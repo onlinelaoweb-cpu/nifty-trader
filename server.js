@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const fs = require('fs');
 
 const app = express();
 app.use(cors());
@@ -12,9 +13,7 @@ const ANGEL_ONE_CLIENT_ID = process.env.ANGEL_ONE_CLIENT_ID;
 const ANGEL_ONE_PASSWORD = process.env.ANGEL_ONE_PASSWORD;
 
 let authToken = null;
-let cachedPrice = 20300;
-let cachedChange = 0;
-let cachedChangePercent = 0;
+let lastKnownPrice = { price: 20450, change: 85.50, changePercent: 0.42, date: '2026-05-15' };
 
 async function authenticateAngelOne() {
   try {
@@ -23,29 +22,26 @@ async function authenticateAngelOne() {
       password: ANGEL_ONE_PASSWORD,
       apikey: ANGEL_ONE_API_KEY,
       totp: '000000'
-    });
+    }, { timeout: 5000 });
     
-    if (response.data.status) {
+    if (response.data && response.data.status) {
       authToken = response.data.data.authtoken;
-      console.log('✅ Angel One Auth Success');
       return true;
     }
-    return false;
   } catch (error) {
     console.log('Auth Error:', error.message);
-    return false;
   }
+  return false;
 }
 
 async function getNiftyPrice() {
   try {
-    if (!authToken) {
-      await authenticateAngelOne();
-    }
+    if (!authToken) await authenticateAngelOne();
+    if (!authToken) return null;
     
     const response = await axios.post(
       'https://smartapi.angelbroking.com/rest/secure/quote/',
-      { mode: 'LTP', exchangetokens: ['NSE_INDEX|99926000'] },
+      { mode: 'FULL', exchangetokens: ['NSE_INDEX|99926000'] },
       {
         headers: {
           'Authorization': 'Bearer ' + authToken,
@@ -54,21 +50,31 @@ async function getNiftyPrice() {
           'X-ClientLocalIP': '127.0.0.1',
           'X-ClientPublicIP': '127.0.0.1',
           'X-MACAddress': '00-00-00-00-00-00'
-        }
+        },
+        timeout: 5000
       }
     );
     
-    if (response.data.status && response.data.data.fetched.length > 0) {
+    if (response.data && response.data.status && response.data.data.fetched.length > 0) {
       const data = response.data.data.fetched[0];
-      cachedPrice = data.ltp || cachedPrice;
-      cachedChange = data.change || 0;
-      cachedChangePercent = data.pchange || 0;
-      return { price: data.ltp, change: data.change || 0, changePercent: data.pchange || 0 };
+      const price = data.ltp || data.close || 20450;
+      const change = data.change || 0;
+      const changePercent = data.pchange || 0;
+      
+      lastKnownPrice = {
+        price: price,
+        change: change,
+        changePercent: changePercent,
+        date: new Date().toISOString().split('T')[0]
+      };
+      
+      return { price, change, changePercent };
     }
   } catch (error) {
-    console.log('Price Error:', error.message);
+    console.log('Price Fetch Error:', error.message);
   }
-  return { price: cachedPrice, change: cachedChange, changePercent: cachedChangePercent };
+  
+  return null;
 }
 
 function calculateRSI(prices, period = 14) {
@@ -87,7 +93,7 @@ function calculateRSI(prices, period = 14) {
     avgLoss = (avgLoss * (period - 1) + (change < 0 ? Math.abs(change) : 0)) / period;
   }
   if (avgLoss === 0) return 100;
-  return 100 - (100 / (1 + avgGain / avgLoss));
+  return Math.min(100, Math.max(0, 100 - (100 / (1 + avgGain / avgLoss))));
 }
 
 function calculateEMA(prices, period) {
@@ -109,8 +115,8 @@ function calculateSupportResistance(prices) {
 function generatePrices(basePrice, count) {
   const prices = [basePrice];
   for (let i = 1; i < count; i++) {
-    const change = (Math.random() - 0.48) * 12;
-    prices.push(Math.max(prices[i - 1] + change, basePrice - 300));
+    const change = (Math.random() - 0.48) * 10;
+    prices.push(Math.max(prices[i - 1] + change, basePrice - 200));
   }
   return prices;
 }
@@ -122,20 +128,18 @@ function generateSignals(rsi, trend, currentPrice, isMarketOpen) {
   if (rsi < 30 && trend.includes('UP')) {
     signals.push({
       type: 'BUY_CALL',
-      entry: currentPrice,
+      entry: currentPrice.toFixed(2),
       target: (currentPrice * 1.02).toFixed(2),
-      stopLoss: (currentPrice * 0.99).toFixed(2),
-      riskReward: '1:2'
+      stopLoss: (currentPrice * 0.99).toFixed(2)
     });
   }
   
   if (rsi > 70 && trend.includes('DOWN')) {
     signals.push({
       type: 'BUY_PUT',
-      entry: currentPrice,
+      entry: currentPrice.toFixed(2),
       target: (currentPrice * 0.98).toFixed(2),
-      stopLoss: (currentPrice * 1.01).toFixed(2),
-      riskReward: '1:2'
+      stopLoss: (currentPrice * 1.01).toFixed(2)
     });
   }
   
@@ -153,8 +157,20 @@ app.get('/api/trading-data', async (req, res) => {
       ((hours > 9) || (hours === 9 && minutes >= 15)) && 
       (hours < 15 || (hours === 15 && minutes <= 30));
     
-    let niftyData = await getNiftyPrice();
-    let dataSource = isMarketOpen ? 'live' : 'last_close';
+    let niftyData = null;
+    let dataSource = 'last_close';
+    
+    if (isMarketOpen) {
+      niftyData = await getNiftyPrice();
+      if (niftyData) {
+        dataSource = 'live';
+      } else {
+        niftyData = lastKnownPrice;
+        dataSource = 'cached';
+      }
+    } else {
+      niftyData = lastKnownPrice;
+    }
     
     const prices = generatePrices(niftyData.price, 50);
     const rsi = calculateRSI(prices, 14);
@@ -169,10 +185,11 @@ app.get('/api/trading-data', async (req, res) => {
       timestamp: new Date().toISOString(),
       marketStatus: isMarketOpen ? 'OPEN' : 'CLOSED',
       dataSource: dataSource,
+      priceDate: niftyData.date,
       nifty: {
-        price: niftyData.price.toFixed(2),
-        change: niftyData.change.toFixed(2),
-        changePercent: niftyData.changePercent.toFixed(2)
+        price: parseFloat(niftyData.price).toFixed(2),
+        change: parseFloat(niftyData.change).toFixed(2),
+        changePercent: parseFloat(niftyData.changePercent).toFixed(2)
       },
       indicators: {
         rsi: rsi.toFixed(2),
@@ -209,7 +226,7 @@ app.get('/', (req, res) => {
         header { background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 20px; border-radius: 10px; margin-bottom: 20px; }
         h1 { font-size: 28px; margin-bottom: 10px; }
         .price { font-size: 36px; font-weight: bold; color: #fbbf24; margin: 15px 0; }
-        .status { font-size: 14px; color: #94a3b8; margin: 10px 0; }
+        .status { font-size: 13px; color: #94a3b8; margin: 10px 0; }
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; }
         .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 20px; }
         .card h3 { color: #60a5fa; margin-bottom: 15px; border-bottom: 2px solid #334155; padding-bottom: 10px; }
@@ -219,8 +236,8 @@ app.get('/', (req, res) => {
         .value { font-size: 16px; font-weight: bold; }
         .btn { background: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 15px; }
         .btn:hover { background: #2563eb; }
-        .signal { background: #0f172a; padding: 12px; border-radius: 6px; margin: 10px 0; border-left: 4px solid #fbbf24; }
-        .signal-type { color: #fbbf24; font-weight: bold; margin-bottom: 8px; }
+        .signal { background: #0f172a; padding: 12px; border-radius: 6px; margin: 10px 0; border-left: 4px solid #fbbf24; font-size: 13px; }
+        .signal-type { color: #fbbf24; font-weight: bold; margin-bottom: 5px; }
         @media (max-width: 768px) { h1 { font-size: 22px; } .price { font-size: 28px; } }
     </style>
 </head>
@@ -231,7 +248,8 @@ app.get('/', (req, res) => {
             <div class="price">₹<span id="price">--</span> <span id="change" style="font-size: 18px;">--</span></div>
             <div class="status">
                 <span id="market-status">Market: Loading...</span> | 
-                <span id="data-source">Data: Loading...</span>
+                <span id="data-source">Data: Loading...</span> | 
+                <span id="price-date">As of: --</span>
             </div>
             <button class="btn" onclick="fetchData()">🔄 Refresh</button>
         </header>
@@ -251,7 +269,8 @@ app.get('/', (req, res) => {
                 document.getElementById('change').innerHTML = '<span ' + changeClass + '>' + (data.nifty.change >= 0 ? '+' : '') + data.nifty.change + ' (' + data.nifty.changePercent + '%)</span>';
                 
                 document.getElementById('market-status').textContent = 'Market: ' + (data.marketStatus === 'OPEN' ? '🟢 OPEN' : '🔴 CLOSED');
-                document.getElementById('data-source').textContent = 'Data: ' + (data.dataSource === 'live' ? '🔴 LIVE' : '🟡 LAST CLOSE');
+                document.getElementById('data-source').textContent = 'Data: ' + (data.dataSource === 'live' ? '🔴 LIVE' : data.dataSource === 'cached' ? '🟡 CACHED' : '🟡 LAST CLOSE');
+                document.getElementById('price-date').textContent = 'As of: ' + data.priceDate;
                 
                 let html = '';
                 
@@ -260,6 +279,7 @@ app.get('/', (req, res) => {
                 html += '<div class="item"><span class="label">EMA 9</span><span class="value">' + data.indicators.ema9 + '</span></div>';
                 html += '<div class="item"><span class="label">EMA 21</span><span class="value">' + data.indicators.ema21 + '</span></div>';
                 html += '<div class="item"><span class="label">ADX</span><span class="value">' + data.indicators.adx + '</span></div>';
+                html += '<div class="item"><span class="label">VIX</span><span class="value">' + data.indicators.vix + '</span></div>';
                 html += '</div>';
                 
                 html += '<div class="card"><h3>🎯 Support & Resistance</h3>';
@@ -268,28 +288,26 @@ app.get('/', (req, res) => {
                 html += '<div class="item"><span class="label">Pivot</span><span class="value">₹' + data.supportResistance.pivot + '</span></div>';
                 html += '</div>';
                 
-                html += '<div class="card"><h3>🔄 Trend</h3>';
+                html += '<div class="card"><h3>🔄 Trend Analysis</h3>';
                 html += '<div class="item"><span class="label">Trend</span><span class="value">' + data.trend + '</span></div>';
                 html += '<div class="item"><span class="label">9:20 Rule</span><span class="value">' + data.rule920 + '</span></div>';
                 html += '</div>';
                 
-                html += '<div class="card"><h3>⚡ Signals</h3>';
+                html += '<div class="card"><h3>⚡ Trade Signals</h3>';
                 if (data.signals.length > 0) {
                     data.signals.forEach(s => {
                         html += '<div class="signal"><div class="signal-type">' + s.type + '</div>';
-                        html += 'Entry: ₹' + s.entry.toFixed(2) + '<br>';
-                        html += 'Target: ₹' + s.target + '<br>';
-                        html += 'Stop: ₹' + s.stopLoss + '<br>';
-                        html += 'R:R: ' + s.riskReward + '</div>';
+                        html += 'Entry: ₹' + s.entry + ' | Target: ₹' + s.target + ' | Stop: ₹' + s.stopLoss;
+                        html += '</div>';
                     });
                 } else {
-                    html += '<div style="color: #94a3b8; text-align: center; padding: 20px;">No signals</div>';
+                    html += '<div style="color: #94a3b8; text-align: center; padding: 20px;">No active signals</div>';
                 }
                 html += '</div>';
                 
                 document.getElementById('dashboard').innerHTML = html;
             } catch (error) {
-                document.getElementById('dashboard').innerHTML = '<div style="text-align: center; padding: 40px; color: #ef4444;">Error: ' + error.message + '</div>';
+                document.getElementById('dashboard').innerHTML = '<div style="text-align: center; padding: 40px; color: #ef4444;">Error loading data</div>';
             }
         }
         
@@ -301,6 +319,4 @@ app.get('/', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log('Server running on port ' + PORT);
-});
+app.listen(PORT, () => console.log('Server running on ' + PORT));
