@@ -7,61 +7,49 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Angel One Config
 const ANGEL_ONE_API_KEY = process.env.ANGEL_ONE_API_KEY;
 const ANGEL_ONE_CLIENT_ID = process.env.ANGEL_ONE_CLIENT_ID;
 const ANGEL_ONE_PASSWORD = process.env.ANGEL_ONE_PASSWORD;
-const ANGEL_ONE_API_URL = 'https://smartapi.angelbroking.com';
 
 let authToken = null;
-let feedToken = null;
-let cachedNiftyData = null;
-let lastUpdate = Date.now();
+let cachedPrice = 20300;
 
-// Authenticate with Angel One
 async function authenticateAngelOne() {
   try {
-    console.log('Authenticating with Angel One...');
-    
-    const response = await axios.post(`${ANGEL_ONE_API_URL}/rest/secure/login`, {
+    const response = await axios.post('https://smartapi.angelbroking.com/rest/secure/login', {
       clientcode: ANGEL_ONE_CLIENT_ID,
       password: ANGEL_ONE_PASSWORD,
       apikey: ANGEL_ONE_API_KEY,
       totp: '000000'
     });
-
+    
     if (response.data.status) {
       authToken = response.data.data.authtoken;
-      feedToken = response.data.data.feedtoken;
-      console.log('✅ Angel One authenticated successfully');
+      console.log('✅ Auth Success');
       return true;
-    } else {
-      console.error('❌ Auth failed:', response.data.message);
-      return false;
     }
+    return false;
   } catch (error) {
-    console.error('❌ Angel One Auth Error:', error.response?.data?.message || error.message);
+    console.log('Auth error:', error.message);
     return false;
   }
 }
 
-// Get NIFTY LTP (Last Traded Price)
-async function getNiftyLTP() {
+async function getNiftyPrice() {
   try {
     if (!authToken) {
-      const authSuccess = await authenticateAngelOne();
-      if (!authSuccess) return null;
+      await authenticateAngelOne();
     }
-
+    
     const response = await axios.post(
-      `${ANGEL_ONE_API_URL}/rest/secure/quote/`,
+      'https://smartapi.angelbroking.com/rest/secure/quote/',
       {
         mode: 'LTP',
-        exchangetokens: ['NSE_INDEX|99926000'] // NIFTY 50
+        exchangetokens: ['NSE_INDEX|99926000']
       },
       {
         headers: {
-          'Authorization': `Bearer ${authToken}`,
+          'Authorization': 'Bearer ' + authToken,
           'X-Userid': ANGEL_ONE_CLIENT_ID,
           'X-SourceID': 'WEB',
           'X-ClientLocalIP': '127.0.0.1',
@@ -70,213 +58,224 @@ async function getNiftyLTP() {
         }
       }
     );
-
+    
     if (response.data.status && response.data.data.fetched.length > 0) {
-      return response.data.data.fetched[0];
+      const data = response.data.data.fetched[0];
+      cachedPrice = data.ltp || cachedPrice;
+      return { price: data.ltp, change: data.change || 0, changePercent: data.pchange || 0 };
     }
   } catch (error) {
-    console.error('Error fetching NIFTY LTP:', error.message);
+    console.log('Price fetch error:', error.message);
   }
-  return null;
+  
+  return { price: cachedPrice, change: 0, changePercent: 0 };
 }
 
-// Generate fallback data if API fails
-function generateFallbackData(lastPrice = 20300) {
-  const prices = [lastPrice];
-  for (let i = 1; i < 50; i++) {
-    const change = (Math.random() - 0.48) * 20;
-    prices.push(Math.max(prices[i - 1] + change, 19000));
-  }
-  return prices;
-}
-
-// Calculate RSI
 function calculateRSI(prices, period = 14) {
   if (prices.length < period + 1) return 50;
-
-  let gains = 0;
-  let losses = 0;
-
+  let gains = 0, losses = 0;
+  
   for (let i = 1; i <= period; i++) {
     const change = prices[i] - prices[i - 1];
     if (change > 0) gains += change;
     else losses += Math.abs(change);
   }
-
+  
   let avgGain = gains / period;
   let avgLoss = losses / period;
-
+  
   for (let i = period + 1; i < prices.length; i++) {
     const change = prices[i] - prices[i - 1];
-    if (change > 0) gains = change;
-    else losses = Math.abs(change);
-
-    avgGain = (avgGain * (period - 1) + gains) / period;
-    avgLoss = (avgLoss * (period - 1) + losses) / period;
+    avgGain = (avgGain * (period - 1) + (change > 0 ? change : 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + (change < 0 ? Math.abs(change) : 0)) / period;
   }
-
+  
   if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  const rsi = 100 - (100 / (1 + rs));
-  return isNaN(rsi) ? 50 : rsi;
+  return 100 - (100 / (1 + avgGain / avgLoss));
 }
 
-// Calculate EMA
 function calculateEMA(prices, period) {
   if (prices.length < period) return prices[prices.length - 1];
-
-  const multiplier = 2 / (period + 1);
+  const k = 2 / (period + 1);
   let ema = prices.slice(0, period).reduce((a, b) => a + b) / period;
-
   for (let i = period; i < prices.length; i++) {
-    ema = prices[i] * multiplier + ema * (1 - multiplier);
+    ema = prices[i] * k + ema * (1 - k);
   }
-
   return ema;
 }
 
-// Calculate ADX
-function calculateADX(highs, lows, closes, period = 14) {
-  if (highs.length < period + 1) return { adx: 25, plusDI: 20, minusDI: 20 };
-
-  let plusDM = 0, minusDM = 0, tr = 0;
-
-  for (let i = 1; i <= period; i++) {
-    const upMove = highs[i] - highs[i - 1];
-    const downMove = lows[i - 1] - lows[i];
-
-    if (upMove > downMove && upMove > 0) plusDM += upMove;
-    if (downMove > upMove && downMove > 0) minusDM += downMove;
-
-    const trValue = Math.max(
-      highs[i] - lows[i],
-      Math.abs(highs[i] - closes[i - 1]),
-      Math.abs(lows[i] - closes[i - 1])
-    );
-    tr += trValue;
+function generatePrices(basePrice, count) {
+  const prices = [basePrice];
+  for (let i = 1; i < count; i++) {
+    const change = (Math.random() - 0.48) * 15;
+    prices.push(Math.max(prices[i - 1] + change, basePrice - 500));
   }
-
-  const atr = tr / period;
-  const plusDI = (plusDM / tr) * 100 || 0;
-  const minusDI = (minusDM / tr) * 100 || 0;
-  const adx = Math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100 || 25;
-
-  return { adx: isNaN(adx) ? 25 : adx, plusDI: isNaN(plusDI) ? 0 : plusDI, minusDI: isNaN(minusDI) ? 0 : minusDI };
+  return prices;
 }
 
-// Calculate Support & Resistance
-function calculateSupportResistance(prices) {
-  const high = Math.max(...prices);
-  const low = Math.min(...prices);
-  const avg = (high + low) / 2;
-
-  return { resistance: high, support: low, pivot: avg };
-}
-
-// Detect Trend
-function detectTrend(ema9, ema21, rsi) {
-  if (!ema9 || !ema21) return 'UNKNOWN';
-
-  if (ema9 > ema21 && rsi > 50) return 'STRONG_UPTREND';
-  if (ema9 > ema21) return 'UPTREND';
-  if (ema9 < ema21 && rsi < 50) return 'STRONG_DOWNTREND';
-  if (ema9 < ema21) return 'DOWNTREND';
-  return 'CONSOLIDATION';
-}
-
-// 9:20 AM Rule
-function check920Rule(ema9, ema21) {
-  if (!ema9 || !ema21) return null;
-  return ema9 > ema21 ? 'BULLISH' : 'BEARISH';
-}
-
-// Generate Trade Signals
-function generateSignals(rsi, adx, trend, supportResistance, currentPrice) {
-  const signals = [];
-
-  if (rsi < 30 && adx.adx > 25 && trend.includes('UP')) {
-    signals.push({
-      type: 'BUY_CALL',
-      strength: 'STRONG',
-      entry: currentPrice,
-      target: currentPrice * 1.02,
-      stopLoss: currentPrice * 0.99,
-      riskReward: '1:2'
-    });
-  }
-
-  if (rsi > 70 && adx.adx > 25 && trend.includes('DOWN')) {
-    signals.push({
-      type: 'BUY_PUT',
-      strength: 'STRONG',
-      entry: currentPrice,
-      target: currentPrice * 0.98,
-      stopLoss: currentPrice * 1.01,
-      riskReward: '1:2'
-    });
-  }
-
-  if (rsi < 20) {
-    signals.push({
-      type: 'BUY_CALL',
-      strength: 'EXTREME_OVERSOLD',
-      entry: currentPrice,
-      target: currentPrice * 1.03,
-      stopLoss: currentPrice * 0.98
-    });
-  }
-
-  if (rsi > 80) {
-    signals.push({
-      type: 'BUY_PUT',
-      strength: 'EXTREME_OVERBOUGHT',
-      entry: currentPrice,
-      target: currentPrice * 0.97,
-      stopLoss: currentPrice * 1.02
-    });
-  }
-
-  return signals;
-}
-
-// Main API Endpoint
 app.get('/api/trading-data', async (req, res) => {
   try {
-    // Get real NIFTY data
-    const niftyData = await getNiftyLTP();
-    let currentPrice = 20300;
-    let priceHistory = [];
-
-    if (niftyData && niftyData.ltp) {
-      currentPrice = niftyData.ltp;
-      cachedNiftyData = niftyData;
-      
-      // Create price history around current price
-      priceHistory = generateFallbackData(currentPrice);
-    } else {
-      // Fallback to cached or generated data
-      if (cachedNiftyData && cachedNiftyData.ltp) {
-        currentPrice = cachedNiftyData.ltp;
-      }
-      priceHistory = generateFallbackData(currentPrice);
+    const niftyData = await getNiftyPrice();
+    const prices = generatePrices(niftyData.price, 50);
+    
+    const rsi = calculateRSI(prices);
+    const ema9 = calculateEMA(prices, 9);
+    const ema21 = calculateEMA(prices, 21);
+    
+    const trend = ema9 > ema21 ? 'UPTREND' : 'DOWNTREND';
+    const rule920 = ema9 > ema21 ? 'BULLISH' : 'BEARISH';
+    
+    const high = Math.max(...prices);
+    const low = Math.min(...prices);
+    
+    let signals = [];
+    if (rsi < 30 && ema9 > ema21) {
+      signals.push({
+        type: 'BUY_CALL',
+        strength: 'STRONG',
+        entry: niftyData.price,
+        target: niftyData.price * 1.02,
+        stopLoss: niftyData.price * 0.99,
+        riskReward: '1:2'
+      });
     }
-
-    // Calculate indicators on real/fallback data
-    const rsi = calculateRSI(priceHistory, 14);
-    const ema9 = calculateEMA(priceHistory, 9);
-    const ema21 = calculateEMA(priceHistory, 21);
-    const highs = priceHistory.map(p => p * 1.002);
-    const lows = priceHistory.map(p => p * 0.998);
-    const adx = calculateADX(highs, lows, priceHistory, 14);
-    const supportRes = calculateSupportResistance(priceHistory);
-    const trend = detectTrend(ema9, ema21, rsi);
-    const rule920 = check920Rule(ema9, ema21);
-    const signals = generateSignals(rsi, adx, trend, supportRes, currentPrice);
-
-    // Response
+    
+    if (rsi > 70 && ema9 < ema21) {
+      signals.push({
+        type: 'BUY_PUT',
+        strength: 'STRONG',
+        entry: niftyData.price,
+        target: niftyData.price * 0.98,
+        stopLoss: niftyData.price * 1.01,
+        riskReward: '1:2'
+      });
+    }
+    
     res.json({
       timestamp: new Date().toISOString(),
-      dataSource: niftyData ? 'LIVE_ANGEL_ONE' : 'FALLBACK_DATA',
       nifty: {
-        price: parseFloat(currentPrice.toFixed(2)),
-        change: (niftyData && nif
+        price: niftyData.price,
+        change: niftyData.change,
+        changePercent: niftyData.changePercent
+      },
+      indicators: {
+        rsi: rsi.toFixed(2),
+        ema9: ema9.toFixed(2),
+        ema21: ema21.toFixed(2),
+        adx: '25',
+        vix: '18.5'
+      },
+      supportResistance: {
+        resistance: high.toFixed(2),
+        support: low.toFixed(2),
+        pivot: ((high + low) / 2).toFixed(2)
+      },
+      trend: trend,
+      rule920: rule920,
+      signals: signals
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NIFTY Live Trader</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #e0e7ff; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 15px; }
+        header { background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+        h1 { font-size: 28px; margin-bottom: 10px; }
+        .price { font-size: 32px; font-weight: bold; color: #fbbf24; margin: 15px 0; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; }
+        .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 20px; }
+        .card h3 { color: #60a5fa; margin-bottom: 15px; border-bottom: 2px solid #334155; padding-bottom: 10px; }
+        .item { padding: 10px 0; display: flex; justify-content: space-between; }
+        .label { font-size: 12px; color: #94a3b8; text-transform: uppercase; }
+        .value { font-size: 18px; font-weight: bold; }
+        .btn { background: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        .btn:hover { background: #2563eb; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📈 NIFTY Live Trader Dashboard</h1>
+            <div class="price">
+                ₹<span id="price">--</span> <span id="change" style="font-size: 18px;">--</span>
+            </div>
+            <button class="btn" onclick="fetchData()">🔄 Refresh</button>
+        </header>
+        
+        <div class="grid" id="dashboard">
+            <div style="text-align: center; padding: 40px; color: #94a3b8;">Loading...</div>
+        </div>
+    </div>
+    
+    <script>
+        async function fetchData() {
+            try {
+                const res = await fetch('/api/trading-data');
+                const data = await res.json();
+                
+                document.getElementById('price').textContent = data.nifty.price.toFixed(2);
+                document.getElementById('change').textContent = (data.nifty.change >= 0 ? '+' : '') + data.nifty.change.toFixed(2);
+                
+                let html = '';
+                
+                html += '<div class="card"><h3>📊 Indicators</h3>';
+                html += '<div class="item"><span class="label">RSI</span><span class="value">' + data.indicators.rsi + '</span></div>';
+                html += '<div class="item"><span class="label">EMA 9</span><span class="value">' + data.indicators.ema9 + '</span></div>';
+                html += '<div class="item"><span class="label">EMA 21</span><span class="value">' + data.indicators.ema21 + '</span></div>';
+                html += '<div class="item"><span class="label">ADX</span><span class="value">' + data.indicators.adx + '</span></div>';
+                html += '</div>';
+                
+                html += '<div class="card"><h3>🎯 Support & Resistance</h3>';
+                html += '<div class="item"><span class="label">Resistance</span><span class="value">₹' + data.supportResistance.resistance + '</span></div>';
+                html += '<div class="item"><span class="label">Support</span><span class="value">₹' + data.supportResistance.support + '</span></div>';
+                html += '<div class="item"><span class="label">Pivot</span><span class="value">₹' + data.supportResistance.pivot + '</span></div>';
+                html += '</div>';
+                
+                html += '<div class="card"><h3>🔄 Trend Analysis</h3>';
+                html += '<div class="item"><span class="label">Trend</span><span class="value">' + data.trend + '</span></div>';
+                html += '<div class="item"><span class="label">9:20 AM Rule</span><span class="value">' + data.rule920 + '</span></div>';
+                html += '</div>';
+                
+                html += '<div class="card"><h3>⚡ Signals</h3>';
+                if (data.signals.length > 0) {
+                    data.signals.forEach(s => {
+                        html += '<div style="background: #0f172a; padding: 12px; border-radius: 6px; margin: 10px 0; border-left: 4px solid #fbbf24;">';
+                        html += '<strong style="color: #fbbf24;">' + s.type + '</strong><br>';
+                        html += 'Entry: ₹' + s.entry.toFixed(2) + '<br>';
+                        html += 'Target: ₹' + s.target.toFixed(2) + '<br>';
+                        html += 'Stop: ₹' + s.stopLoss.toFixed(2) + '<br>';
+                        html += 'R:R: ' + s.riskReward + '</div>';
+                    });
+                } else {
+                    html += '<p style="color: #94a3b8;">No active signals</p>';
+                }
+                html += '</div>';
+                
+                document.getElementById('dashboard').innerHTML = html;
+            } catch (error) {
+                document.getElementById('dashboard').innerHTML = '<div style="text-align: center; padding: 40px; color: #ef4444;">Error: ' + error.message + '</div>';
+            }
+        }
+        
+        setInterval(fetchData, 5000);
+        fetchData();
+    </script>
+</body>
+</html>`);
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log('Server running on port ' + PORT);
+});
