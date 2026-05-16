@@ -15,6 +15,9 @@ let authToken = null;
 let cachedPrice = 20300;
 let cachedChange = 0;
 let cachedChangePercent = 0;
+let lastClosingPrice = 20300;
+let lastClosingChange = 0;
+let lastClosingChangePercent = 0;
 let lastUpdateTime = new Date();
 
 // ==================== ANGEL ONE AUTHENTICATION ====================
@@ -40,7 +43,7 @@ async function authenticateAngelOne() {
   }
 }
 
-// ==================== NIFTY PRICE FETCH ====================
+// ==================== FETCH NIFTY PRICE & CLOSING ====================
 
 async function getNiftyPrice() {
   try {
@@ -68,11 +71,28 @@ async function getNiftyPrice() {
     
     if (response.data.status && response.data.data.fetched.length > 0) {
       const data = response.data.data.fetched[0];
+      
       cachedPrice = data.ltp || cachedPrice;
       cachedChange = data.change || 0;
       cachedChangePercent = data.pchange || 0;
+      
+      // Store closing price from previous close field
+      if (data.close) {
+        lastClosingPrice = data.close;
+        lastClosingChange = data.change || 0;
+        lastClosingChangePercent = data.pchange || 0;
+      }
+      
       lastUpdateTime = new Date();
-      return { price: data.ltp, change: data.change || 0, changePercent: data.pchange || 0 };
+      return { 
+        price: data.ltp, 
+        change: data.change || 0, 
+        changePercent: data.pchange || 0,
+        close: data.close || data.ltp,
+        open: data.open,
+        high: data.high,
+        low: data.low
+      };
     }
   } catch (error) {
     console.log('Price Fetch Error:', error.message);
@@ -194,7 +214,6 @@ function generateSignals(rsi, adx, trend, currentPrice, isMarketOpen) {
     return signals;
   }
   
-  // BUY CALL Signal
   if (rsi < 30 && adx.adx > 25 && trend.includes('UP')) {
     signals.push({
       type: 'BUY_CALL',
@@ -206,7 +225,6 @@ function generateSignals(rsi, adx, trend, currentPrice, isMarketOpen) {
     });
   }
   
-  // BUY PUT Signal
   if (rsi > 70 && adx.adx > 25 && trend.includes('DOWN')) {
     signals.push({
       type: 'BUY_PUT',
@@ -218,7 +236,6 @@ function generateSignals(rsi, adx, trend, currentPrice, isMarketOpen) {
     });
   }
   
-  // Extreme Oversold
   if (rsi < 20) {
     signals.push({
       type: 'BUY_CALL',
@@ -229,7 +246,6 @@ function generateSignals(rsi, adx, trend, currentPrice, isMarketOpen) {
     });
   }
   
-  // Extreme Overbought
   if (rsi > 80) {
     signals.push({
       type: 'BUY_PUT',
@@ -259,30 +275,33 @@ app.get('/api/trading-data', async (req, res) => {
     
     let niftyData = null;
     let dataSource = 'cached';
+    let displayPrice = cachedPrice;
+    let displayChange = cachedChange;
+    let displayChangePercent = cachedChangePercent;
     
     if (isMarketOpen) {
+      // Try to fetch live data
       niftyData = await getNiftyPrice();
       if (niftyData && niftyData.price) {
         dataSource = 'live';
+        displayPrice = niftyData.price;
+        displayChange = niftyData.change;
+        displayChangePercent = niftyData.changePercent;
       } else {
-        dataSource = 'cached';
-        niftyData = { 
-          price: cachedPrice, 
-          change: cachedChange, 
-          changePercent: cachedChangePercent 
-        };
+        dataSource = 'cached_during_hours';
+        displayPrice = cachedPrice;
+        displayChange = cachedChange;
+        displayChangePercent = cachedChangePercent;
       }
     } else {
-      dataSource = 'market_closed';
-      niftyData = { 
-        price: cachedPrice, 
-        change: cachedChange, 
-        changePercent: cachedChangePercent 
-      };
+      // Market is closed - show last closing price
+      dataSource = 'last_close';
+      displayPrice = lastClosingPrice || cachedPrice;
+      displayChange = lastClosingChange || cachedChange;
+      displayChangePercent = lastClosingChangePercent || cachedChangePercent;
     }
     
-    const currentPrice = niftyData.price || cachedPrice;
-    const prices = generatePrices(currentPrice, 50);
+    const prices = generatePrices(displayPrice, 50);
     
     // Calculate all indicators
     const rsi = calculateRSI(prices, 14);
@@ -292,16 +311,16 @@ app.get('/api/trading-data', async (req, res) => {
     const supportRes = calculateSupportResistance(prices);
     const trend = detectTrend(ema9, ema21, rsi);
     const rule920 = check920Rule(ema9, ema21);
-    const signals = generateSignals(rsi, adx, trend, currentPrice, isMarketOpen);
+    const signals = generateSignals(rsi, adx, trend, displayPrice, isMarketOpen);
     
     res.json({
       timestamp: new Date().toISOString(),
       marketStatus: isMarketOpen ? 'OPEN' : 'CLOSED',
       dataSource: dataSource,
       nifty: {
-        price: parseFloat(currentPrice.toFixed(2)),
-        change: parseFloat(niftyData.change.toFixed(2)),
-        changePercent: parseFloat(niftyData.changePercent.toFixed(2))
+        price: parseFloat(displayPrice.toFixed(2)),
+        change: parseFloat(displayChange.toFixed(2)),
+        changePercent: parseFloat(displayChangePercent.toFixed(2))
       },
       indicators: {
         rsi: parseFloat(rsi.toFixed(2)),
@@ -533,25 +552,26 @@ app.get('/', (req, res) => {
                 const response = await fetch('/api/trading-data');
                 const data = await response.json();
                 
-                // Update price
                 document.getElementById('nifty-price').textContent = data.nifty.price.toFixed(2);
                 const changeClass = data.nifty.change >= 0 ? 'positive' : 'negative';
                 const changeText = (data.nifty.change >= 0 ? '+' : '') + data.nifty.change.toFixed(2) + ' (' + data.nifty.changePercent + '%)';
                 document.getElementById('nifty-change').innerHTML = '<span class="' + changeClass + '">' + changeText + '</span>';
                 
-                // Update status
                 const marketStatus = data.marketStatus === 'OPEN' ? '🟢 OPEN' : '🔴 CLOSED';
                 document.getElementById('market-status').textContent = 'Market: ' + marketStatus;
                 document.getElementById('market-pulse').className = 'pulse ' + (data.marketStatus === 'OPEN' ? 'open' : 'closed');
                 
-                const dataSourceText = data.dataSource === 'live' ? '🔴 LIVE Angel One' : data.dataSource === 'cached' ? '🟡 Last Close' : '⚪ Market Closed';
-                document.getElementById('data-source').textContent = 'Data: ' + dataSourceText;
+                let sourceText = '';
+                if (data.dataSource === 'live') sourceText = '🔴 LIVE (Angel One)';
+                else if (data.dataSource === 'last_close') sourceText = '🟡 Last Close (Friday May 15)';
+                else if (data.dataSource === 'cached_during_hours') sourceText = '⚪ Cached Data';
+                else sourceText = data.dataSource;
+                
+                document.getElementById('data-source').textContent = 'Data: ' + sourceText;
                 document.getElementById('last-update').textContent = 'Updated: ' + new Date(data.timestamp).toLocaleTimeString();
                 
-                // Build dashboard
                 let html = '';
                 
-                // Indicators Card
                 html += '<div class="card"><h3>📊 Technical Indicators</h3>';
                 html += '<div class="item"><span class="label">RSI (14)</span><span class="value">' + data.indicators.rsi + '</span></div>';
                 html += '<div class="item"><span class="label">ADX (14)</span><span class="value">' + data.indicators.adx + '</span></div>';
@@ -561,60 +581,12 @@ app.get('/', (req, res) => {
                 html += '<div class="item"><span class="label">VIX</span><span class="value">' + data.indicators.vix + '</span></div>';
                 html += '</div>';
                 
-                // Support & Resistance
                 html += '<div class="card"><h3>🎯 Support & Resistance (4H)</h3>';
                 html += '<div class="item"><span class="label">Resistance</span><span class="value">₹' + data.supportResistance.resistance + '</span></div>';
                 html += '<div class="item"><span class="label">Support</span><span class="value">₹' + data.supportResistance.support + '</span></div>';
                 html += '<div class="item"><span class="label">Pivot</span><span class="value">₹' + data.supportResistance.pivot + '</span></div>';
                 html += '</div>';
                 
-                // Trend Analysis
                 html += '<div class="card"><h3>🔄 Market Analysis</h3>';
                 const trendClass = data.trend.includes('UP') ? 'uptrend' : data.trend.includes('DOWN') ? 'downtrend' : 'consolidation';
-                html += '<div class="item"><span class="label">Trend</span><span class="trend-badge ' + trendClass + '">' + data.trend.replace(/_/g, ' ') + '</span></div>';
-                html += '<div class="item"><span class="label">9:20 AM Rule</span><span class="trend-badge ' + (data.rule920 === 'BULLISH' ? 'uptrend' : 'downtrend') + '">' + data.rule920 + '</span></div>';
-                html += '</div>';
-                
-                // Trade Signals
-                html += '<div class="card"><h3>⚡ Active Trade Signals</h3>';
-                if (data.signals.length > 0) {
-                    data.signals.forEach(signal => {
-                        html += '<div class="signal-box">';
-                        html += '<div class="signal-type">' + signal.type.replace(/_/g, ' ') + ' (' + signal.strength + ')</div>';
-                        html += '<div class="signal-detail">';
-                        html += '<strong>Entry:</strong> ₹' + signal.entry.toFixed(2) + '<br>';
-                        html += '<strong>Target:</strong> ₹' + signal.target.toFixed(2) + '<br>';
-                        html += '<strong>Stop Loss:</strong> ₹' + signal.stopLoss.toFixed(2) + '<br>';
-                        html += '<strong>R:R Ratio:</strong> ' + signal.riskReward;
-                        html += '</div></div>';
-                    });
-                } else {
-                    html += '<div class="no-signal">No active signals at this moment</div>';
-                }
-                html += '</div>';
-                
-                document.getElementById('dashboard').innerHTML = html;
-            } catch (error) {
-                console.error('Error:', error);
-                document.getElementById('dashboard').innerHTML = '<div class="loading">❌ Error: ' + error.message + '</div>';
-            }
-        }
-        
-        // Auto-refresh every 5 seconds
-        setInterval(fetchData, 5000);
-        
-        // Initial load
-        fetchData();
-    </script>
-</body>
-</html>`);
-});
-
-// ==================== START SERVER ====================
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log('🚀 NIFTY Live Trader Dashboard');
-  console.log('📊 Running on port ' + PORT);
-  console.log('🟢 Ready for live trading data');
-});
+                html += '<div class="item"><span class="label">Trend</span><span class="trend-badge ' + trendClass 
