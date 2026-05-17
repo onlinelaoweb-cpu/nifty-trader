@@ -1,4 +1,4 @@
-const SmartApi = require('smartapi-javascript');
+const SmartAPI = require('smartapi-javascript').SmartAPI;
 
 async function loginAngel() {
 
@@ -6,7 +6,7 @@ async function loginAngel() {
 
         console.log('Trying SmartAPI SDK Login...');
 
-        const smartApi = new SmartApi({
+        const smartApi = new SmartAPI({
             api_key: process.env.ANGEL_API_KEY
         });
 
