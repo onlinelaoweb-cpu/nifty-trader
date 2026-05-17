@@ -11,6 +11,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "smartapi-javascript": "^1.0.23",
     "socket.io": "^4.7.5",
     "technicalindicators": "^3.1.0",
     "ws": "^8.17.0"
