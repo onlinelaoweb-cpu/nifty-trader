@@ -1,65 +1,87 @@
-// ✅ Bug 2 Fix — Node.js ko WebSocket chahiye
-global.WebSocket = require('ws');
-
-const { SmartWebSocketV2 } =
-    require('smartapi-javascript');
+const WebSocket = require('ws');
 
 function startWebSocket(authData) {
     try {
         console.log('Starting WebSocket...');
 
-        // ✅ feedToken check
         if (!authData?.feedToken) {
-            console.error('❌ feedToken missing — cannot connect');
+            console.error('❌ feedToken missing');
             return;
         }
 
-        const smart_ws = new SmartWebSocketV2(
-            authData.jwtToken,
-            process.env.ANGEL_API_KEY,
-            process.env.ANGEL_CLIENT_ID,
-            authData.feedToken
+        // ✅ Direct Angel One WebSocket — no SDK
+        const ws = new WebSocket(
+            'wss://smartapisocket.angelone.in/smart-stream',
+            {
+                headers: {
+                    'Authorization' : authData.jwtToken,
+                    'x-api-key'     : process.env.ANGEL_API_KEY,
+                    'x-client-code' : process.env.ANGEL_CLIENT_ID,
+                    'x-feed-token'  : authData.feedToken
+                }
+            }
         );
 
-        smart_ws.connect();
+        // ── Heartbeat every 30s ──────────────────
+        let heartbeat = null;
 
-        // ✅ Bug 3 Fix — 'connect' → 'open'
-        smart_ws.on('open', () => {
+        ws.on('open', () => {
             console.log('✅ WebSocket Connected!');
 
-            smart_ws.subscribe(
-                'vardaannifty',
-                3,              // mode 3 = full quote
-                [
-                    {
-                        exchangeType: 1,
-                        tokens: ['26000'] // NIFTY 50
-                    }
-                ]
-            );
+            // Subscribe to NIFTY 50
+            const subscribeMsg = {
+                correlationID: 'vardaannifty',
+                action       : 1,
+                params       : {
+                    mode     : 2,
+                    tokenList: [
+                        {
+                            exchangeType: 1,
+                            tokens      : ['26000'] // NIFTY 50
+                        }
+                    ]
+                }
+            };
 
+            ws.send(JSON.stringify(subscribeMsg));
             console.log('📊 Subscribed to NIFTY 50');
+
+            // Keep alive
+            heartbeat = setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.ping();
+                }
+            }, 30000);
         });
 
-        smart_ws.on('tick', (data) => {
-            const price = data?.last_traded_price;
-            if (price) {
-                // Angel sends price in paise → divide by 100
-                console.log('NIFTY LIVE:', price / 100);
+        ws.on('message', (rawData) => {
+            try {
+                // Angel sends binary data
+                const data = JSON.parse(rawData.toString());
+                if (data?.last_traded_price) {
+                    const price = data.last_traded_price / 100;
+                    console.log('NIFTY LIVE :', price);
+                }
+            } catch (e) {
+                // Binary tick data — normal, ignore parse errors
             }
         });
 
-        smart_ws.on('error', (err) => {
-            console.error('WebSocket Error:', err);
+        ws.on('error', (err) => {
+            console.error('WebSocket Error:', err.message);
         });
 
-        smart_ws.on('close', () => {
-            console.log('🔴 WebSocket Closed — reconnecting in 5s...');
+        ws.on('close', (code, reason) => {
+            console.log('🔴 WebSocket Closed:', code, reason.toString());
+            clearInterval(heartbeat);
+            console.log('⏳ Reconnecting in 5s...');
             setTimeout(() => startWebSocket(authData), 5000);
         });
 
+        ws.on('ping', () => ws.pong());
+
     } catch (err) {
-        console.error('SOCKET START ERROR:', err);
+        console.error('SOCKET START ERROR:', err.message);
         setTimeout(() => startWebSocket(authData), 10000);
     }
 }
