@@ -43,13 +43,17 @@ function startWebSocket(jwtToken) {
 
             console.log('LIVE TICK:', tick);
 
-            latestPrice = tick.last_traded_price || 0;
+            latestPrice =
+                tick.last_traded_price || 0;
 
         }
 
         catch(err){
 
-            console.log('Raw Tick:', data.toString());
+            console.log(
+                'Raw Tick:',
+                data.toString()
+            );
 
         }
 
