@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>VardaanNifty AI</title>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <style>
+
+        body{
+            background:#0d1117;
+            color:white;
+            font-family:Arial;
+            text-align:center;
+            padding:20px;
+        }
+
+        .card{
+            background:#161b22;
+            padding:20px;
+            border-radius:14px;
+            margin-top:20px;
+        }
+
+        .buy{
+            color:#00ff99;
+        }
+
+        .sell{
+            color:#ff4d4d;
+        }
+
+        .wait{
+            color:#ffd166;
+        }
+
+    </style>
+
+</head>
+<body>
+
+    <h1>VardaanNifty AI</h1>
+
+    <div class="card">
+
+        <h2 id="nifty">Loading...</h2>
+
+        <h1 id="signal">WAIT</h1>
+
+        <h3 id="confidence"></h3>
+
+        <p id="rsi"></p>
+
+        <p id="reason"></p>
+
+    </div>
+
+<script>
+
+async function fetchSignal(){
+
+    const res = await fetch('/api/signal');
+
+    const data = await res.json();
+
+    document.getElementById('nifty').innerHTML =
+        `NIFTY : ${data.nifty}`;
+
+    const signalEl =
+        document.getElementById('signal');
+
+    signalEl.innerHTML = data.signal;
+
+    signalEl.className = '';
+
+    if(data.signal === 'BUY CALL'){
+        signalEl.classList.add('buy');
+    }
+
+    else if(data.signal === 'BUY PUT'){
+        signalEl.classList.add('sell');
+    }
+
+    else{
+        signalEl.classList.add('wait');
+    }
+
+    document.getElementById('confidence').innerHTML =
+        `Confidence : ${data.confidence}%`;
+
+    document.getElementById('rsi').innerHTML =
+        `RSI : ${data.rsi?.toFixed(2)}`;
+
+    document.getElementById('reason').innerHTML =
+        data.reason.join(' | ');
+}
+
+setInterval(fetchSignal,2000);
+
+fetchSignal();
+
+</script>
+
+</body>
+</html>
