@@ -1,42 +1,32 @@
-const axios = require('axios');
+const SmartAPI = require('smartapi-javascript');
 
 async function loginAngel() {
 
     try {
 
-        console.log('Trying Angel Login...');
+        console.log('Trying SmartAPI SDK Login...');
 
-        const response = await axios.post(
-            'https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword',
+        const smart_api = new SmartAPI({
+            api_key: process.env.ANGEL_API_KEY
+        });
 
-            {
-                clientcode: process.env.ANGEL_CLIENT_ID,
-                password: process.env.ANGEL_PASSWORD,
-                totp: process.env.ANGEL_TOTP
-            },
-
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'X-UserType': 'USER',
-                    'X-SourceID': 'WEB',
-                    'X-PrivateKey': process.env.ANGEL_API_KEY
-                }
-            }
+        const data = await smart_api.generateSession(
+            process.env.ANGEL_CLIENT_ID,
+            process.env.ANGEL_PASSWORD,
+            process.env.ANGEL_TOTP
         );
 
-        console.log('Angel Response:', response.data);
+        console.log('Login Success');
 
-        return response.data.data;
+        return data.data;
 
     }
 
     catch (err) {
 
         console.error(
-            'FULL ANGEL ERROR:',
-            err.response?.data || err.message
+            'SMARTAPI LOGIN ERROR:',
+            err.message || err
         );
 
     }
