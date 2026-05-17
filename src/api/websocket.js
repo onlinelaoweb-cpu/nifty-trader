@@ -1,6 +1,6 @@
 const WebSocket = require('ws');
 
-function startWebSocket(authData) {
+function startWebSocket(authData, onTick) {
     try {
         console.log('Starting WebSocket...');
 
@@ -9,7 +9,6 @@ function startWebSocket(authData) {
             return;
         }
 
-        // ✅ Direct Angel One WebSocket — no SDK
         const ws = new WebSocket(
             'wss://smartapisocket.angelone.in/smart-stream',
             {
@@ -22,14 +21,12 @@ function startWebSocket(authData) {
             }
         );
 
-        // ── Heartbeat every 30s ──────────────────
         let heartbeat = null;
 
         ws.on('open', () => {
             console.log('✅ WebSocket Connected!');
 
-            // Subscribe to NIFTY 50
-            const subscribeMsg = {
+            ws.send(JSON.stringify({
                 correlationID: 'vardaannifty',
                 action       : 1,
                 params       : {
@@ -41,12 +38,11 @@ function startWebSocket(authData) {
                         }
                     ]
                 }
-            };
+            }));
 
-            ws.send(JSON.stringify(subscribeMsg));
             console.log('📊 Subscribed to NIFTY 50');
 
-            // Keep alive
+            // Keep alive ping every 30s
             heartbeat = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) {
                     ws.ping();
@@ -56,14 +52,18 @@ function startWebSocket(authData) {
 
         ws.on('message', (rawData) => {
             try {
-                // Angel sends binary data
                 const data = JSON.parse(rawData.toString());
+
                 if (data?.last_traded_price) {
                     const price = data.last_traded_price / 100;
-                    console.log('NIFTY LIVE :', price);
+
+                    // ✅ server.js ko callback karo
+                    if (typeof onTick === 'function') {
+                        onTick({ price });
+                    }
                 }
             } catch (e) {
-                // Binary tick data — normal, ignore parse errors
+                // Binary data — ignore
             }
         });
 
@@ -71,18 +71,24 @@ function startWebSocket(authData) {
             console.error('WebSocket Error:', err.message);
         });
 
-        ws.on('close', (code, reason) => {
-            console.log('🔴 WebSocket Closed:', code, reason.toString());
+        ws.on('close', (code) => {
+            console.log('🔴 WebSocket Closed:', code);
             clearInterval(heartbeat);
             console.log('⏳ Reconnecting in 5s...');
-            setTimeout(() => startWebSocket(authData), 5000);
+            setTimeout(
+                () => startWebSocket(authData, onTick),
+                5000
+            );
         });
 
         ws.on('ping', () => ws.pong());
 
     } catch (err) {
         console.error('SOCKET START ERROR:', err.message);
-        setTimeout(() => startWebSocket(authData), 10000);
+        setTimeout(
+            () => startWebSocket(authData, onTick),
+            10000
+        );
     }
 }
 
