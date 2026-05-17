@@ -1,5 +1,5 @@
 const SmartAPI = require('smartapi-javascript').SmartAPI;
-const { TOTP }  = require('otpauth');
+const { TOTP } = require('otpauth');
 
 async function loginAngel() {
     try {
@@ -9,7 +9,6 @@ async function loginAngel() {
             api_key: process.env.ANGEL_API_KEY
         });
 
-        // ✅ Dynamic TOTP — har 30s mein fresh
         const totpCode = new TOTP({
             secret   : process.env.ANGEL_TOTP_SECRET,
             digits   : 6,
@@ -25,7 +24,12 @@ async function loginAngel() {
             totpCode
         );
 
-        // ✅ Check karo response valid hai
+        // ✅ Full response log karo debug ke liye
+        console.log('FULL RESPONSE:', JSON.stringify(data, null, 2));
+        console.log('STATUS:', data?.status);
+        console.log('MESSAGE:', data?.message);
+        console.log('ERROR CODE:', data?.errorCode);
+
         if (!data?.data?.jwtToken) {
             throw new Error(
                 'Login response invalid: '
@@ -36,7 +40,7 @@ async function loginAngel() {
         console.log('Login Success');
         console.log('feedToken:', data.data.feedToken ? '✅' : '❌ MISSING');
 
-        return data.data; // { jwtToken, feedToken, refreshToken }
+        return data.data;
 
     } catch (err) {
         console.error('SMARTAPI LOGIN ERROR:', err.message || err);
