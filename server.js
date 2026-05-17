@@ -3,19 +3,18 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
-const axios = require('axios');
 
 const loginAngel = require('./src/api/angelAuth');
 const startWebSocket = require('./src/api/websocket');
 
 const app = express();
-
 const server = http.createServer(app);
 
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 let marketState = {
     nifty: 0,
@@ -23,8 +22,6 @@ let marketState = {
     confidence: 0,
     reason: []
 };
-
-app.use(express.static('public'));
 
 app.get('/api/signal', (req, res) => {
 
@@ -44,7 +41,7 @@ async function initializeLiveData() {
 
     const auth = await loginAngel();
 
-    if(auth?.jwtToken){
+    if(auth){
 
         console.log('Angel Login Success');
 
