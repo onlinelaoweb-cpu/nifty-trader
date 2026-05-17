@@ -45,7 +45,11 @@ async function initializeLiveData() {
 
         console.log('Angel Login Success');
 
-        startWebSocket(auth.jwtToken);
+        if(auth.jwtToken){
+
+            startWebSocket(auth.jwtToken);
+
+        }
 
     }
 
