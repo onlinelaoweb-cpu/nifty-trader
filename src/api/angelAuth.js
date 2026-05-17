@@ -1,21 +1,11 @@
-const SmartAPI = require('smartapi-javascript').SmartAPI;
+const axios = require('axios');
 const { TOTP, Secret } = require('otpauth');
 
 async function loginAngel() {
     try {
-        console.log('Trying SmartAPI SDK Login...');
+        console.log('Trying Angel One Login...');
+        console.log('CLIENT_ID:', process.env.ANGEL_CLIENT_ID);
 
-        // ✅ Credentials check
-        console.log('API_KEY present   :', !!process.env.ANGEL_API_KEY);
-        console.log('CLIENT_ID present :', !!process.env.ANGEL_CLIENT_ID);
-        console.log('PASSWORD present  :', !!process.env.ANGEL_PASSWORD);
-        console.log('TOTP_SECRET length:', process.env.ANGEL_TOTP_SECRET?.length);
-
-        const smartApi = new SmartAPI({
-            api_key: process.env.ANGEL_API_KEY
-        });
-
-        // ✅ 25-char Angel One secret handle
         const totpCode = new TOTP({
             secret   : Secret.fromBase32(
                            process.env.ANGEL_TOTP_SECRET
@@ -29,32 +19,51 @@ async function loginAngel() {
 
         console.log('TOTP Generated:', totpCode);
 
-        const data = await smartApi.generateSession(
-            process.env.ANGEL_CLIENT_ID,
-            process.env.ANGEL_PASSWORD,
-            totpCode
+        // ✅ Direct REST API — no SDK
+        const response = await axios.post(
+            'https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword',
+            {
+                clientcode : process.env.ANGEL_CLIENT_ID,
+                password   : process.env.ANGEL_PASSWORD,
+                totp       : totpCode
+            },
+            {
+                headers: {
+                    'Content-Type'      : 'application/json',
+                    'Accept'            : 'application/json',
+                    'X-UserType'        : 'USER',
+                    'X-SourceID'        : 'WEB',
+                    'X-ClientLocalIP'   : '127.0.0.1',
+                    'X-ClientPublicIP'  : '127.0.0.1',
+                    'X-MACAddress'      : '00:00:00:00:00:00',
+                    'X-PrivateKey'      : process.env.ANGEL_API_KEY
+                }
+            }
         );
 
-        // ✅ Full response for debugging
+        const data = response.data;
         console.log('FULL RESPONSE:', JSON.stringify(data, null, 2));
-        console.log('STATUS     :', data?.status);
-        console.log('MESSAGE    :', data?.message);
-        console.log('ERROR CODE :', data?.errorCode);
 
         if (!data?.data?.jwtToken) {
             throw new Error(
-                'Login response invalid: '
-                + JSON.stringify(data)
+                'Login failed: ' + JSON.stringify(data)
             );
         }
 
-        console.log('Login Success ✅');
-        console.log('feedToken    :', data.data.feedToken ? '✅ present' : '❌ MISSING');
+        console.log('✅ Login Success!');
+        console.log('jwtToken  :', data.data.jwtToken  ? '✅' : '❌');
+        console.log('feedToken :', data.data.feedToken ? '✅' : '❌');
 
         return data.data;
 
     } catch (err) {
-        console.error('SMARTAPI LOGIN ERROR:', err.message || err);
+        if (err.response) {
+            // Angel API ne error diya
+            console.error('API ERROR STATUS:', err.response.status);
+            console.error('API ERROR DATA  :', JSON.stringify(err.response.data));
+        } else {
+            console.error('LOGIN ERROR:', err.message);
+        }
         return null;
     }
 }
