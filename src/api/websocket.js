@@ -1,78 +1,87 @@
-const WebSocket = require('ws');
+const { SmartWebSocketV2 } =
+require('smartapi-javascript');
 
-let latestPrice = 0;
+function startWebSocket(authData) {
 
-function startWebSocket(jwtToken) {
+    try {
 
-    const ws = new WebSocket(
-        'wss://smartapisocket.angelone.in/smart-stream'
-    );
+        const TOKEN =
+            authData.jwtToken;
 
-    ws.on('open', () => {
+        const API_KEY =
+            process.env.ANGEL_API_KEY;
 
-        console.log('WebSocket Connected');
+        const CLIENT_CODE =
+            process.env.ANGEL_CLIENT_ID;
 
-        ws.send(JSON.stringify({
+        const FEED_TOKEN =
+            authData.feedToken;
 
-            correlationID: 'vardaannifty',
+        const smart_ws =
+            new SmartWebSocketV2(
+                TOKEN,
+                API_KEY,
+                CLIENT_CODE,
+                FEED_TOKEN
+            );
 
-            action: 1,
+        smart_ws.connect();
 
-            params: {
+        smart_ws.on('connect', () => {
 
-                mode: 1,
+            console.log(
+                'WebSocket Connected'
+            );
 
-                tokenList: [
+            smart_ws.subscribe(
+                'vardaannifty',
+                1,
+                [
                     {
                         exchangeType: 1,
                         tokens: ['26000']
                     }
                 ]
-
-            }
-
-        }));
-
-    });
-
-    ws.on('message', (data) => {
-
-        try {
-
-            const tick = JSON.parse(data);
-
-            console.log('LIVE TICK:', tick);
-
-            latestPrice =
-                tick.last_traded_price || 0;
-
-        }
-
-        catch(err){
-
-            console.log(
-                'Raw Tick:',
-                data.toString()
             );
 
-        }
+        });
 
-    });
+        smart_ws.on('tick', (data) => {
 
-    ws.on('error', (err) => {
+            console.log(
+                'LIVE TICK:',
+                data
+            );
+
+        });
+
+        smart_ws.on('error', (err) => {
+
+            console.error(
+                'WebSocket Error:',
+                err
+            );
+
+        });
+
+        smart_ws.on('close', () => {
+
+            console.log(
+                'WebSocket Closed'
+            );
+
+        });
+
+    }
+
+    catch(err){
 
         console.error(
-            'WebSocket Error:',
+            'SOCKET START ERROR:',
             err
         );
 
-    });
-
-    ws.on('close', () => {
-
-        console.log('WebSocket Closed');
-
-    });
+    }
 
 }
 
