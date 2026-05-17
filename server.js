@@ -47,7 +47,7 @@ async function initializeLiveData() {
 
         if(auth.jwtToken){
 
-            startWebSocket(auth.jwtToken);
+            startWebSocket(auth);
 
         }
 
