@@ -1,36 +1,45 @@
 const { RSI, EMA, VWAP } = require('technicalindicators');
 
-// ── Price History Store ───────────────────────────────
-const priceHistory  = [];  // raw prices
-const candleHistory = [];  // OHLCV for VWAP
-
+// ── Price + Candle History ────────────────────────────
+let priceHistory  = [];
+let candleHistory = [];
 let currentCandle = null;
-let lastCandleTime = null;
+let lastMinute    = null;
+let initialized   = false;
 
-// ── Add new tick ─────────────────────────────────────
+// ── Initialize with Yahoo candle history ──────────────
+function initializeHistory(closes, candles) {
+    if (!closes || closes.length === 0) return;
+
+    priceHistory  = [...closes];
+    candleHistory = candles ? [...candles] : [];
+    initialized   = true;
+
+    console.log(`✅ Indicators initialized: ${priceHistory.length} prices loaded`);
+    console.log(`   RSI ready: ${priceHistory.length >= 15 ? 'YES' : 'NO (need ' + (15 - priceHistory.length) + ' more)'}`);
+    console.log(`   EMA ready: ${priceHistory.length >= 21 ? 'YES' : 'NO (need ' + (21 - priceHistory.length) + ' more)'}`);
+}
+
+// ── Add new tick ──────────────────────────────────────
 function addTick(price) {
-    const now     = new Date();
-    const minutes = now.getMinutes();
+    const now    = new Date();
+    const minute = now.getMinutes();
 
-    // New 1-min candle
-    if (!currentCandle || minutes !== lastCandleTime) {
+    // 1-min candle logic
+    if (!currentCandle || minute !== lastMinute) {
         if (currentCandle) {
             candleHistory.push({ ...currentCandle });
-            // Keep last 100 candles only
-            if (candleHistory.length > 100) {
-                candleHistory.shift();
-            }
+            if (candleHistory.length > 200) candleHistory.shift();
         }
-        currentCandle  = {
+        currentCandle = {
             open  : price,
             high  : price,
             low   : price,
             close : price,
             volume: 1
         };
-        lastCandleTime = minutes;
+        lastMinute = minute;
     } else {
-        // Update current candle
         currentCandle.high   = Math.max(currentCandle.high, price);
         currentCandle.low    = Math.min(currentCandle.low, price);
         currentCandle.close  = price;
@@ -39,12 +48,10 @@ function addTick(price) {
 
     // Price history
     priceHistory.push(price);
-    if (priceHistory.length > 200) {
-        priceHistory.shift();
-    }
+    if (priceHistory.length > 300) priceHistory.shift();
 }
 
-// ── Calculate RSI ─────────────────────────────────────
+// ── RSI ───────────────────────────────────────────────
 function calcRSI() {
     if (priceHistory.length < 15) return null;
     const result = RSI.calculate({
@@ -56,7 +63,7 @@ function calcRSI() {
         : null;
 }
 
-// ── Calculate EMA ─────────────────────────────────────
+// ── EMA ───────────────────────────────────────────────
 function calcEMA(period) {
     if (priceHistory.length < period) return null;
     const result = EMA.calculate({
@@ -68,12 +75,11 @@ function calcEMA(period) {
         : null;
 }
 
-// ── Calculate VWAP ────────────────────────────────────
+// ── VWAP ──────────────────────────────────────────────
 function calcVWAP() {
     const candles = currentCandle
         ? [...candleHistory, currentCandle]
         : candleHistory;
-
     if (candles.length < 2) return null;
 
     const result = VWAP.calculate({
@@ -82,14 +88,13 @@ function calcVWAP() {
         close : candles.map(c => c.close),
         volume: candles.map(c => c.volume)
     });
-
     return result.length > 0
         ? parseFloat(result[result.length - 1].toFixed(2))
         : null;
 }
 
-// ── Generate Signal ───────────────────────────────────
-function generateSignal(price, rsi, ema9, ema21, vwap) {
+// ── Signal from indicators ────────────────────────────
+function getIndicatorSignal(price, rsi, ema9, ema21, vwap) {
     const reasons   = [];
     let   bullScore = 0;
     let   bearScore = 0;
@@ -102,7 +107,7 @@ function generateSignal(price, rsi, ema9, ema21, vwap) {
         } else if (rsi > 65) {
             bearScore += 2;
             reasons.push(`RSI ${rsi} — Overbought ⚠️`);
-        } else if (rsi > 50) {
+        } else if (rsi >= 50) {
             bullScore++;
             reasons.push(`RSI ${rsi} — Bullish zone`);
         } else {
@@ -111,14 +116,14 @@ function generateSignal(price, rsi, ema9, ema21, vwap) {
         }
     }
 
-    // EMA Crossover
+    // EMA Cross
     if (ema9 !== null && ema21 !== null) {
         if (ema9 > ema21) {
             bullScore += 2;
-            reasons.push(`EMA9 > EMA21 — Uptrend ✅`);
+            reasons.push(`EMA9(${ema9}) > EMA21(${ema21}) — Uptrend ✅`);
         } else {
             bearScore += 2;
-            reasons.push(`EMA9 < EMA21 — Downtrend ⚠️`);
+            reasons.push(`EMA9(${ema9}) < EMA21(${ema21}) — Downtrend ⚠️`);
         }
     }
 
@@ -126,41 +131,39 @@ function generateSignal(price, rsi, ema9, ema21, vwap) {
     if (vwap !== null) {
         if (price > vwap) {
             bullScore += 2;
-            reasons.push(`Price above VWAP (${vwap}) ✅`);
+            reasons.push(`Price above VWAP(${vwap}) ✅`);
         } else {
             bearScore += 2;
-            reasons.push(`Price below VWAP (${vwap}) ⚠️`);
+            reasons.push(`Price below VWAP(${vwap}) ⚠️`);
         }
     }
 
-    // Signal decision
-    let signal     = 'WAIT';
-    let confidence = 0;
-    const total    = bullScore + bearScore;
-
+    const total = bullScore + bearScore;
     if (total === 0) {
-        reasons.push('Not enough data — wait');
-        return { signal, confidence: 0, reasons };
+        return {
+            signal    : 'WAIT',
+            confidence: 0,
+            reasons   : ['Collecting data...']
+        };
     }
 
-    const bullPct = (bullScore / total) * 100;
+    const pct = (bullScore / total) * 100;
+    let signal     = 'WAIT';
+    let confidence = 0;
 
-    if (bullPct >= 70) {
-        signal     = 'BUY CALL';
-        confidence = Math.round(bullPct);
-    } else if (bullPct <= 30) {
-        signal     = 'BUY PUT';
-        confidence = Math.round(100 - bullPct);
+    if (pct >= 65) {
+        signal = 'BUY CALL'; confidence = Math.round(pct);
+    } else if (pct <= 35) {
+        signal = 'BUY PUT';  confidence = Math.round(100 - pct);
     } else {
-        signal     = 'WAIT';
-        confidence = 30;
+        signal = 'WAIT';     confidence = 30;
         reasons.push('Mixed signals — no trade');
     }
 
     return { signal, confidence, reasons };
 }
 
-// ── Main Export ───────────────────────────────────────
+// ── Main export ───────────────────────────────────────
 function processIndicators(price) {
     addTick(price);
 
@@ -170,18 +173,14 @@ function processIndicators(price) {
     const vwap  = calcVWAP();
 
     const { signal, confidence, reasons } =
-        generateSignal(price, rsi, ema9, ema21, vwap);
+        getIndicatorSignal(price, rsi, ema9, ema21, vwap);
 
     return {
-        rsi,
-        ema9,
-        ema21,
-        vwap,
-        signal,
-        confidence,
-        reasons,
-        priceCount: priceHistory.length
+        rsi, ema9, ema21, vwap,
+        signal, confidence, reasons,
+        priceCount: priceHistory.length,
+        initialized
     };
 }
 
-module.exports = { processIndicators };
+module.exports = { processIndicators, initializeHistory };
