@@ -20,137 +20,110 @@ const PORT = process.env.PORT || 8080;
 
 // ── Market State ──────────────────────────────────────
 let marketState = {
-    // Price
-    nifty      : 0,
-    change     : 0,
-    changePct  : 0,
-    // Indicators
-    signal     : 'WAIT',
-    confidence : 0,
-    rsi        : null,
-    ema9       : null,
-    ema21      : null,
-    vwap       : null,
-    // PCR
-    pcr        : null,
-    atmPcr     : null,
-    pcrSignal  : 'N/A',
+    nifty       : 0,
+    change      : 0,
+    changePct   : 0,
+    signal      : 'WAIT',
+    confidence  : 0,
+    rsi         : null,
+    ema9        : null,
+    ema21       : null,
+    vwap        : null,
+    pcr         : null,
+    atmPcr      : null,
+    pcrSignal   : 'N/A',
     atmPcrSignal: 'N/A',
-    // VIX
-    vix        : null,
-    vixChange  : null,
-    vixSignal  : 'N/A',
-    vixNote    : '',
-    strikeRange: 'ATM ±200',
-    // Meta
-    reason     : ['Waiting for market data...'],
-    lastUpdated: null,
-    connected  : false
+    vix         : null,
+    vixChange   : null,
+    vixSignal   : 'N/A',
+    vixNote     : '',
+    strikeRange : 'ATM ±200',
+    reason      : ['Waiting for market data...'],
+    lastUpdated : null,
+    connected   : false,
+    source      : 'none'  // 'websocket' or 'yahoo'
 };
 
-let prevClose = 0;
+// ── Combined Signal Generator ─────────────────────────
+function combineSignals(indicators) {
+    let bullScore = 0;
+    let bearScore = 0;
+    const reasons = [...(indicators.reasons || [])];
 
-// ── Generate Combined Signal ──────────────────────────
-function combineSignals(indicators, pcrData, vixData) {
-    let   bullScore = 0;
-    let   bearScore = 0;
-    const reasons   = [...(indicators.reasons || [])];
-
-    // PCR scoring
-    if (pcrData?.pcr !== null && pcrData?.pcr !== undefined) {
-        if (pcrData.pcrSignal === 'BULLISH') {
+    // PCR
+    if (marketState.pcr !== null) {
+        if (marketState.pcrSignal === 'BULLISH') {
             bullScore += 2;
-            reasons.push(`PCR ${pcrData.pcr} — Bullish ✅`);
-        } else if (pcrData.pcrSignal === 'BEARISH') {
+            reasons.push(`PCR ${marketState.pcr} — Bullish ✅`);
+        } else if (marketState.pcrSignal === 'BEARISH') {
             bearScore += 2;
-            reasons.push(`PCR ${pcrData.pcr} — Bearish ⚠️`);
+            reasons.push(`PCR ${marketState.pcr} — Bearish ⚠️`);
         } else {
-            reasons.push(`PCR ${pcrData.pcr} — Neutral`);
+            reasons.push(`PCR ${marketState.pcr} — Neutral`);
         }
     }
 
-    // ATM PCR scoring
-    if (pcrData?.atmPcr !== null && pcrData?.atmPcr !== undefined) {
-        if (pcrData.atmPcrSignal === 'BULLISH') {
+    // ATM PCR
+    if (marketState.atmPcr !== null) {
+        if (marketState.atmPcrSignal === 'BULLISH') {
             bullScore += 2;
-            reasons.push(`ATM PCR ${pcrData.atmPcr} — Bullish ✅`);
-        } else if (pcrData.atmPcrSignal === 'BEARISH') {
+            reasons.push(`ATM PCR ${marketState.atmPcr} — Bullish ✅`);
+        } else if (marketState.atmPcrSignal === 'BEARISH') {
             bearScore += 2;
-            reasons.push(`ATM PCR ${pcrData.atmPcr} — Bearish ⚠️`);
+            reasons.push(`ATM PCR ${marketState.atmPcr} — Bearish ⚠️`);
         }
     }
 
-    // VIX scoring
-    if (vixData?.vix) {
-        if (vixData.change < -0.5) {
+    // VIX
+    if (marketState.vix) {
+        if (marketState.vixChange < -0.5) {
             bullScore++;
-            reasons.push(`VIX falling ${vixData.vix} — Bullish ✅`);
-        } else if (vixData.change > 0.5) {
+            reasons.push(`VIX falling (${marketState.vix}) ✅`);
+        } else if (marketState.vixChange > 0.5) {
             bearScore++;
-            reasons.push(`VIX rising ${vixData.vix} — Bearish ⚠️`);
+            reasons.push(`VIX rising (${marketState.vix}) ⚠️`);
         }
-
-        if (vixData.vix > 25) {
-            reasons.push(`⚠️ VIX HIGH (${vixData.vix}) — ${vixData.note}`);
+        if (marketState.vix > 25) {
+            reasons.push(`⚠️ VIX HIGH — ${marketState.vixNote}`);
         }
     }
 
-    // Combine with indicator score
-    const indBull = indicators.signal === 'BUY CALL' ? 3 : 0;
-    const indBear = indicators.signal === 'BUY PUT'  ? 3 : 0;
-    bullScore += indBull;
-    bearScore += indBear;
+    // Indicator signal weight
+    bullScore += indicators.signal === 'BUY CALL' ? 3 : 0;
+    bearScore += indicators.signal === 'BUY PUT'  ? 3 : 0;
 
-    const total   = bullScore + bearScore;
-    let signal    = 'WAIT';
+    const total    = bullScore + bearScore;
+    let signal     = 'WAIT';
     let confidence = 0;
 
     if (total > 0) {
-        const bullPct = (bullScore / total) * 100;
-        if (bullPct >= 65) {
-            signal     = 'BUY CALL';
-            confidence = Math.round(bullPct);
-        } else if (bullPct <= 35) {
-            signal     = 'BUY PUT';
-            confidence = Math.round(100 - bullPct);
+        const pct = (bullScore / total) * 100;
+        if (pct >= 65) {
+            signal = 'BUY CALL'; confidence = Math.round(pct);
+        } else if (pct <= 35) {
+            signal = 'BUY PUT';  confidence = Math.round(100 - pct);
         } else {
-            signal     = 'WAIT';
-            confidence = 30;
+            signal = 'WAIT';     confidence = 30;
             reasons.push('Mixed signals — no trade');
         }
     }
 
-    // VIX too high = override
-    if (vixData?.vix > 30) {
-        signal     = 'WAIT';
-        confidence = 0;
-        reasons.push('VIX > 30 — Avoid trading!');
+    if (marketState.vix > 30) {
+        signal = 'WAIT'; confidence = 0;
+        reasons.push('VIX > 30 — Avoid option buying!');
     }
 
     return { signal, confidence, reasons };
 }
 
-// ── Tick Callback ─────────────────────────────────────
-function onTick(tickData) {
-    const price = tickData.price;
-
-    if (prevClose > 0) {
-        marketState.change    = parseFloat((price - prevClose).toFixed(2));
-        marketState.changePct = parseFloat(
-            ((marketState.change / prevClose) * 100).toFixed(2)
-        );
-    }
-
+// ── Update price from any source ─────────────────────
+function updatePrice(price, change, changePct, source) {
     const indicators = processIndicators(price);
-    const { signal, confidence, reasons } = combineSignals(
-        indicators,
-        { pcr: marketState.pcr, atmPcr: marketState.atmPcr,
-          pcrSignal: marketState.pcrSignal,
-          atmPcrSignal: marketState.atmPcrSignal },
-        { vix: marketState.vix, change: marketState.vixChange }
-    );
+    const { signal, confidence, reasons } = combineSignals(indicators);
 
     marketState.nifty       = price;
+    marketState.change      = change;
+    marketState.changePct   = changePct;
     marketState.signal      = signal;
     marketState.confidence  = confidence;
     marketState.rsi         = indicators.rsi;
@@ -160,33 +133,62 @@ function onTick(tickData) {
     marketState.reason      = reasons;
     marketState.lastUpdated = new Date().toISOString();
     marketState.connected   = true;
+    marketState.source      = source;
 
-    console.log(
-        `NIFTY:${price}`,
-        `RSI:${indicators.rsi}`,
-        `PCR:${marketState.pcr}`,
-        `VIX:${marketState.vix}`,
-        `→ ${signal}(${confidence}%)`
-    );
+    if (source === 'yahoo') {
+        console.log(`NIFTY(Yahoo):${price} RSI:${indicators.rsi} VIX:${marketState.vix} → ${signal}(${confidence}%)`);
+    }
 }
 
-// ── Fetch PCR + VIX every 3 minutes ──────────────────
-async function refreshMarketData() {
-    const { pcrData, vixData } = await fetchMarketData();
+// ── WebSocket tick callback ───────────────────────────
+function onTick(tickData) {
+    const price = tickData.price;
+    if (!price || price <= 0) return;
 
+    const prev    = marketState.nifty || price;
+    const change  = parseFloat((price - prev).toFixed(2));
+    const chgPct  = prev > 0
+        ? parseFloat(((change / prev) * 100).toFixed(2)) : 0;
+
+    updatePrice(price, change, chgPct, 'websocket');
+}
+
+// ── Yahoo Finance polling fallback ────────────────────
+async function refreshMarketData() {
+    const { niftyData, pcrData, vixData } = await fetchMarketData();
+
+    // PCR update
     if (pcrData) {
-        marketState.pcr         = pcrData.pcr;
-        marketState.atmPcr      = pcrData.atmPcr;
-        marketState.pcrSignal   = pcrData.pcrSignal;
-        marketState.atmPcrSignal= pcrData.atmPcrSignal;
+        marketState.pcr          = pcrData.pcr;
+        marketState.atmPcr       = pcrData.atmPcr;
+        marketState.pcrSignal    = pcrData.pcrSignal;
+        marketState.atmPcrSignal = pcrData.atmPcrSignal;
     }
 
+    // VIX update
     if (vixData) {
         marketState.vix        = vixData.vix;
         marketState.vixChange  = vixData.change;
         marketState.vixSignal  = vixData.signal;
         marketState.vixNote    = vixData.note;
         marketState.strikeRange= vixData.strikeRange;
+    }
+
+    // NIFTY from Yahoo — use if WebSocket not giving data
+    if (niftyData && niftyData.price > 0) {
+        // Always update if no WebSocket data, or update every cycle
+        if (marketState.source !== 'websocket' || !marketState.connected) {
+            updatePrice(
+                niftyData.price,
+                niftyData.change,
+                niftyData.changePct,
+                'yahoo'
+            );
+        } else {
+            // Still update change/changePct from Yahoo
+            marketState.change    = niftyData.change;
+            marketState.changePct = niftyData.changePct;
+        }
     }
 }
 
@@ -198,6 +200,7 @@ app.get('/api/health', (req, res) => res.json({
     nifty      : marketState.nifty,
     vix        : marketState.vix,
     pcr        : marketState.pcr,
+    source     : marketState.source,
     lastUpdated: marketState.lastUpdated
 }));
 
@@ -209,18 +212,19 @@ app.get('/', (req, res) => {
 async function initializeLiveData() {
     console.log('Starting VardaanNifty AI...');
 
-    // Fetch PCR + VIX immediately
+    // First fetch immediately
     await refreshMarketData();
 
     // Refresh every 3 minutes
     setInterval(refreshMarketData, 3 * 60 * 1000);
 
+    // Angel WebSocket for real-time ticks
     const auth = await loginAngel();
     if (auth) {
         console.log('Angel Login Success');
         startWebSocket(auth, onTick);
     } else {
-        console.log('Login Failed — retrying in 30s...');
+        console.log('Angel Login Failed — Yahoo Finance fallback active');
         setTimeout(initializeLiveData, 30000);
     }
 }
