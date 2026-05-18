@@ -4,10 +4,11 @@ const express  = require('express');
 const http     = require('http');
 const cors     = require('cors');
 
-const loginAngel            = require('./src/api/angelAuth');
-const startWebSocket        = require('./src/api/websocket');
-const { processIndicators } = require('./src/api/indicators');
-const { fetchMarketData }   = require('./src/api/marketData');
+const loginAngel                       = require('./src/api/angelAuth');
+const startWebSocket                   = require('./src/api/websocket');
+const { processIndicators,
+        initializeHistory }            = require('./src/api/indicators');
+const { fetchMarketData }              = require('./src/api/marketData');
 
 const app    = express();
 const server = http.createServer(app);
@@ -20,37 +21,39 @@ const PORT = process.env.PORT || 8080;
 
 // ── Market State ──────────────────────────────────────
 let marketState = {
-    nifty       : 0,
-    change      : 0,
-    changePct   : 0,
-    signal      : 'WAIT',
-    confidence  : 0,
-    rsi         : null,
-    ema9        : null,
-    ema21       : null,
-    vwap        : null,
-    pcr         : null,
-    atmPcr      : null,
-    pcrSignal   : 'N/A',
-    atmPcrSignal: 'N/A',
-    vix         : null,
-    vixChange   : null,
-    vixSignal   : 'N/A',
-    vixNote     : '',
-    strikeRange : 'ATM ±200',
-    reason      : ['Waiting for market data...'],
-    lastUpdated : null,
-    connected   : false,
-    source      : 'none'  // 'websocket' or 'yahoo'
+    nifty        : 0,
+    change       : 0,
+    changePct    : 0,
+    signal       : 'WAIT',
+    confidence   : 0,
+    rsi          : null,
+    ema9         : null,
+    ema21        : null,
+    vwap         : null,
+    pcr          : null,
+    atmPcr       : null,
+    pcrSignal    : 'N/A',
+    atmPcrSignal : 'N/A',
+    vix          : null,
+    vixChange    : null,
+    vixSignal    : 'N/A',
+    vixNote      : '',
+    strikeRange  : 'ATM ±200',
+    reason       : ['Waiting for market data...'],
+    lastUpdated  : null,
+    connected    : false,
+    source       : 'none',
+    dataPoints   : 0
 };
 
-// ── Combined Signal Generator ─────────────────────────
+let historyLoaded = false;
+
+// ── Combined Signal ───────────────────────────────────
 function combineSignals(indicators) {
     let bullScore = 0;
     let bearScore = 0;
     const reasons = [...(indicators.reasons || [])];
 
-    // PCR
     if (marketState.pcr !== null) {
         if (marketState.pcrSignal === 'BULLISH') {
             bullScore += 2;
@@ -63,7 +66,6 @@ function combineSignals(indicators) {
         }
     }
 
-    // ATM PCR
     if (marketState.atmPcr !== null) {
         if (marketState.atmPcrSignal === 'BULLISH') {
             bullScore += 2;
@@ -74,7 +76,6 @@ function combineSignals(indicators) {
         }
     }
 
-    // VIX
     if (marketState.vix) {
         if (marketState.vixChange < -0.5) {
             bullScore++;
@@ -88,13 +89,11 @@ function combineSignals(indicators) {
         }
     }
 
-    // Indicator signal weight
     bullScore += indicators.signal === 'BUY CALL' ? 3 : 0;
     bearScore += indicators.signal === 'BUY PUT'  ? 3 : 0;
 
-    const total    = bullScore + bearScore;
-    let signal     = 'WAIT';
-    let confidence = 0;
+    const total = bullScore + bearScore;
+    let signal = 'WAIT', confidence = 0;
 
     if (total > 0) {
         const pct = (bullScore / total) * 100;
@@ -116,48 +115,60 @@ function combineSignals(indicators) {
     return { signal, confidence, reasons };
 }
 
-// ── Update price from any source ─────────────────────
+// ── Update price ──────────────────────────────────────
 function updatePrice(price, change, changePct, source) {
     const indicators = processIndicators(price);
     const { signal, confidence, reasons } = combineSignals(indicators);
 
-    marketState.nifty       = price;
-    marketState.change      = change;
-    marketState.changePct   = changePct;
-    marketState.signal      = signal;
-    marketState.confidence  = confidence;
-    marketState.rsi         = indicators.rsi;
-    marketState.ema9        = indicators.ema9;
-    marketState.ema21       = indicators.ema21;
-    marketState.vwap        = indicators.vwap;
-    marketState.reason      = reasons;
-    marketState.lastUpdated = new Date().toISOString();
-    marketState.connected   = true;
-    marketState.source      = source;
+    marketState.nifty      = price;
+    marketState.change     = change;
+    marketState.changePct  = changePct;
+    marketState.signal     = signal;
+    marketState.confidence = confidence;
+    marketState.rsi        = indicators.rsi;
+    marketState.ema9       = indicators.ema9;
+    marketState.ema21      = indicators.ema21;
+    marketState.vwap       = indicators.vwap;
+    marketState.reason     = reasons;
+    marketState.lastUpdated= new Date().toISOString();
+    marketState.connected  = true;
+    marketState.source     = source;
+    marketState.dataPoints = indicators.priceCount;
 
     if (source === 'yahoo') {
-        console.log(`NIFTY(Yahoo):${price} RSI:${indicators.rsi} VIX:${marketState.vix} → ${signal}(${confidence}%)`);
+        console.log(
+            `NIFTY:${price}`,
+            `RSI:${indicators.rsi || '--'}`,
+            `EMA9:${indicators.ema9 || '--'}`,
+            `EMA21:${indicators.ema21 || '--'}`,
+            `VWAP:${indicators.vwap || '--'}`,
+            `→ ${signal}(${confidence}%)`
+        );
     }
 }
 
-// ── WebSocket tick callback ───────────────────────────
+// ── WebSocket tick ────────────────────────────────────
 function onTick(tickData) {
     const price = tickData.price;
     if (!price || price <= 0) return;
-
-    const prev    = marketState.nifty || price;
-    const change  = parseFloat((price - prev).toFixed(2));
-    const chgPct  = prev > 0
+    const prev   = marketState.nifty || price;
+    const change = parseFloat((price - prev).toFixed(2));
+    const chgPct = prev > 0
         ? parseFloat(((change / prev) * 100).toFixed(2)) : 0;
-
     updatePrice(price, change, chgPct, 'websocket');
 }
 
-// ── Yahoo Finance polling fallback ────────────────────
+// ── Market Data Refresh ───────────────────────────────
 async function refreshMarketData() {
     const { niftyData, pcrData, vixData } = await fetchMarketData();
 
-    // PCR update
+    // ✅ KEY FIX: Load candle history → RSI/EMA work immediately
+    if (niftyData?.closes?.length > 0 && !historyLoaded) {
+        initializeHistory(niftyData.closes, niftyData.candles);
+        historyLoaded = true;
+        console.log(`📊 History seeded: ${niftyData.closes.length} candles`);
+    }
+
     if (pcrData) {
         marketState.pcr          = pcrData.pcr;
         marketState.atmPcr       = pcrData.atmPcr;
@@ -165,7 +176,6 @@ async function refreshMarketData() {
         marketState.atmPcrSignal = pcrData.atmPcrSignal;
     }
 
-    // VIX update
     if (vixData) {
         marketState.vix        = vixData.vix;
         marketState.vixChange  = vixData.change;
@@ -174,10 +184,8 @@ async function refreshMarketData() {
         marketState.strikeRange= vixData.strikeRange;
     }
 
-    // NIFTY from Yahoo — use if WebSocket not giving data
-    if (niftyData && niftyData.price > 0) {
-        // Always update if no WebSocket data, or update every cycle
-        if (marketState.source !== 'websocket' || !marketState.connected) {
+    if (niftyData?.price > 0) {
+        if (marketState.source !== 'websocket') {
             updatePrice(
                 niftyData.price,
                 niftyData.change,
@@ -185,21 +193,23 @@ async function refreshMarketData() {
                 'yahoo'
             );
         } else {
-            // Still update change/changePct from Yahoo
             marketState.change    = niftyData.change;
             marketState.changePct = niftyData.changePct;
         }
     }
 }
 
-// ── API Routes ────────────────────────────────────────
+// ── Routes ────────────────────────────────────────────
 app.get('/api/signal', (req, res) => res.json(marketState));
 
 app.get('/api/health', (req, res) => res.json({
     status     : marketState.connected ? 'live' : 'waiting',
     nifty      : marketState.nifty,
+    rsi        : marketState.rsi,
+    ema9       : marketState.ema9,
     vix        : marketState.vix,
     pcr        : marketState.pcr,
+    dataPoints : marketState.dataPoints,
     source     : marketState.source,
     lastUpdated: marketState.lastUpdated
 }));
@@ -212,19 +222,15 @@ app.get('/', (req, res) => {
 async function initializeLiveData() {
     console.log('Starting VardaanNifty AI...');
 
-    // First fetch immediately
-    await refreshMarketData();
-
-    // Refresh every 3 minutes
+    await refreshMarketData();          // loads candles + seeds history
     setInterval(refreshMarketData, 3 * 60 * 1000);
 
-    // Angel WebSocket for real-time ticks
     const auth = await loginAngel();
     if (auth) {
         console.log('Angel Login Success');
         startWebSocket(auth, onTick);
     } else {
-        console.log('Angel Login Failed — Yahoo Finance fallback active');
+        console.log('Yahoo Finance fallback active');
         setTimeout(initializeLiveData, 30000);
     }
 }
