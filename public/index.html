@@ -2,103 +2,370 @@
 <html>
 <head>
     <title>VardaanNifty AI</title>
-
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
     <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
-        body{
-            background:#0d1117;
-            color:white;
-            font-family:Arial;
-            text-align:center;
-            padding:20px;
+        body {
+            background : #080c10;
+            color      : #cfd8dc;
+            font-family: 'Arial', sans-serif;
+            padding    : 12px;
+            min-height : 100vh;
         }
 
-        .card{
-            background:#161b22;
-            padding:20px;
-            border-radius:14px;
-            margin-top:20px;
+        h1 {
+            text-align   : center;
+            font-size    : 18px;
+            color        : #29b6f6;
+            letter-spacing: 3px;
+            padding      : 10px 0;
+            border-bottom: 1px solid #1e3a5f;
+            margin-bottom: 12px;
         }
 
-        .buy{
-            color:#00ff99;
+        /* NIFTY Price */
+        .price-card {
+            background   : #0a1828;
+            border       : 1px solid #1e3a5f;
+            border-radius: 10px;
+            padding      : 14px;
+            text-align   : center;
+            margin-bottom: 10px;
         }
 
-        .sell{
-            color:#ff4d4d;
+        .price-label {
+            font-size: 11px;
+            color    : #546e7a;
+            letter-spacing: 2px;
         }
 
-        .wait{
-            color:#ffd166;
+        .price-value {
+            font-size  : 36px;
+            font-weight: 700;
+            color      : #eceff1;
+            font-family: monospace;
+            margin     : 4px 0;
         }
 
+        .price-change.up   { color: #00e676; font-size: 14px; }
+        .price-change.down { color: #ff1744; font-size: 14px; }
+        .price-change.flat { color: #78909c; font-size: 14px; }
+
+        /* Signal */
+        .signal-card {
+            border-radius: 10px;
+            padding      : 16px;
+            text-align   : center;
+            margin-bottom: 10px;
+            border       : 2px solid;
+        }
+
+        .signal-card.buy-call {
+            background  : rgba(0,230,118,0.08);
+            border-color: #00e676;
+        }
+
+        .signal-card.buy-put {
+            background  : rgba(255,23,68,0.08);
+            border-color: #ff1744;
+        }
+
+        .signal-card.wait {
+            background  : rgba(255,196,0,0.08);
+            border-color: #ffc400;
+        }
+
+        .signal-text {
+            font-size     : 32px;
+            font-weight   : 700;
+            letter-spacing: 3px;
+        }
+
+        .buy-call .signal-text { color: #00e676; }
+        .buy-put  .signal-text { color: #ff1744; }
+        .wait     .signal-text { color: #ffc400; }
+
+        .confidence-bar-wrap {
+            background   : #1e3a5f;
+            border-radius: 4px;
+            height       : 8px;
+            margin       : 10px 0 4px;
+            overflow     : hidden;
+        }
+
+        .confidence-bar {
+            height       : 100%;
+            border-radius: 4px;
+            transition   : width 0.5s ease;
+        }
+
+        .buy-call .confidence-bar { background: #00e676; }
+        .buy-put  .confidence-bar { background: #ff1744; }
+        .wait     .confidence-bar { background: #ffc400; }
+
+        .confidence-text {
+            font-size: 12px;
+            color    : #78909c;
+        }
+
+        /* Indicators Grid */
+        .grid {
+            display              : grid;
+            grid-template-columns: 1fr 1fr;
+            gap                  : 8px;
+            margin-bottom        : 10px;
+        }
+
+        .ind-card {
+            background   : #0a1828;
+            border       : 1px solid #1e3a5f;
+            border-radius: 8px;
+            padding      : 10px;
+            text-align   : center;
+        }
+
+        .ind-label {
+            font-size     : 10px;
+            color         : #546e7a;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        .ind-value {
+            font-size  : 20px;
+            font-weight: 700;
+            font-family: monospace;
+            margin-top : 4px;
+        }
+
+        .ind-card.rsi-bull  { border-left: 3px solid #00e676; }
+        .ind-card.rsi-bear  { border-left: 3px solid #ff1744; }
+        .ind-card.rsi-neut  { border-left: 3px solid #ffc400; }
+        .ind-card.vwap-bull { border-left: 3px solid #00e676; }
+        .ind-card.vwap-bear { border-left: 3px solid #ff1744; }
+        .ind-card.ema-bull  { border-left: 3px solid #00e676; }
+        .ind-card.ema-bear  { border-left: 3px solid #ff1744; }
+
+        /* Reasons */
+        .reason-card {
+            background   : #0a1828;
+            border       : 1px solid #1e3a5f;
+            border-radius: 8px;
+            padding      : 10px 14px;
+            margin-bottom: 10px;
+        }
+
+        .reason-title {
+            font-size     : 10px;
+            color         : #546e7a;
+            letter-spacing: 2px;
+            margin-bottom : 6px;
+        }
+
+        .reason-item {
+            font-size    : 12px;
+            color        : #90a4ae;
+            padding      : 3px 0;
+            border-bottom: 1px solid #1e3a5f;
+            line-height  : 1.6;
+        }
+
+        .reason-item:last-child { border-bottom: none; }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            font-size : 10px;
+            color     : #37474f;
+            padding   : 8px 0;
+        }
+
+        .dot {
+            display      : inline-block;
+            width        : 8px;
+            height       : 8px;
+            border-radius: 50%;
+            margin-right : 5px;
+            animation    : pulse 2s infinite;
+        }
+
+        .dot.live    { background: #00e676; }
+        .dot.offline { background: #ff1744; }
+
+        @keyframes pulse {
+            0%,100% { opacity: 1; }
+            50%     { opacity: 0.3; }
+        }
     </style>
-
 </head>
 <body>
 
-    <h1>VardaanNifty AI</h1>
+<h1>⚡ VARDAANNIFTY AI</h1>
 
-    <div class="card">
+<!-- Price Card -->
+<div class="price-card">
+    <div class="price-label">NIFTY 50</div>
+    <div class="price-value" id="price">--</div>
+    <div class="price-change flat" id="change">-- | --%</div>
+</div>
 
-        <h2 id="nifty">Loading...</h2>
-
-        <h1 id="signal">WAIT</h1>
-
-        <h3 id="confidence"></h3>
-
-        <p id="rsi"></p>
-
-        <p id="reason"></p>
-
+<!-- Signal Card -->
+<div class="signal-card wait" id="signal-card">
+    <div class="signal-text" id="signal">WAIT</div>
+    <div class="confidence-bar-wrap">
+        <div class="confidence-bar" id="conf-bar" style="width:0%"></div>
     </div>
+    <div class="confidence-text" id="conf-text">Confidence: 0%</div>
+</div>
+
+<!-- Indicators Grid -->
+<div class="grid">
+    <div class="ind-card rsi-neut" id="rsi-card">
+        <div class="ind-label">RSI (14)</div>
+        <div class="ind-value" id="rsi-val">--</div>
+    </div>
+    <div class="ind-card" id="vwap-card">
+        <div class="ind-label">VWAP</div>
+        <div class="ind-value" id="vwap-val">--</div>
+    </div>
+    <div class="ind-card" id="ema-card">
+        <div class="ind-label">EMA 9 / 21</div>
+        <div class="ind-value" id="ema-val" style="font-size:14px;">--</div>
+    </div>
+    <div class="ind-card" id="status-card">
+        <div class="ind-label">STATUS</div>
+        <div class="ind-value" id="status-val" style="font-size:14px;">
+            <span class="dot offline" id="dot"></span>WAIT
+        </div>
+    </div>
+</div>
+
+<!-- Reasons -->
+<div class="reason-card">
+    <div class="reason-title">📊 SIGNAL REASONING</div>
+    <div id="reasons">
+        <div class="reason-item">Waiting for market data...</div>
+    </div>
+</div>
+
+<div class="footer" id="footer">Last updated: --</div>
 
 <script>
+async function fetchSignal() {
+    try {
+        const res  = await fetch('/api/signal');
+        const data = await res.json();
 
-async function fetchSignal(){
+        // ── Price ──────────────────────────────────
+        document.getElementById('price').textContent =
+            data.nifty > 0
+                ? data.nifty.toLocaleString('en-IN', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                  })
+                : '--';
 
-    const res = await fetch('/api/signal');
+        const chg    = data.change    || 0;
+        const chgPct = data.changePct || 0;
+        const chgEl  = document.getElementById('change');
+        chgEl.textContent =
+            data.nifty > 0
+                ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)} (${chgPct.toFixed(2)}%)`
+                : 'Market closed';
+        chgEl.className = 'price-change ' +
+            (chg > 0 ? 'up' : chg < 0 ? 'down' : 'flat');
 
-    const data = await res.json();
+        // ── Signal ─────────────────────────────────
+        const sig     = data.signal || 'WAIT';
+        const sigCard = document.getElementById('signal-card');
+        const sigEl   = document.getElementById('signal');
+        sigEl.textContent  = sig;
+        sigCard.className  = 'signal-card ' +
+            (sig === 'BUY CALL' ? 'buy-call' :
+             sig === 'BUY PUT'  ? 'buy-put'  : 'wait');
 
-    document.getElementById('nifty').innerHTML =
-        `NIFTY : ${data.nifty}`;
+        const conf = data.confidence || 0;
+        document.getElementById('conf-bar').style.width  = conf + '%';
+        document.getElementById('conf-text').textContent =
+            `Confidence: ${conf}%`;
 
-    const signalEl =
-        document.getElementById('signal');
+        // ── RSI ────────────────────────────────────
+        const rsiCard = document.getElementById('rsi-card');
+        const rsiVal  = document.getElementById('rsi-val');
+        if (data.rsi !== null && data.rsi !== undefined) {
+            rsiVal.textContent = data.rsi.toFixed(2);
+            rsiCard.className  = 'ind-card ' +
+                (data.rsi < 35 ? 'rsi-bull' :
+                 data.rsi > 65 ? 'rsi-bear' : 'rsi-neut');
+            rsiVal.style.color =
+                data.rsi < 35 ? '#00e676' :
+                data.rsi > 65 ? '#ff1744' : '#ffc400';
+        } else {
+            rsiVal.textContent = '--';
+        }
 
-    signalEl.innerHTML = data.signal;
+        // ── VWAP ───────────────────────────────────
+        const vwapCard = document.getElementById('vwap-card');
+        const vwapVal  = document.getElementById('vwap-val');
+        if (data.vwap) {
+            vwapVal.textContent = data.vwap.toLocaleString('en-IN');
+            const aboveVWAP    = data.nifty > data.vwap;
+            vwapCard.className = 'ind-card ' +
+                (aboveVWAP ? 'vwap-bull' : 'vwap-bear');
+            vwapVal.style.color= aboveVWAP ? '#00e676' : '#ff1744';
+        } else {
+            vwapVal.textContent = '--';
+        }
 
-    signalEl.className = '';
+        // ── EMA ────────────────────────────────────
+        const emaCard = document.getElementById('ema-card');
+        const emaVal  = document.getElementById('ema-val');
+        if (data.ema9 && data.ema21) {
+            emaVal.textContent = `${data.ema9} / ${data.ema21}`;
+            const emaBull      = data.ema9 > data.ema21;
+            emaCard.className  = 'ind-card ' +
+                (emaBull ? 'ema-bull' : 'ema-bear');
+            emaVal.style.color = emaBull ? '#00e676' : '#ff1744';
+        } else {
+            emaVal.textContent = '--';
+        }
 
-    if(data.signal === 'BUY CALL'){
-        signalEl.classList.add('buy');
+        // ── Status ─────────────────────────────────
+        const dot    = document.getElementById('dot');
+        const status = document.getElementById('status-val');
+        if (data.connected && data.nifty > 0) {
+            dot.className          = 'dot live';
+            status.childNodes[1]
+                ? (status.childNodes[1].textContent = 'LIVE')
+                : null;
+        } else {
+            dot.className = 'dot offline';
+        }
+
+        // ── Reasons ────────────────────────────────
+        const reasonsEl = document.getElementById('reasons');
+        if (data.reason && data.reason.length > 0) {
+            reasonsEl.innerHTML = data.reason
+                .map(r => `<div class="reason-item">${r}</div>`)
+                .join('');
+        }
+
+        // ── Footer ─────────────────────────────────
+        document.getElementById('footer').textContent =
+            data.lastUpdated
+                ? 'Updated: ' + new Date(data.lastUpdated)
+                    .toLocaleTimeString('en-IN', { hour12: true })
+                : 'Waiting...';
+
+    } catch (e) {
+        console.error('Fetch error:', e);
     }
-
-    else if(data.signal === 'BUY PUT'){
-        signalEl.classList.add('sell');
-    }
-
-    else{
-        signalEl.classList.add('wait');
-    }
-
-    document.getElementById('confidence').innerHTML =
-        `Confidence : ${data.confidence}%`;
-
-    document.getElementById('rsi').innerHTML =
-        `RSI : ${data.rsi?.toFixed(2)}`;
-
-    document.getElementById('reason').innerHTML =
-        data.reason.join(' | ');
 }
 
-setInterval(fetchSignal,2000);
-
+// Refresh every 2 seconds
+setInterval(fetchSignal, 2000);
 fetchSignal();
-
 </script>
 
 </body>
