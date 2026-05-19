@@ -10,6 +10,14 @@ const { processIndicators,
         initializeHistory }         = require('./src/api/indicators');
 const { fetchMarketData }           = require('./src/api/marketData');
 const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
+const {
+    sendSignalAlert,
+    sendMTFAlert,
+    sendMorningSummary,
+    sendVIXAlert,
+    sendCloseSummary,
+    isConfigured
+}                                   = require('./src/api/telegram');
 
 const app    = express();
 const server = http.createServer(app);
@@ -20,6 +28,7 @@ app.use(express.static('public'));
 
 const PORT = process.env.PORT || 8080;
 
+// ── Market State ──────────────────────────────────────
 let marketState = {
     nifty        : 0,
     change       : 0,
@@ -57,8 +66,30 @@ let marketState = {
     dataPoints   : 0
 };
 
-let historyLoaded = false;
+let historyLoaded       = false;
+let prevSignal          = 'WAIT';
+let prevMTFAligned      = false;
+let morningSummarySent  = false;
+let closeSummarySent    = false;
+let vixAlertSent        = false;
 
+// ── Market hours check ────────────────────────────────
+function isMarketOpen() {
+    const now = new Date();
+    const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const h   = ist.getHours();
+    const m   = ist.getMinutes();
+    const mins = h * 60 + m;
+    // 9:15 AM to 3:30 PM IST
+    return mins >= 555 && mins <= 930;
+}
+
+function getISTTime() {
+    const now = new Date();
+    return new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+}
+
+// ── PCR label ─────────────────────────────────────────
 function pcrLabel(v) {
     if (!v)      return 'N/A';
     if (v > 1.5) return 'BULLISH';
@@ -66,6 +97,7 @@ function pcrLabel(v) {
     return 'NEUTRAL';
 }
 
+// ── Signal generator ──────────────────────────────────
 function combineSignals(indicators) {
     let bullScore = 0;
     let bearScore = 0;
@@ -148,9 +180,62 @@ function combineSignals(indicators) {
     return { signal, confidence, reasons };
 }
 
-function updatePrice(price, change, changePct, source) {
+// ── Telegram trigger checks ───────────────────────────
+async function checkTelegramAlerts(newSignal) {
+    if (!isConfigured()) return;
+    if (!isMarketOpen()) return;
+
+    const ist = getISTTime();
+    const h   = ist.getHours();
+    const m   = ist.getMinutes();
+
+    // Morning summary at 9:16 AM
+    if (h === 9 && m >= 16 && m <= 20 && !morningSummarySent) {
+        morningSummarySent = true;
+        await sendMorningSummary(marketState);
+        return;
+    }
+
+    // Reset flags at market close
+    if (h === 15 && m >= 30 && !closeSummarySent) {
+        closeSummarySent = true;
+        await sendCloseSummary(marketState);
+        // Reset for next day
+        setTimeout(() => {
+            morningSummarySent = false;
+            closeSummarySent   = false;
+            vixAlertSent       = false;
+        }, 6 * 60 * 60 * 1000); // reset after 6 hours
+        return;
+    }
+
+    // Signal changed alert
+    if (newSignal !== prevSignal && newSignal !== 'WAIT') {
+        console.log(`📱 Signal changed: ${prevSignal} → ${newSignal}`);
+        await sendSignalAlert(marketState, prevSignal);
+    }
+
+    // MTF all aligned — only once per alignment
+    if (marketState.mtf.aligned && !prevMTFAligned) {
+        console.log('📱 MTF aligned alert!');
+        await sendMTFAlert(marketState);
+    }
+    prevMTFAligned = marketState.mtf.aligned;
+
+    // VIX high alert
+    if (marketState.vix > 20 && !vixAlertSent) {
+        vixAlertSent = true;
+        await sendVIXAlert(marketState.vix, marketState.vixNote);
+    }
+    if (marketState.vix <= 20) vixAlertSent = false;
+}
+
+// ── Update price ──────────────────────────────────────
+async function updatePrice(price, change, changePct, source) {
     const indicators = processIndicators(price);
     const { signal, confidence, reasons } = combineSignals(indicators);
+
+    const newSignal = signal;
 
     marketState.nifty       = price;
     marketState.change      = change;
@@ -176,8 +261,13 @@ function updatePrice(price, change, changePct, source) {
             `→ ${signal}(${confidence}%)`
         );
     }
+
+    // Telegram alerts
+    await checkTelegramAlerts(newSignal);
+    prevSignal = newSignal;
 }
 
+// ── WebSocket tick ────────────────────────────────────
 function onTick(tickData) {
     const price = tickData.price;
     if (!price || price <= 0) return;
@@ -188,6 +278,7 @@ function onTick(tickData) {
     updatePrice(price, change, chgPct, 'websocket');
 }
 
+// ── Refresh market data ───────────────────────────────
 async function refreshMarketData() {
     const { niftyData, vixData } = await fetchMarketData();
 
@@ -207,7 +298,7 @@ async function refreshMarketData() {
 
     if (niftyData?.price > 0) {
         if (marketState.source !== 'websocket') {
-            updatePrice(
+            await updatePrice(
                 niftyData.price,
                 niftyData.change,
                 niftyData.changePct,
@@ -220,6 +311,7 @@ async function refreshMarketData() {
     }
 }
 
+// ── Refresh MTF ───────────────────────────────────────
 async function refreshMTF() {
     try {
         const mtfData = await analyzeMultiTimeframe();
@@ -242,7 +334,7 @@ async function refreshMTF() {
     }
 }
 
-// ── Routes ────────────────────────────────────────────
+// ── API Routes ────────────────────────────────────────
 app.get('/api/signal', (req, res) => res.json(marketState));
 
 app.get('/api/health', (req, res) => res.json({
@@ -251,27 +343,34 @@ app.get('/api/health', (req, res) => res.json({
     rsi        : marketState.rsi,
     mtfSignal  : marketState.mtf.signal,
     vix        : marketState.vix,
+    telegram   : isConfigured() ? 'configured' : 'not configured',
     source     : marketState.source,
     lastUpdated: marketState.lastUpdated
 }));
 
-// ✅ Manual PCR input from dashboard
+// Manual PCR
 app.post('/api/pcr', (req, res) => {
     const { pcr, atmPcr } = req.body;
-
     if (pcr !== undefined && pcr !== null) {
         marketState.pcr       = parseFloat(pcr);
         marketState.pcrSignal = pcrLabel(marketState.pcr);
         console.log(`PCR manual: ${marketState.pcr} → ${marketState.pcrSignal}`);
     }
-
     if (atmPcr !== undefined && atmPcr !== null) {
         marketState.atmPcr       = parseFloat(atmPcr);
         marketState.atmPcrSignal = pcrLabel(marketState.atmPcr);
         console.log(`ATM PCR manual: ${marketState.atmPcr} → ${marketState.atmPcrSignal}`);
     }
-
     res.json({ success: true });
+});
+
+// Manual Telegram test
+app.post('/api/telegram/test', async (req, res) => {
+    if (!isConfigured()) {
+        return res.json({ success: false, msg: 'Telegram not configured' });
+    }
+    await sendMorningSummary(marketState);
+    res.json({ success: true, msg: 'Test message sent!' });
 });
 
 app.get('/', (req, res) => {
@@ -281,6 +380,7 @@ app.get('/', (req, res) => {
 // ── Init ──────────────────────────────────────────────
 async function initializeLiveData() {
     console.log('Starting VardaanNifty AI...');
+    console.log('Telegram:', isConfigured() ? '✅ configured' : '❌ not configured');
 
     await refreshMarketData();
     await refreshMTF();
