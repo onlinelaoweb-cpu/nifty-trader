@@ -4,12 +4,12 @@ const express  = require('express');
 const http     = require('http');
 const cors     = require('cors');
 
-const loginAngel                       = require('./src/api/angelAuth');
-const startWebSocket                   = require('./src/api/websocket');
+const loginAngel                    = require('./src/api/angelAuth');
+const startWebSocket                = require('./src/api/websocket');
 const { processIndicators,
-        initializeHistory }            = require('./src/api/indicators');
-const { fetchMarketData }              = require('./src/api/marketData');
-const { analyzeMultiTimeframe }        = require('./src/api/multiTimeframe');
+        initializeHistory }         = require('./src/api/indicators');
+const { fetchMarketData }           = require('./src/api/marketData');
+const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
 
 const app    = express();
 const server = http.createServer(app);
@@ -20,31 +20,25 @@ app.use(express.static('public'));
 
 const PORT = process.env.PORT || 8080;
 
-// ── Market State ──────────────────────────────────────
 let marketState = {
-    // Price
     nifty        : 0,
     change       : 0,
     changePct    : 0,
-    // 1min signal
     signal       : 'WAIT',
     confidence   : 0,
     rsi          : null,
     ema9         : null,
     ema21        : null,
     vwap         : null,
-    // PCR
     pcr          : null,
     atmPcr       : null,
     pcrSignal    : 'N/A',
     atmPcrSignal : 'N/A',
-    // VIX
     vix          : null,
     vixChange    : null,
     vixSignal    : 'N/A',
     vixNote      : '',
     strikeRange  : 'ATM ±200',
-    // Multi-timeframe
     mtf: {
         signal    : 'WAIT',
         strength  : 'WEAK',
@@ -56,7 +50,6 @@ let marketState = {
         tf15m: { rsi:null, ema9:null, ema21:null, vwap:null, signal:'NEUTRAL', score:50 },
         tf1h : { rsi:null, ema9:null, ema21:null, vwap:null, signal:'NEUTRAL', score:50 }
     },
-    // Meta
     reason       : ['Waiting for market data...'],
     lastUpdated  : null,
     connected    : false,
@@ -66,7 +59,13 @@ let marketState = {
 
 let historyLoaded = false;
 
-// ── Combined Signal ───────────────────────────────────
+function pcrLabel(v) {
+    if (!v)      return 'N/A';
+    if (v > 1.5) return 'BULLISH';
+    if (v < 0.7) return 'BEARISH';
+    return 'NEUTRAL';
+}
+
 function combineSignals(indicators) {
     let bullScore = 0;
     let bearScore = 0;
@@ -84,6 +83,16 @@ function combineSignals(indicators) {
         }
     }
 
+    if (marketState.atmPcr !== null) {
+        if (marketState.atmPcrSignal === 'BULLISH') {
+            bullScore += 2;
+            reasons.push(`ATM PCR ${marketState.atmPcr} — Bullish ✅`);
+        } else if (marketState.atmPcrSignal === 'BEARISH') {
+            bearScore += 2;
+            reasons.push(`ATM PCR ${marketState.atmPcr} — Bearish ⚠️`);
+        }
+    }
+
     if (marketState.vix) {
         if (marketState.vixChange < -0.5) {
             bullScore++;
@@ -92,23 +101,25 @@ function combineSignals(indicators) {
             bearScore++;
             reasons.push(`VIX rising (${marketState.vix}) ⚠️`);
         }
+        if (marketState.vix > 25) {
+            reasons.push(`⚠️ VIX HIGH — ${marketState.vixNote}`);
+        }
     }
 
-    // MTF alignment bonus
     if (marketState.mtf.aligned) {
-        if (marketState.mtf.mtfSignal === 'BUY CALL') {
+        if (marketState.mtf.signal === 'BUY CALL') {
             bullScore += 3;
             reasons.push('All 3 timeframes BULLISH 🔥');
-        } else if (marketState.mtf.mtfSignal === 'BUY PUT') {
+        } else if (marketState.mtf.signal === 'BUY PUT') {
             bearScore += 3;
             reasons.push('All 3 timeframes BEARISH 🔥');
         }
     } else if (marketState.mtf.bullCount === 2) {
-        bullScore += 1;
-        reasons.push(`2/3 timeframes bullish`);
+        bullScore++;
+        reasons.push('2/3 timeframes bullish');
     } else if (marketState.mtf.bearCount === 2) {
-        bearScore += 1;
-        reasons.push(`2/3 timeframes bearish`);
+        bearScore++;
+        reasons.push('2/3 timeframes bearish');
     }
 
     bullScore += indicators.signal === 'BUY CALL' ? 3 : 0;
@@ -155,6 +166,16 @@ function updatePrice(price, change, changePct, source) {
     marketState.connected   = true;
     marketState.source      = source;
     marketState.dataPoints  = indicators.priceCount;
+
+    if (source === 'yahoo') {
+        console.log(
+            `NIFTY:${price}`,
+            `RSI:${indicators.rsi || '--'}`,
+            `EMA9:${indicators.ema9 || '--'}`,
+            `VWAP:${indicators.vwap || '--'}`,
+            `→ ${signal}(${confidence}%)`
+        );
+    }
 }
 
 function onTick(tickData) {
@@ -167,20 +188,13 @@ function onTick(tickData) {
     updatePrice(price, change, chgPct, 'websocket');
 }
 
-// ── Refresh market data every 3 min ──────────────────
 async function refreshMarketData() {
-    const { niftyData, pcrData, vixData } = await fetchMarketData();
+    const { niftyData, vixData } = await fetchMarketData();
 
     if (niftyData?.closes?.length > 0 && !historyLoaded) {
         initializeHistory(niftyData.closes, niftyData.candles);
         historyLoaded = true;
-    }
-
-    if (pcrData) {
-        marketState.pcr          = pcrData.pcr;
-        marketState.atmPcr       = pcrData.atmPcr;
-        marketState.pcrSignal    = pcrData.pcrSignal;
-        marketState.atmPcrSignal = pcrData.atmPcrSignal;
+        console.log(`History seeded: ${niftyData.closes.length} candles`);
     }
 
     if (vixData) {
@@ -193,7 +207,12 @@ async function refreshMarketData() {
 
     if (niftyData?.price > 0) {
         if (marketState.source !== 'websocket') {
-            updatePrice(niftyData.price, niftyData.change, niftyData.changePct, 'yahoo');
+            updatePrice(
+                niftyData.price,
+                niftyData.change,
+                niftyData.changePct,
+                'yahoo'
+            );
         } else {
             marketState.change    = niftyData.change;
             marketState.changePct = niftyData.changePct;
@@ -201,22 +220,25 @@ async function refreshMarketData() {
     }
 }
 
-// ── Refresh MTF every 5 min ───────────────────────────
 async function refreshMTF() {
-    const mtfData = await analyzeMultiTimeframe();
-    if (mtfData) {
-        marketState.mtf = {
-            signal    : mtfData.mtfSignal,
-            strength  : mtfData.mtfStrength,
-            confidence: mtfData.mtfConfidence,
-            aligned   : mtfData.aligned,
-            bullCount : mtfData.bullCount,
-            bearCount : mtfData.bearCount,
-            tf5m      : mtfData.tf5m,
-            tf15m     : mtfData.tf15m,
-            tf1h      : mtfData.tf1h
-        };
-        console.log(`MTF updated: ${mtfData.mtfSignal} (${mtfData.mtfStrength})`);
+    try {
+        const mtfData = await analyzeMultiTimeframe();
+        if (mtfData) {
+            marketState.mtf = {
+                signal    : mtfData.mtfSignal,
+                strength  : mtfData.mtfStrength,
+                confidence: mtfData.mtfConfidence,
+                aligned   : mtfData.aligned,
+                bullCount : mtfData.bullCount,
+                bearCount : mtfData.bearCount,
+                tf5m      : mtfData.tf5m,
+                tf15m     : mtfData.tf15m,
+                tf1h      : mtfData.tf1h
+            };
+            console.log(`MTF: ${mtfData.mtfSignal} (${mtfData.mtfStrength})`);
+        }
+    } catch (err) {
+        console.error('MTF error:', err.message);
     }
 }
 
@@ -224,15 +246,33 @@ async function refreshMTF() {
 app.get('/api/signal', (req, res) => res.json(marketState));
 
 app.get('/api/health', (req, res) => res.json({
-    status    : marketState.connected ? 'live' : 'waiting',
-    nifty     : marketState.nifty,
-    rsi       : marketState.rsi,
-    mtfSignal : marketState.mtf.signal,
-    mtfAligned: marketState.mtf.aligned,
-    vix       : marketState.vix,
-    source    : marketState.source,
+    status     : marketState.connected ? 'live' : 'waiting',
+    nifty      : marketState.nifty,
+    rsi        : marketState.rsi,
+    mtfSignal  : marketState.mtf.signal,
+    vix        : marketState.vix,
+    source     : marketState.source,
     lastUpdated: marketState.lastUpdated
 }));
+
+// ✅ Manual PCR input from dashboard
+app.post('/api/pcr', (req, res) => {
+    const { pcr, atmPcr } = req.body;
+
+    if (pcr !== undefined && pcr !== null) {
+        marketState.pcr       = parseFloat(pcr);
+        marketState.pcrSignal = pcrLabel(marketState.pcr);
+        console.log(`PCR manual: ${marketState.pcr} → ${marketState.pcrSignal}`);
+    }
+
+    if (atmPcr !== undefined && atmPcr !== null) {
+        marketState.atmPcr       = parseFloat(atmPcr);
+        marketState.atmPcrSignal = pcrLabel(marketState.atmPcr);
+        console.log(`ATM PCR manual: ${marketState.atmPcr} → ${marketState.atmPcrSignal}`);
+    }
+
+    res.json({ success: true });
+});
 
 app.get('/', (req, res) => {
     res.sendFile(__dirname + '/public/index.html');
