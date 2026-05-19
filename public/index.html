@@ -23,13 +23,10 @@ body::before {
   background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.07) 2px,rgba(0,0,0,0.07) 4px);
   pointer-events:none; z-index:999;
 }
-
-/* HEADER */
 .header {
   background:linear-gradient(180deg,#050f1a 0%,var(--bg1) 100%);
   border-bottom:1px solid var(--border);
-  padding:8px 14px;
-  display:flex; align-items:center; justify-content:space-between;
+  padding:8px 14px; display:flex; align-items:center; justify-content:space-between;
   position:sticky; top:0; z-index:100;
 }
 .logo {
@@ -49,26 +46,20 @@ body::before {
   color:var(--dim); text-align:right; line-height:1.6;
 }
 #live-clock { color:var(--amber); }
-
-/* PRICE */
 .price-section {
   background:linear-gradient(135deg,#050e1a 0%,#071828 100%);
   border-bottom:1px solid var(--border);
   padding:14px; text-align:center;
-  transition:background 0.3s;
 }
 .price-label { font-size:10px; letter-spacing:4px; color:var(--dim); margin-bottom:4px; }
 .price-value {
   font-family:'Share Tech Mono',monospace; font-size:42px;
   font-weight:700; color:var(--bright); line-height:1;
-  text-shadow:0 0 30px rgba(221,238,255,0.2);
 }
 .price-change { font-family:'Share Tech Mono',monospace; font-size:14px; margin-top:5px; }
 .price-change.up   { color:var(--green); }
 .price-change.down { color:var(--red); }
 .price-change.flat { color:var(--dim); }
-
-/* SIGNAL */
 .signal-wrap { padding:10px 12px; }
 .signal-card {
   border-radius:10px; padding:16px 14px 12px;
@@ -76,7 +67,7 @@ body::before {
   position:relative; overflow:hidden; transition:all 0.4s;
 }
 .signal-card.buy-call { background:rgba(0,255,136,0.05); border-color:var(--green); color:var(--green); }
-.signal-card.buy-put  { background:rgba(255,34,68,0.05);  border-color:var(--red);   color:var(--red);   }
+.signal-card.buy-put  { background:rgba(255,34,68,0.05);  border-color:var(--red);   color:var(--red); }
 .signal-card.wait     { background:rgba(255,187,0,0.05);  border-color:var(--amber); color:var(--amber); }
 .signal-badge {
   font-family:'Orbitron',monospace; font-size:26px; font-weight:900;
@@ -86,11 +77,9 @@ body::before {
 .conf-wrap { background:var(--border); border-radius:4px; height:6px; margin:10px 0 4px; overflow:hidden; }
 .conf-bar { height:100%; border-radius:4px; transition:width 0.8s cubic-bezier(.4,0,.2,1); }
 .buy-call .conf-bar { background:var(--green); box-shadow:0 0 10px var(--green); }
-.buy-put  .conf-bar { background:var(--red);   box-shadow:0 0 10px var(--red);   }
-.wait     .conf-bar { background:var(--amber);  box-shadow:0 0 10px var(--amber);  }
+.buy-put  .conf-bar { background:var(--red);   box-shadow:0 0 10px var(--red); }
+.wait     .conf-bar { background:var(--amber);  box-shadow:0 0 10px var(--amber); }
 .conf-label { font-size:11px; color:var(--dim); letter-spacing:1px; }
-
-/* STRIKE BANNER */
 .strike-banner {
   margin:0 12px 10px;
   background:var(--bg2); border:1px solid var(--border);
@@ -98,51 +87,31 @@ body::before {
   padding:8px 12px; display:flex; align-items:center; justify-content:space-between;
 }
 .strike-left { font-size:10px; color:var(--dim); letter-spacing:2px; }
-.strike-val  { font-family:'Share Tech Mono',monospace; font-size:14px; color:var(--blue); text-shadow:0 0 10px var(--blue); }
-.status-pill { display:flex; align-items:center; gap:5px; font-size:11px; font-weight:700; letter-spacing:1px; }
-
-/* SECTION LABEL */
+.strike-val  { font-family:'Share Tech Mono',monospace; font-size:14px; color:var(--blue); }
+.status-pill { display:flex; align-items:center; gap:5px; font-size:11px; font-weight:700; }
 .sec-label { padding:0 12px; margin-bottom:6px; font-size:9px; letter-spacing:3px; color:var(--dim); text-transform:uppercase; }
-
-/* MTF SECTION */
 .mtf-header {
   margin:0 12px 8px;
   background:var(--bg2); border:1px solid var(--border);
   border-radius:10px; padding:12px;
 }
-.mtf-title-row {
-  display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;
-}
+.mtf-title-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
 .mtf-title { font-family:'Orbitron',monospace; font-size:12px; color:var(--purple); letter-spacing:2px; }
-.mtf-badge {
-  padding:3px 10px; border-radius:12px; font-size:11px;
-  font-weight:700; letter-spacing:1px; font-family:'Rajdhani',sans-serif;
-}
+.mtf-badge { padding:3px 10px; border-radius:12px; font-size:11px; font-weight:700; letter-spacing:1px; }
 .mtf-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; }
 .mtf-card {
   background:var(--bg3); border:1px solid var(--border);
-  border-radius:8px; padding:8px; text-align:center;
-  transition:border-color 0.3s, box-shadow 0.3s;
+  border-radius:8px; padding:8px; text-align:center; transition:border-color 0.3s;
 }
 .mtf-tf   { font-size:9px; letter-spacing:2px; color:var(--dim); margin-bottom:4px; }
 .mtf-sig  { font-family:'Orbitron',monospace; font-size:10px; font-weight:700; margin-bottom:6px; }
 .mtf-stats { font-size:9px; color:var(--dim); line-height:1.6; }
 .mtf-rsi  { font-family:'Share Tech Mono',monospace; }
-
-/* Alignment Bar */
-.align-bar {
-  display:flex; gap:4px; margin-top:10px;
-  height:6px;
-}
-.align-seg {
-  flex:1; border-radius:3px; background:var(--border);
-  transition:background 0.5s, box-shadow 0.5s;
-}
+.align-bar { display:flex; gap:4px; margin-top:10px; height:6px; }
+.align-seg { flex:1; border-radius:3px; background:var(--border); transition:background 0.5s; }
 .align-seg.bull { background:var(--green); box-shadow:0 0 8px var(--green); }
 .align-seg.bear { background:var(--red);   box-shadow:0 0 8px var(--red); }
 .align-label { display:flex; justify-content:space-between; font-size:9px; color:var(--dim); margin-top:3px; padding:0 2px; }
-
-/* PCR VIX */
 .pcr-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; padding:0 12px; margin-bottom:10px; }
 .pv-card {
   background:var(--bg2); border:1px solid var(--border);
@@ -153,21 +122,23 @@ body::before {
 .pv-label { font-size:9px; color:var(--dim); letter-spacing:2px; margin-bottom:3px; }
 .pv-val   { font-family:'Share Tech Mono',monospace; font-size:18px; font-weight:700; }
 .pv-sig   { font-size:9px; font-weight:700; letter-spacing:1px; margin-top:2px; }
-
-/* INDICATORS */
-.ind-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; padding:0 12px; margin-bottom:10px; }
-.ind-card {
-  background:var(--bg2); border:1px solid var(--border);
-  border-radius:8px; padding:10px; transition:border-color 0.3s;
+.pcr-input {
+  margin-top:5px; width:100%;
+  background:#060d14; border:1px solid var(--border);
+  color:var(--text); padding:4px 6px;
+  border-radius:4px; font-size:11px;
+  font-family:'Share Tech Mono',monospace;
+  text-align:center; outline:none;
 }
+.pcr-input:focus { border-color:var(--blue); }
+.ind-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; padding:0 12px; margin-bottom:10px; }
+.ind-card { background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:10px; transition:border-color 0.3s; }
 .ind-label { font-size:9px; letter-spacing:2px; color:var(--dim); text-transform:uppercase; margin-bottom:5px; display:flex; align-items:center; justify-content:space-between; }
 .ind-val   { font-family:'Share Tech Mono',monospace; font-size:22px; font-weight:700; line-height:1; }
 .ind-sub   { font-size:10px; color:var(--dim); margin-top:3px; }
 .rsi-bar-wrap { height:3px; background:var(--border); border-radius:2px; margin-top:6px; }
 .rsi-bar      { height:100%; border-radius:2px; transition:width 0.5s; }
 .rsi-zones    { display:flex; justify-content:space-between; font-size:8px; color:var(--dim); margin-top:2px; }
-
-/* REASONS */
 .reasons-wrap { padding:0 12px; margin-bottom:10px; }
 .reasons-card { background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:10px 12px; }
 .reasons-title { font-size:9px; letter-spacing:3px; color:var(--dim); margin-bottom:8px; display:flex; align-items:center; gap:6px; }
@@ -175,21 +146,13 @@ body::before {
 .reason-row { display:flex; align-items:flex-start; gap:8px; padding:4px 0; border-bottom:1px solid var(--border); font-size:12px; color:var(--text); line-height:1.5; }
 .reason-row:last-child { border-bottom:none; }
 .reason-row::before { content:'›'; color:var(--dim); font-size:14px; }
-
-/* FOOTER */
 .footer { text-align:center; font-family:'Share Tech Mono',monospace; font-size:10px; color:var(--dim); padding:8px 12px 0; display:flex; align-items:center; justify-content:center; gap:6px; }
-
-/* DOTS */
 .dot-live { width:7px; height:7px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:blink 1.5s infinite; flex-shrink:0; }
 .dot-off  { width:7px; height:7px; border-radius:50%; background:var(--dim); flex-shrink:0; }
-
-/* Flash */
 @keyframes flashG { 0%{background:rgba(0,255,136,0.15)} 100%{background:transparent} }
 @keyframes flashR { 0%{background:rgba(255,34,68,0.15)}  100%{background:transparent} }
 .flash-green { animation:flashG 0.4s ease-out; }
 .flash-red   { animation:flashR 0.4s ease-out; }
-
-/* MTF Signal colors */
 .sig-bull { color:var(--green); }
 .sig-bear { color:var(--red); }
 .sig-neut { color:var(--amber); }
@@ -246,9 +209,7 @@ body::before {
       WAIT — WEAK
     </div>
   </div>
-
   <div class="mtf-grid">
-    <!-- 5 min -->
     <div class="mtf-card" id="mtf-5m">
       <div class="mtf-tf">5 MIN</div>
       <div class="mtf-sig sig-neut" id="mtf-5m-sig">NEUTRAL</div>
@@ -258,7 +219,6 @@ body::before {
         <div>VWAP: <span class="mtf-rsi" id="mtf-5m-vwap">--</span></div>
       </div>
     </div>
-    <!-- 15 min -->
     <div class="mtf-card" id="mtf-15m">
       <div class="mtf-tf">15 MIN</div>
       <div class="mtf-sig sig-neut" id="mtf-15m-sig">NEUTRAL</div>
@@ -268,7 +228,6 @@ body::before {
         <div>VWAP: <span class="mtf-rsi" id="mtf-15m-vwap">--</span></div>
       </div>
     </div>
-    <!-- 1 hour -->
     <div class="mtf-card" id="mtf-1h">
       <div class="mtf-tf">1 HOUR</div>
       <div class="mtf-sig sig-neut" id="mtf-1h-sig">NEUTRAL</div>
@@ -279,8 +238,6 @@ body::before {
       </div>
     </div>
   </div>
-
-  <!-- Alignment Bar -->
   <div class="align-bar">
     <div class="align-seg" id="align-5m"></div>
     <div class="align-seg" id="align-15m"></div>
@@ -291,24 +248,51 @@ body::before {
   </div>
 </div>
 
-<!-- PCR VIX -->
+<!-- PCR + VIX -->
 <div class="sec-label" style="margin-top:10px;">OPTIONS DATA</div>
 <div class="pcr-row">
+
+  <!-- PCR Manual -->
   <div class="pv-card" style="color:var(--amber)" id="pcr-card">
     <div class="pv-label">PCR</div>
     <div class="pv-val" id="pcr-val">--</div>
-    <div class="pv-sig" id="pcr-sig">--</div>
+    <div class="pv-sig" id="pcr-sig">ENTER BELOW</div>
+    <input
+      class="pcr-input"
+      id="pcr-input"
+      type="number"
+      step="0.01"
+      min="0"
+      max="5"
+      placeholder="e.g. 1.25"
+      onchange="setPCR(this.value)"
+    />
   </div>
+
+  <!-- ATM PCR Manual -->
   <div class="pv-card" style="color:var(--amber)" id="atm-pcr-card">
     <div class="pv-label">ATM PCR</div>
     <div class="pv-val" id="atm-pcr-val">--</div>
-    <div class="pv-sig" id="atm-pcr-sig">--</div>
+    <div class="pv-sig" id="atm-pcr-sig">ENTER BELOW</div>
+    <input
+      class="pcr-input"
+      id="atm-pcr-input"
+      type="number"
+      step="0.01"
+      min="0"
+      max="5"
+      placeholder="e.g. 1.40"
+      onchange="setATMPCR(this.value)"
+    />
   </div>
+
+  <!-- VIX Auto -->
   <div class="pv-card" style="color:var(--amber)" id="vix-card">
     <div class="pv-label">INDIA VIX</div>
     <div class="pv-val" id="vix-val">--</div>
-    <div class="pv-sig" id="vix-sig">--</div>
+    <div class="pv-sig" id="vix-sig">AUTO ✅</div>
   </div>
+
 </div>
 
 <!-- 1MIN INDICATORS -->
@@ -323,7 +307,9 @@ body::before {
     <div class="rsi-bar-wrap">
       <div class="rsi-bar" id="rsi-bar" style="width:50%;background:var(--amber)"></div>
     </div>
-    <div class="rsi-zones"><span>0</span><span>30</span><span>50</span><span>70</span><span>100</span></div>
+    <div class="rsi-zones">
+      <span>0</span><span>30</span><span>50</span><span>70</span><span>100</span>
+    </div>
   </div>
   <div class="ind-card" id="vwap-card">
     <div class="ind-label">
@@ -382,7 +368,7 @@ function updateClock() {
 setInterval(updateClock,1000);
 updateClock();
 
-// Color
+// Color helpers
 function sigColor(s) {
   if(!s) return 'var(--amber)';
   const u = s.toUpperCase();
@@ -392,10 +378,80 @@ function sigColor(s) {
   return 'var(--amber)';
 }
 
-function mtfSigClass(s) {
-  if(s==='BULLISH') return 'mtf-sig sig-bull';
-  if(s==='BEARISH') return 'mtf-sig sig-bear';
-  return 'mtf-sig sig-neut';
+function pcrColor(val) {
+  const n = parseFloat(val);
+  if(isNaN(n)) return 'var(--amber)';
+  if(n > 1.5) return 'var(--green)';
+  if(n < 0.7) return 'var(--red)';
+  return 'var(--amber)';
+}
+
+function pcrLabel(val) {
+  const n = parseFloat(val);
+  if(isNaN(n)) return 'ENTER VALUE';
+  if(n > 1.5) return 'BULLISH ✅';
+  if(n < 0.7) return 'BEARISH ⚠️';
+  return 'NEUTRAL';
+}
+
+// Manual PCR input
+function setPCR(val) {
+  if(!val || isNaN(parseFloat(val))) return;
+  const c = pcrColor(val);
+  const l = pcrLabel(val);
+  const n = parseFloat(val).toFixed(2);
+  document.getElementById('pcr-val').textContent  = n;
+  document.getElementById('pcr-sig').textContent  = l;
+  document.getElementById('pcr-val').style.color  = c;
+  document.getElementById('pcr-sig').style.color  = c;
+  document.getElementById('pcr-card').style.color = c;
+  fetch('/api/pcr', {
+    method : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body   : JSON.stringify({ pcr: parseFloat(val) })
+  }).catch(()=>{});
+}
+
+function setATMPCR(val) {
+  if(!val || isNaN(parseFloat(val))) return;
+  const c = pcrColor(val);
+  const l = pcrLabel(val);
+  const n = parseFloat(val).toFixed(2);
+  document.getElementById('atm-pcr-val').textContent  = n;
+  document.getElementById('atm-pcr-sig').textContent  = l;
+  document.getElementById('atm-pcr-val').style.color  = c;
+  document.getElementById('atm-pcr-sig').style.color  = c;
+  document.getElementById('atm-pcr-card').style.color = c;
+  fetch('/api/pcr', {
+    method : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body   : JSON.stringify({ atmPcr: parseFloat(val) })
+  }).catch(()=>{});
+}
+
+// MTF card update
+function updateMTFCard(prefix, tf) {
+  if(!tf) return;
+  const sigEl  = document.getElementById(`mtf-${prefix}-sig`);
+  const card   = document.getElementById(`mtf-${prefix}`);
+  const alignEl= document.getElementById(`align-${prefix}`);
+
+  sigEl.className  = 'mtf-sig ' +
+    (tf.signal==='BULLISH'?'sig-bull':tf.signal==='BEARISH'?'sig-bear':'sig-neut');
+  sigEl.textContent= tf.signal || 'NEUTRAL';
+
+  const c = tf.signal==='BULLISH'?'var(--green)':tf.signal==='BEARISH'?'var(--red)':'var(--amber)';
+  card.style.borderColor = c;
+
+  document.getElementById(`mtf-${prefix}-rsi`).textContent =
+    tf.rsi !== null ? tf.rsi.toFixed(1) : '--';
+  document.getElementById(`mtf-${prefix}-ema`).textContent =
+    tf.ema9 && tf.ema21 ? (tf.ema9 > tf.ema21 ? '▲ UP' : '▼ DN') : '--';
+  document.getElementById(`mtf-${prefix}-vwap`).textContent =
+    tf.vwap ? tf.vwap.toLocaleString('en-IN') : '--';
+
+  alignEl.className = 'align-seg ' +
+    (tf.signal==='BULLISH'?'bull':tf.signal==='BEARISH'?'bear':'');
 }
 
 // Price flash
@@ -409,40 +465,11 @@ function flashPrice(p) {
   lastPrice = p;
 }
 
-// Update MTF card
-function updateMTFCard(prefix, tf) {
-  if(!tf) return;
-  const card    = document.getElementById(`mtf-${prefix}`);
-  const sigEl   = document.getElementById(`mtf-${prefix}-sig`);
-  const rsiEl   = document.getElementById(`mtf-${prefix}-rsi`);
-  const emaEl   = document.getElementById(`mtf-${prefix}-ema`);
-  const vwapEl  = document.getElementById(`mtf-${prefix}-vwap`);
-  const alignEl = document.getElementById(`align-${prefix}`);
-
-  sigEl.className  = mtfSigClass(tf.signal);
-  sigEl.textContent= tf.signal || 'NEUTRAL';
-
-  const c = tf.signal === 'BULLISH' ? 'var(--green)'
-          : tf.signal === 'BEARISH' ? 'var(--red)' : 'var(--amber)';
-  card.style.borderColor = c;
-  card.style.boxShadow   = `inset 0 0 15px rgba(0,0,0,0.5)`;
-
-  rsiEl.textContent  = tf.rsi  !== null ? tf.rsi.toFixed(1)  : '--';
-  emaEl.textContent  = tf.ema9 && tf.ema21
-    ? (tf.ema9 > tf.ema21 ? '▲ UP' : '▼ DN') : '--';
-  vwapEl.textContent = tf.vwap ? tf.vwap.toLocaleString('en-IN') : '--';
-
-  // Alignment bar
-  alignEl.className = 'align-seg ' +
-    (tf.signal === 'BULLISH' ? 'bull' :
-     tf.signal === 'BEARISH' ? 'bear' : '');
-}
-
 // Main fetch
 async function fetchSignal() {
   try {
-    const res = await fetch('/api/signal');
-    const d   = await res.json();
+    const res  = await fetch('/api/signal');
+    const d    = await res.json();
     const live = d.connected && d.nifty > 0;
 
     // Price
@@ -456,21 +483,21 @@ async function fetchSignal() {
     chgEl.textContent = d.nifty > 0
       ? `${chg>=0?'▲':'▼'} ${Math.abs(chg).toFixed(2)} (${chg>=0?'+':''}${chgPct.toFixed(2)}%)`
       : 'Market Closed';
-    chgEl.className = 'price-change ' + (chg>0?'up':chg<0?'down':'flat');
+    chgEl.className = 'price-change '+(chg>0?'up':chg<0?'down':'flat');
 
     // Signal
     const sig = d.signal || 'WAIT';
     document.getElementById('signal').textContent = sig;
-    document.getElementById('signal-card').className = 'signal-card ' +
+    document.getElementById('signal-card').className = 'signal-card '+
       (sig==='BUY CALL'?'buy-call':sig==='BUY PUT'?'buy-put':'wait');
     const conf = d.confidence || 0;
-    document.getElementById('conf-bar').style.width  = conf + '%';
+    document.getElementById('conf-bar').style.width  = conf+'%';
     document.getElementById('conf-text').textContent = `CONFIDENCE: ${conf}%`;
 
-    // Strike
+    // Strike + Status
     document.getElementById('strike-range').textContent = d.strikeRange || 'ATM ±200';
-    document.getElementById('status-dot').className = live ? 'dot-live' : 'dot-off';
-    document.getElementById('status-txt').textContent = live ? 'LIVE' : 'WAITING';
+    document.getElementById('status-dot').className = live?'dot-live':'dot-off';
+    document.getElementById('status-txt').textContent = live?'LIVE':'WAITING';
 
     // MTF
     const mtf = d.mtf;
@@ -478,42 +505,50 @@ async function fetchSignal() {
       updateMTFCard('5m',  mtf.tf5m);
       updateMTFCard('15m', mtf.tf15m);
       updateMTFCard('1h',  mtf.tf1h);
-
-      // MTF badge
       const badge = document.getElementById('mtf-badge');
-      const bc = mtf.signal === 'BUY CALL' ? 'var(--green)'
-               : mtf.signal === 'BUY PUT'  ? 'var(--red)' : 'var(--amber)';
-      badge.textContent = `${mtf.signal} — ${mtf.strength}`;
+      const bc = mtf.signal==='BUY CALL'?'var(--green)':mtf.signal==='BUY PUT'?'var(--red)':'var(--amber)';
       badge.style.color       = bc;
       badge.style.borderColor = bc;
       badge.style.background  = `rgba(${bc==='var(--green)'?'0,255,136':bc==='var(--red)'?'255,34,68':'255,187,0'},0.1)`;
-
       if(mtf.aligned) {
-        badge.style.boxShadow = `0 0 15px ${bc}`;
-        badge.textContent = `🔥 ${mtf.signal} — ALL 3 ALIGNED!`;
+        badge.textContent    = `🔥 ${mtf.signal} — ALL 3 ALIGNED!`;
+        badge.style.boxShadow= `0 0 15px ${bc}`;
       } else {
-        badge.style.boxShadow = 'none';
+        badge.textContent    = `${mtf.signal} — ${mtf.strength}`;
+        badge.style.boxShadow= 'none';
       }
     }
 
-    // PCR
-    function setPV(cId, vId, sId, val, sig) {
-      if(val===null||val===undefined) return;
-      const c = sigColor(sig);
-      document.getElementById(vId).textContent = val.toFixed(2);
-      document.getElementById(sId).textContent = sig || '--';
-      document.getElementById(vId).style.color = c;
-      document.getElementById(sId).style.color = c;
-      document.getElementById(cId).style.color = c;
+    // PCR — only update display if server has value
+    // (don't overwrite manual input)
+    if(d.pcr !== null && d.pcr !== undefined) {
+      const c = pcrColor(d.pcr);
+      const l = pcrLabel(d.pcr);
+      document.getElementById('pcr-val').textContent  = d.pcr.toFixed(2);
+      document.getElementById('pcr-sig').textContent  = l;
+      document.getElementById('pcr-val').style.color  = c;
+      document.getElementById('pcr-sig').style.color  = c;
+      if(!document.getElementById('pcr-input').value) {
+        document.getElementById('pcr-input').value = d.pcr;
+      }
     }
-    setPV('pcr-card',    'pcr-val',    'pcr-sig',    d.pcr,    d.pcrSignal);
-    setPV('atm-pcr-card','atm-pcr-val','atm-pcr-sig',d.atmPcr, d.atmPcrSignal);
+    if(d.atmPcr !== null && d.atmPcr !== undefined) {
+      const c = pcrColor(d.atmPcr);
+      const l = pcrLabel(d.atmPcr);
+      document.getElementById('atm-pcr-val').textContent  = d.atmPcr.toFixed(2);
+      document.getElementById('atm-pcr-sig').textContent  = l;
+      document.getElementById('atm-pcr-val').style.color  = c;
+      document.getElementById('atm-pcr-sig').style.color  = c;
+      if(!document.getElementById('atm-pcr-input').value) {
+        document.getElementById('atm-pcr-input').value = d.atmPcr;
+      }
+    }
 
     // VIX
-    if(d.vix!==null && d.vix!==undefined) {
+    if(d.vix !== null && d.vix !== undefined) {
       const c = sigColor(d.vixSignal);
       document.getElementById('vix-val').textContent  = d.vix.toFixed(2);
-      document.getElementById('vix-sig').textContent  = d.vixSignal||'--';
+      document.getElementById('vix-sig').textContent  = (d.vixSignal||'--')+' ✅';
       document.getElementById('vix-val').style.color  = c;
       document.getElementById('vix-sig').style.color  = c;
       document.getElementById('vix-card').style.color = c;
@@ -522,11 +557,11 @@ async function fetchSignal() {
     }
 
     // RSI
-    if(d.rsi!==null && d.rsi!==undefined) {
+    if(d.rsi !== null && d.rsi !== undefined) {
       const c = d.rsi<35?'var(--green)':d.rsi>65?'var(--red)':'var(--amber)';
       document.getElementById('rsi-val').textContent   = d.rsi.toFixed(2);
       document.getElementById('rsi-val').style.color   = c;
-      document.getElementById('rsi-bar').style.width   = d.rsi + '%';
+      document.getElementById('rsi-bar').style.width   = d.rsi+'%';
       document.getElementById('rsi-bar').style.background = c;
       document.getElementById('rsi-zone').textContent  = d.rsi<35?'OVERSOLD':d.rsi>65?'OVERBOUGHT':'NEUTRAL';
       document.getElementById('rsi-zone').style.color  = c;
@@ -536,24 +571,24 @@ async function fetchSignal() {
     // VWAP
     if(d.vwap) {
       const ab = d.nifty > d.vwap;
-      const c  = ab ? 'var(--green)' : 'var(--red)';
+      const c  = ab?'var(--green)':'var(--red)';
       document.getElementById('vwap-val').textContent  = d.vwap.toLocaleString('en-IN');
       document.getElementById('vwap-val').style.color  = c;
-      document.getElementById('vwap-pos').textContent  = ab ? 'ABOVE ▲' : 'BELOW ▼';
+      document.getElementById('vwap-pos').textContent  = ab?'ABOVE ▲':'BELOW ▼';
       document.getElementById('vwap-pos').style.color  = c;
-      document.getElementById('vwap-sub').textContent  = ab ? 'Price above fair value' : 'Price below fair value';
+      document.getElementById('vwap-sub').textContent  = ab?'Price above fair value':'Price below fair value';
       document.getElementById('vwap-card').style.borderLeft = `2px solid ${c}`;
     }
 
     // EMA
     if(d.ema9 && d.ema21) {
       const bull = d.ema9 > d.ema21;
-      const c    = bull ? 'var(--green)' : 'var(--red)';
+      const c    = bull?'var(--green)':'var(--red)';
       document.getElementById('ema9-val').textContent  = d.ema9.toFixed(0);
       document.getElementById('ema21-val').textContent = d.ema21.toFixed(0);
       document.getElementById('ema9-val').style.color  = c;
       document.getElementById('ema21-val').style.color = c;
-      document.getElementById('ema-trend').textContent = bull ? 'UPTREND ▲' : 'DOWNTREND ▼';
+      document.getElementById('ema-trend').textContent = bull?'UPTREND ▲':'DOWNTREND ▼';
       document.getElementById('ema-trend').style.color = c;
       document.getElementById('ema-card').style.borderLeft = `2px solid ${c}`;
     }
@@ -561,14 +596,14 @@ async function fetchSignal() {
     // Reasons
     if(d.reason && d.reason.length > 0) {
       document.getElementById('reasons').innerHTML =
-        d.reason.map(r => `<div class="reason-row">${r}</div>`).join('');
+        d.reason.map(r=>`<div class="reason-row">${r}</div>`).join('');
     }
 
     // Footer
-    document.getElementById('foot-dot').className = live ? 'dot-live' : 'dot-off';
+    document.getElementById('foot-dot').className = live?'dot-live':'dot-off';
     document.getElementById('footer-txt').textContent =
       d.lastUpdated
-        ? 'UPDATED ' + new Date(d.lastUpdated).toLocaleTimeString('en-IN',{hour12:true}).toUpperCase()
+        ? 'UPDATED '+new Date(d.lastUpdated).toLocaleTimeString('en-IN',{hour12:true}).toUpperCase()
         : 'WAITING...';
 
   } catch(e) { console.error('Fetch error:',e); }
