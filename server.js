@@ -224,3 +224,4 @@ async function initializeLiveData() {
 
 initializeLiveData();
 server.listen(PORT, ()=>console.log(`VardaanNifty AI running on port ${PORT}`));
+
