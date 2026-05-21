@@ -119,6 +119,12 @@ function combineSignals(indicators) {
     }
     if (marketState.vix > 30) { signal = 'WAIT'; confidence = 0; reasons.push('VIX>30 — Avoid!'); }
 
+    // Remove confusing "Mixed signals" from 1-min when higher timeframes override to a trade
+    if (signal !== 'WAIT') {
+        const idx = reasons.findIndex(r => r.includes('Mixed signals'));
+        if (idx !== -1) reasons.splice(idx, 1);
+    }
+
     return { signal, confidence, reasons };
 }
 
@@ -180,6 +186,37 @@ async function refreshGlobal() {
 app.get('/api/signal',  (req,res) => res.json(marketState));
 app.get('/api/candles', (req,res) => res.json(getCandleHistory()));
 app.get('/api/global',  (req,res) => res.json(marketState.global));
+
+// ── Chart proxy — avoids browser CORS restrictions ──
+app.get('/api/chart', async (req, res) => {
+    const tf = req.query.tf || '5m';
+    const intervalMap = { '5m': '5m', '15m': '15m', '1h': '60m' };
+    const rangeMap    = { '5m': '5d',  '15m': '5d',  '1h': '1mo' };
+    const interval = intervalMap[tf] || '5m';
+    const range    = rangeMap[tf]    || '5d';
+    try {
+        const axios = require('axios');
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=${interval}&range=${range}&includePrePost=false`;
+        const r = await axios.get(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
+            timeout: 10000
+        });
+        const q = r.data?.chart?.result?.[0]?.indicators?.quote?.[0];
+        const candles = [];
+        if (q) {
+            const { open, high, low, close, volume } = q;
+            for (let i = 0; i < close.length; i++) {
+                if (close[i] != null && high[i] != null && low[i] != null) {
+                    candles.push({ open: open[i]||close[i], high: high[i], low: low[i], close: close[i], volume: volume[i]||1 });
+                }
+            }
+        }
+        res.json(candles);
+    } catch(e) {
+        console.error('Chart proxy error:', e.message);
+        res.json([]);
+    }
+});
 
 app.get('/api/health', (req,res) => res.json({
     status: marketState.connected?'live':'waiting',
