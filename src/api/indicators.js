@@ -76,8 +76,9 @@ function getIndicatorSignal(price, rsi, ema9, ema21, vwap) {
     }
 
     if (ema9 !== null && ema21 !== null) {
-        if (ema9 > ema21) { bull += 2; reasons.push(`EMA9(${ema9}) > EMA21(${ema21}) — Uptrend ✅`); }
-        else              { bear += 2; reasons.push(`EMA9(${ema9}) < EMA21(${ema21}) — Downtrend ⚠️`); }
+        if (ema9 > ema21)      { bull += 2; reasons.push(`EMA9(${ema9}) > EMA21(${ema21}) — Uptrend ✅`); }
+        else if (ema9 < ema21) { bear += 2; reasons.push(`EMA9(${ema9}) < EMA21(${ema21}) — Downtrend ⚠️`); }
+        else                   {            reasons.push(`EMA9 = EMA21(${ema9}) — Flat/consolidating`); }
     }
 
     if (vwap !== null) {
