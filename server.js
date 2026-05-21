@@ -247,12 +247,13 @@ async function initializeLiveData() {
     console.log('Starting VardaanNifty AI...');
     console.log('Telegram:', isConfigured()?'✅':'❌');
 
-    await Promise.all([refreshMarketData(), refreshGlobal()]);
-    await refreshMTF();
+    // ✅ FIX: Load global & MTF FIRST so combineSignals has full context on first price update
+    await Promise.all([refreshGlobal(), refreshMTF()]);
+    await refreshMarketData();
 
     setInterval(refreshMarketData, 3*60*1000);
     setInterval(refreshMTF,        5*60*1000);
-    setInterval(refreshGlobal,     5*60*1000); // global every 5 min
+    setInterval(refreshGlobal,     5*60*1000);
 
     const auth = await loginAngel();
     if (auth) { console.log('Angel Login Success'); startWebSocket(auth, onTick); }
