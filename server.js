@@ -12,6 +12,7 @@ const { processIndicators,
 const { fetchMarketData }           = require('./src/api/marketData');
 const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
 const { fetchGlobalCues }           = require('./src/api/globalCues');
+const { fetchAdvanceDecline }       = require('./src/api/breadth');
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
@@ -41,17 +42,30 @@ let marketState = {
         tf1h:  { rsi:null, ema9:null, ema21:null, vwap:null, signal:'NEUTRAL', score:50 }
     },
     global: {
-        bias: 'NEUTRAL', score: 50, reasons: ['Loading global data...'],
-        updatedAt: null,
-        us:          { dow:null, nasdaq:null, sp500:null },
-        asia:        { nikkei:null, hangseng:null, shanghai:null },
-        europe:      { dax:null, ftse:null },
-        currency:    { usdinr:null, dxy:null },
-        commodities: { crude:null, brent:null, gold:null, silver:null },
-        sectors:     { bankNifty:null, niftyIT:null, niftyAuto:null, niftyMetal:null }
+        bias: 'NEUTRAL', score: 50, reasons: ['Loading...'],
+        updatedAt: null, us: {}, asia: {}, europe: {},
+        currency: {}, commodities: {}, sectors: {}
     },
-    reason: ['Waiting for market data...'],
-    lastUpdated: null, connected: false, source: 'none', dataPoints: 0
+    breadth: {
+        advances: 0, declines: 0, unchanged: 0,
+        total: 0, adRatio: 0, breadthPct: 50,
+        weightedBull: 50, breadthSignal: 'NEUTRAL',
+        bullWeight: 0, bearWeight: 0,
+        stocks: [], updatedAt: null
+    },
+    // PCR History for trend
+    pcrHistory: [],
+    // FII DII manual
+    fii: { buy: null, sell: null, net: null },
+    dii: { buy: null, sell: null, net: null },
+    // Option flow tracking
+    optionFlow: {
+        atmCEpremium: null, atmPEpremium: null,
+        ceChange: 0, peChange: 0,
+        dominance: 'NEUTRAL', history: []
+    },
+    reason: ['Waiting...'], lastUpdated: null,
+    connected: false, source: 'none', dataPoints: 0
 };
 
 let historyLoaded = false, prevSignal = 'WAIT', prevMTFAligned = false;
@@ -65,41 +79,107 @@ function isMarketOpen() {
 function getIST() { return new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'})); }
 function pcrLabel(v) { if(!v) return 'N/A'; if(v>1.5) return 'BULLISH'; if(v<0.7) return 'BEARISH'; return 'NEUTRAL'; }
 
+// ── PCR History tracker ───────────────────────────────
+function trackPCRHistory(pcr) {
+    if (!pcr) return;
+    const now = new Date();
+    const ist = new Date(now.toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+    marketState.pcrHistory.push({
+        time : `${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`,
+        pcr  : parseFloat(pcr.toFixed(2)),
+        signal: pcrLabel(pcr)
+    });
+    if (marketState.pcrHistory.length > 50) marketState.pcrHistory.shift();
+}
+
+// ── Option Flow tracker ───────────────────────────────
+function updateOptionFlow(atmCE, atmPE) {
+    if (!atmCE && !atmPE) return;
+    const prev = marketState.optionFlow;
+
+    const ceChange = atmCE && prev.atmCEpremium
+        ? parseFloat((((atmCE - prev.atmCEpremium) / prev.atmCEpremium) * 100).toFixed(2))
+        : 0;
+    const peChange = atmPE && prev.atmPEpremium
+        ? parseFloat((((atmPE - prev.atmPEpremium) / prev.atmPEpremium) * 100).toFixed(2))
+        : 0;
+
+    let dominance = 'NEUTRAL';
+    if (ceChange > 1 && ceChange > peChange + 1)       dominance = 'CALL BUYERS';
+    else if (peChange > 1 && peChange > ceChange + 1)   dominance = 'PUT BUYERS';
+    else if (ceChange < -1 && ceChange < peChange - 1)  dominance = 'CALL SELLERS';
+    else if (peChange < -1 && peChange < ceChange - 1)  dominance = 'PUT SELLERS';
+
+    const now  = new Date();
+    const ist  = new Date(now.toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+    const time = `${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
+
+    const history = [...(prev.history || [])];
+    if (dominance !== 'NEUTRAL') {
+        history.push({ time, dominance, ceChange, peChange });
+        if (history.length > 20) history.shift();
+    }
+
+    marketState.optionFlow = {
+        atmCEpremium: atmCE || prev.atmCEpremium,
+        atmPEpremium: atmPE || prev.atmPEpremium,
+        ceChange, peChange, dominance, history
+    };
+}
+
+// ── Signal generator ──────────────────────────────────
 function combineSignals(indicators) {
     let bull = 0, bear = 0;
     const reasons = [...(indicators.reasons || [])];
 
+    // PCR
     if (marketState.pcr !== null) {
         if      (marketState.pcrSignal === 'BULLISH') { bull += 2; reasons.push(`PCR ${marketState.pcr} — Bullish ✅`); }
         else if (marketState.pcrSignal === 'BEARISH') { bear += 2; reasons.push(`PCR ${marketState.pcr} — Bearish ⚠️`); }
         else                                          { reasons.push(`PCR ${marketState.pcr} — Neutral`); }
     }
+
+    // VIX
     if (marketState.vix) {
         if      (marketState.vixChange < -0.5) { bull++; reasons.push(`VIX falling (${marketState.vix}) ✅`); }
         else if (marketState.vixChange >  0.5) { bear++; reasons.push(`VIX rising (${marketState.vix}) ⚠️`); }
         if (marketState.vix > 25) reasons.push(`⚠️ VIX HIGH — ${marketState.vixNote}`);
     }
 
-    // ✅ Global cues impact on signal
-    if (marketState.global.bias === 'BULLISH') {
-        bull += 2; reasons.push('Global cues bullish ✅');
-    } else if (marketState.global.bias === 'BEARISH') {
-        bear += 2; reasons.push('Global cues bearish ⚠️');
-    }
+    // Global
+    if (marketState.global.bias === 'BULLISH') { bull += 2; reasons.push('Global cues bullish ✅'); }
+    else if (marketState.global.bias === 'BEARISH') { bear += 2; reasons.push('Global cues bearish ⚠️'); }
 
-    // Bank Nifty direct
+    // Bank Nifty
     const bn = marketState.global.sectors?.bankNifty;
-    if (bn?.changePct > 0.5) { bull += 2; }
+    if (bn?.changePct > 0.5)  { bull += 2; }
     else if (bn?.changePct < -0.5) { bear += 2; }
 
-    // USD/INR
+    // Breadth
+    const br = marketState.breadth;
+    if (br.breadthSignal === 'BULLISH') {
+        bull += 2;
+        reasons.push(`A/D ${br.advances}↑/${br.declines}↓ — Breadth bullish ✅`);
+    } else if (br.breadthSignal === 'BEARISH') {
+        bear += 2;
+        reasons.push(`A/D ${br.advances}↑/${br.declines}↓ — Breadth bearish ⚠️`);
+    } else if (br.advances > 0 || br.declines > 0) {
+        reasons.push(`A/D ${br.advances}↑/${br.declines}↓ — Mixed breadth`);
+    }
+
+    // Currency/Commodity
     const fx = marketState.global.currency?.usdinr;
     if (fx?.changePct > 0.5) { bear++; reasons.push(`Rupee weak ₹${fx.price} ⚠️`); }
-
-    // Crude
     const cr = marketState.global.commodities?.crude;
     if (cr?.changePct > 1.5) { bear++; reasons.push(`Crude rising ${cr.changePct}% ⚠️`); }
 
+    // FII
+    if (marketState.fii.net !== null) {
+        if      (marketState.fii.net > 0)  { bull++; reasons.push(`FII Net Buy ₹${marketState.fii.net}Cr ✅`); }
+        else if (marketState.fii.net < 0)  { bear++; reasons.push(`FII Net Sell ₹${marketState.fii.net}Cr ⚠️`); }
+    }
+
+    // MTF
     if (marketState.mtf.aligned) {
         if      (marketState.mtf.signal === 'BUY CALL') { bull += 3; reasons.push('All 3 timeframes BULLISH 🔥'); }
         else if (marketState.mtf.signal === 'BUY PUT')  { bear += 3; reasons.push('All 3 timeframes BEARISH 🔥'); }
@@ -119,20 +199,14 @@ function combineSignals(indicators) {
     }
     if (marketState.vix > 30) { signal = 'WAIT'; confidence = 0; reasons.push('VIX>30 — Avoid!'); }
 
-    // Remove confusing "Mixed signals" from 1-min when higher timeframes override to a trade
-    if (signal !== 'WAIT') {
-        const idx = reasons.findIndex(r => r.includes('Mixed signals'));
-        if (idx !== -1) reasons.splice(idx, 1);
-    }
-
     return { signal, confidence, reasons };
 }
 
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured() || !isMarketOpen()) return;
-    const ist = getIST(), h = ist.getHours(), m = ist.getMinutes();
-    if (h===9 && m>=16 && m<=20 && !morningSummarySent) { morningSummarySent=true; await sendMorningSummary(marketState); return; }
-    if (h===15 && m>=30 && !closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;},6*60*60*1000); return; }
+    const ist=getIST(), h=ist.getHours(), m=ist.getMinutes();
+    if (h===9&&m>=16&&m<=20&&!morningSummarySent) { morningSummarySent=true; await sendMorningSummary(marketState); return; }
+    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;},6*60*60*1000); return; }
     if (newSignal !== prevSignal && newSignal !== 'WAIT') await sendSignalAlert(marketState, prevSignal);
     if (marketState.mtf.aligned && !prevMTFAligned) await sendMTFAlert(marketState);
     prevMTFAligned = marketState.mtf.aligned;
@@ -145,17 +219,17 @@ async function updatePrice(price, change, changePct, source) {
     const { signal, confidence, reasons } = combineSignals(indicators);
     marketState.nifty=price; marketState.change=change; marketState.changePct=changePct;
     marketState.signal=signal; marketState.confidence=confidence;
-    marketState.rsi=indicators.rsi; marketState.ema9=indicators.ema9; marketState.ema21=indicators.ema21; marketState.vwap=indicators.vwap;
+    marketState.rsi=indicators.rsi; marketState.ema9=indicators.ema9;
+    marketState.ema21=indicators.ema21; marketState.vwap=indicators.vwap;
     marketState.reason=reasons; marketState.lastUpdated=new Date().toISOString();
     marketState.connected=true; marketState.source=source; marketState.dataPoints=indicators.priceCount;
-    if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} VWAP:${indicators.vwap||'--'} → ${signal}(${confidence}%)`);
+    if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%)`);
     await checkTelegramAlerts(signal);
     prevSignal = signal;
 }
 
 function onTick(tickData) {
-    const price = tickData.price;
-    if (!price || price <= 0) return;
+    const price=tickData.price; if(!price||price<=0) return;
     const prev=marketState.nifty||price, change=parseFloat((price-prev).toFixed(2));
     const chgPct=prev>0?parseFloat(((change/prev)*100).toFixed(2)):0;
     updatePrice(price, change, chgPct, 'websocket');
@@ -163,76 +237,67 @@ function onTick(tickData) {
 
 async function refreshMarketData() {
     const { niftyData, vixData } = await fetchMarketData();
-    if (niftyData?.closes?.length > 0 && !historyLoaded) { initializeHistory(niftyData.closes, niftyData.candles); historyLoaded=true; console.log(`History: ${niftyData.closes.length} candles`); }
-    if (vixData)    { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.strikeRange; }
+    if (niftyData?.closes?.length > 0 && !historyLoaded) { initializeHistory(niftyData.closes, niftyData.candles); historyLoaded=true; }
+    if (vixData) { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.strikeRange; }
     if (niftyData?.price > 0) {
-        if (marketState.source !== 'websocket') await updatePrice(niftyData.price, niftyData.change, niftyData.changePct, 'yahoo');
+        if (marketState.source!=='websocket') await updatePrice(niftyData.price, niftyData.change, niftyData.changePct, 'yahoo');
         else { marketState.change=niftyData.change; marketState.changePct=niftyData.changePct; }
     }
 }
 
 async function refreshMTF() {
-    try { const d=await analyzeMultiTimeframe(); if(d) { marketState.mtf={signal:d.mtfSignal,strength:d.mtfStrength,confidence:d.mtfConfidence,aligned:d.aligned,bullCount:d.bullCount,bearCount:d.bearCount,tf5m:d.tf5m,tf15m:d.tf15m,tf1h:d.tf1h}; console.log(`MTF: ${d.mtfSignal} (${d.mtfStrength})`); } } catch(e) { console.error('MTF error:',e.message); }
+    try { const d=await analyzeMultiTimeframe(); if(d) { marketState.mtf={signal:d.mtfSignal,strength:d.mtfStrength,confidence:d.mtfConfidence,aligned:d.aligned,bullCount:d.bullCount,bearCount:d.bearCount,tf5m:d.tf5m,tf15m:d.tf15m,tf1h:d.tf1h}; } } catch(e) { console.error('MTF:',e.message); }
 }
 
 async function refreshGlobal() {
+    try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); }
+}
+
+async function refreshBreadth() {
     try {
-        const globalData = await fetchGlobalCues();
-        if (globalData) marketState.global = globalData;
-    } catch(e) { console.error('Global cues error:', e.message); }
+        const data = await fetchAdvanceDecline();
+        if (data) { marketState.breadth = data; console.log(`Breadth: ${data.advances}↑ ${data.declines}↓ ${data.breadthSignal}`); }
+    } catch(e) { console.error('Breadth:',e.message); }
 }
 
 // ── Routes ────────────────────────────────────────────
 app.get('/api/signal',  (req,res) => res.json(marketState));
 app.get('/api/candles', (req,res) => res.json(getCandleHistory()));
 app.get('/api/global',  (req,res) => res.json(marketState.global));
+app.get('/api/breadth', (req,res) => res.json(marketState.breadth));
 
-// ── Chart proxy — avoids browser CORS restrictions ──
-app.get('/api/chart', async (req, res) => {
-    const tf = req.query.tf || '5m';
-    const intervalMap = { '5m': '5m', '15m': '15m', '1h': '60m' };
-    const rangeMap    = { '5m': '5d',  '15m': '5d',  '1h': '1mo' };
-    const interval = intervalMap[tf] || '5m';
-    const range    = rangeMap[tf]    || '5d';
-    try {
-        const axios = require('axios');
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=${interval}&range=${range}&includePrePost=false`;
-        const r = await axios.get(url, {
-            headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
-            timeout: 10000
-        });
-        const q = r.data?.chart?.result?.[0]?.indicators?.quote?.[0];
-        const candles = [];
-        if (q) {
-            const { open, high, low, close, volume } = q;
-            for (let i = 0; i < close.length; i++) {
-                if (close[i] != null && high[i] != null && low[i] != null) {
-                    candles.push({ open: open[i]||close[i], high: high[i], low: low[i], close: close[i], volume: volume[i]||1 });
-                }
-            }
-        }
-        res.json(candles);
-    } catch(e) {
-        console.error('Chart proxy error:', e.message);
-        res.json([]);
-    }
-});
-
-app.get('/api/health', (req,res) => res.json({
+app.get('/api/health',  (req,res) => res.json({
     status: marketState.connected?'live':'waiting',
     nifty: marketState.nifty, vix: marketState.vix,
     globalBias: marketState.global.bias,
-    bankNifty: marketState.global.sectors?.bankNifty?.price,
-    usdinr: marketState.global.currency?.usdinr?.price,
+    advances: marketState.breadth.advances,
+    declines: marketState.breadth.declines,
+    breadthSignal: marketState.breadth.breadthSignal,
     telegram: isConfigured()?'configured':'not configured',
-    source: marketState.source, lastUpdated: marketState.lastUpdated
+    source: marketState.source
 }));
 
 app.post('/api/pcr', (req,res) => {
     const {pcr,atmPcr}=req.body;
-    if(pcr!=null)    { marketState.pcr=parseFloat(pcr);    marketState.pcrSignal=pcrLabel(marketState.pcr);    console.log(`PCR: ${marketState.pcr}`); }
-    if(atmPcr!=null) { marketState.atmPcr=parseFloat(atmPcr); marketState.atmPcrSignal=pcrLabel(marketState.atmPcr); }
+    if (pcr!=null)    { marketState.pcr=parseFloat(pcr);    marketState.pcrSignal=pcrLabel(marketState.pcr); trackPCRHistory(marketState.pcr); }
+    if (atmPcr!=null) { marketState.atmPcr=parseFloat(atmPcr); marketState.atmPcrSignal=pcrLabel(marketState.atmPcr); }
     res.json({success:true});
+});
+
+// FII DII manual input
+app.post('/api/fiidii', (req,res) => {
+    const {fiiBuy, fiiSell, diiBuy, diiSell} = req.body;
+    if (fiiBuy!=null&&fiiSell!=null) { marketState.fii={buy:parseFloat(fiiBuy),sell:parseFloat(fiiSell),net:parseFloat((fiiBuy-fiiSell).toFixed(2))}; }
+    if (diiBuy!=null&&diiSell!=null) { marketState.dii={buy:parseFloat(diiBuy),sell:parseFloat(diiSell),net:parseFloat((diiBuy-diiSell).toFixed(2))}; }
+    console.log(`FII Net: ${marketState.fii.net} | DII Net: ${marketState.dii.net}`);
+    res.json({success:true});
+});
+
+// Option flow manual input (ATM CE/PE premium)
+app.post('/api/optionflow', (req,res) => {
+    const {atmCE, atmPE} = req.body;
+    updateOptionFlow(atmCE?parseFloat(atmCE):null, atmPE?parseFloat(atmPE):null);
+    res.json({success:true, dominance: marketState.optionFlow.dominance});
 });
 
 app.post('/api/telegram/test', async (req,res) => {
@@ -246,20 +311,16 @@ app.get('/', (req,res) => res.sendFile(__dirname+'/public/index.html'));
 async function initializeLiveData() {
     console.log('Starting VardaanNifty AI...');
     console.log('Telegram:', isConfigured()?'✅':'❌');
-
-    // ✅ FIX: Load global & MTF FIRST so combineSignals has full context on first price update
-    await Promise.all([refreshGlobal(), refreshMTF()]);
-    await refreshMarketData();
-
+    await Promise.all([refreshMarketData(), refreshGlobal(), refreshBreadth()]);
+    await refreshMTF();
     setInterval(refreshMarketData, 3*60*1000);
     setInterval(refreshMTF,        5*60*1000);
     setInterval(refreshGlobal,     5*60*1000);
-
-    const auth = await loginAngel();
-    if (auth) { console.log('Angel Login Success'); startWebSocket(auth, onTick); }
-    else      { console.log('Yahoo Finance fallback'); setTimeout(initializeLiveData, 30000); }
+    setInterval(refreshBreadth,    3*60*1000); // every 3 min
+    const auth=await loginAngel();
+    if(auth) { console.log('Angel Login Success'); startWebSocket(auth,onTick); }
+    else     { console.log('Yahoo Finance fallback'); setTimeout(initializeLiveData,30000); }
 }
 
 initializeLiveData();
-server.listen(PORT, ()=>console.log(`VardaanNifty AI running on port ${PORT}`));
-
+server.listen(PORT,()=>console.log(`VardaanNifty AI running on port ${PORT}`));
