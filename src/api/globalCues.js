@@ -102,7 +102,7 @@ async function fetchGlobalCues() {
             crude  : crude  ? { ...crude,  name: 'Crude WTI', score: score(crude?.changePct,  true) } : null,
             brent  : brent  ? { ...brent,  name: 'Brent',     score: score(brent?.changePct,  true) } : null,
             gold   : gold   ? { ...gold,   name: 'Gold',      score: score(gold?.changePct,   true) } : null,
-            silver : silver ? { ...silver, name: 'Silver',    score: 0 } : null,
+            silver : silver ? { ...silver, name: 'Silver',    score: score(silver?.changePct)  } : null,
         },
         // Indian Sectors
         sectors: {
