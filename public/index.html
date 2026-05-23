@@ -848,6 +848,9 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 </div>
 
 <script>
+// Error handler
+window.onerror=function(msg,src,line){console.error('JS Error:',msg,'at line',line);return false;};
+
 // PWA
 if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
 let deferredPrompt=null;
@@ -864,9 +867,17 @@ function switchTab(name,btn){
   if(name==='journal')loadJournal();
 }
 
-// CLOCK
-function updateClock(){document.getElementById('live-clock').textContent=new Date().toLocaleTimeString('en-IN',{hour12:false});}
-setInterval(updateClock,1000);updateClock();
+// CLOCK - runs immediately
+function updateClock(){
+  try{
+    const t=new Date().toLocaleTimeString('en-IN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    document.getElementById('live-clock').textContent=t;
+  }catch(e){
+    document.getElementById('live-clock').textContent=new Date().toTimeString().slice(0,8);
+  }
+}
+setInterval(updateClock,500);
+updateClock();
 
 // MARKET + EXPIRY COUNTDOWN
 function updateHeaderBadges(){
@@ -1097,7 +1108,9 @@ async function deleteEvent(id){await fetch('/api/event/'+id,{method:'DELETE'});l
 // MAIN FETCH
 async function fetchSignal(){
   try{
-    const res=await fetch('/api/signal'),d=await res.json();
+    const res=await fetch('/api/signal');
+    if(!res.ok){console.error('API error:',res.status);return;}
+    const d=await res.json();
     const live=d.connected&&d.nifty>0;
     if(d.nifty>0)flashPrice(d.nifty);
     document.getElementById('price').textContent=d.nifty>0?d.nifty.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}):'--';
@@ -1210,9 +1223,4 @@ function calcTheta(){
   else if(dte<=3)exitBy='Exit by 3:00 PM';
   else exitBy='Monitor daily';
   document.getElementById('th-perday').textContent='₹'+perDay;
-  document.getElementById('th-perhour').textContent='₹'+perHour;
-  document.getElementById('th-breakeven').textContent='₹'+breakeven;
-  document.getElementById('th-exitby').textContent=exitBy;
-  document.getElementById('theta-result').style.display='grid';
-  const alertEl=document.getElementById('theta-alert');
-  if(dte===0){alertEl.textContent=`⚠️ EXPIRY DAY! Theta maximum. Every hour costs ₹${perHour}. Exit early!`;alertEl.style.displa
+  document.getElementById('th-perhour').tex
