@@ -1,10 +1,8 @@
-const CACHE = 'vardaannifty-v5';
+const CACHE = 'vardaannifty-v7';
 const ASSETS = ['/', '/manifest.json'];
 
 self.addEventListener('install', e => {
-    e.waitUntil(
-        caches.open(CACHE).then(c => c.addAll(ASSETS))
-    );
+    e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
     self.skipWaiting();
 });
 
@@ -20,13 +18,11 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
     if (e.request.url.includes('/api/')) {
         e.respondWith(fetch(e.request).catch(() =>
-            new Response('{"error":"offline"}', {
-                headers: { 'Content-Type': 'application/json' }
-            })
+            new Response('{"error":"offline"}', { headers: {'Content-Type':'application/json'} })
         ));
         return;
     }
-    // ✅ Network first — always fresh HTML
+    // Always network first for fresh HTML/JS
     e.respondWith(
         fetch(e.request)
             .then(res => {
