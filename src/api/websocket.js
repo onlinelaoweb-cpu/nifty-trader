@@ -1,4 +1,19 @@
-const WebSocket = require('ws');
+const WebSocket  = require('ws');
+const loginAngel = require('./angelAuth');
+
+// Re-authenticates and reconnects — never reuses a potentially-expired JWT
+async function reconnectWebSocket(onTick, delayMs = 5000) {
+    console.log(`🔄 WebSocket reconnecting in ${delayMs / 1000}s (fresh auth)...`);
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+    const freshAuth = await loginAngel();
+    if (freshAuth) {
+        startWebSocket(freshAuth, onTick);
+    } else {
+        // Auth failed — back off and retry (cap at 60s)
+        console.error('❌ Re-auth failed — retrying in 60s');
+        reconnectWebSocket(onTick, 60000);
+    }
+}
 
 function startWebSocket(authData, onTick) {
     try {
@@ -120,16 +135,16 @@ function startWebSocket(authData, onTick) {
         });
 
         ws.on('close', (code) => {
-            console.log('🔴 WebSocket Closed:', code, '— reconnecting in 5s');
+            console.log('🔴 WebSocket Closed:', code);
             clearInterval(heartbeat);
-            setTimeout(() => startWebSocket(authData, onTick), 5000);
+            reconnectWebSocket(onTick, 5000);  // fresh auth every reconnect
         });
 
         ws.on('ping', () => ws.pong());
 
     } catch (err) {
         console.error('SOCKET START ERROR:', err.message);
-        setTimeout(() => startWebSocket(authData, onTick), 10000);
+        reconnectWebSocket(onTick, 10000);     // fresh auth here too
     }
 }
 
