@@ -82,8 +82,8 @@ function getIST() { return new Date(new Date().toLocaleString('en-US',{timeZone:
 function isSafeEntryWindow() {
     const ist = getIST();
     const m   = ist.getHours()*60 + ist.getMinutes();
-    if (m < 555) return { status:'pre',      label:'Pre-Open',               safe:false, reason:'Market not open yet' };
-    if (m < 570) return { status:'volatile', label:'Volatile (9:15–9:30)',   safe:false, reason:'Gap-fill window — wait for 9:30' };
+    if (m < 555) return { status:'pre',      label:'Pre-Open',                safe:false, reason:'Market not open yet' };
+    if (m < 570) return { status:'volatile', label:'Volatile (9:15–9:30)',    safe:false, reason:'Gap-fill window — wait for 9:30' };
     if (m < 870) return { status:'trade',    label:'Safe Entry (9:30–14:30)', safe:true,  reason:null };
     if (m <= 930) return { status:'theta',   label:'Theta Zone (14:30–15:30)',safe:false, reason:'Theta decay accelerating — avoid new entries' };
     return              { status:'closed',   label:'Market Closed',           safe:false, reason:'Market closed' };
@@ -210,6 +210,14 @@ function onTick(tickData) {
 }
 
 async function refreshMarketData() {
+    // Clear stale price when market is closed so UI shows '--' not yesterday's close
+    if (!isMarketOpen() && marketState.nifty > 0) {
+        marketState.nifty     = 0;
+        marketState.change    = 0;
+        marketState.changePct = 0;
+        marketState.connected = false;
+        marketState.source    = 'none';
+    }
     const { niftyData, vixData }=await fetchMarketData();
     if (niftyData?.closes?.length>0&&!historyLoaded) { initializeHistory(niftyData.closes,niftyData.candles); historyLoaded=true; console.log(`History: ${niftyData.closes.length} candles`); }
     if (vixData) { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.strikeRange; }
