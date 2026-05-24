@@ -109,8 +109,19 @@ function calcVWAP() {
     } catch(e) { return null; }
 }
 
+// ── Momentum confirmation gate ────────────────────────
+// Returns the last *closed* candle (not the in-progress one).
+// The in-progress candle body can flip many times mid-minute,
+// so we only trust a fully closed candle for body direction.
+function getLastClosedCandle() {
+    return candleHistory.length > 0 ? candleHistory[candleHistory.length - 1] : null;
+}
+
 function getIndicatorSignal(price, rsi, ema9, ema21, vwap) {
     const reasons = [];
+
+    // ── Step 1: score each indicator independently ────
+    // (kept so the UI can still show partial context even on a WAIT)
     let bull = 0, bear = 0;
 
     if (rsi !== null) {
@@ -131,21 +142,68 @@ function getIndicatorSignal(price, rsi, ema9, ema21, vwap) {
         else              { bear += 2; reasons.push(`Price below VWAP(${vwap}) ⚠️`); }
     }
 
+    // ── Step 2: momentum confirmation gate ───────────
+    // All three structural conditions must align AND the last closed
+    // candle body must confirm the direction. If momentum has already
+    // turned (e.g. bearish body on a bullish setup), we suppress the
+    // signal even if the score would have triggered it.
+    const lastCandle   = getLastClosedCandle();
+    const bullishBody  = lastCandle && lastCandle.close > lastCandle.open;
+    const bearishBody  = lastCandle && lastCandle.close < lastCandle.open;
+
+    const bullGate =
+        vwap   !== null && price > vwap &&   // price above VWAP
+        ema9   !== null && ema21 !== null &&
+        ema9   > ema21 &&                    // uptrend
+        bullishBody;                         // last candle closed green
+
+    const bearGate =
+        vwap   !== null && price < vwap &&   // price below VWAP
+        ema9   !== null && ema21 !== null &&
+        ema9   < ema21 &&                    // downtrend
+        bearishBody;                         // last candle closed red
+
+    // ── Step 3: derive final signal ──────────────────
     const total = bull + bear;
     if (total === 0) return { signal: 'WAIT', confidence: 0, reasons: ['Collecting data...'] };
 
     const pct = (bull / total) * 100;
-    let signal = 'WAIT', confidence = 0;
-    if (pct >= 65)      { signal = 'BUY CALL'; confidence = Math.round(pct); }
-    else if (pct <= 35) { signal = 'BUY PUT';  confidence = Math.round(100 - pct); }
-    else                { signal = 'WAIT';     confidence = 30; reasons.push('Mixed signals — no trade'); }
 
-    return { signal, confidence, reasons };
+    if (pct >= 65 && bullGate) {
+        return { signal: 'BUY CALL', confidence: Math.round(pct), reasons };
+    }
+
+    if (pct <= 35 && bearGate) {
+        return { signal: 'BUY PUT', confidence: Math.round(100 - pct), reasons };
+    }
+
+    // Score favours a direction but momentum gate blocked it
+    if (pct >= 65 && !bullGate) {
+        const missing = [];
+        if (!lastCandle || !bullishBody) missing.push('last candle not bullish');
+        if (vwap === null || price <= vwap) missing.push('price not above VWAP');
+        if (ema9 === null || ema21 === null || ema9 <= ema21) missing.push('EMA9 ≤ EMA21');
+        reasons.push(`⏳ Bullish score but momentum gate blocked (${missing.join(', ')})`);
+        return { signal: 'WAIT', confidence: 30, reasons };
+    }
+
+    if (pct <= 35 && !bearGate) {
+        const missing = [];
+        if (!lastCandle || !bearishBody) missing.push('last candle not bearish');
+        if (vwap === null || price >= vwap) missing.push('price not below VWAP');
+        if (ema9 === null || ema21 === null || ema9 >= ema21) missing.push('EMA9 ≥ EMA21');
+        reasons.push(`⏳ Bearish score but momentum gate blocked (${missing.join(', ')})`);
+        return { signal: 'WAIT', confidence: 30, reasons };
+    }
+
+    // Mixed signals
+    reasons.push('Mixed signals — no trade');
+    return { signal: 'WAIT', confidence: 30, reasons };
 }
 
 function processIndicators(price) {
     addTick(price);
-    const rsi  = calcRSI();
+    const rsi   = calcRSI();
     const ema9  = calcEMA(9);
     const ema21 = calcEMA(21);
     const vwap  = calcVWAP();
