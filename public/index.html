@@ -951,7 +951,7 @@ function updateSRLevels(sr){
   if(!sr)return;
   const nifty=parseFloat(document.getElementById('price').textContent.replace(/,/g,''))||0;
   document.getElementById('sr-current').textContent=nifty>0?nifty.toLocaleString('en-IN'):sr.pp;
-  document.getElementById('sr-updated').textContent=sr.updatedAt?new Date(sr.updatedAt).toLocaleTimeString('en-IN',{hour12:true}):'--';
+  document.getElementById('sr-updated').textContent=sr.updatedAt?new Date(sr.updatedAt).toLocaleTimeString('en-IN',{hour12:true,hour:'2-digit',minute:'2-digit'}):'--';
   if(sr.nearRes){document.getElementById('near-res').textContent=sr.nearRes.price.toLocaleString('en-IN');const dist=nifty>0?Math.abs(sr.nearRes.price-nifty).toFixed(0):'--';document.getElementById('near-res-dist').textContent=dist+' pts away';}
   if(sr.nearSup){document.getElementById('near-sup').textContent=sr.nearSup.price.toLocaleString('en-IN');const dist=nifty>0?Math.abs(nifty-sr.nearSup.price).toFixed(0):'--';document.getElementById('near-sup-dist').textContent=dist+' pts away';}
   const levels=sr.levels||[];
@@ -1039,7 +1039,7 @@ function updateGlobalUI(g){
   const card=document.getElementById('global-bias-card');
   card.className='global-bias-card '+(bias==='BULLISH'?'bull':bias==='BEARISH'?'bear':'neut');
   document.getElementById('global-bias-val').textContent=bias;document.getElementById('global-bias-val').style.color=bc;
-  document.getElementById('global-updated').textContent=g.updatedAt?'Updated: '+new Date(g.updatedAt).toLocaleTimeString('en-IN',{hour12:true}):'--';
+  document.getElementById('global-updated').textContent=g.updatedAt?'Updated: '+new Date(g.updatedAt).toLocaleTimeString('en-IN',{hour12:true,hour:'2-digit',minute:'2-digit'}):'--';
   if(g.reasons)document.getElementById('global-reasons').innerHTML=g.reasons.map(r=>`<div class="reason-row">${r}</div>`).join('');
   if(g.sectors){setGItem('g-banknifty',g.sectors.bankNifty,false);setGItem('g-niftyit',g.sectors.niftyIT,false);setGItem('g-niftyauto',g.sectors.niftyAuto,false);setGItem('g-niftymetal',g.sectors.niftyMetal,false);}
   if(g.currency){setGItem('g-usdinr',g.currency.usdinr,true);setGItem('g-dxy',g.currency.dxy,true);}
@@ -1172,7 +1172,7 @@ async function fetchSignal(){
     if(d.ema9&&d.ema21){const bull=d.ema9>d.ema21,c=bull?'var(--green)':'var(--red)';document.getElementById('ema9-val').textContent=d.ema9.toFixed(0);document.getElementById('ema21-val').textContent=d.ema21.toFixed(0);document.getElementById('ema9-val').style.color=c;document.getElementById('ema21-val').style.color=c;document.getElementById('ema-trend').textContent=bull?'UP ▲':'DN ▼';document.getElementById('ema-trend').style.color=c;document.getElementById('ema-card').style.borderLeft=`2px solid ${c}`;}
     if(d.reason&&d.reason.length>0)document.getElementById('reasons').innerHTML=d.reason.map(r=>`<div class="reason-row">${r}</div>`).join('');
     document.getElementById('foot-dot').className=live?'dot-live':'dot-off';
-    document.getElementById('footer-txt').textContent=d.lastUpdated?'UPDATED '+new Date(d.lastUpdated).toLocaleTimeString('en-IN',{hour12:true}).toUpperCase():'WAITING...';
+    document.getElementById('footer-txt').textContent=d.lastUpdated?'UPDATED '+new Date(d.lastUpdated).toLocaleTimeString('en-IN',{hour12:true,hour:'2-digit',minute:'2-digit'}).toUpperCase():'WAITING...';
     document.getElementById('chart-nifty-label').textContent=d.nifty>0?d.nifty.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}):'--';
     if(d.nifty>0&&!document.getElementById('calc-nifty').value){document.getElementById('calc-nifty').value=Math.round(d.nifty);document.getElementById('calc-atm').value=Math.round(d.nifty/50)*50;}
     if(d.breadth)updateBreadthUI(d.breadth);
