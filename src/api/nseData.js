@@ -57,6 +57,57 @@ async function getCookie() {
     return _cookie;
 }
 
+// ── Expiry detection ──────────────────────────────────
+// Nifty weekly options expire every Tuesday (IST).
+function isExpiryDay() {
+    const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    return ist.getDay() === 2;   // 0=Sun … 2=Tue … 6=Sat
+}
+
+// ── Max pain calculation ──────────────────────────────
+// For every candidate settlement price S (each listed strike),
+// compute the total rupee loss that option WRITERS would suffer:
+//   call writers lose (S − K) × CE_OI  when S > K
+//   put  writers lose (K − S) × PE_OI  when S < K
+// The strike with the MINIMUM total writer loss is max pain —
+// that is where the price is most likely to gravitate on expiry.
+function calcMaxPain(records) {
+    if (!Array.isArray(records) || records.length < 5) return null;
+
+    // Build a strike → { ceOI, peOI } map from every row in the chain
+    const oiMap = {};
+    for (const row of records) {
+        const strike = row.strikePrice;
+        if (!strike) continue;
+        oiMap[strike] = {
+            ceOI: row.CE?.openInterest || 0,
+            peOI: row.PE?.openInterest || 0
+        };
+    }
+    const strikes = Object.keys(oiMap).map(Number).sort((a, b) => a - b);
+    if (strikes.length < 3) return null;
+
+    let minPain = Infinity, maxPainStrike = null;
+
+    for (const S of strikes) {
+        let totalPain = 0;
+        for (const K of strikes) {
+            const { ceOI, peOI } = oiMap[K];
+            if (S > K) totalPain += (S - K) * ceOI;   // call writer loss
+            if (S < K) totalPain += (K - S) * peOI;   // put  writer loss
+        }
+        if (totalPain < minPain) {
+            minPain        = totalPain;
+            maxPainStrike  = S;
+        }
+    }
+
+    return {
+        strike   : maxPainStrike,
+        totalPain: minPain          // raw ₹ exposure — useful for gauging confidence
+    };
+}
+
 // ── PCR calculation helpers ───────────────────────────
 function calcATMStrike(spotPrice) {
     return Math.round(spotPrice / 50) * 50;
@@ -91,7 +142,9 @@ function parsePCR(data, spotPrice) {
     const pcr    = totalCEoi > 0 ? parseFloat((totalPEoi / totalCEoi).toFixed(2)) : null;
     const atmPcr = atmCEoi  > 0 ? parseFloat((atmPEoi  / atmCEoi).toFixed(2))  : null;
 
-    return { pcr, atmPcr, atm, atmCEpremium, atmPEpremium, totalCEoi, totalPEoi };
+    const maxPain = calcMaxPain(records);
+
+    return { pcr, atmPcr, atm, atmCEpremium, atmPEpremium, totalCEoi, totalPEoi, maxPain, expiryDay: isExpiryDay() };
 }
 
 // ── Main export ───────────────────────────────────────
@@ -145,4 +198,4 @@ async function fetchNSEPcr(spotPrice) {
     }
 }
 
-module.exports = { fetchNSEPcr };
+module.exports = { fetchNSEPcr, isExpiryDay };
