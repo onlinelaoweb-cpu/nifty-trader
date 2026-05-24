@@ -24,7 +24,7 @@ const NIFTY_STOCKS = [
 ];
 
 // ✅ FIX: Use v8 chart API (same as NIFTY price — no auth needed)
-async function fetchStockData(symbol) {
+async function fetchStockData(symbol, attempt = 1) {
     try {
         const res = await axios.get(
             `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`,
@@ -47,6 +47,11 @@ async function fetchStockData(symbol) {
 
         return { price, change, changePct };
     } catch(e) {
+        // One silent retry after a 2s pause before giving up
+        if (attempt === 1) {
+            await new Promise(r => setTimeout(r, 2000));
+            return fetchStockData(symbol, 2);
+        }
         return null;
     }
 }
@@ -63,10 +68,12 @@ async function fetchAdvanceDecline() {
         const stocks = [];
         let advances = 0, declines = 0, unchanged = 0;
         let bullWeight = 0, bearWeight = 0;
+        let fetchedCount = 0;
 
         results.forEach((data, i) => {
             const info = NIFTY_STOCKS[i];
             if (!data) return;
+            fetchedCount++;
 
             const { price, change, changePct } = data;
 
@@ -81,6 +88,13 @@ async function fetchAdvanceDecline() {
             });
         });
 
+        // Guard: if fewer than 5 stocks returned data, Yahoo is likely rate-limiting.
+        // Return null so server.js keeps the last good breadth reading.
+        if (fetchedCount < 5) {
+            console.warn(`⚠️  A/D: only ${fetchedCount}/20 stocks returned data — skipping update`);
+            return null;
+        }
+
         // Sort by % change descending
         stocks.sort((a, b) => b.changePct - a.changePct);
 
@@ -88,6 +102,7 @@ async function fetchAdvanceDecline() {
         const adRatio    = declines > 0
             ? parseFloat((advances / declines).toFixed(2))
             : advances > 0 ? 9.99 : 0;
+        // BUG FIX: use full total (incl. unchanged) as denominator — was advances+declines only
         const breadthPct = total > 0 ? Math.round((advances / total) * 100) : 50;
 
         const totalWeight  = bullWeight + bearWeight;
