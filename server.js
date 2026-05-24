@@ -606,9 +606,16 @@ app.post('/api/telegram/test', async (req,res) => {
 
 app.get('/', (req,res) => res.sendFile(__dirname+'/public/index.html'));
 
-// Serve stub sw.js + manifest so PWA requests don't 404
+// Serve stub sw.js
 app.get('/sw.js', (req,res) => { res.setHeader('Content-Type','application/javascript'); res.send('// Service Worker stub'); });
-app.get('/manifest.json', (req,res) => res.json({ name:'VardaanNifty AI', short_name:'VNifty', start_url:'/', display:'standalone', background_color:'#020508', theme_color:'#00ff88', icons:[] }));
+
+// Serve real manifest.json from disk (fixes PWA install on Android + iOS)
+app.get('/manifest.json', (req,res) => res.sendFile(__dirname+'/public/manifest.json'));
+
+// Serve PNG icons for PWA install prompt and apple-touch-icon
+// Place icon-192.png, icon-512.png, apple-touch-icon.png in public/icons/
+app.use('/icons', require('express').static(__dirname+'/public/icons'));
+app.get('/apple-touch-icon.png', (req,res) => res.sendFile(__dirname+'/public/icons/apple-touch-icon.png'));
 
 // ── Init ──────────────────────────────────────────────
 let _intervalsStarted = false;
