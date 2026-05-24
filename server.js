@@ -3,6 +3,7 @@ require('dotenv').config();
 const express  = require('express');
 const http     = require('http');
 const cors     = require('cors');
+const axios    = require('axios');
 
 const loginAngel                    = require('./src/api/angelAuth');
 const startWebSocket                = require('./src/api/websocket');
@@ -225,6 +226,32 @@ function updateOpenTradesMTM() {
 // ── Routes ────────────────────────────────────────────
 app.get('/api/signal',  (req,res) => { updateOpenTradesMTM(); res.json(marketState); });
 app.get('/api/candles', (req,res) => res.json(getCandleHistory()));
+
+// Chart historical data — fetched server-side to avoid browser CORS restrictions
+app.get('/api/chart', async (req,res) => {
+    const tf = req.query.tf || '5m';
+    const intervalMap = { '5m':'5m', '15m':'15m', '1h':'60m' };
+    const rangeMap    = { '5m':'5d', '15m':'5d', '1h':'1mo' };
+    const interval = intervalMap[tf] || '5m';
+    const range    = rangeMap[tf]    || '5d';
+    try {
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=${interval}&range=${range}&includePrePost=false`;
+        const response = await axios.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 8000 });
+        const q = response.data?.chart?.result?.[0]?.indicators?.quote?.[0];
+        if (!q) return res.json([]);
+        const { open, high, low, close, volume } = q;
+        const candles = [];
+        for (let i = 0; i < close.length; i++) {
+            if (close[i] != null && high[i] != null && low[i] != null) {
+                candles.push({ open: open[i] || close[i], high: high[i], low: low[i], close: close[i], volume: volume[i] || 1 });
+            }
+        }
+        res.json(candles);
+    } catch (err) {
+        console.error('Chart API error:', err.message);
+        res.json([]);
+    }
+});
 app.get('/api/global',  (req,res) => res.json(marketState.global));
 app.get('/api/breadth', (req,res) => res.json(marketState.breadth));
 app.get('/api/levels',  (req,res) => res.json(marketState.srLevels));
@@ -285,7 +312,7 @@ app.post('/api/trade/exit', (req,res) => {
     const trade=trades.find(t=>t.id===id);
     if(!trade) return res.json({success:false,msg:'Not found'});
     trade.exitPremium=parseFloat(exitPremium);
-    trade.pnl=parseFloat(((trade.exitPremium-trade.premium)*trade.lots*25).toFixed(0));
+    trade.pnl=parseFloat(((trade.exitPremium-trade.premium)*trade.lots*65).toFixed(0));
     trade.status='CLOSED';
     const ist=getIST();
     trade.exitTime=`${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
