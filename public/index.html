@@ -848,11 +848,16 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 </div>
 
 <script>
-// Error handler
-window.onerror=function(msg,src,line){console.error('JS Error:',msg,'at line',line);return false;};
+// Error handler — never let any JS error kill the whole page
+window.onerror=function(msg,src,line){console.warn('JS Error:',msg,'at line',line);return true;};
+window.addEventListener('unhandledrejection',function(e){console.warn('Unhandled promise:',e.reason);e.preventDefault();});
 
-// PWA
-if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
+// PWA — only register sw.js if it actually exists (Railway may not have it)
+if('serviceWorker' in navigator){
+  fetch('/sw.js',{method:'HEAD'}).then(r=>{
+    if(r.ok) navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  }).catch(()=>{});
+}
 let deferredPrompt=null;
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;document.getElementById('install-banner').classList.add('show');});
 function installPWA(){if(!deferredPrompt)return;deferredPrompt.prompt();deferredPrompt.userChoice.then(()=>{deferredPrompt=null;document.getElementById('install-banner').classList.remove('show');});}
@@ -1106,11 +1111,25 @@ async function loadEvents(){
 
 async function deleteEvent(id){await fetch('/api/event/'+id,{method:'DELETE'});loadEvents();}
 
-// MAIN FETCH
+// MAIN FETCH — Railway-safe with cold-start retry
+let _fetchFailCount=0;
+let _fetchInterval=null;
+
+function setFetchInterval(ms){
+  if(_fetchInterval)clearInterval(_fetchInterval);
+  _fetchInterval=setInterval(fetchSignal,ms);
+}
+
 async function fetchSignal(){
   try{
-    const res=await fetch('/api/signal');
-    if(!res.ok){console.error('API error:',res.status);return;}
+    const ctrl=new AbortController();
+    const timer=setTimeout(()=>ctrl.abort(),8000); // 8s timeout for Railway cold start
+    const res=await fetch('/api/signal',{signal:ctrl.signal});
+    clearTimeout(timer);
+    if(!res.ok){throw new Error('HTTP '+res.status);}
+    _fetchFailCount=0;
+    // Back to normal 2s polling once connected
+    if(_fetchInterval&&_fetchInterval._ms!==2000)setFetchInterval(2000);
     const d=await res.json();
     const live=d.connected&&d.nifty>0;
     if(d.nifty>0)flashPrice(d.nifty);
@@ -1146,10 +1165,22 @@ async function fetchSignal(){
     if(d.dii?.net!=null){const de=document.getElementById('dii-net');de.textContent=(d.dii.net>=0?'+':'')+d.dii.net+'Cr';de.style.color=d.dii.net>=0?'var(--green)':'var(--red)';}
     if(d.global)updateGlobalUI(d.global);
     if(d.srLevels)updateSRLevels(d.srLevels);
-  }catch(e){console.error(e);}
+  }catch(e){
+    _fetchFailCount++;
+    console.warn('fetchSignal failed ('+_fetchFailCount+'):', e.message||e);
+    // Show connecting status — don't crash, just slow down polling on repeated failures
+    document.getElementById('footer-txt').textContent='⏳ Connecting to server...';
+    document.getElementById('foot-dot').className='dot-off';
+    if(_fetchFailCount>=3){
+      // Railway cold start can take 10-30s — back off to 5s polling
+      setFetchInterval(5000);
+    }
+  }
 }
-setInterval(fetchSignal,2000);fetchSignal();
-setInterval(loadEvents,60000);loadEvents();
+setFetchInterval(2000);fetchSignal();
+setInterval(loadEvents,60000);
+// Delay first loadEvents until server is likely up
+setTimeout(loadEvents, 3000);
 
 // CHART
 let chartTF='1m',chartVwap=null;
@@ -1210,29 +1241,4 @@ function calculateAll(){
   const delta=parseFloat(normalCDF(d1).toFixed(3));
   const gamma=parseFloat((normalPDF(d1)/(S*sigma*Math.sqrt(T))).toFixed(5));
   const theta=parseFloat((-(S*normalPDF(d1)*sigma/(2*Math.sqrt(T))-r*atm*Math.exp(-r*T)*normalCDF(d2))/365).toFixed(2));
-  const vega=parseFloat((S*normalPDF(d1)*Math.sqrt(T)/100).toFixed(2));
-  document.getElementById('greek-delta').textContent=delta;
-  document.getElementById('greek-gamma').textContent=gamma;
-  document.getElementById('greek-theta').textContent='₹'+Math.abs(theta).toFixed(2);
-  document.getElementById('greek-vega').textContent='₹'+vega.toFixed(2);
-  document.getElementById('greeks-result').style.display='grid';
-}
-function calcTheta(){
-  const premium=parseFloat(document.getElementById('th-premium').value);
-  const dte=parseInt(document.getElementById('th-dte').value)||0;
-  if(!premium||dte<0)return;
-  const perDay=parseFloat((premium*0.15).toFixed(1));
-  const perHour=parseFloat((perDay/6.5).toFixed(1));
-  const breakeven=parseFloat((premium*0.05).toFixed(1));
-  let exitBy='--';
-  if(dte===0)exitBy='Exit by 2:30 PM!';
-  else if(dte===1)exitBy='Exit by 2:00 PM';
-  else if(dte<=3)exitBy='Exit by 3:00 PM';
-  else exitBy='Monitor daily';
-  document.getElementById('th-perday').textContent='₹'+perDay;
-  document.getElementById('th-perhour').textContent='₹'+perHour;
-  document.getElementById('th-breakeven').textContent='₹'+breakeven;
-  document.getElementById('th-exitby').textContent=exitBy;
-  document.getElementById('theta-result').style.display='grid';
-  const alertEl=document.getElementById('theta-alert');
-  if(dte<=1){alertEl.style.display='blo
+  const 
