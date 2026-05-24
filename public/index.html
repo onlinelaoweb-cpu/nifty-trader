@@ -828,7 +828,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="res-card"><div class="res-label">SL 20%</div><div class="res-val" id="sl-20" style="color:var(--red);">--</div><div class="res-sub">per unit</div></div>
         <div class="res-card"><div class="res-label">SL 25%</div><div class="res-val" id="sl-25" style="color:var(--red);">--</div><div class="res-sub">per unit</div></div>
         <div class="res-card"><div class="res-label">TARGET 1:1</div><div class="res-val" id="sl-t1" style="color:var(--green);">--</div><div class="res-sub">per unit</div></div>
-        <div class="res-card"><div class="res-label">MAX LOSS</div><div class="res-val" id="sl-maxloss" style="color:var(--red);">--</div><div class="res-sub" id="sl-qty-lbl">1lot=25</div></div>
+        <div class="res-card"><div class="res-label">MAX LOSS</div><div class="res-val" id="sl-maxloss" style="color:var(--red);">--</div><div class="res-sub" id="sl-qty-lbl">1lot=65</div></div>
         <div class="res-card"><div class="res-label">TARGET P&L</div><div class="res-val" id="sl-pnl" style="color:var(--green);">--</div></div>
         <div class="res-card"><div class="res-label">INVESTED</div><div class="res-val" id="sl-invested" style="color:var(--blue);">--</div></div>
       </div>
@@ -863,8 +863,9 @@ function switchTab(name,btn){
   document.querySelectorAll('.btab').forEach(b=>b.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
   btn.classList.add('active');
-  if(name==='chart')refreshChart();
-  if(name==='journal')loadJournal();
+  if(name==='chart'){refreshChart();}
+  if(name==='journal'){loadJournal();loadEvents();}
+  if(name==='breadth'||name==='global'){fetchSignal();}
 }
 
 // CLOCK - runs immediately
@@ -891,7 +892,7 @@ function updateHeaderBadges(){
   else if(secs<=cls){badge.className='hbadge market-open';badge.textContent='🟢 '+fmt(cls-secs);}
   else{badge.className='hbadge market-closed';badge.textContent='🔴 CLOSED';}
   const day=ist.getDay();
-  const daysToExp=day<=4?(4-day):(4+7-day);
+  const daysToExp=day<=2?(2-day):(2+7-day);
   const expBadge=document.getElementById('expiry-badge');
   if(daysToExp===0){
     const minsToClose=(15*60+30)-(h*60+m);
@@ -1155,11 +1156,17 @@ let chartTF='1m',chartVwap=null;
 function setChartTF(tf,btn){chartTF=tf;document.querySelectorAll('.chart-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');refreshChart();}
 async function refreshChart(){
   try{let candles=[];
-  if(chartTF==='1m'){const res=await fetch('/api/candles');candles=await res.json();}
-  else{const im={'5m':'5m','15m':'15m','1h':'60m'},rm={'5m':'5d','15m':'5d','1h':'1mo'};const url=`https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=${im[chartTF]}&range=${rm[chartTF]}&includePrePost=false`;const res=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0'}});const data=await res.json();const q=data?.chart?.result?.[0]?.indicators?.quote?.[0];if(q){const{open,high,low,close,volume}=q;for(let i=0;i<close.length;i++)if(close[i]!=null&&high[i]!=null&&low[i]!=null)candles.push({open:open[i]||close[i],high:high[i],low:low[i],close:close[i],volume:volume[i]||1});}}
+  if(chartTF==='1m'){
+    const res=await fetch('/api/candles');
+    candles=await res.json();
+  } else {
+    // Route through server-side proxy endpoint to avoid CORS
+    const res=await fetch(`/api/chart?tf=${chartTF}`);
+    if(res.ok) candles=await res.json();
+  }
   const sr=await fetch('/api/signal');const sd=await sr.json();chartVwap=sd.vwap;
   if(candles.length>0){const last=candles[candles.length-1],allH=candles.map(c=>c.high),allL=candles.map(c=>c.low);const c=last.close>=last.open?'var(--green)':'var(--red)';document.getElementById('chart-open').textContent=last.open.toFixed(0);document.getElementById('chart-open').style.color=c;document.getElementById('chart-close').textContent=last.close.toFixed(0);document.getElementById('chart-close').style.color=c;document.getElementById('chart-high').textContent=Math.max(...allH).toFixed(0);document.getElementById('chart-low').textContent=Math.min(...allL).toFixed(0);}
-  drawChart(candles,chartVwap);}catch(e){drawChart([],null);}
+  drawChart(candles,chartVwap);}catch(e){console.error('Chart error:',e);drawChart([],null);}
 }
 function drawChart(candles,vwap){
   const canvas=document.getElementById('chart-canvas');if(!canvas)return;
@@ -1223,4 +1230,9 @@ function calcTheta(){
   else if(dte<=3)exitBy='Exit by 3:00 PM';
   else exitBy='Monitor daily';
   document.getElementById('th-perday').textContent='₹'+perDay;
-  document.getElementById('th-perhour').tex
+  document.getElementById('th-perhour').textContent='₹'+perHour;
+  document.getElementById('th-breakeven').textContent='₹'+breakeven;
+  document.getElementById('th-exitby').textContent=exitBy;
+  document.getElementById('theta-result').style.display='grid';
+  const alertEl=document.getElementById('theta-alert');
+  if(dte<=1){alertEl.style.display='blo
