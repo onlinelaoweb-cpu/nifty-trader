@@ -15,6 +15,7 @@ const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
 const { fetchGlobalCues }           = require('./src/api/globalCues');
 const { fetchAdvanceDecline }       = require('./src/api/breadth');
 const { calculateSRLevels }         = require('./src/api/levels');
+const { fetchNSEPcr }               = require('./src/api/nseData');
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
@@ -35,6 +36,7 @@ let marketState = {
     signal: 'WAIT', confidence: 0,
     rsi: null, ema9: null, ema21: null, vwap: null,
     pcr: null, atmPcr: null, pcrSignal: 'N/A', atmPcrSignal: 'N/A',
+    pcrSource: 'manual', // 'auto' when NSE fetch succeeds
     vix: null, vixChange: null, vixSignal: 'N/A', vixNote: '', strikeRange: 'ATM ±200',
     mtf: {
         signal: 'WAIT', strength: 'WEAK', confidence: 0,
@@ -58,8 +60,7 @@ let marketState = {
     fii: { buy:null, sell:null, net:null },
     dii: { buy:null, sell:null, net:null },
     optionFlow: { atmCEpremium:null, atmPEpremium:null, ceChange:0, peChange:0, dominance:'NEUTRAL', history:[] },
-    reason: ['Waiting...'], lastUpdated:null, connected:false, source:'none', dataPoints:0,
-    entryWindow: { status:'closed', label:'Market Closed', safe:false }
+    reason: ['Waiting...'], lastUpdated:null, connected:false, source:'none', dataPoints:0
 };
 
 // ── Trade Journal ─────────────────────────────────────
@@ -77,16 +78,6 @@ function isMarketOpen() {
     return m >= 555 && m <= 930;
 }
 function getIST() { return new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'})); }
-function isSafeEntryWindow() {
-    const ist = getIST();
-    const m   = ist.getHours()*60 + ist.getMinutes();
-    if (m < 555) return { status:'pre',      label:'Pre-Open',              safe:false, reason:'Market not open yet' };
-    if (m < 570) return { status:'volatile', label:'Volatile (9:15–9:30)',  safe:false, reason:'Gap-fill window — wait for 9:30' };
-    if (m < 870) return { status:'trade',    label:'Safe Entry (9:30–14:30)',safe:true,  reason:null };
-    if (m <= 930) return { status:'theta',   label:'Theta Zone (14:30–15:30)',safe:false,reason:'Theta decay accelerating — avoid new entries' };
-    return              { status:'closed',   label:'Market Closed',          safe:false, reason:'Market closed' };
-}
-
 function pcrLabel(v) { if(!v) return 'N/A'; if(v>1.5) return 'BULLISH'; if(v<0.7) return 'BEARISH'; return 'NEUTRAL'; }
 
 function trackPCRHistory(pcr) {
@@ -115,17 +106,6 @@ function updateOptionFlow(atmCE, atmPE) {
 
 // ── Signal Generator ──────────────────────────────────
 function combineSignals(indicators) {
-    // ── Time-of-day gate (IST) ──────────────────────────
-    const ew = isSafeEntryWindow();
-    marketState.entryWindow = ew;
-    if (!ew.safe) {
-        return {
-            signal     : 'WAIT',
-            confidence : 0,
-            reasons    : [`⏰ ${ew.reason}`, ...( indicators.reasons||[] ).slice(0,2)]
-        };
-    }
-    // ────────────────────────────────────────────────────
     let bull=0, bear=0;
     const reasons=[...(indicators.reasons||[])];
 
@@ -221,6 +201,35 @@ async function refreshMTF() { try { const d=await analyzeMultiTimeframe(); if(d)
 async function refreshGlobal() { try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); } }
 async function refreshBreadth() { try { const d=await fetchAdvanceDecline(); if(d) marketState.breadth=d; } catch(e) { console.error('Breadth:',e.message); } }
 async function refreshSR() { try { if(marketState.nifty>0) { const sr=await calculateSRLevels(marketState.nifty); if(sr) marketState.srLevels=sr; } } catch(e) { console.error('SR:',e.message); } }
+
+async function refreshPCR() {
+    if (!isMarketOpen() || marketState.nifty <= 0) return;
+    try {
+        const data = await fetchNSEPcr(marketState.nifty);
+        if (!data || !data.pcr) return;
+
+        // Update PCR
+        marketState.pcr        = data.pcr;
+        marketState.pcrSignal  = pcrLabel(data.pcr);
+        trackPCRHistory(data.pcr);
+
+        // Update ATM PCR
+        if (data.atmPcr) {
+            marketState.atmPcr       = data.atmPcr;
+            marketState.atmPcrSignal = pcrLabel(data.atmPcr);
+        }
+
+        // Feed live ATM premiums into option flow tracker
+        if (data.atmCEpremium || data.atmPEpremium) {
+            updateOptionFlow(data.atmCEpremium, data.atmPEpremium);
+        }
+
+        marketState.pcrSource = 'auto';
+        console.log(`✅ PCR auto-updated: ${data.pcr} | ATM: ${data.atmPcr} (source: NSE)`);
+    } catch(e) {
+        console.error('refreshPCR:', e.message);
+    }
+}
 
 // ── Trade journal helpers ─────────────────────────────
 function getTradeSummary() {
@@ -390,6 +399,7 @@ function startPollingIntervals() {
     setInterval(refreshGlobal,     5*60*1000);
     setInterval(refreshBreadth,    3*60*1000);
     setInterval(refreshSR,        10*60*1000);
+    setInterval(refreshPCR,        3*60*1000);  // NSE PCR every 3 min
     console.log('Polling intervals started (x1)');
 }
 
@@ -405,7 +415,7 @@ async function initializeLiveData() {
     console.log('Telegram:', isConfigured()?'✅':'❌');
     // Initial data load (runs once at startup)
     await Promise.all([refreshMarketData(), refreshGlobal(), refreshBreadth()]);
-    await Promise.all([refreshMTF(), refreshSR()]);
+    await Promise.all([refreshMTF(), refreshSR(), refreshPCR()]);
     // Start polling loops exactly once, no matter how many login retries follow
     startPollingIntervals();
     // Attempt Angel One login; retries go through tryAngelLogin() which never re-enters here
