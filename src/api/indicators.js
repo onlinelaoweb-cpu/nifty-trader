@@ -3,30 +3,74 @@ const { RSI, EMA, VWAP } = require('technicalindicators');
 let priceHistory  = [];
 let candleHistory = [];
 let currentCandle = null;
-let lastMinute    = null;
+let lastMinute    = null;   // now stores hours*60+minutes, not just minutes
 let initialized   = false;
+
+// ── Session-scoped VWAP state ─────────────────────────
+// Resets at 9:15 IST every day so VWAP only uses today's candles
+let sessionCandles  = [];   // candles from 9:15 IST today only
+let sessionDate     = null; // 'YYYY-MM-DD' of current session
+
+function getISTMinute() {
+    const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    return ist.getHours() * 60 + ist.getMinutes();
+}
+
+function getISTDateStr() {
+    const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    return `${ist.getFullYear()}-${String(ist.getMonth()+1).padStart(2,'0')}-${String(ist.getDate()).padStart(2,'0')}`;
+}
+
+function checkSessionReset() {
+    const today  = getISTDateStr();
+    const istMin = getISTMinute();
+    // New session: date changed OR it's exactly 9:15 on a fresh day
+    if (sessionDate !== today && istMin >= 555) { // 555 = 9:15 AM
+        sessionCandles = [];
+        sessionDate    = today;
+        console.log(`🔄 VWAP session reset for ${today}`);
+    }
+}
 
 function initializeHistory(closes, candles) {
     if (!closes || closes.length === 0) return;
     priceHistory  = [...closes];
     candleHistory = candles ? [...candles] : [];
     initialized   = true;
+
+    // Seed sessionCandles with only today's candles (last 75 = ~75 min of 1m bars)
+    // This gives VWAP a warm start on app launch during market hours
+    const todayStr = getISTDateStr();
+    if (sessionDate !== todayStr) {
+        sessionCandles = candleHistory.slice(-75);
+        sessionDate    = todayStr;
+        console.log(`📅 VWAP seeded with ${sessionCandles.length} candles for today`);
+    }
+
     console.log(`✅ Indicators initialized: ${priceHistory.length} prices loaded`);
     console.log(`   RSI ready: ${priceHistory.length >= 15 ? 'YES' : 'NO'}`);
     console.log(`   EMA ready: ${priceHistory.length >= 21 ? 'YES' : 'NO'}`);
 }
 
 function addTick(price) {
-    const now    = new Date();
-    const minute = now.getMinutes();
+    // Bug fix: use hours*60+minutes so :15 of 9AM ≠ :15 of 10AM
+    const istMin = getISTMinute();
 
-    if (!currentCandle || minute !== lastMinute) {
+    // Reset VWAP session if new trading day
+    checkSessionReset();
+
+    if (!currentCandle || istMin !== lastMinute) {
         if (currentCandle) {
             candleHistory.push({ ...currentCandle });
             if (candleHistory.length > 300) candleHistory.shift();
+            // Only add to sessionCandles during market hours (9:15–15:30)
+            if (istMin >= 555 && istMin <= 930) {
+                sessionCandles.push({ ...currentCandle });
+                if (sessionCandles.length > 80) sessionCandles.shift(); // max 75-min session
+            }
         }
         currentCandle = { open: price, high: price, low: price, close: price, volume: 1 };
-        lastMinute    = minute;
+        lastMinute    = istMin;
     } else {
         currentCandle.high   = Math.max(currentCandle.high, price);
         currentCandle.low    = Math.min(currentCandle.low, price);
@@ -51,7 +95,8 @@ function calcEMA(period) {
 }
 
 function calcVWAP() {
-    const candles = currentCandle ? [...candleHistory, currentCandle] : candleHistory;
+    // Use only today's session candles — not multi-day history
+    const candles = currentCandle ? [...sessionCandles, currentCandle] : sessionCandles;
     if (candles.length < 2) return null;
     try {
         const r = VWAP.calculate({
