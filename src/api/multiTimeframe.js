@@ -14,8 +14,9 @@ async function fetchCandles(interval, range) {
             timeout: 10000
         });
 
-        const result  = res.data?.chart?.result?.[0];
-        const quotes  = result?.indicators?.quote?.[0];
+        const result     = res.data?.chart?.result?.[0];
+        const quotes     = result?.indicators?.quote?.[0];
+        const timestamps = result?.timestamp || [];
         if (!quotes) return [];
 
         const closes  = quotes.close  || [];
@@ -27,6 +28,7 @@ async function fetchCandles(interval, range) {
         for (let i = 0; i < closes.length; i++) {
             if (closes[i] != null && highs[i] != null && lows[i] != null) {
                 candles.push({
+                    ts    : timestamps[i] ? timestamps[i] * 1000 : null,   // ← unix ms
                     close : parseFloat(closes[i].toFixed(2)),
                     high  : parseFloat(highs[i].toFixed(2)),
                     low   : parseFloat(lows[i].toFixed(2)),
@@ -43,7 +45,28 @@ async function fetchCandles(interval, range) {
     }
 }
 
-// ── Calculate indicators for a set of candles ─────────
+// ── Filter candles to the current IST trading session ─
+// VWAP must reset at 09:15 IST each day; using multi-day
+// candles inflates/deflates the anchor and produces the
+// cross-timeframe divergence seen in the MTF output.
+function todaySessionCandles(candles) {
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;           // UTC+5:30
+    const nowIST  = new Date(Date.now() + IST_OFFSET_MS);
+    const todayStr = nowIST.toISOString().slice(0, 10);    // "YYYY-MM-DD"
+
+    const session = candles.filter(c => {
+        if (!c.ts) return false;
+        const istDate = new Date(c.ts + IST_OFFSET_MS).toISOString().slice(0, 10);
+        return istDate === todayStr;
+    });
+
+    // Fallback: if market hasn't opened yet or timestamps missing,
+    // use the last 80 candles (≈ one 5-min session) so VWAP
+    // never silently go multi-day.
+    return session.length >= 2 ? session : candles.slice(-80);
+}
+
+
 function calcIndicators(candles) {
     if (!candles || candles.length < 5) {
         return {
@@ -83,15 +106,16 @@ function calcIndicators(candles) {
         ema21 = r.length > 0 ? parseFloat(r[r.length - 1].toFixed(2)) : null;
     }
 
-    // VWAP
+    // VWAP — today's session only (resets at 09:15 IST)
     let vwap = null;
-    if (candles.length >= 2) {
+    const sessionCandles = todaySessionCandles(candles);
+    if (sessionCandles.length >= 2) {
         try {
             const r = VWAP.calculate({
-                high  : candles.map(c => c.high),
-                low   : candles.map(c => c.low),
-                close : closes,
-                volume: candles.map(c => c.volume)
+                high  : sessionCandles.map(c => c.high),
+                low   : sessionCandles.map(c => c.low),
+                close : sessionCandles.map(c => c.close),
+                volume: sessionCandles.map(c => c.volume)
             });
             vwap = r.length > 0 ? parseFloat(r[r.length - 1].toFixed(2)) : null;
         } catch(e) {}
