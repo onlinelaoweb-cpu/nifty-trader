@@ -19,7 +19,7 @@ const { fetchNSEPcr, isExpiryDay }           = require('./src/api/nseData');
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
-    sendCloseSummary, isConfigured
+    sendCloseSummary, sendExitAlert, isConfigured
 }                                   = require('./src/api/telegram');
 
 const app    = express();
@@ -366,6 +366,8 @@ async function refreshPCR() {
         // Feed live ATM premiums into option flow tracker
         if (data.atmCEpremium || data.atmPEpremium) {
             updateOptionFlow(data.atmCEpremium, data.atmPEpremium);
+            // Check open trades for SL/target hits using fresh premiums
+            await updateOpenTradesMTM();
         }
 
         marketState.pcrSource = 'auto';
@@ -418,16 +420,60 @@ function getTradeSummary() {
     return { totalPnl, openPnl, winners, losers, winRate, totalTrades:trades.length, openTrades:trades.filter(t=>t.status==='OPEN').length };
 }
 
-// Update open trade MTM P&L
-function updateOpenTradesMTM() {
+// ── Exit monitor — runs every time live premiums arrive ──
+// Uses live ATM premiums from optionFlow (updated by refreshPCR every 3 min).
+// Fires a Telegram exit alert ONCE per trade per threshold via alertSent flags.
+// P&L is premium-based, not Nifty-move-based.
+async function updateOpenTradesMTM() {
     const price = marketState.nifty;
     if (!price) return;
-    trades.filter(t=>t.status==='OPEN').forEach(t=>{
-        // Rough MTM based on Nifty move (simplified)
-        // In real scenario we'd track live premium
+
+    const atmCE = marketState.optionFlow.atmCEpremium;
+    const atmPE = marketState.optionFlow.atmPEpremium;
+
+    for (const t of trades.filter(t => t.status === 'OPEN')) {
+        // Nifty move (kept for UI display)
         t.niftyCurrent = price;
-        t.niftyMove    = parseFloat((price - (t.niftyAtEntry||price)).toFixed(0));
-    });
+        t.niftyMove    = parseFloat((price - (t.niftyAtEntry || price)).toFixed(0));
+
+        // Pick the live premium that matches this trade's type
+        const livePremium = t.type === 'CE' ? atmCE : atmPE;
+        if (!livePremium || !t.premium) continue;
+
+        t.currentPremium = livePremium;
+        t.currentPnl     = parseFloat(((livePremium - t.premium) * t.lots * 65).toFixed(0));
+
+        // ── Threshold calculation ────────────────────────
+        const entry   = t.premium;
+        const risk    = t.sl > 0 ? (entry - t.sl) : entry * 0.25;  // fallback: 25% of entry
+        const sl      = t.sl > 0 ? t.sl : parseFloat((entry * 0.75).toFixed(2));
+        const target1R  = parseFloat((entry + risk).toFixed(2));         // 1:1
+        const target15R = parseFloat((entry + risk * 1.5).toFixed(2));   // 1:1.5
+
+        // Initialise alert-sent guards on first pass
+        if (!t.alertSent) t.alertSent = { sl: false, target1R: false, target15R: false };
+
+        // ── SL hit ──────────────────────────────────────
+        if (!t.alertSent.sl && livePremium <= sl) {
+            t.alertSent.sl = true;
+            console.log(`🛑 SL hit: Trade #${t.id} ${t.type} ${t.strike} — premium ₹${livePremium} ≤ SL ₹${sl}`);
+            if (isConfigured()) await sendExitAlert(t, 'STOP_LOSS', livePremium);
+        }
+
+        // ── Target 1:1 ──────────────────────────────────
+        if (!t.alertSent.target1R && livePremium >= target1R) {
+            t.alertSent.target1R = true;
+            console.log(`✅ Target 1R hit: Trade #${t.id} — premium ₹${livePremium} ≥ ₹${target1R}`);
+            if (isConfigured()) await sendExitAlert(t, 'TARGET_1R', livePremium);
+        }
+
+        // ── Target 1:1.5 ────────────────────────────────
+        if (!t.alertSent.target15R && livePremium >= target15R) {
+            t.alertSent.target15R = true;
+            console.log(`🎯 Target 1.5R hit: Trade #${t.id} — premium ₹${livePremium} ≥ ₹${target15R}`);
+            if (isConfigured()) await sendExitAlert(t, 'TARGET_1_5R', livePremium);
+        }
+    }
 }
 
 // ── Routes ────────────────────────────────────────────
