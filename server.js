@@ -72,6 +72,7 @@ let events       = [];
 // ── Helpers ───────────────────────────────────────────
 let historyLoaded=false, prevSignal='WAIT', prevMTFAligned=false;
 let morningSummarySent=false, closeSummarySent=false, vixAlertSent=false;
+let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:15
 
 function isMarketOpen() {
     const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
@@ -180,7 +181,7 @@ async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return;
     const ist=getIST(), h=ist.getHours(), m=ist.getMinutes();
     if (h===9&&m>=16&&m<=20&&!morningSummarySent) { morningSummarySent=true; await sendMorningSummary(marketState); return; }
-    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;},6*60*60*1000); return; }
+    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;pcrClearedToday=false;},6*60*60*1000); return; }
     if (newSignal!==prevSignal&&newSignal!=='WAIT') await sendSignalAlert(marketState,prevSignal);
     if (marketState.mtf.aligned&&!prevMTFAligned) await sendMTFAlert(marketState);
     prevMTFAligned=marketState.mtf.aligned;
@@ -227,13 +228,53 @@ async function refreshMarketData() {
     }
 }
 
-async function refreshMTF() { try { const d=await analyzeMultiTimeframe(); if(d) marketState.mtf={signal:d.mtfSignal,strength:d.mtfStrength,confidence:d.mtfConfidence,aligned:d.aligned,bullCount:d.bullCount,bearCount:d.bearCount,tf5m:d.tf5m,tf15m:d.tf15m,tf1h:d.tf1h}; } catch(e) { console.error('MTF:',e.message); } }
+async function refreshMTF() {
+    try {
+        const d = await analyzeMultiTimeframe();
+        if (!d) return;
+
+        // ── Pre-market gate ────────────────────────────
+        // Before 09:15 IST the candle history is overnight/multi-day data.
+        // Store the raw timeframe readings so they're ready the moment the
+        // session opens, but force the composite badge to NEUTRAL so it
+        // can't show a directional call based on stale pre-market data.
+        const ist = getIST();
+        const mins = ist.getHours() * 60 + ist.getMinutes();
+        const preMarket = mins < 555;   // 09:15 = 555 minutes from midnight
+
+        marketState.mtf = {
+            signal    : preMarket ? 'NEUTRAL' : d.mtfSignal,
+            strength  : preMarket ? 'WEAK'    : d.mtfStrength,
+            confidence: preMarket ? 0         : d.mtfConfidence,
+            aligned   : preMarket ? false      : d.aligned,
+            bullCount : preMarket ? 0          : d.bullCount,
+            bearCount : preMarket ? 0          : d.bearCount,
+            tf5m      : d.tf5m,
+            tf15m     : d.tf15m,
+            tf1h      : d.tf1h
+        };
+    } catch(e) { console.error('MTF:', e.message); }
+}
 async function refreshGlobal() { try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); } }
 async function refreshBreadth() { try { const d=await fetchAdvanceDecline(); if(d) marketState.breadth=d; } catch(e) { console.error('Breadth:',e.message); } }
 async function refreshSR() { try { if(marketState.nifty>0) { const sr=await calculateSRLevels(marketState.nifty); if(sr) marketState.srLevels=sr; } } catch(e) { console.error('SR:',e.message); } }
 
 async function refreshPCR() {
     if (!isMarketOpen() || marketState.nifty <= 0) return;
+
+    // ── One-shot stale-data wipe ───────────────────────
+    // Manual values entered yesterday persist in marketState until the first
+    // successful NSE fetch. Clear them now so they don't pollute the signal
+    // during the gap between 09:15 and the first successful auto-fetch.
+    if (!pcrClearedToday && marketState.pcrSource === 'manual') {
+        marketState.pcr          = null;
+        marketState.atmPcr       = null;
+        marketState.pcrSignal    = 'N/A';
+        marketState.atmPcrSignal = 'N/A';
+        marketState.pcrHistory   = [];
+        pcrClearedToday          = true;
+        console.log('🧹 Stale manual PCR cleared for new session');
+    }
     try {
         const data = await fetchNSEPcr(marketState.nifty);
         if (!data || !data.pcr) return;
