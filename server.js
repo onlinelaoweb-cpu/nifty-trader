@@ -150,6 +150,13 @@ function combineSignals(indicators) {
     else if (marketState.global.bias==='BEARISH') { bear+=2; reasons.push('Global cues bearish ⚠️'); }
     const bn = marketState.global.sectors?.bankNifty;
     if (bn?.changePct > 0.5) bull+=2; else if (bn?.changePct < -0.5) bear+=2;
+
+    // ── BankNifty VWAP leading indicator (+1 / -1) ────
+    // BankNifty leads Nifty ~70% of the time intraday.
+    // Only fires on a FRESH VWAP cross 5 min ago (signal !== 0).
+    const bnLead = marketState.global?.bankNiftyLeadSignal;
+    if (bnLead?.signal === 1)  { bull += 1; reasons.push(`🏦 ${bnLead.reason}`); }
+    if (bnLead?.signal === -1) { bear += 1; reasons.push(`🏦 ${bnLead.reason}`); }
     const br = marketState.breadth;
     if      (br.breadthSignal==='BULLISH') { bull+=2; reasons.push(`A/D ${br.advances}↑/${br.declines}↓ Bullish ✅`); }
     else if (br.breadthSignal==='BEARISH') { bear+=2; reasons.push(`A/D ${br.advances}↑/${br.declines}↓ Bearish ⚠️`); }
@@ -256,7 +263,7 @@ async function checkTelegramAlerts(newSignal) {
 }
 
 async function updatePrice(price, change, changePct, source) {
-    const indicators=processIndicators(price);
+    const indicators=processIndicators(price, marketState.global?.bankNiftyLeadSignal ?? null);
     const { signal, confidence, reasons }=combineSignals(indicators);
     marketState.nifty=price; marketState.change=change; marketState.changePct=changePct;
     marketState.signal=signal; marketState.confidence=confidence;
