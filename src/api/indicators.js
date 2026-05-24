@@ -117,12 +117,30 @@ function getLastClosedCandle() {
     return candleHistory.length > 0 ? candleHistory[candleHistory.length - 1] : null;
 }
 
-function getIndicatorSignal(price, rsi, ema9, ema21, vwap) {
+// ── BankNifty VWAP leading indicator ─────────────────
+// bnLeadSignal is the object from globalCues.bankNiftyLeadSignal:
+//   { signal: +1 | -1 | 0, reason: string, crossedAt: string|null }
+// Weight = 1 (same as one indicator point). Only fires on a FRESH cross
+// (signal !== 0). Passed in from server.js where globalData is available.
+function getIndicatorSignal(price, rsi, ema9, ema21, vwap, bnLeadSignal) {
     const reasons = [];
 
     // ── Step 1: score each indicator independently ────
     // (kept so the UI can still show partial context even on a WAIT)
     let bull = 0, bear = 0;
+
+    // ── BankNifty VWAP Lead (weight: 1) ──────────────
+    // BankNifty leads Nifty ~70% of the time intraday.
+    // A fresh VWAP cross 5 min ago is an early directional signal.
+    if (bnLeadSignal && bnLeadSignal.signal !== 0) {
+        if (bnLeadSignal.signal === 1) {
+            bull += 1;
+            reasons.push(`🏦 ${bnLeadSignal.reason}`);
+        } else {
+            bear += 1;
+            reasons.push(`🏦 ${bnLeadSignal.reason}`);
+        }
+    }
 
     if (rsi !== null) {
         if (rsi < 35)       { bull += 2; reasons.push(`RSI ${rsi} — Oversold ✅`); }
@@ -201,13 +219,16 @@ function getIndicatorSignal(price, rsi, ema9, ema21, vwap) {
     return { signal: 'WAIT', confidence: 30, reasons };
 }
 
-function processIndicators(price) {
+// bnLeadSignal is optional — pass globalData.bankNiftyLeadSignal from server.js.
+// If omitted (undefined/null) the BankNifty lead block is silently skipped,
+// so existing callers without globalData stay fully backward-compatible.
+function processIndicators(price, bnLeadSignal) {
     addTick(price);
     const rsi   = calcRSI();
     const ema9  = calcEMA(9);
     const ema21 = calcEMA(21);
     const vwap  = calcVWAP();
-    const { signal, confidence, reasons } = getIndicatorSignal(price, rsi, ema9, ema21, vwap);
+    const { signal, confidence, reasons } = getIndicatorSignal(price, rsi, ema9, ema21, vwap, bnLeadSignal);
     return { rsi, ema9, ema21, vwap, signal, confidence, reasons, priceCount: priceHistory.length, initialized };
 }
 
