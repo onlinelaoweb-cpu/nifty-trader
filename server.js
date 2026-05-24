@@ -221,7 +221,7 @@ async function refreshMarketData() {
     const { niftyData, vixData }=await fetchMarketData();
     if (niftyData?.closes?.length>0&&!historyLoaded) { initializeHistory(niftyData.closes,niftyData.candles); historyLoaded=true; console.log(`History: ${niftyData.closes.length} candles`); }
     if (vixData) { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.strikeRange; }
-    if (niftyData?.price>0) {
+    if (niftyData?.price>0 && isMarketOpen()) {
         if (marketState.source!=='websocket') await updatePrice(niftyData.price,niftyData.change,niftyData.changePct,'yahoo');
         else { marketState.change=niftyData.change; marketState.changePct=niftyData.changePct; }
     }
