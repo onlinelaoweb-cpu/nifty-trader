@@ -60,7 +60,8 @@ let marketState = {
     fii: { buy:null, sell:null, net:null },
     dii: { buy:null, sell:null, net:null },
     optionFlow: { atmCEpremium:null, atmPEpremium:null, ceChange:0, peChange:0, dominance:'NEUTRAL', history:[] },
-    reason: ['Waiting...'], lastUpdated:null, connected:false, source:'none', dataPoints:0
+    reason: ['Waiting...'], lastUpdated:null, connected:false, source:'none', dataPoints:0,
+    entryWindow: { status:'closed', label:'Market Closed', safe:false }
 };
 
 // ── Trade Journal ─────────────────────────────────────
@@ -78,6 +79,16 @@ function isMarketOpen() {
     return m >= 555 && m <= 930;
 }
 function getIST() { return new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'})); }
+function isSafeEntryWindow() {
+    const ist = getIST();
+    const m   = ist.getHours()*60 + ist.getMinutes();
+    if (m < 555) return { status:'pre',      label:'Pre-Open',               safe:false, reason:'Market not open yet' };
+    if (m < 570) return { status:'volatile', label:'Volatile (9:15–9:30)',   safe:false, reason:'Gap-fill window — wait for 9:30' };
+    if (m < 870) return { status:'trade',    label:'Safe Entry (9:30–14:30)', safe:true,  reason:null };
+    if (m <= 930) return { status:'theta',   label:'Theta Zone (14:30–15:30)',safe:false, reason:'Theta decay accelerating — avoid new entries' };
+    return              { status:'closed',   label:'Market Closed',           safe:false, reason:'Market closed' };
+}
+
 function pcrLabel(v) { if(!v) return 'N/A'; if(v>1.5) return 'BULLISH'; if(v<0.7) return 'BEARISH'; return 'NEUTRAL'; }
 
 function trackPCRHistory(pcr) {
@@ -106,6 +117,17 @@ function updateOptionFlow(atmCE, atmPE) {
 
 // ── Signal Generator ──────────────────────────────────
 function combineSignals(indicators) {
+    // ── Time-of-day gate (IST) ─────────────────────────
+    const ew = isSafeEntryWindow();
+    marketState.entryWindow = ew;
+    if (!ew.safe) {
+        return {
+            signal     : 'WAIT',
+            confidence : 0,
+            reasons    : [`⏰ ${ew.reason}`, ...(indicators.reasons||[]).slice(0,2)]
+        };
+    }
+    // ──────────────────────────────────────────────────
     let bull=0, bear=0;
     const reasons=[...(indicators.reasons||[])];
 
