@@ -15,7 +15,7 @@ const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
 const { fetchGlobalCues }           = require('./src/api/globalCues');
 const { fetchAdvanceDecline }       = require('./src/api/breadth');
 const { calculateSRLevels }         = require('./src/api/levels');
-const { fetchNSEPcr }               = require('./src/api/nseData');
+const { fetchNSEPcr, isExpiryDay }           = require('./src/api/nseData');
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
@@ -56,6 +56,7 @@ let marketState = {
         stocks:[], updatedAt:null
     },
     srLevels: null,
+    maxPain: { strike: null, expiryDay: false, totalPain: null, updatedAt: null },
     pcrHistory: [],
     fii: { buy:null, sell:null, net:null },
     dii: { buy:null, sell:null, net:null },
@@ -160,6 +161,19 @@ function combineSignals(indicators) {
     if (marketState.fii.net!==null) {
         if      (marketState.fii.net > 0) { bull++; reasons.push(`FII Buy ₹${marketState.fii.net}Cr ✅`); }
         else if (marketState.fii.net < 0) { bear++; reasons.push(`FII Sell ₹${marketState.fii.net}Cr ⚠️`); }
+    }
+
+    // ── Max pain gravity (expiry day only) ────────────
+    // On Tuesday, price is pulled toward max pain by pinning pressure.
+    // A spot well above max pain means call writers will defend → bearish pull.
+    // A spot well below means put writers will defend → bullish pull.
+    // "Near" = within 0.5 % — treat as magnet zone, no directional bias.
+    const mp = marketState.maxPain;
+    if (mp?.strike && mp.expiryDay && marketState.nifty > 0) {
+        const distPct = ((marketState.nifty - mp.strike) / mp.strike) * 100;
+        if      (distPct >  0.5) { bear += 2; reasons.push(`🎯 Max Pain ${mp.strike} below spot — expiry gravity bearish ⚠️`); }
+        else if (distPct < -0.5) { bull += 2; reasons.push(`🎯 Max Pain ${mp.strike} above spot — expiry gravity bullish ✅`); }
+        else                     {            reasons.push(`🎯 Spot near Max Pain ${mp.strike} — expiry magnet zone`); }
     }
     if (marketState.mtf.aligned) {
         if      (marketState.mtf.signal==='BUY CALL') { bull+=3; reasons.push('All 3 timeframes BULLISH 🔥'); }
@@ -309,7 +323,7 @@ async function refreshMTF() {
 }
 async function refreshGlobal() { try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); } }
 async function refreshBreadth() { try { const d=await fetchAdvanceDecline(); if(d) marketState.breadth=d; } catch(e) { console.error('Breadth:',e.message); } }
-async function refreshSR() { try { if(marketState.nifty>0) { const sr=await calculateSRLevels(marketState.nifty); if(sr) marketState.srLevels=sr; } } catch(e) { console.error('SR:',e.message); } }
+async function refreshSR() { try { if(marketState.nifty>0) { const sr=await calculateSRLevels(marketState.nifty, marketState.maxPain?.strike ? marketState.maxPain : null); if(sr) marketState.srLevels=sr; } } catch(e) { console.error('SR:',e.message); } }
 
 async function refreshPCR() {
     if (!isMarketOpen() || marketState.nifty <= 0) return;
@@ -349,6 +363,38 @@ async function refreshPCR() {
 
         marketState.pcrSource = 'auto';
         console.log(`✅ PCR auto-updated: ${data.pcr} | ATM: ${data.atmPcr} (source: NSE)`);
+
+        // ── Max pain ──────────────────────────────────────
+        if (data.maxPain?.strike) {
+            marketState.maxPain = {
+                strike    : data.maxPain.strike,
+                totalPain : data.maxPain.totalPain,
+                expiryDay : data.expiryDay,
+                updatedAt : new Date().toISOString()
+            };
+            if (data.expiryDay) {
+                console.log(`🎯 Max Pain: ${data.maxPain.strike} ⚡ EXPIRY DAY`);
+            } else {
+                console.log(`🎯 Max Pain: ${data.maxPain.strike}`);
+            }
+
+            // Live-patch srLevels so the dashboard reflects max pain immediately
+            // without waiting for the next 10-min SR refresh cycle.
+            if (marketState.srLevels) {
+                marketState.srLevels.maxPain = marketState.maxPain;
+                // Remove any stale MP entry, then insert the fresh one
+                marketState.srLevels.levels = marketState.srLevels.levels
+                    .filter(l => l.type !== 'MP');
+                const onExpiry = data.expiryDay;
+                marketState.srLevels.levels.push({
+                    price   : data.maxPain.strike,
+                    type    : 'MP',
+                    label   : onExpiry ? 'Max Pain 🎯 EXPIRY' : 'Max Pain',
+                    strength: onExpiry ? 5 : 4
+                });
+                marketState.srLevels.levels.sort((a, b) => b.price - a.price);
+            }
+        }
     } catch(e) {
         console.error('refreshPCR:', e.message);
     }
