@@ -162,11 +162,57 @@ RSI: ${state.rsi || '--'}
     await sendMessage(msg);
 }
 
+// ── Exit Alert (SL / Target hit) ──────────────────────
+// Called when a live premium crosses a stop-loss or target threshold.
+// trade        : the trade object from the trades[] array
+// reason       : 'STOP_LOSS' | 'TARGET_1R' | 'TARGET_1_5R'
+// currentPremium : latest live ATM premium (from optionFlow)
+async function sendExitAlert(trade, reason, currentPremium) {
+    const pnlPerLot = parseFloat(((currentPremium - trade.premium) * 65).toFixed(0));
+    const totalPnl  = pnlPerLot * trade.lots;
+    const pnlSign   = totalPnl >= 0 ? '+' : '';
+    const changePct = parseFloat(((currentPremium - trade.premium) / trade.premium * 100).toFixed(1));
+
+    let emoji, heading, action;
+    if (reason === 'STOP_LOSS') {
+        emoji   = '🛑';
+        heading = 'STOP-LOSS HIT';
+        action  = 'EXIT NOW — cut loss';
+    } else if (reason === 'TARGET_1_5R') {
+        emoji   = '🎯';
+        heading = 'TARGET 1:1.5 HIT';
+        action  = 'Book full profit or trail SL';
+    } else {
+        emoji   = '✅';
+        heading = 'TARGET 1:1 HIT';
+        action  = 'Book 50–75% or move SL to cost';
+    }
+
+    const msg = `
+${emoji} <b>${heading}</b>
+━━━━━━━━━━━━━━━━━━
+📋 Trade: ${trade.type} ${trade.strike} × ${trade.lots} lot${trade.lots > 1 ? 's' : ''}
+⏰ Entry Time: ${trade.time}
+
+💰 Entry Premium : ₹${trade.premium}
+📉 Current Premium: ₹${currentPremium} (${changePct > 0 ? '+' : ''}${changePct}%)
+━━━━━━━━━━━━━━━━━━
+P&L : ${pnlSign}₹${Math.abs(totalPnl)} (${pnlSign}₹${Math.abs(pnlPerLot)}/lot)
+━━━━━━━━━━━━━━━━━━
+⚡ <b>Action: ${action}</b>
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true })}
+<i>VardaanNifty AI</i>
+`.trim();
+
+    await sendMessage(msg);
+}
+
 module.exports = {
     sendSignalAlert,
     sendMTFAlert,
     sendMorningSummary,
     sendVIXAlert,
     sendCloseSummary,
+    sendExitAlert,
     isConfigured
 };
