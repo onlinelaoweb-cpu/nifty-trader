@@ -22,6 +22,7 @@ async function fetchNiftyData() {
         const change    = parseFloat((price - prevClose).toFixed(2));
         const changePct = parseFloat(((change / prevClose) * 100).toFixed(2));
 
+        const opens   = result?.indicators?.quote?.[0]?.open   || [];
         const closes  = result?.indicators?.quote?.[0]?.close  || [];
         const highs   = result?.indicators?.quote?.[0]?.high   || [];
         const lows    = result?.indicators?.quote?.[0]?.low    || [];
@@ -34,7 +35,7 @@ async function fetchNiftyData() {
             if (closes[i] != null && highs[i] != null && lows[i] != null) {
                 validCloses.push(parseFloat(closes[i].toFixed(2)));
                 validCandles.push({
-                    open  : closes[i],
+                    open  : opens[i] != null ? parseFloat(opens[i].toFixed(2)) : parseFloat(closes[i].toFixed(2)),
                     high  : highs[i],
                     low   : lows[i],
                     close : closes[i],
