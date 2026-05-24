@@ -358,19 +358,36 @@ app.get('/sw.js', (req,res) => { res.setHeader('Content-Type','application/javas
 app.get('/manifest.json', (req,res) => res.json({ name:'VardaanNifty AI', short_name:'VNifty', start_url:'/', display:'standalone', background_color:'#020508', theme_color:'#00ff88', icons:[] }));
 
 // ── Init ──────────────────────────────────────────────
-async function initializeLiveData() {
-    console.log('Starting VardaanNifty AI...');
-    console.log('Telegram:', isConfigured()?'✅':'❌');
-    await Promise.all([refreshMarketData(), refreshGlobal(), refreshBreadth()]);
-    await Promise.all([refreshMTF(), refreshSR()]);
+let _intervalsStarted = false;
+
+function startPollingIntervals() {
+    if (_intervalsStarted) return;          // guard — only ever runs once
+    _intervalsStarted = true;
     setInterval(refreshMarketData, 3*60*1000);
     setInterval(refreshMTF,        5*60*1000);
     setInterval(refreshGlobal,     5*60*1000);
     setInterval(refreshBreadth,    3*60*1000);
     setInterval(refreshSR,        10*60*1000);
-    const auth=await loginAngel();
-    if(auth) { console.log('Angel Login Success'); startWebSocket(auth,onTick); }
-    else     { console.log('Yahoo Finance fallback'); setTimeout(initializeLiveData,30000); }
+    console.log('Polling intervals started (x1)');
+}
+
+// Retries Angel login only — intervals and initial data are already running
+async function tryAngelLogin() {
+    const auth = await loginAngel();
+    if (auth) { console.log('Angel Login Success'); startWebSocket(auth, onTick); }
+    else      { console.log('Yahoo Finance fallback — retry in 30s'); setTimeout(tryAngelLogin, 30000); }
+}
+
+async function initializeLiveData() {
+    console.log('Starting VardaanNifty AI...');
+    console.log('Telegram:', isConfigured()?'✅':'❌');
+    // Initial data load (runs once at startup)
+    await Promise.all([refreshMarketData(), refreshGlobal(), refreshBreadth()]);
+    await Promise.all([refreshMTF(), refreshSR()]);
+    // Start polling loops exactly once, no matter how many login retries follow
+    startPollingIntervals();
+    // Attempt Angel One login; retries go through tryAngelLogin() which never re-enters here
+    await tryAngelLogin();
 }
 
 initializeLiveData();
