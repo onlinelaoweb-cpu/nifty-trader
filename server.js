@@ -61,7 +61,8 @@ let marketState = {
     dii: { buy:null, sell:null, net:null },
     optionFlow: { atmCEpremium:null, atmPEpremium:null, ceChange:0, peChange:0, dominance:'NEUTRAL', history:[] },
     reason: ['Waiting...'], lastUpdated:null, connected:false, source:'none', dataPoints:0,
-    entryWindow: { status:'closed', label:'Market Closed', safe:false }
+    entryWindow: { status:'closed', label:'Market Closed', safe:false },
+    qualityGate: { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, passed:false }
 };
 
 // ── Trade Journal ─────────────────────────────────────
@@ -118,17 +119,19 @@ function updateOptionFlow(atmCE, atmPE) {
 
 // ── Signal Generator ──────────────────────────────────
 function combineSignals(indicators) {
-    // ── Time-of-day gate (IST) ─────────────────────────
+    // ── Gate 1: safe time window (IST) ────────────────
     const ew = isSafeEntryWindow();
     marketState.entryWindow = ew;
     if (!ew.safe) {
+        marketState.qualityGate = { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, passed:false };
         return {
             signal     : 'WAIT',
             confidence : 0,
             reasons    : [`⏰ ${ew.reason}`, ...(indicators.reasons||[]).slice(0,2)]
         };
     }
-    // ──────────────────────────────────────────────────
+
+    // ── Bull / bear vote tally (unchanged scoring) ────
     let bull=0, bear=0;
     const reasons=[...(indicators.reasons||[])];
 
@@ -140,7 +143,7 @@ function combineSignals(indicators) {
     if (marketState.vix) {
         if      (marketState.vixChange < -0.5) { bull++; reasons.push(`VIX falling (${marketState.vix}) ✅`); }
         else if (marketState.vixChange >  0.5) { bear++; reasons.push(`VIX rising (${marketState.vix}) ⚠️`); }
-        if (marketState.vix > 25) reasons.push(`⚠️ VIX HIGH — ${marketState.vixNote}`);
+        if (marketState.vix > 20) reasons.push(`⚠️ VIX ${marketState.vix} ≥ 20 — ${marketState.vixNote}`);
     }
     if (marketState.global.bias==='BULLISH') { bull+=2; reasons.push('Global cues bullish ✅'); }
     else if (marketState.global.bias==='BEARISH') { bear+=2; reasons.push('Global cues bearish ⚠️'); }
@@ -165,15 +168,64 @@ function combineSignals(indicators) {
     else if   (marketState.mtf.bearCount===2) { bear++; reasons.push('2/3 TF bearish'); }
     bull += indicators.signal==='BUY CALL' ? 3 : 0;
     bear += indicators.signal==='BUY PUT'  ? 3 : 0;
-    const total=bull+bear;
-    let signal='WAIT', confidence=0;
-    if (total>0) {
-        const pct=(bull/total)*100;
-        if      (pct>=65) { signal='BUY CALL'; confidence=Math.round(pct); }
-        else if (pct<=35) { signal='BUY PUT';  confidence=Math.round(100-pct); }
-        else              { signal='WAIT';     confidence=30; reasons.push('Mixed signals'); }
+
+    // Raw directional intention from the vote tally
+    const total = bull + bear;
+    let rawSignal = 'WAIT', rawConfidence = 0;
+    if (total > 0) {
+        const pct = (bull / total) * 100;
+        if      (pct >= 65) { rawSignal = 'BUY CALL'; rawConfidence = Math.round(pct); }
+        else if (pct <= 35) { rawSignal = 'BUY PUT';  rawConfidence = Math.round(100 - pct); }
+        else                { rawSignal = 'WAIT';     rawConfidence = 30; reasons.push('Mixed signals'); }
     }
-    if (marketState.vix>30) { signal='WAIT'; confidence=0; reasons.push('VIX>30 — Avoid!'); }
+
+    // ── Entry quality gate ────────────────────────────
+    // All four conditions must be true before a directional signal is issued.
+    // The scoring above still runs in full so the UI can show the underlying
+    // bull/bear breakdown even when the gate blocks the final call.
+    const rsi = indicators.rsi;
+    const qualityGate = {
+        // 1. All three timeframes must agree
+        mtfAligned : marketState.mtf.aligned,
+
+        // 2. RSI must not already be stretched in the direction of entry.
+        //    For a CALL entry: RSI < 70 (not overbought — chasing a crowded move).
+        //    For a PUT  entry: RSI > 30 (not oversold  — fading a washed-out move).
+        //    WAIT signals are unconditionally clean (no direction to check).
+        rsiClean   : rawSignal === 'WAIT' || rsi === null
+                     || (rawSignal === 'BUY CALL' && rsi < 70)
+                     || (rawSignal === 'BUY PUT'  && rsi > 30),
+
+        // 3. Safe time window — already enforced at the top of this function.
+        safeWindow : true,
+
+        // 4. VIX below 20: elevated vol inflates premiums and widens spreads,
+        //    making option-buying risk/reward unfavourable.
+        vixSafe    : !marketState.vix || marketState.vix < 20
+    };
+    qualityGate.passed = qualityGate.mtfAligned && qualityGate.rsiClean
+                      && qualityGate.safeWindow  && qualityGate.vixSafe;
+
+    // Persist gate state so the UI can show which checks are passing / failing
+    marketState.qualityGate = qualityGate;
+
+    // Gate decision — each failed check overwrites the signal with WAIT and
+    // appends a specific, actionable reason so the trader knows what to wait for.
+    let signal = rawSignal, confidence = rawConfidence;
+    if (rawSignal !== 'WAIT') {
+        if (!qualityGate.mtfAligned) {
+            signal = 'WAIT'; confidence = 0;
+            reasons.push(`⛔ MTF not aligned (${marketState.mtf.bullCount}/3 bull, ${marketState.mtf.bearCount}/3 bear) — wait for all-3 agreement`);
+        } else if (!qualityGate.rsiClean) {
+            signal = 'WAIT'; confidence = 0;
+            const extreme = rawSignal === 'BUY CALL' ? `overbought (${rsi})` : `oversold (${rsi})`;
+            reasons.push(`⛔ RSI already ${extreme} — entry is chasing, skip`);
+        } else if (!qualityGate.vixSafe) {
+            signal = 'WAIT'; confidence = 0;
+            reasons.push(`⛔ VIX ${marketState.vix} ≥ 20 — option premium too expensive for buyer, skip`);
+        }
+    }
+
     return { signal, confidence, reasons };
 }
 
