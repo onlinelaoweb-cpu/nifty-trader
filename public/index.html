@@ -870,7 +870,20 @@ function switchTab(name,btn){
   btn.classList.add('active');
   if(name==='chart'){refreshChart();}
   if(name==='journal'){loadJournal();loadEvents();}
-  if(name==='breadth'||name==='global'){fetchSignal();}
+  if(name==='breadth'||name==='global'){
+    // Render immediately from cache — no loading flicker
+    if(_lastState){
+      if(_lastState.breadth)updateBreadthUI(_lastState.breadth);
+      if(_lastState.global)updateGlobalUI(_lastState.global);
+      if(_lastState.optionFlow){const dom=_lastState.optionFlow.dominance||'NEUTRAL';const c=dom.includes('CALL')?'var(--blue)':dom.includes('PUT')?'var(--red)':'var(--amber)';document.getElementById('flow-dominance').textContent=dom;document.getElementById('flow-dominance').style.color=c;if(_lastState.optionFlow.history)updateFlowHistory(_lastState.optionFlow.history);}
+      if(_lastState.pcrHistory)updatePCRTrend(_lastState.pcrHistory);
+      if(_lastState.fii?.net!=null){document.getElementById('fiidii-result').style.display='grid';const fe=document.getElementById('fii-net');fe.textContent=(_lastState.fii.net>=0?'+':'')+_lastState.fii.net+'Cr';fe.style.color=_lastState.fii.net>=0?'var(--green)':'var(--red)';}
+      if(_lastState.dii?.net!=null){const de=document.getElementById('dii-net');de.textContent=(_lastState.dii.net>=0?'+':'')+_lastState.dii.net+'Cr';de.style.color=_lastState.dii.net>=0?'var(--green)':'var(--red)';}
+    } else {
+      // No cache yet — do a single fetch to populate
+      fetchSignal();
+    }
+  }
 }
 
 // CLOCK - runs immediately
@@ -1114,10 +1127,13 @@ async function deleteEvent(id){await fetch('/api/event/'+id,{method:'DELETE'});l
 // MAIN FETCH — Railway-safe with cold-start retry
 let _fetchFailCount=0;
 let _fetchInterval=null;
+let _fetchIntervalMs=0;
+let _lastState=null;
 
 function setFetchInterval(ms){
   if(_fetchInterval)clearInterval(_fetchInterval);
   _fetchInterval=setInterval(fetchSignal,ms);
+  _fetchIntervalMs=ms;
 }
 
 async function fetchSignal(){
@@ -1129,8 +1145,9 @@ async function fetchSignal(){
     if(!res.ok){throw new Error('HTTP '+res.status);}
     _fetchFailCount=0;
     // Back to normal 2s polling once connected
-    if(_fetchInterval&&_fetchInterval._ms!==2000)setFetchInterval(2000);
+    if(_fetchIntervalMs!==2000)setFetchInterval(2000);
     const d=await res.json();
+    _lastState=d;
     const live=d.connected&&d.nifty>0;
     if(d.nifty>0)flashPrice(d.nifty);
     document.getElementById('price').textContent=d.nifty>0?d.nifty.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}):'--';
@@ -1241,4 +1258,79 @@ function calculateAll(){
   const delta=parseFloat(normalCDF(d1).toFixed(3));
   const gamma=parseFloat((normalPDF(d1)/(S*sigma*Math.sqrt(T))).toFixed(5));
   const theta=parseFloat((-(S*normalPDF(d1)*sigma/(2*Math.sqrt(T))-r*atm*Math.exp(-r*T)*normalCDF(d2))/365).toFixed(2));
-  const 
+  const vega=parseFloat((S*normalPDF(d1)*Math.sqrt(T)/100).toFixed(2));
+  document.getElementById('greeks-result').style.display='grid';
+  document.getElementById('greek-delta').textContent=delta;
+  document.getElementById('greek-gamma').textContent=gamma;
+  document.getElementById('greek-theta').textContent='₹'+theta;
+  document.getElementById('greek-vega').textContent='₹'+vega;
+}
+
+// THETA DECAY TRACKER
+function calcTheta(){
+  const premium=parseFloat(document.getElementById('th-premium').value);
+  const dte=parseInt(document.getElementById('th-dte').value);
+  if(!premium||isNaN(dte)||dte<0)return;
+  const perDay=parseFloat((premium*0.1).toFixed(2));
+  const perHour=parseFloat((perDay/6.25).toFixed(2));
+  const breakeven=parseFloat((premium*0.15).toFixed(0));
+  const exitHours=Math.max(1,Math.round(dte*6.25*0.5));
+  const exitH=Math.floor(exitHours/6.25),exitM=Math.round((exitHours%6.25)*60/6.25*10);
+  const exitStr=dte<=1?'Exit by 14:00':'Exit by 13:00 on last day';
+  document.getElementById('theta-result').style.display='grid';
+  document.getElementById('th-perday').textContent='₹'+perDay;
+  document.getElementById('th-perhour').textContent='₹'+perHour;
+  document.getElementById('th-breakeven').textContent=breakeven+' pts';
+  document.getElementById('th-exitby').textContent=exitStr;
+  const alert=document.getElementById('theta-alert');
+  if(dte<=1){alert.style.display='block';alert.textContent='⚠️ Expiry day — theta decay is accelerating. Consider exiting by 14:00.';}
+  else{alert.style.display='none';}
+}
+
+// POSITION SIZING
+function calcPositionSize(){
+  const capital=parseFloat(document.getElementById('ps-capital').value);
+  const riskPct=parseFloat(document.getElementById('ps-risk').value);
+  const entry=parseFloat(document.getElementById('ps-entry').value);
+  const sl=parseFloat(document.getElementById('ps-sl').value);
+  if(!capital||!riskPct||!entry||!sl)return;
+  const riskAmt=parseFloat((capital*riskPct/100).toFixed(0));
+  const riskPerUnit=entry-sl;
+  if(riskPerUnit<=0)return;
+  const unitsRaw=riskAmt/(riskPerUnit*75);
+  const lots=Math.max(1,Math.floor(unitsRaw));
+  const maxLoss=parseFloat((lots*75*riskPerUnit).toFixed(0));
+  const invested=parseFloat((lots*75*entry).toFixed(0));
+  const target=parseFloat((entry+(entry-sl)).toFixed(2));
+  document.getElementById('ps-result').style.display='block';
+  document.getElementById('ps-details').style.display='grid';
+  document.getElementById('ps-lots').textContent=lots;
+  document.getElementById('ps-note').textContent=`${lots} lot${lots>1?'s':''} × 75 = ${lots*75} units`;
+  document.getElementById('ps-riskamt').textContent='₹'+riskAmt.toLocaleString('en-IN');
+  document.getElementById('ps-maxloss').textContent='₹'+maxLoss.toLocaleString('en-IN');
+  document.getElementById('ps-invested').textContent='₹'+invested.toLocaleString('en-IN');
+  document.getElementById('ps-target').textContent='₹'+target;
+}
+
+// STOP-LOSS CALCULATOR
+function calcSL(){
+  const premium=parseFloat(document.getElementById('sl-premium').value);
+  const qty=parseInt(document.getElementById('sl-qty').value)||1;
+  if(!premium)return;
+  const sl20=parseFloat((premium*0.8).toFixed(2));
+  const sl25=parseFloat((premium*0.75).toFixed(2));
+  const target=parseFloat((premium*2).toFixed(2));
+  const maxLoss=parseFloat((premium*0.2*75*qty).toFixed(0));
+  const targetPnl=parseFloat((premium*75*qty).toFixed(0));
+  const invested=parseFloat((premium*75*qty).toFixed(0));
+  document.getElementById('sl-20').textContent='₹'+sl20;
+  document.getElementById('sl-25').textContent='₹'+sl25;
+  document.getElementById('sl-t1').textContent='₹'+target;
+  document.getElementById('sl-maxloss').textContent='₹'+maxLoss.toLocaleString('en-IN');
+  document.getElementById('sl-qty-lbl').textContent=`${qty}lot=${qty*75}`;
+  document.getElementById('sl-pnl').textContent='₹'+targetPnl.toLocaleString('en-IN');
+  document.getElementById('sl-invested').textContent='₹'+invested.toLocaleString('en-IN');
+}
+</script>
+</body>
+</html>
