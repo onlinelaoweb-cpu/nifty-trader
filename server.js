@@ -353,6 +353,10 @@ app.post('/api/telegram/test', async (req,res) => {
 
 app.get('/', (req,res) => res.sendFile(__dirname+'/public/index.html'));
 
+// Serve stub sw.js + manifest so PWA requests don't 404
+app.get('/sw.js', (req,res) => { res.setHeader('Content-Type','application/javascript'); res.send('// Service Worker stub'); });
+app.get('/manifest.json', (req,res) => res.json({ name:'VardaanNifty AI', short_name:'VNifty', start_url:'/', display:'standalone', background_color:'#020508', theme_color:'#00ff88', icons:[] }));
+
 // ── Init ──────────────────────────────────────────────
 async function initializeLiveData() {
     console.log('Starting VardaanNifty AI...');
@@ -370,4 +374,8 @@ async function initializeLiveData() {
 }
 
 initializeLiveData();
-server.listen(PORT,()=>console.log(`VardaanNifty AI running on port ${PORT}`));
+server.listen(PORT, () => {
+    console.log(`VardaanNifty AI running on port ${PORT}`);
+    server.keepAliveTimeout = 120000;
+    server.headersTimeout   = 125000;
+});
