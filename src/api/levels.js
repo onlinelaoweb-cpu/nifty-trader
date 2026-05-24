@@ -1,6 +1,6 @@
 const axios = require('axios');
 
-async function calculateSRLevels(currentPrice) {
+async function calculateSRLevels(currentPrice, maxPainData = null) {
     try {
         const res = await axios.get(
             'https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=10d',
@@ -46,7 +46,22 @@ async function calculateSRLevels(currentPrice) {
             { price: wLow,  type: 'WL',  label: 'Week Low',         strength: 3 },
             { price: s2,    type: 'S2',  label: 'Pivot S2',         strength: 2 },
             { price: s3,    type: 'S3',  label: 'Pivot S3',         strength: 1 },
-        ]
+        ];
+
+        // ── Max pain injection ────────────────────────────
+        // Max pain is the strike where option writers lose the least —
+        // price gravitates toward it into expiry. On expiry day (Tuesday)
+        // it outranks most technical levels so we give it strength 5.
+        if (maxPainData?.strike) {
+            const onExpiry  = maxPainData.expiryDay;
+            levels.push({
+                price   : maxPainData.strike,
+                type    : 'MP',
+                label   : onExpiry ? 'Max Pain 🎯 EXPIRY' : 'Max Pain',
+                strength: onExpiry ? 5 : 4
+            });
+        }
+        const dedupedLevels = levels
         .filter((l, i, arr) => {
             // Remove duplicate prices
             return arr.findIndex(x => x.price === l.price) === i;
@@ -54,17 +69,18 @@ async function calculateSRLevels(currentPrice) {
         .sort((a, b) => b.price - a.price);
 
         // Find nearest S/R to current price
-        const above = levels.filter(l => l.price > currentPrice);
-        const below = levels.filter(l => l.price < currentPrice);
+        const above = dedupedLevels.filter(l => l.price > currentPrice);
+        const below = dedupedLevels.filter(l => l.price < currentPrice);
         const nearRes = above.length > 0 ? above[above.length - 1] : null;
         const nearSup = below.length > 0 ? below[0] : null;
 
-        console.log(`S/R: PP=${pp} R1=${r1} S1=${s1} | Near Res:${nearRes?.price} Sup:${nearSup?.price}`);
+        console.log(`S/R: PP=${pp} R1=${r1} S1=${s1} | Near Res:${nearRes?.price} Sup:${nearSup?.price}${maxPainData?.strike ? ` | MaxPain:${maxPainData.strike}` : ''}`);
 
         return {
             pp, r1, r2, r3, s1, s2, s3,
             pdH, pdL, pdC, wHigh, wLow,
-            levels, nearRes, nearSup,
+            levels: dedupedLevels, nearRes, nearSup,
+            maxPain: maxPainData || null,
             updatedAt: new Date().toISOString()
         };
 
