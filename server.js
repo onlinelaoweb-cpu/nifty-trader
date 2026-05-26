@@ -62,8 +62,9 @@ let marketState = {
     dii: { buy:null, sell:null, net:null },
     optionFlow: { atmCEpremium:null, atmPEpremium:null, ceChange:0, peChange:0, dominance:'NEUTRAL', history:[] },
     reason: ['Waiting...'], lastUpdated:null, connected:false, source:'none', dataPoints:0,
+    adx: null,
     entryWindow: { status:'closed', label:'Market Closed', safe:false },
-    qualityGate: { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, passed:false }
+    qualityGate: { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, passed:false }
 };
 
 // ── Trade Journal ─────────────────────────────────────
@@ -92,7 +93,64 @@ function isSafeEntryWindow() {
     return              { status:'closed',   label:'Market Closed',           safe:false, reason:'Market closed' };
 }
 
-function pcrLabel(v) { if(!v) return 'N/A'; if(v>1.5) return 'BULLISH'; if(v<0.7) return 'BEARISH'; return 'NEUTRAL'; }
+// PCR label — displayed on UI (thresholds tuned for real Nifty option chain behaviour)
+function pcrLabel(v) {
+    if (!v) return 'N/A';
+    if (v > 1.3) return 'BULLISH';   // was >1.5 — too rare, almost never fired
+    if (v < 0.8) return 'BEARISH';   // was <0.7 — missed mildly bearish setups
+    return 'NEUTRAL';
+}
+
+// Graduated PCR score used for signal weighting (-3 to +3)
+// More nuanced than binary label — avoids cliff-edge on/off behaviour
+function pcrScore(v) {
+    if (!v || isNaN(v)) return 0;
+    if (v >= 1.5) return  3;   // heavy call-writing protection → very bullish
+    if (v >= 1.3) return  2;
+    if (v >= 1.1) return  1;
+    if (v >= 0.9) return  0;   // neutral band
+    if (v >= 0.7) return -1;
+    if (v >= 0.5) return -2;
+    return -3;                  // extreme put build-up → very bearish
+}
+
+// ── ADX Calculator — Wilder's smoothing, period=14 ───────────────────────────
+// Uses candle history already stored in memory (no extra API calls / packages).
+// Returns { adx, diPlus, diMinus } or null when insufficient data.
+function calculateADX(candles, period = 14) {
+    if (!candles || candles.length < period * 2 + 2) return null;
+    try {
+        const tr = [], dmp = [], dmm = [];
+        for (let i = 1; i < candles.length; i++) {
+            const h = candles[i].high,   l = candles[i].low,   pc = candles[i - 1].close;
+            const ph = candles[i - 1].high, pl = candles[i - 1].low;
+            tr .push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+            const up = h - ph, dn = pl - l;
+            dmp.push(up > dn && up > 0 ? up : 0);
+            dmm.push(dn > up && dn > 0 ? dn : 0);
+        }
+        // Wilder's running smooth: seed = sum of first `period` bars, then iterate
+        function wilderSmooth(arr) {
+            let s = arr.slice(0, period).reduce((a, b) => a + b, 0);
+            const out = [s];
+            for (let i = period; i < arr.length; i++) { s = s - s / period + arr[i]; out.push(s); }
+            return out;
+        }
+        const atr  = wilderSmooth(tr);
+        const sdmp = wilderSmooth(dmp);
+        const sdmm = wilderSmooth(dmm);
+        const dip  = sdmp.map((v, i) => atr[i] > 0 ? (v / atr[i]) * 100 : 0);
+        const dim  = sdmm.map((v, i) => atr[i] > 0 ? (v / atr[i]) * 100 : 0);
+        const dx   = dip .map((v, i) => { const s = v + dim[i]; return s > 0 ? (Math.abs(v - dim[i]) / s) * 100 : 0; });
+        const adxArr = wilderSmooth(dx);
+        const n = adxArr.length - 1;
+        return {
+            adx    : parseFloat(adxArr[n].toFixed(2)),
+            diPlus : parseFloat(dip[dip.length - 1].toFixed(2)),
+            diMinus: parseFloat(dim[dim.length - 1].toFixed(2))
+        };
+    } catch (_) { return null; }
+}
 
 function trackPCRHistory(pcr) {
     if (!pcr) return;
@@ -124,7 +182,7 @@ function combineSignals(indicators) {
     const ew = isSafeEntryWindow();
     marketState.entryWindow = ew;
     if (!ew.safe) {
-        marketState.qualityGate = { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, passed:false };
+        marketState.qualityGate = { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, passed:false };
         return {
             signal     : 'WAIT',
             confidence : 0,
@@ -132,14 +190,31 @@ function combineSignals(indicators) {
         };
     }
 
-    // ── Bull / bear vote tally (unchanged scoring) ────
+    // ── Bull / bear vote tally ────────────────────────
     let bull=0, bear=0;
     const reasons=[...(indicators.reasons||[])];
 
-    if (marketState.pcr!==null) {
-        if      (marketState.pcrSignal==='BULLISH') { bull+=2; reasons.push(`PCR ${marketState.pcr} — Bullish ✅`); }
-        else if (marketState.pcrSignal==='BEARISH') { bear+=2; reasons.push(`PCR ${marketState.pcr} — Bearish ⚠️`); }
-        else reasons.push(`PCR ${marketState.pcr} — Neutral`);
+    // ── PCR — graduated score (-3 to +3) ─────────────────────────────────────
+    // Replaces old binary BULLISH/BEARISH: threshold >1.5/<0.7 almost never fired.
+    // Now every reading contributes proportionally, positive or negative.
+    if (marketState.pcr !== null) {
+        const ps = pcrScore(marketState.pcr);
+        if      (ps >= 2)  { bull += ps;           reasons.push(`PCR ${marketState.pcr} — Strongly Bullish ✅`); }
+        else if (ps === 1) { bull += 1;            reasons.push(`PCR ${marketState.pcr} — Mildly Bullish ✅`); }
+        else if (ps <= -2) { bear += Math.abs(ps); reasons.push(`PCR ${marketState.pcr} — Strongly Bearish ⚠️`); }
+        else if (ps === -1){ bear += 1;            reasons.push(`PCR ${marketState.pcr} — Mildly Bearish ⚠️`); }
+        else               {                       reasons.push(`PCR ${marketState.pcr} — Neutral`); }
+    }
+
+    // ── ATM PCR — 1.5× weight (nearest strikes = real money intent) ──────────
+    // ATM PCR tells you what writers are actually doing at the current price.
+    // It's more accurate than broad PCR, so it gets heavier weighting.
+    if (marketState.atmPcr !== null) {
+        const as = pcrScore(marketState.atmPcr);
+        const w = Math.min(Math.max(Math.round(as * 1.5), -4), 4); // cap ±4
+        if      (w > 0) { bull += w;  reasons.push(`ATM PCR ${marketState.atmPcr} — Bullish near-strike ✅ (+${w}pts)`); }
+        else if (w < 0) { bear += -w; reasons.push(`ATM PCR ${marketState.atmPcr} — Bearish near-strike ⚠️ (+${-w}pts)`); }
+        else            {             reasons.push(`ATM PCR ${marketState.atmPcr} — Neutral near-strike`); }
     }
     if (marketState.vix) {
         if      (marketState.vixChange < -0.5) { bull++; reasons.push(`VIX falling (${marketState.vix}) ✅`); }
@@ -201,10 +276,31 @@ function combineSignals(indicators) {
     }
 
     // ── Entry quality gate ────────────────────────────
-    // All four conditions must be true before a directional signal is issued.
+    // All five conditions must pass before a directional signal is issued.
     // The scoring above still runs in full so the UI can show the underlying
     // bull/bear breakdown even when the gate blocks the final call.
     const rsi = indicators.rsi;
+
+    // ── ADX — trend strength filter ──────────────────────────────────────────
+    // ADX < 20 = choppy/sideways = worst environment for option buyers.
+    // In a ranging market, premiums decay fast (theta) with no directional move.
+    // ADX >= 20 but < 25 = weak trend forming — allow signal but cap confidence.
+    // ADX >= 25 = confirmed trend — full signal strength.
+    // ADX >= 40 = explosive move — warn about wide premiums.
+    const candleHistory = getCandleHistory();
+    const adxData = calculateADX(candleHistory);
+    marketState.adx = adxData;   // expose to frontend via /api/signal
+
+    const adxVal      = adxData?.adx ?? null;
+    const adxTooWeak  = adxVal !== null && adxVal < 20;
+
+    if (adxVal !== null) {
+        if      (adxVal >= 40) reasons.push(`🔥 ADX ${adxVal} — Explosive trend (wider SL advised)`);
+        else if (adxVal >= 25) reasons.push(`📈 ADX ${adxVal} — Strong trend confirmed ✅`);
+        else if (adxVal >= 20) reasons.push(`⚠️ ADX ${adxVal} — Trend forming (weak, confidence capped 60%)`);
+        // <20 handled in gate reason below — no need to add here
+    }
+
     const qualityGate = {
         // 1. All three timeframes must agree
         mtfAligned : marketState.mtf.aligned,
@@ -222,19 +318,28 @@ function combineSignals(indicators) {
 
         // 4. VIX below 20: elevated vol inflates premiums and widens spreads,
         //    making option-buying risk/reward unfavourable.
-        vixSafe    : !marketState.vix || marketState.vix < 20
+        vixSafe    : !marketState.vix || marketState.vix < 20,
+
+        // 5. ADX >= 20: trend must exist before betting directional premium.
+        //    When ADX data is unavailable (insufficient history), default to true
+        //    so we don't silently block signals during early session.
+        adxTrend   : !adxTooWeak
     };
     qualityGate.passed = qualityGate.mtfAligned && qualityGate.rsiClean
-                      && qualityGate.safeWindow  && qualityGate.vixSafe;
+                      && qualityGate.safeWindow  && qualityGate.vixSafe
+                      && qualityGate.adxTrend;
 
     // Persist gate state so the UI can show which checks are passing / failing
     marketState.qualityGate = qualityGate;
 
-    // Gate decision — each failed check overwrites the signal with WAIT and
-    // appends a specific, actionable reason so the trader knows what to wait for.
+    // Gate decision — check in priority order.
+    // ADX is checked FIRST because a choppy market invalidates everything else.
     let signal = rawSignal, confidence = rawConfidence;
     if (rawSignal !== 'WAIT') {
-        if (!qualityGate.mtfAligned) {
+        if (!qualityGate.adxTrend) {
+            signal = 'WAIT'; confidence = 0;
+            reasons.push(`⛔ ADX ${adxVal} < 20 — Sideways/choppy market. No trend = theta decay kills option buyers. Wait for ADX ≥ 20`);
+        } else if (!qualityGate.mtfAligned) {
             signal = 'WAIT'; confidence = 0;
             reasons.push(`⛔ MTF not aligned (${marketState.mtf.bullCount}/3 bull, ${marketState.mtf.bearCount}/3 bear) — wait for all-3 agreement`);
         } else if (!qualityGate.rsiClean) {
@@ -245,6 +350,15 @@ function combineSignals(indicators) {
             signal = 'WAIT'; confidence = 0;
             reasons.push(`⛔ VIX ${marketState.vix} ≥ 20 — option premium too expensive for buyer, skip`);
         }
+    }
+
+    // ── ADX weak-trend confidence cap ────────────────────────────────────────
+    // Signal passes gate (ADX 20–25) but trend is not fully confirmed.
+    // Cap confidence at 60% so the UI doesn't show a strong conviction call.
+    if (signal !== 'WAIT' && adxVal !== null && adxVal < 25) {
+        const before = confidence;
+        confidence = Math.min(confidence, 60);
+        if (confidence < before) reasons.push(`⚠️ Confidence capped at 60% — ADX ${adxVal} < 25 (trend weak, full size risky)`);
     }
 
     return { signal, confidence, reasons };
