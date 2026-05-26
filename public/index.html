@@ -353,6 +353,16 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .gitem-chg{font-family:'Share Tech Mono',monospace;font-size:10px;margin-top:1px;}
 .gitem-chg.up{color:var(--green);}.gitem-chg.down{color:var(--red);}.gitem-chg.flat{color:#8ab0c8;}
 #global-updated{font-size:10px;color:#9ab8d0;margin-top:3px;}
+/* ── Global Score Badge ── */
+.global-score-badge{display:flex;align-items:center;justify-content:space-between;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:7px 12px;margin-bottom:8px;}
+.global-score-label{font-size:9px;letter-spacing:3px;color:var(--dim);}
+.global-score-value{font-family:'Orbitron',monospace;font-size:13px;font-weight:900;letter-spacing:1px;}
+.global-score-bar{height:4px;border-radius:2px;margin-top:4px;background:var(--border);}
+.global-score-fill{height:4px;border-radius:2px;transition:width 0.5s;}
+/* ── USD/INR Alert ── */
+.usdinr-alert{display:none;background:rgba(255,34,68,0.1);border:1px solid var(--red);border-radius:7px;padding:6px 10px;margin-bottom:8px;font-size:10px;color:var(--red);letter-spacing:1px;animation:pulse-border 1.5s ease-in-out infinite;}
+.usdinr-alert.show{display:flex;align-items:center;gap:6px;}
+@keyframes pulse-border{0%,100%{box-shadow:0 0 0 0 rgba(255,34,68,0.3);}50%{box-shadow:0 0 0 4px rgba(255,34,68,0);}}
 
 /* ═══ CHART ═══ */
 .chart-wrap{padding:12px;}
@@ -839,6 +849,16 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 <!-- ═══════════════════════════════════ -->
 <div class="panel" id="panel-global">
   <div class="global-wrap">
+    <!-- Global Score Badge -->
+    <div class="global-score-badge">
+      <div>
+        <div class="global-score-label">GLOBAL SCORE</div>
+        <div class="global-score-bar" style="width:120px;margin-top:4px;"><div class="global-score-fill" id="global-score-fill" style="width:50%;background:#ffbb00;"></div></div>
+      </div>
+      <div class="global-score-value" id="global-score-badge-val" style="color:var(--amber);">--/10 🟡</div>
+    </div>
+    <!-- USD/INR Weakness Alert -->
+    <div class="usdinr-alert" id="usdinr-alert">⚠️ <span>USD/INR &gt;95.5 — Rupee weakness detected! FII selling pressure likely.</span></div>
     <div class="global-bias-card neut" id="global-bias-card">
       <div class="global-bias-label">🌍 GLOBAL MARKET BIAS</div>
       <div class="global-bias-value" id="global-bias-val" style="color:var(--amber);">NEUTRAL</div>
@@ -1300,9 +1320,10 @@ function setGItem(id,data,reverse){
   if(!data)return;
   const c=data.changePct>0.3?(reverse?'var(--red)':'var(--green)'):data.changePct<-0.3?(reverse?'var(--green)':'var(--red)'):'#8ab0c8';
   const cc=data.changePct>0.3?(reverse?'down':'up'):data.changePct<-0.3?(reverse?'up':'down'):'flat';
+  const arrow=data.changePct>0.3?(reverse?'▼':'▲'):data.changePct<-0.3?(reverse?'▲':'▼'):'●';
   const pEl=document.getElementById(id+'-p'),cEl=document.getElementById(id+'-c');
   if(pEl){pEl.textContent=data.price>999?data.price.toLocaleString('en-IN',{maximumFractionDigits:1}):data.price.toFixed(2);pEl.style.color=c;}
-  if(cEl){cEl.textContent=(data.changePct>=0?'+':'')+data.changePct.toFixed(2)+'%';cEl.className='gitem-chg '+cc;}
+  if(cEl){cEl.innerHTML=`<span style="font-size:11px;vertical-align:middle;">${arrow}</span> ${(data.changePct>=0?'+':'')+data.changePct.toFixed(2)+'%'}`;cEl.className='gitem-chg '+cc;}
   const card=document.getElementById(id.replace('-p','').replace('-c',''));if(card)card.style.borderColor=c;
 }
 function updateGlobalUI(g){
@@ -1313,6 +1334,29 @@ function updateGlobalUI(g){
   document.getElementById('global-bias-val').textContent=bias;document.getElementById('global-bias-val').style.color=bc;
   document.getElementById('global-updated').textContent=g.updatedAt?'Updated: '+new Date(g.updatedAt).toLocaleTimeString('en-IN',{hour12:true,hour:'2-digit',minute:'2-digit'}):'--';
   if(g.reasons)document.getElementById('global-reasons').innerHTML=g.reasons.map(r=>`<div class="reason-row">${r}</div>`).join('');
+  // ── Global Score Badge ──────────────────────────────
+  if(g.score!=null){
+    const raw=g.score; // 0–100 internal; map to /10
+    const out10=Math.round(raw/10);
+    const clamp=Math.max(0,Math.min(10,out10));
+    const emoji=clamp>=7?'🟢':clamp>=4?'🟡':'🔴';
+    const color=clamp>=7?'var(--green)':clamp>=4?'var(--amber)':'var(--red)';
+    const badgeEl=document.getElementById('global-score-badge-val');
+    const fillEl=document.getElementById('global-score-fill');
+    if(badgeEl){badgeEl.textContent=clamp+'/10 '+emoji;badgeEl.style.color=color;}
+    if(fillEl){fillEl.style.width=(clamp*10)+'%';fillEl.style.background=color;}
+  }
+  // ── USD/INR Alert ───────────────────────────────────
+  const alertEl=document.getElementById('usdinr-alert');
+  if(alertEl&&g.currency&&g.currency.usdinr&&g.currency.usdinr.price){
+    const rate=parseFloat(g.currency.usdinr.price);
+    if(rate>95.5){
+      alertEl.classList.add('show');
+      alertEl.querySelector('span').textContent=`USD/INR at ₹${rate.toFixed(2)} (>95.5) — Rupee weakness! FII selling pressure likely.`;
+    } else {
+      alertEl.classList.remove('show');
+    }
+  }
   if(g.sectors){setGItem('g-banknifty',g.sectors.bankNifty,false);setGItem('g-niftyit',g.sectors.niftyIT,false);setGItem('g-niftyauto',g.sectors.niftyAuto,false);setGItem('g-niftymetal',g.sectors.niftyMetal,false);}
   if(g.currency){setGItem('g-usdinr',g.currency.usdinr,true);setGItem('g-dxy',g.currency.dxy,true);}
   if(g.commodities){setGItem('g-crude',g.commodities.crude,true);setGItem('g-gold',g.commodities.gold,false);}
