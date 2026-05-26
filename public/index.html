@@ -63,10 +63,22 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .signal-card.wait{background:rgba(255,187,0,0.05);border-color:var(--amber);color:var(--amber);}
 .signal-badge{font-family:'Orbitron',monospace;font-size:22px;font-weight:900;letter-spacing:3px;animation:sigPulse 2s infinite;}
 @keyframes sigPulse{0%,100%{text-shadow:0 0 20px currentColor}50%{text-shadow:0 0 50px currentColor}}
-.conf-wrap{background:var(--border);border-radius:4px;height:5px;margin:7px 0 3px;overflow:hidden;}
-.conf-bar{height:100%;border-radius:4px;transition:width 0.8s ease;}
-.buy-call .conf-bar{background:var(--green);}.buy-put .conf-bar{background:var(--red);}.wait .conf-bar{background:var(--amber);}
+@keyframes confGlowGreen{0%,100%{box-shadow:0 0 8px rgba(0,255,136,0.7),0 0 18px rgba(0,255,136,0.4)}50%{box-shadow:0 0 16px rgba(0,255,136,1),0 0 35px rgba(0,255,136,0.6)}}
+@keyframes confGlowRed{0%,100%{box-shadow:0 0 8px rgba(255,34,68,0.7),0 0 18px rgba(255,34,68,0.4)}50%{box-shadow:0 0 16px rgba(255,34,68,1),0 0 35px rgba(255,34,68,0.6)}}
+@keyframes scanline{0%{transform:translateX(-100%)}100%{transform:translateX(600%)}}
+.conf-wrap{background:rgba(26,58,90,0.5);border-radius:6px;height:8px;margin:7px 0 3px;overflow:hidden;border:1px solid var(--border);}
+.conf-bar{height:100%;border-radius:6px;transition:width 0.8s ease;position:relative;overflow:hidden;}
+.conf-bar::after{content:'';position:absolute;top:0;left:0;bottom:0;width:40px;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.4),transparent);animation:scanline 2s ease-in-out infinite;}
+.buy-call .conf-bar{background:linear-gradient(90deg,#00cc66,var(--green));}
+.buy-put .conf-bar{background:linear-gradient(90deg,#cc1133,var(--red));}
+.wait .conf-bar{background:linear-gradient(90deg,#cc9900,var(--amber));}
+.conf-bar.strong-bull{animation:confGlowGreen 1.5s ease-in-out infinite;}
+.conf-bar.strong-bear{animation:confGlowRed 1.5s ease-in-out infinite;}
 .conf-label{font-size:10px;color:#a0c0d8;}
+.conf-strength{font-size:9px;font-weight:700;letter-spacing:1px;padding:1px 7px;border-radius:99px;display:inline-block;margin-left:6px;}
+.conf-strength.bull{background:rgba(0,255,136,0.15);color:var(--green);border:1px solid rgba(0,255,136,0.3);}
+.conf-strength.bear{background:rgba(255,34,68,0.15);color:var(--red);border:1px solid rgba(255,34,68,0.3);}
+.conf-ticks{display:flex;justify-content:space-between;font-size:8px;color:#4a6a8a;margin-top:2px;padding:0 1px;}
 
 /* COMMON */
 .strike-banner{margin:0 12px 7px;background:var(--bg2);border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:8px;padding:6px 12px;display:flex;align-items:center;justify-content:space-between;}
@@ -148,7 +160,24 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .rsi-bar{height:100%;border-radius:2px;transition:width 0.5s;}
 .rsi-zones{display:flex;justify-content:space-between;font-size:8px;color:#6a8a9a;margin-top:2px;}
 
-/* REASONS */
+/* RSI DIAL */
+.rsi-dial-wrap{display:flex;flex-direction:column;align-items:center;margin-top:4px;}
+.rsi-dial-svg{overflow:visible;}
+.rsi-needle{transition:transform 0.8s cubic-bezier(.34,1.2,.64,1);}
+.rsi-dial-val{font-family:'Orbitron',monospace;font-size:20px;font-weight:900;text-align:center;margin-top:2px;line-height:1;}
+.rsi-dial-zone{font-size:9px;font-weight:700;letter-spacing:2px;padding:2px 9px;border-radius:99px;margin-top:3px;display:inline-block;}
+.rsi-dial-zone.ob{background:rgba(255,34,68,0.15);color:var(--red);border:1px solid rgba(255,34,68,0.3);}
+.rsi-dial-zone.os{background:rgba(0,170,255,0.15);color:var(--blue);border:1px solid rgba(0,170,255,0.3);}
+.rsi-dial-zone.neut{background:rgba(255,187,0,0.12);color:var(--amber);border:1px solid rgba(255,187,0,0.25);}
+/* MTF BADGE UPGRADE */
+.mtf-align-badge{padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;letter-spacing:0.5px;display:inline-flex;align-items:center;gap:4px;transition:all 0.3s;}
+.mtf-align-badge.full{background:rgba(0,255,136,0.12);color:var(--green);border:1px solid rgba(0,255,136,0.4);box-shadow:0 0 12px rgba(0,255,136,0.2);}
+.mtf-align-badge.partial{background:rgba(255,187,0,0.12);color:var(--amber);border:1px solid rgba(255,187,0,0.35);}
+.mtf-align-badge.weak{background:rgba(255,34,68,0.1);color:var(--red);border:1px solid rgba(255,34,68,0.25);}
+.mtf-align-badge.wait{background:rgba(255,187,0,0.08);color:var(--amber);border:1px solid var(--amber);}
+/* CHECKLIST MINI-BAR */
+.cl-mini-bar{height:3px;background:var(--border);border-radius:99px;margin:5px 0 2px;overflow:hidden;}
+.cl-mini-fill{height:100%;border-radius:99px;background:var(--green);transition:width 0.4s ease;}
 .reasons-wrap{padding:0 12px;margin-bottom:7px;}
 .reasons-card{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 11px;}
 .reasons-title{font-size:9px;letter-spacing:3px;color:var(--dim);margin-bottom:6px;display:flex;align-items:center;gap:6px;}
@@ -164,9 +193,9 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .dot-live{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 1.5s infinite;flex-shrink:0;}
 .dot-off{width:7px;height:7px;border-radius:50%;background:#4a6a8a;flex-shrink:0;}
 .footer{text-align:center;font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);padding:5px 12px 0;display:flex;align-items:center;justify-content:center;gap:6px;}
-@keyframes flashG{0%{background:rgba(0,255,136,0.15)}100%{background:transparent}}
-@keyframes flashR{0%{background:rgba(255,34,68,0.15)}100%{background:transparent}}
-.flash-green{animation:flashG 0.4s ease-out;}.flash-red{animation:flashR 0.4s ease-out;}
+@keyframes flashG{0%{background:rgba(0,255,136,0.22);box-shadow:0 0 30px rgba(0,255,136,0.35) inset}60%{background:rgba(0,255,136,0.10);box-shadow:0 0 20px rgba(0,255,136,0.2) inset}100%{background:rgba(0,255,136,0.05);box-shadow:none}}
+@keyframes flashR{0%{background:rgba(255,34,68,0.22);box-shadow:0 0 30px rgba(255,34,68,0.35) inset}60%{background:rgba(255,34,68,0.10);box-shadow:0 0 20px rgba(255,34,68,0.2) inset}100%{background:rgba(255,34,68,0.05);box-shadow:none}}
+.flash-green{animation:flashG 1.2s ease-out forwards;}.flash-red{animation:flashR 1.2s ease-out forwards;}
 .sig-bull{color:var(--green);}.sig-bear{color:var(--red);}.sig-neut{color:var(--amber);}
 .install-banner{margin:6px 12px;background:rgba(0,170,255,0.08);border:1px solid var(--blue);border-radius:8px;padding:6px 12px;display:none;align-items:center;justify-content:space-between;}
 .install-banner.show{display:flex;}
@@ -392,7 +421,11 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="signal-card wait" id="signal-card">
       <div class="signal-badge" id="signal">WAIT</div>
       <div class="conf-wrap"><div class="conf-bar" id="conf-bar" style="width:0%"></div></div>
-      <div class="conf-label" id="conf-text">CONFIDENCE: 0%</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div class="conf-label" id="conf-text">CONFIDENCE: 0%</div>
+        <span class="conf-strength" id="conf-strength" style="display:none"></span>
+      </div>
+      <div class="conf-ticks"><span>0</span><span>25</span><span style="color:var(--amber)">50</span><span id="conf-tick70" style="color:#4a6a8a">70</span><span>100</span></div>
     </div>
   </div>
 
@@ -439,14 +472,15 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <button class="cl-reset" onclick="event.stopPropagation();resetChecklist()">↺</button>
       </div>
     </div>
+    <div class="cl-mini-bar"><div class="cl-mini-fill" id="cl-mini-fill" style="width:0%"></div></div>
     <div class="checklist-body" id="checklist-body">
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">✅ Checked global markets & overnight cues</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">✅ Checked India VIX level (is it < 20?)</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">✅ Noted PCR & ATM PCR from Sensibull</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">✅ Checked Bank Nifty direction & levels</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">✅ Set max loss limit for today (₹_____)</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">✅ Selected ATM strike based on VIX</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">✅ Market bias confirmed (Bull/Bear/Sideways)</div></div>
+      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🌍 Checked global markets &amp; overnight cues</div></div>
+      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">📊 India VIX checked — is it below 20?</div></div>
+      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">📈 Noted PCR &amp; ATM PCR from Sensibull</div></div>
+      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🏦 Checked Bank Nifty direction &amp; key levels</div></div>
+      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🛡️ Set max loss limit for today (₹_____)</div></div>
+      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🎯 Selected ATM strike based on VIX</div></div>
+      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🧭 Market bias confirmed (Bull / Bear / Sideways)</div></div>
     </div>
   </div>
 
@@ -455,7 +489,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
   <div class="mtf-header">
     <div class="mtf-title-row">
       <div class="mtf-title">⚡ MTF</div>
-      <div class="mtf-badge" id="mtf-badge" style="background:rgba(255,187,0,0.1);color:var(--amber);border:1px solid var(--amber)">WAIT</div>
+      <div class="mtf-align-badge wait" id="mtf-badge">WAIT</div>
     </div>
     <div class="mtf-grid">
       <div class="mtf-card" id="mtf-5m"><div class="mtf-tf">5 MIN</div><div class="mtf-sig sig-neut" id="mtf-5m-sig">NEUTRAL</div><div class="mtf-stats"><div>RSI:<span class="mtf-rsi" id="mtf-5m-rsi">--</span></div><div>EMA:<span class="mtf-rsi" id="mtf-5m-ema">--</span></div><div>VWAP:<span class="mtf-rsi" id="mtf-5m-vwap">--</span></div></div></div>
@@ -475,7 +509,33 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 
   <div class="sec-label">1-MIN INDICATORS</div>
   <div class="ind-grid">
-    <div class="ind-card" id="rsi-card"><div class="ind-label"><span>RSI (14)</span><span id="rsi-zone" style="font-size:8px;">--</span></div><div class="ind-val" id="rsi-val">--</div><div class="rsi-bar-wrap"><div class="rsi-bar" id="rsi-bar" style="width:50%;background:var(--amber)"></div></div><div class="rsi-zones"><span>0</span><span>30</span><span>50</span><span>70</span><span>100</span></div></div>
+    <div class="ind-card" id="rsi-card">
+      <div class="ind-label"><span>RSI (14)</span><span id="rsi-zone" style="font-size:8px;">--</span></div>
+      <div class="rsi-dial-wrap">
+        <svg class="rsi-dial-svg" width="130" height="72" viewBox="0 0 130 72">
+          <!-- Track -->
+          <path d="M 10 65 A 55 55 0 0 1 120 65" fill="none" stroke="#1a3a5a" stroke-width="9" stroke-linecap="round"/>
+          <!-- Oversold zone 0-30 -->
+          <path d="M 10 65 A 55 55 0 0 1 37.5 22.5" fill="none" stroke="#00aaff" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
+          <!-- Neutral zone 30-70 -->
+          <path d="M 37.5 22.5 A 55 55 0 0 1 92.5 22.5" fill="none" stroke="#00ff88" stroke-width="9" stroke-linecap="round" opacity="0.35"/>
+          <!-- Overbought zone 70-100 -->
+          <path d="M 92.5 22.5 A 55 55 0 0 1 120 65" fill="none" stroke="#ff2244" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
+          <!-- Tick at 30 -->
+          <line x1="33" y1="26" x2="42" y2="34" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+          <!-- Tick at 70 -->
+          <line x1="97" y1="26" x2="88" y2="34" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+          <!-- Needle group — rotate around center (65,65) -->
+          <g id="rsi-needle-g" class="rsi-needle" style="transform:rotate(-90deg);transform-origin:65px 65px;">
+            <line x1="65" y1="65" x2="65" y2="14" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+            <circle cx="65" cy="65" r="5" fill="white" opacity="0.9"/>
+            <circle cx="65" cy="65" r="2.5" fill="#020508"/>
+          </g>
+        </svg>
+        <div class="rsi-dial-val" id="rsi-val" style="color:var(--amber);">--</div>
+        <div class="rsi-dial-zone neut" id="rsi-dial-zone">NEUTRAL</div>
+      </div>
+    </div>
     <div class="ind-card" id="vwap-card"><div class="ind-label"><span>VWAP</span><span id="vwap-pos" style="font-size:8px;">--</span></div><div class="ind-val" id="vwap-val" style="font-size:15px;">--</div><div class="ind-sub" id="vwap-sub">Fair value</div></div>
     <div class="ind-card" id="ema-card"><div class="ind-label"><span>EMA CROSS</span><span id="ema-trend" style="font-size:8px;">--</span></div><div style="display:flex;gap:5px;align-items:baseline;margin-top:2px;"><div><div style="font-size:8px;color:var(--dim);">EMA9</div><div class="ind-val" id="ema9-val" style="font-size:14px;">--</div></div><div style="color:var(--dim);font-size:11px;align-self:center;">/</div><div><div style="font-size:8px;color:var(--dim);">EMA21</div><div class="ind-val" id="ema21-val" style="font-size:14px;">--</div></div></div></div>
     <div class="ind-card" style="border-left:2px solid var(--amber)"><div class="ind-label"><span>VIX STATUS</span></div><div class="ind-val" id="vix-note-val" style="font-size:12px;color:var(--amber);">--</div><div class="ind-sub" id="vix-note-sub">--</div></div>
@@ -975,6 +1035,32 @@ function setATMPCR(v){if(!v||isNaN(parseFloat(v)))return;const c=pcrColor(v),l=p
 
 // MTF
 function updateMTFCard(prefix,tf){if(!tf)return;const sigEl=document.getElementById(`mtf-${prefix}-sig`),card=document.getElementById(`mtf-${prefix}`),alignEl=document.getElementById(`align-${prefix}`);sigEl.className='mtf-sig '+(tf.signal==='BULLISH'?'sig-bull':tf.signal==='BEARISH'?'sig-bear':'sig-neut');sigEl.textContent=tf.signal||'NEUTRAL';const c=tf.signal==='BULLISH'?'var(--green)':tf.signal==='BEARISH'?'var(--red)':'var(--amber)';card.style.borderColor=c;document.getElementById(`mtf-${prefix}-rsi`).textContent=tf.rsi!==null?tf.rsi.toFixed(1):'--';document.getElementById(`mtf-${prefix}-ema`).textContent=tf.ema9&&tf.ema21?(tf.ema9>tf.ema21?'▲UP':'▼DN'):'--';document.getElementById(`mtf-${prefix}-vwap`).textContent=tf.vwap?tf.vwap.toLocaleString('en-IN'):'--';alignEl.className='align-seg '+(tf.signal==='BULLISH'?'bull':tf.signal==='BEARISH'?'bear':'');}
+function updateMTFBadge(mtf){
+  const badge=document.getElementById('mtf-badge');
+  if(!mtf){badge.className='mtf-align-badge wait';badge.textContent='WAIT';return;}
+  // Count aligned timeframes
+  const tfs=[mtf.tf5m,mtf.tf15m,mtf.tf1h];
+  const dir=mtf.signal==='BUY CALL'?'BULLISH':mtf.signal==='BUY PUT'?'BEARISH':null;
+  let alignedCount=0;
+  if(dir){tfs.forEach(t=>{if(t&&t.signal===dir)alignedCount++;});}
+  if(mtf.aligned||alignedCount===3){
+    badge.className='mtf-align-badge full';
+    badge.textContent='3/3 🔥 ALL ALIGNED';
+    badge.style.boxShadow='0 0 14px rgba(0,255,136,0.35)';
+  }else if(alignedCount===2){
+    badge.className='mtf-align-badge partial';
+    badge.textContent='2/3 aligned ✅';
+    badge.style.boxShadow='none';
+  }else if(alignedCount===1){
+    badge.className='mtf-align-badge weak';
+    badge.textContent='1/3 ⚠ WEAK';
+    badge.style.boxShadow='none';
+  }else{
+    badge.className='mtf-align-badge wait';
+    badge.textContent=mtf.signal||'WAIT';
+    badge.style.boxShadow='none';
+  }
+}
 
 // PRICE FLASH
 let lastPrice=0,lastSignal='';
@@ -1001,7 +1087,18 @@ function updateSRLevels(sr){
 // CHECKLIST
 function toggleChecklist(){const body=document.getElementById('checklist-body');body.classList.toggle('open');}
 function toggleCL(item){item.classList.toggle('checked');updateCLProgress();}
-function updateCLProgress(){const items=document.querySelectorAll('.cl-item');const checked=document.querySelectorAll('.cl-item.checked').length;document.getElementById('cl-progress').textContent=`${checked}/${items.length}`;}
+function updateCLProgress(){
+  const items=document.querySelectorAll('.cl-item');
+  const checked=document.querySelectorAll('.cl-item.checked').length;
+  const total=items.length;
+  const pct=Math.round((checked/total)*100);
+  document.getElementById('cl-progress').textContent=`${checked}/${total}`;
+  const fill=document.getElementById('cl-mini-fill');
+  if(fill){
+    fill.style.width=pct+'%';
+    fill.style.background=pct===100?'var(--green)':pct>=57?'linear-gradient(90deg,var(--amber),var(--green))':'linear-gradient(90deg,var(--red),var(--amber))';
+  }
+}
 function resetChecklist(){document.querySelectorAll('.cl-item').forEach(i=>i.classList.remove('checked'));updateCLProgress();}
 
 // BREADTH UI
@@ -1192,16 +1289,58 @@ async function fetchSignal(){
     const sig=d.signal||'WAIT';
     if(sig!==lastSignal&&sig!=='WAIT'){playSignalSound(sig);lastSignal=sig;}
     document.getElementById('signal').textContent=sig;
-    document.getElementById('signal-card').className='signal-card '+(sig==='BUY CALL'?'buy-call':sig==='BUY PUT'?'buy-put':'wait');
-    const conf=d.confidence||0;document.getElementById('conf-bar').style.width=conf+'%';document.getElementById('conf-text').textContent=`CONFIDENCE: ${conf}%`;
+    // Signal card — class + flash animation on BUY signal
+    const card=document.getElementById('signal-card');
+    const newClass='signal-card '+(sig==='BUY CALL'?'buy-call':sig==='BUY PUT'?'buy-put':'wait');
+    if(card.className!==newClass){
+      card.className=newClass;
+      if(sig==='BUY CALL'){card.classList.add('flash-green');setTimeout(()=>card.classList.remove('flash-green'),1400);}
+      else if(sig==='BUY PUT'){card.classList.add('flash-red');setTimeout(()=>card.classList.remove('flash-red'),1400);}
+    }
+    const conf=d.confidence||0;
+    document.getElementById('conf-bar').style.width=conf+'%';
+    document.getElementById('conf-text').textContent=`CONFIDENCE: ${conf}%`;
+    // Confidence glow pulse + strength badge
+    const confBar=document.getElementById('conf-bar');
+    const confStrength=document.getElementById('conf-strength');
+    const tick70=document.getElementById('conf-tick70');
+    confBar.classList.remove('strong-bull','strong-bear');
+    if(conf>70){
+      if(sig==='BUY CALL'){confBar.classList.add('strong-bull');}
+      else if(sig==='BUY PUT'){confBar.classList.add('strong-bear');}
+      const label=conf>=85?'⚡ STRONG':(conf>=70?'✦ GOOD':'');
+      if(confStrength){confStrength.style.display='inline-block';confStrength.textContent=label;confStrength.className='conf-strength '+(sig==='BUY CALL'?'bull':'bear');}
+      if(tick70){tick70.style.color=sig==='BUY CALL'?'var(--green)':'var(--red)';}
+    }else{
+      if(confStrength)confStrength.style.display='none';
+      if(tick70)tick70.style.color='#4a6a8a';
+    }
     document.getElementById('strike-range').textContent=d.strikeRange||'ATM ±200';
     document.getElementById('status-dot').className=live?'dot-live':'dot-off';document.getElementById('status-txt').textContent=live?'LIVE':'WAITING';
     const mtf=d.mtf;
-    if(mtf){updateMTFCard('5m',mtf.tf5m);updateMTFCard('15m',mtf.tf15m);updateMTFCard('1h',mtf.tf1h);const badge=document.getElementById('mtf-badge');const bc=mtf.signal==='BUY CALL'?'var(--green)':mtf.signal==='BUY PUT'?'var(--red)':'var(--amber)';badge.style.color=bc;badge.style.borderColor=bc;badge.style.background=`rgba(${bc==='var(--green)'?'0,255,136':bc==='var(--red)'?'255,34,68':'255,187,0'},0.1)`;badge.textContent=mtf.aligned?`🔥 ${mtf.signal} — ALL 3!`:`${mtf.signal} — ${mtf.strength}`;badge.style.boxShadow=mtf.aligned?`0 0 12px ${bc}`:'none';}
+    if(mtf){updateMTFCard('5m',mtf.tf5m);updateMTFCard('15m',mtf.tf15m);updateMTFCard('1h',mtf.tf1h);updateMTFBadge(mtf);}
+    else{updateMTFBadge(null);}
     if(d.pcr!=null){const c=pcrColor(d.pcr),l=pcrLabel(d.pcr);document.getElementById('pcr-val').textContent=d.pcr.toFixed(2);document.getElementById('pcr-sig').textContent=l;document.getElementById('pcr-val').style.color=c;document.getElementById('pcr-sig').style.color=c;if(!document.getElementById('pcr-input').value)document.getElementById('pcr-input').value=d.pcr;}
     if(d.atmPcr!=null){const c=pcrColor(d.atmPcr),l=pcrLabel(d.atmPcr);document.getElementById('atm-pcr-val').textContent=d.atmPcr.toFixed(2);document.getElementById('atm-pcr-sig').textContent=l;document.getElementById('atm-pcr-val').style.color=c;document.getElementById('atm-pcr-sig').style.color=c;if(!document.getElementById('atm-pcr-input').value)document.getElementById('atm-pcr-input').value=d.atmPcr;}
     if(d.vix!=null){const c=sigColor(d.vixSignal);document.getElementById('vix-val').textContent=d.vix.toFixed(2);document.getElementById('vix-sig').textContent=(d.vixSignal||'--')+' ✅';document.getElementById('vix-val').style.color=c;document.getElementById('vix-sig').style.color=c;document.getElementById('vix-card').style.color=c;document.getElementById('vix-note-val').textContent=d.vixSignal||'--';document.getElementById('vix-note-sub').textContent=d.vixNote||'--';if(!document.getElementById('calc-vix').value)document.getElementById('calc-vix').value=d.vix;}
-    if(d.rsi!=null){const c=d.rsi<35?'var(--green)':d.rsi>65?'var(--red)':'var(--amber)';document.getElementById('rsi-val').textContent=d.rsi.toFixed(2);document.getElementById('rsi-val').style.color=c;document.getElementById('rsi-bar').style.width=d.rsi+'%';document.getElementById('rsi-bar').style.background=c;document.getElementById('rsi-zone').textContent=d.rsi<35?'OVERSOLD':d.rsi>65?'OVERBOUGHT':'NEUTRAL';document.getElementById('rsi-zone').style.color=c;document.getElementById('rsi-card').style.borderLeft=`2px solid ${c}`;}
+    if(d.rsi!=null){
+      const rv=d.rsi;
+      const c=rv<35?'var(--blue)':rv>65?'var(--red)':'var(--amber)';
+      const zoneText=rv<35?'OVERSOLD':rv>65?'OVERBOUGHT':'NEUTRAL';
+      const zoneCls=rv<35?'os':rv>65?'ob':'neut';
+      document.getElementById('rsi-val').textContent=rv.toFixed(1);
+      document.getElementById('rsi-val').style.color=c;
+      // Legacy rsi-bar (hidden, kept for compat)
+      const rsiBar=document.getElementById('rsi-bar');if(rsiBar){rsiBar.style.width=rv+'%';rsiBar.style.background=c;}
+      document.getElementById('rsi-zone').textContent=zoneText;
+      document.getElementById('rsi-zone').style.color=c;
+      document.getElementById('rsi-card').style.borderLeft=`2px solid ${c}`;
+      // SVG needle: RSI 0-100 maps to -90deg to +90deg (180deg sweep)
+      const needle=document.getElementById('rsi-needle-g');
+      if(needle){const deg=-90+(rv/100)*180;needle.style.transform=`rotate(${deg}deg)`;}
+      const dialZone=document.getElementById('rsi-dial-zone');
+      if(dialZone){dialZone.textContent=zoneText;dialZone.className='rsi-dial-zone '+zoneCls;}
+    }
     if(d.vwap){const ab=d.nifty>d.vwap,c=ab?'var(--green)':'var(--red)';document.getElementById('vwap-val').textContent=d.vwap.toLocaleString('en-IN');document.getElementById('vwap-val').style.color=c;document.getElementById('vwap-pos').textContent=ab?'ABOVE ▲':'BELOW ▼';document.getElementById('vwap-pos').style.color=c;document.getElementById('vwap-sub').textContent=ab?'Above fair value':'Below fair value';document.getElementById('vwap-card').style.borderLeft=`2px solid ${c}`;}
     if(d.ema9&&d.ema21){const bull=d.ema9>d.ema21,c=bull?'var(--green)':'var(--red)';document.getElementById('ema9-val').textContent=d.ema9.toFixed(0);document.getElementById('ema21-val').textContent=d.ema21.toFixed(0);document.getElementById('ema9-val').style.color=c;document.getElementById('ema21-val').style.color=c;document.getElementById('ema-trend').textContent=bull?'UP ▲':'DN ▼';document.getElementById('ema-trend').style.color=c;document.getElementById('ema-card').style.borderLeft=`2px solid ${c}`;}
     if(d.adx){
