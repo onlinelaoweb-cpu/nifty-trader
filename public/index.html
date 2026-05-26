@@ -270,9 +270,6 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .ad-up{font-family:'Share Tech Mono',monospace;font-size:34px;font-weight:700;color:var(--green);text-shadow:0 0 20px rgba(0,255,136,0.4);}
 .ad-dn{font-family:'Share Tech Mono',monospace;font-size:34px;font-weight:700;color:var(--red);text-shadow:0 0 20px rgba(255,34,68,0.4);}
 .ad-sep{font-size:20px;color:var(--dim);}
-.ad-bar-wrap{height:10px;background:var(--border);border-radius:5px;overflow:hidden;margin-bottom:5px;display:flex;}
-.ad-bar-bull{height:100%;border-radius:5px 0 0 5px;background:var(--green);transition:width 0.8s ease;}
-.ad-bar-bear{height:100%;border-radius:0 5px 5px 0;background:var(--red);transition:width 0.8s ease;}
 .ad-stats{display:flex;justify-content:space-between;font-size:10px;font-family:'Share Tech Mono',monospace;color:#c8e0f4;}
 .ad-signal{display:inline-block;padding:3px 10px;border-radius:10px;font-family:'Orbitron',monospace;font-size:10px;font-weight:700;letter-spacing:2px;margin-top:5px;}
 .weight-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px;}
@@ -306,6 +303,28 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .fiidii-net{background:var(--bg3);border-radius:7px;padding:7px;text-align:center;}
 .fiidii-net-label{font-size:9px;color:#9ab8d0;letter-spacing:1px;margin-bottom:2px;}
 .fiidii-net-val{font-family:'Share Tech Mono',monospace;font-size:15px;font-weight:700;}
+/* ── A/D DIAL ── */
+.ad-dial-wrap{display:flex;flex-direction:column;align-items:center;margin:4px 0 2px;}
+.ad-dial-svg{overflow:visible;}
+.ad-needle{transition:transform 0.9s cubic-bezier(.34,1.2,.64,1);}
+.ad-dial-stats{display:flex;justify-content:space-between;width:100%;font-size:10px;font-family:'Share Tech Mono',monospace;margin-top:1px;}
+/* ── SECTOR HEATMAP ── */
+.sector-heatmap-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;}
+.sector-heatmap-title{font-family:'Orbitron',monospace;font-size:10px;color:var(--amber);letter-spacing:2px;margin-bottom:7px;}
+.sector-heatmap{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;}
+.sector-cell{border:1px solid;border-radius:6px;padding:5px 3px;text-align:center;transition:all 0.5s;}
+.sc-label{font-size:8px;font-weight:700;letter-spacing:1px;color:#9ab8d0;margin-bottom:2px;}
+.sc-chg{font-family:'Share Tech Mono',monospace;font-size:11px;font-weight:700;}
+/* ── FII LIVE NET ── */
+.fii-live-preview{background:var(--bg3);border-radius:8px;padding:8px 8px 6px;margin-bottom:7px;}
+.fii-nets-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:5px;}
+.fii-net-box{text-align:center;}
+.fii-net-lbl{font-size:9px;color:#9ab8d0;letter-spacing:1px;margin-bottom:2px;}
+.fii-net-big{font-family:'Share Tech Mono',monospace;font-size:16px;font-weight:700;letter-spacing:1px;}
+.fii-combined-row{display:flex;align-items:center;justify-content:space-between;padding:5px 6px;background:rgba(255,255,255,0.03);border-radius:5px;border:1px solid var(--border);}
+.fii-comb-lbl{font-size:9px;color:#9ab8d0;letter-spacing:2px;}
+.fii-comb-val{font-family:'Share Tech Mono',monospace;font-size:14px;font-weight:700;}
+.fii-bias-tag{font-family:'Orbitron',monospace;font-size:9px;font-weight:700;padding:1px 7px;border-radius:99px;letter-spacing:1px;}
 .stock-list{background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:8px;}
 .stock-header{display:grid;grid-template-columns:1fr 2fr 1fr;padding:5px 10px;background:var(--bg3);font-size:9px;letter-spacing:2px;color:#9ab8d0;}
 .stock-row{display:grid;grid-template-columns:1fr 2fr 1fr;padding:4px 10px;border-top:1px solid var(--border);align-items:center;}
@@ -686,12 +705,38 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="ad-sep">vs</div>
         <div><div style="font-size:9px;color:var(--red);letter-spacing:2px;">DECLINES</div><div class="ad-dn" id="ad-dn">--</div></div>
       </div>
-      <div class="ad-bar-wrap"><div class="ad-bar-bull" id="ad-bar-bull" style="width:50%"></div><div class="ad-bar-bear" id="ad-bar-bear" style="width:50%"></div></div>
-      <div class="ad-stats">
-        <span style="color:var(--green);" id="ad-bull-pct">50%</span>
-        <span id="ad-ratio" style="color:#9ab8d0;">A/D: --</span>
-        <span style="color:var(--red);" id="ad-bear-pct">50%</span>
+      <div class="ad-dial-wrap">
+        <svg class="ad-dial-svg" width="130" height="72" viewBox="0 0 130 72">
+          <!-- Track -->
+          <path d="M 10 65 A 55 55 0 0 1 120 65" fill="none" stroke="#1a3a5a" stroke-width="9" stroke-linecap="round"/>
+          <!-- Bear zone 0–35% -->
+          <path d="M 10 65 A 55 55 0 0 1 40.03 15.99" fill="none" stroke="#ff2244" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
+          <!-- Neutral zone 35–65% -->
+          <path d="M 40.03 15.99 A 55 55 0 0 1 89.97 15.99" fill="none" stroke="#ffbb00" stroke-width="9" stroke-linecap="round" opacity="0.4"/>
+          <!-- Bull zone 65–100% -->
+          <path d="M 89.97 15.99 A 55 55 0 0 1 120 65" fill="none" stroke="#00ff88" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
+          <!-- Tick at 35% -->
+          <line x1="43.7" y1="23.1" x2="36.4" y2="8.9" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+          <!-- Tick at 65% -->
+          <line x1="86.3" y1="23.1" x2="93.6" y2="8.9" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+          <!-- Zone labels -->
+          <text x="16" y="62" font-size="7" fill="rgba(255,34,68,0.7)" font-family="monospace">BEAR</text>
+          <text x="96" y="62" font-size="7" fill="rgba(0,255,136,0.7)" font-family="monospace">BULL</text>
+          <!-- Needle -->
+          <g id="ad-needle-g" class="ad-needle" style="transform:rotate(0deg);transform-origin:65px 65px;">
+            <line x1="65" y1="65" x2="65" y2="14" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+            <circle cx="65" cy="65" r="5" fill="white" opacity="0.9"/>
+            <circle cx="65" cy="65" r="2.5" fill="#020508"/>
+          </g>
+        </svg>
+        <div class="ad-dial-stats">
+          <span style="color:var(--red);" id="ad-bear-pct">50%</span>
+          <span id="ad-ratio" style="color:#9ab8d0;font-size:9px;">A/D: --</span>
+          <span style="color:var(--green);" id="ad-bull-pct">50%</span>
+        </div>
       </div>
+      <!-- hidden bar elements kept for JS compat -->
+      <div style="display:none"><div id="ad-bar-bull"></div><div id="ad-bar-bear"></div></div>
       <div><span class="ad-signal" id="ad-signal" style="background:rgba(255,187,0,0.1);color:var(--amber);border:1px solid var(--amber);">NEUTRAL</span></div>
     </div>
 
@@ -699,6 +744,25 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div class="wcard"><div class="wcard-label">BULL WEIGHT</div><div class="wcard-val" id="bull-weight" style="color:var(--green);">--%</div></div>
       <div class="wcard"><div class="wcard-label">A/D RATIO</div><div class="wcard-val" id="ad-ratio-big" style="color:var(--amber);">--</div></div>
       <div class="wcard"><div class="wcard-label">UNCHANGED</div><div class="wcard-val" id="ad-unch" style="color:#9ab8d0;">--</div></div>
+    </div>
+
+    <!-- SECTOR HEATMAP -->
+    <div class="sector-heatmap-card">
+      <div class="sector-heatmap-title">🔥 SECTOR HEATMAP</div>
+      <div class="sector-heatmap" id="sector-heatmap">
+        <!-- populated by updateSectorHeatmap() -->
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">BANK</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">IT</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">AUTO</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">METAL</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">PHARMA</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">FMCG</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">REALTY</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">MEDIA</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">ENERGY</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">INFRA</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">PSU BNK</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
+      </div>
     </div>
 
     <div class="flow-card">
@@ -727,24 +791,38 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     </div>
 
     <div class="fiidii-card">
-      <div class="fiidii-title">💼 FII / DII (Manual)</div>
+      <div class="fiidii-title">💼 FII / DII FLOW</div>
       <div class="fiidii-grid">
         <div class="fiidii-section">
           <label>FII (₹ Crore)</label>
-          <div class="fiidii-row"><label>BUY</label><input class="fiidii-input" id="fii-buy" type="number" placeholder="12000"/></div>
-          <div class="fiidii-row"><label>SELL</label><input class="fiidii-input" id="fii-sell" type="number" placeholder="13500"/></div>
+          <div class="fiidii-row"><label>BUY</label><input class="fiidii-input" id="fii-buy" type="number" placeholder="12000" oninput="calcFIINet()"/></div>
+          <div class="fiidii-row"><label>SELL</label><input class="fiidii-input" id="fii-sell" type="number" placeholder="13500" oninput="calcFIINet()"/></div>
         </div>
         <div class="fiidii-section">
           <label>DII (₹ Crore)</label>
-          <div class="fiidii-row"><label>BUY</label><input class="fiidii-input" id="dii-buy" type="number" placeholder="8000"/></div>
-          <div class="fiidii-row"><label>SELL</label><input class="fiidii-input" id="dii-sell" type="number" placeholder="6000"/></div>
+          <div class="fiidii-row"><label>BUY</label><input class="fiidii-input" id="dii-buy" type="number" placeholder="8000" oninput="calcFIINet()"/></div>
+          <div class="fiidii-row"><label>SELL</label><input class="fiidii-input" id="dii-sell" type="number" placeholder="6000" oninput="calcFIINet()"/></div>
         </div>
       </div>
-      <button class="fiidii-submit" onclick="submitFIIDII()">💾 UPDATE FII/DII</button>
-      <div class="fiidii-result" id="fiidii-result" style="display:none;">
-        <div class="fiidii-net"><div class="fiidii-net-label">FII NET</div><div class="fiidii-net-val" id="fii-net">--</div></div>
-        <div class="fiidii-net"><div class="fiidii-net-label">DII NET</div><div class="fiidii-net-val" id="dii-net">--</div></div>
+      <!-- Live NET preview — always visible, auto-updates on input -->
+      <div class="fii-live-preview" id="fiidii-result">
+        <div class="fii-nets-row">
+          <div class="fii-net-box">
+            <div class="fii-net-lbl">FII NET</div>
+            <div class="fii-net-big" id="fii-net" style="color:#9ab8d0;">--</div>
+          </div>
+          <div class="fii-net-box">
+            <div class="fii-net-lbl">DII NET</div>
+            <div class="fii-net-big" id="dii-net" style="color:#9ab8d0;">--</div>
+          </div>
+        </div>
+        <div class="fii-combined-row" id="fii-combined-row" style="display:none;">
+          <span class="fii-comb-lbl">INST. COMBINED</span>
+          <span class="fii-comb-val" id="fii-combined" style="color:#9ab8d0;">--</span>
+          <span class="fii-bias-tag" id="fii-bias-tag" style="background:rgba(255,187,0,0.1);color:var(--amber);border:1px solid var(--amber);">NEUTRAL</span>
+        </div>
       </div>
+      <button class="fiidii-submit" onclick="submitFIIDII()">💾 SAVE TO SERVER</button>
     </div>
 
     <div style="font-size:9px;letter-spacing:3px;color:var(--dim);margin-bottom:5px;">TOP 20 NIFTY STOCKS</div>
@@ -968,11 +1046,11 @@ function switchTab(name,btn){
     // Render immediately from cache — no loading flicker
     if(_lastState){
       if(_lastState.breadth)updateBreadthUI(_lastState.breadth);
-      if(_lastState.global)updateGlobalUI(_lastState.global);
+      if(_lastState.global){updateGlobalUI(_lastState.global);updateSectorHeatmap(_lastState.global.sectors);}
       if(_lastState.optionFlow){const dom=_lastState.optionFlow.dominance||'NEUTRAL';const c=dom.includes('CALL')?'var(--blue)':dom.includes('PUT')?'var(--red)':'var(--amber)';document.getElementById('flow-dominance').textContent=dom;document.getElementById('flow-dominance').style.color=c;if(_lastState.optionFlow.history)updateFlowHistory(_lastState.optionFlow.history);}
       if(_lastState.pcrHistory)updatePCRTrend(_lastState.pcrHistory);
-      if(_lastState.fii?.net!=null){document.getElementById('fiidii-result').style.display='grid';const fe=document.getElementById('fii-net');fe.textContent=(_lastState.fii.net>=0?'+':'')+_lastState.fii.net+'Cr';fe.style.color=_lastState.fii.net>=0?'var(--green)':'var(--red)';}
-      if(_lastState.dii?.net!=null){const de=document.getElementById('dii-net');de.textContent=(_lastState.dii.net>=0?'+':'')+_lastState.dii.net+'Cr';de.style.color=_lastState.dii.net>=0?'var(--green)':'var(--red)';}
+      if(_lastState.fii?.net!=null){const fe=document.getElementById('fii-net');fe.textContent=(_lastState.fii.net>=0?'▲ +':'▼ ')+Math.abs(_lastState.fii.net).toFixed(0)+'Cr';fe.style.color=_lastState.fii.net>=0?'var(--green)':'var(--red)';}
+      if(_lastState.dii?.net!=null){const de=document.getElementById('dii-net');de.textContent=(_lastState.dii.net>=0?'▲ +':'▼ ')+Math.abs(_lastState.dii.net).toFixed(0)+'Cr';de.style.color=_lastState.dii.net>=0?'var(--green)':'var(--red)';}
     } else {
       // No cache yet — do a single fetch to populate
       fetchSignal();
@@ -1116,6 +1194,9 @@ function updateBreadthUI(b){
   document.getElementById('ad-unch').textContent=b.unchanged||'0';
   document.getElementById('ad-ratio-big').textContent=b.adRatio||'--';
   document.getElementById('bull-weight').textContent=(b.weightedBull||50)+'%';
+  // Animate A/D dial needle: bullPct 0→-90deg, 50→0deg, 100→+90deg
+  const adNeedle=document.getElementById('ad-needle-g');
+  if(adNeedle){const deg=-90+(bullPct/100)*180;adNeedle.style.transform=`rotate(${deg}deg)`;}
   const sig=b.breadthSignal||'NEUTRAL',bc=biasColor(sig);
   const sigEl=document.getElementById('ad-signal');
   sigEl.textContent=sig;sigEl.style.color=bc;sigEl.style.borderColor=bc;
@@ -1141,17 +1222,77 @@ function updatePCRTrend(history){if(!history||history.length===0)return;const ht
 
 function updateFlowHistory(history){if(!history||history.length===0)return;const html=[...history].reverse().slice(0,6).map(h=>{const c=h.dominance.includes('CALL')?'var(--blue)':h.dominance.includes('PUT')?'var(--red)':'var(--amber)';return`<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border);"><span style="color:var(--dim)">${h.time}</span><span style="color:${c};font-weight:700">${h.dominance}</span></div>`;}).join('');document.getElementById('flow-history').innerHTML=html;}
 
+// FII/DII live NET calculator (fires oninput)
+function calcFIINet(){
+  const fb=parseFloat(document.getElementById('fii-buy').value);
+  const fs=parseFloat(document.getElementById('fii-sell').value);
+  const db=parseFloat(document.getElementById('dii-buy').value);
+  const ds=parseFloat(document.getElementById('dii-sell').value);
+  const fNet=(!isNaN(fb)&&!isNaN(fs))?fb-fs:null;
+  const dNet=(!isNaN(db)&&!isNaN(ds))?db-ds:null;
+  const fEl=document.getElementById('fii-net');
+  const dEl=document.getElementById('dii-net');
+  const cEl=document.getElementById('fii-combined');
+  const cRow=document.getElementById('fii-combined-row');
+  const biasTag=document.getElementById('fii-bias-tag');
+  if(fNet!==null){
+    const arr=fNet>0?'▲ ':'▼ ';
+    fEl.textContent=arr+(fNet>=0?'+':'')+fNet.toFixed(0)+'Cr';
+    fEl.style.color=fNet>=0?'var(--green)':'var(--red)';
+  }else{fEl.textContent='--';fEl.style.color='#9ab8d0';}
+  if(dNet!==null){
+    const arr=dNet>0?'▲ ':'▼ ';
+    dEl.textContent=arr+(dNet>=0?'+':'')+dNet.toFixed(0)+'Cr';
+    dEl.style.color=dNet>=0?'var(--green)':'var(--red)';
+  }else{dEl.textContent='--';dEl.style.color='#9ab8d0';}
+  if(fNet!==null&&dNet!==null&&cEl&&cRow){
+    const combo=fNet+dNet;
+    const arr=combo>0?'▲ ':'▼ ';
+    cEl.textContent=arr+(combo>=0?'+':'')+combo.toFixed(0)+'Cr';
+    cEl.style.color=combo>=0?'var(--green)':'var(--red)';
+    const bias=combo>500?'BUYER':combo<-500?'SELLER':'NEUTRAL';
+    const bc=combo>500?'var(--green)':combo<-500?'var(--red)':'var(--amber)';
+    const bga=combo>500?'0,255,136':combo<-500?'255,34,68':'255,187,0';
+    if(biasTag){biasTag.textContent=bias;biasTag.style.color=bc;biasTag.style.borderColor=bc;biasTag.style.background=`rgba(${bga},0.12)`;}
+    cRow.style.display='flex';
+  }else if(cRow){cRow.style.display='none';}
+}
+
+// SECTOR HEATMAP
+const SECTOR_DEFS=[
+  {key:'bankNifty',label:'BANK'},{key:'niftyIT',label:'IT'},
+  {key:'niftyAuto',label:'AUTO'},{key:'niftyMetal',label:'METAL'},
+  {key:'niftyPharma',label:'PHARMA'},{key:'niftyFMCG',label:'FMCG'},
+  {key:'niftyRealty',label:'REALTY'},{key:'niftyMedia',label:'MEDIA'},
+  {key:'niftyEnergy',label:'ENERGY'},{key:'niftyInfra',label:'INFRA'},
+  {key:'niftyPSU',label:'PSU BNK'}
+];
+function sectorHeatColor(chg){
+  if(chg==null)return{bg:'var(--bg3)',color:'#4a6a8a',border:'var(--border)'};
+  const intens=Math.min(Math.abs(chg)/3,1);
+  const a=(0.08+intens*0.42).toFixed(2);
+  const ba=(0.15+intens*0.5).toFixed(2);
+  if(chg>=0)return{bg:`rgba(0,255,136,${a})`,color:intens>0.35?'#00ff88':'#c8e0f4',border:`rgba(0,255,136,${ba})`};
+  return{bg:`rgba(255,34,68,${a})`,color:intens>0.35?'#ff2244':'#c8e0f4',border:`rgba(255,34,68,${ba})`};
+}
+function updateSectorHeatmap(sectors){
+  const el=document.getElementById('sector-heatmap');
+  if(!el)return;
+  el.innerHTML=SECTOR_DEFS.map(def=>{
+    const d=sectors?.[def.key];
+    const chg=d?.changePct??null;
+    const col=sectorHeatColor(chg);
+    const txt=chg!=null?`${chg>=0?'+':''}${chg.toFixed(2)}%`:'--';
+    return`<div class="sector-cell" style="background:${col.bg};border-color:${col.border};"><div class="sc-label">${def.label}</div><div class="sc-chg" style="color:${col.color};">${txt}</div></div>`;
+  }).join('');
+}
+
 function submitFIIDII(){
   const fb=parseFloat(document.getElementById('fii-buy').value),fs=parseFloat(document.getElementById('fii-sell').value);
   const db=parseFloat(document.getElementById('dii-buy').value),ds=parseFloat(document.getElementById('dii-sell').value);
   if(isNaN(fb)||isNaN(fs)){alert('Enter FII Buy and Sell');return;}
   fetch('/api/fiidii',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fiiBuy:fb,fiiSell:fs,diiBuy:isNaN(db)?null:db,diiSell:isNaN(ds)?null:ds})})
-  .then(()=>{
-    document.getElementById('fiidii-result').style.display='grid';
-    const fn=fb-fs,dn=db-ds;
-    const fe=document.getElementById('fii-net');fe.textContent=(fn>=0?'+':'')+fn.toFixed(0)+'Cr';fe.style.color=fn>=0?'var(--green)':'var(--red)';
-    if(!isNaN(dn)){const de=document.getElementById('dii-net');de.textContent=(dn>=0?'+':'')+dn.toFixed(0)+'Cr';de.style.color=dn>=0?'var(--green)':'var(--red)';}
-  }).catch(()=>{});
+  .then(()=>{calcFIINet();}).catch(()=>{calcFIINet();});
 }
 
 // GLOBAL UI
@@ -1369,9 +1510,9 @@ async function fetchSignal(){
     if(d.breadth)updateBreadthUI(d.breadth);
     if(d.pcrHistory)updatePCRTrend(d.pcrHistory);
     if(d.optionFlow){const dom=d.optionFlow.dominance||'NEUTRAL';const c=dom.includes('CALL')?'var(--blue)':dom.includes('PUT')?'var(--red)':'var(--amber)';document.getElementById('flow-dominance').textContent=dom;document.getElementById('flow-dominance').style.color=c;if(d.optionFlow.history)updateFlowHistory(d.optionFlow.history);}
-    if(d.fii?.net!=null){document.getElementById('fiidii-result').style.display='grid';const fe=document.getElementById('fii-net');fe.textContent=(d.fii.net>=0?'+':'')+d.fii.net+'Cr';fe.style.color=d.fii.net>=0?'var(--green)':'var(--red)';}
-    if(d.dii?.net!=null){const de=document.getElementById('dii-net');de.textContent=(d.dii.net>=0?'+':'')+d.dii.net+'Cr';de.style.color=d.dii.net>=0?'var(--green)':'var(--red)';}
-    if(d.global)updateGlobalUI(d.global);
+    if(d.fii?.net!=null){const fe=document.getElementById('fii-net');fe.textContent=(d.fii.net>=0?'▲ +':'▼ ')+Math.abs(d.fii.net).toFixed(0)+'Cr';fe.style.color=d.fii.net>=0?'var(--green)':'var(--red)';}
+    if(d.dii?.net!=null){const de=document.getElementById('dii-net');de.textContent=(d.dii.net>=0?'▲ +':'▼ ')+Math.abs(d.dii.net).toFixed(0)+'Cr';de.style.color=d.dii.net>=0?'var(--green)':'var(--red)';}
+    if(d.global){updateGlobalUI(d.global);updateSectorHeatmap(d.global.sectors);}
     if(d.srLevels)updateSRLevels(d.srLevels);
   }catch(e){
     _fetchFailCount++;
