@@ -516,15 +516,15 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
           <!-- Track -->
           <path d="M 10 65 A 55 55 0 0 1 120 65" fill="none" stroke="#1a3a5a" stroke-width="9" stroke-linecap="round"/>
           <!-- Oversold zone 0-30 -->
-          <path d="M 10 65 A 55 55 0 0 1 37.5 22.5" fill="none" stroke="#00aaff" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
+          <path d="M 10 65 A 55 55 0 0 1 32.67 20.5" fill="none" stroke="#00aaff" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
           <!-- Neutral zone 30-70 -->
-          <path d="M 37.5 22.5 A 55 55 0 0 1 92.5 22.5" fill="none" stroke="#00ff88" stroke-width="9" stroke-linecap="round" opacity="0.35"/>
+          <path d="M 32.67 20.5 A 55 55 0 0 1 97.33 20.5" fill="none" stroke="#00ff88" stroke-width="9" stroke-linecap="round" opacity="0.35"/>
           <!-- Overbought zone 70-100 -->
-          <path d="M 92.5 22.5 A 55 55 0 0 1 120 65" fill="none" stroke="#ff2244" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
+          <path d="M 97.33 20.5 A 55 55 0 0 1 120 65" fill="none" stroke="#ff2244" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
           <!-- Tick at 30 -->
-          <line x1="33" y1="26" x2="42" y2="34" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+          <line x1="37.4" y1="27" x2="28" y2="14" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
           <!-- Tick at 70 -->
-          <line x1="97" y1="26" x2="88" y2="34" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+          <line x1="92.6" y1="27" x2="102" y2="14" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
           <!-- Needle group — rotate around center (65,65) -->
           <g id="rsi-needle-g" class="rsi-needle" style="transform:rotate(-90deg);transform-origin:65px 65px;">
             <line x1="65" y1="65" x2="65" y2="14" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
@@ -1063,7 +1063,7 @@ function updateMTFBadge(mtf){
 }
 
 // PRICE FLASH
-let lastPrice=0,lastSignal='';
+let lastPrice=0,lastSignal='',lastCardSig='';
 function flashPrice(p){const sec=document.getElementById('price-section');sec.classList.remove('flash-green','flash-red');void sec.offsetWidth;if(p>lastPrice)sec.classList.add('flash-green');else if(p<lastPrice)sec.classList.add('flash-red');lastPrice=p;}
 
 // S/R LEVELS UI
@@ -1292,7 +1292,8 @@ async function fetchSignal(){
     // Signal card — class + flash animation on BUY signal
     const card=document.getElementById('signal-card');
     const newClass='signal-card '+(sig==='BUY CALL'?'buy-call':sig==='BUY PUT'?'buy-put':'wait');
-    if(card.className!==newClass){
+    if(sig!==lastCardSig){
+      lastCardSig=sig;
       card.className=newClass;
       if(sig==='BUY CALL'){card.classList.add('flash-green');setTimeout(()=>card.classList.remove('flash-green'),1400);}
       else if(sig==='BUY PUT'){card.classList.add('flash-red');setTimeout(()=>card.classList.remove('flash-red'),1400);}
@@ -1305,7 +1306,7 @@ async function fetchSignal(){
     const confStrength=document.getElementById('conf-strength');
     const tick70=document.getElementById('conf-tick70');
     confBar.classList.remove('strong-bull','strong-bear');
-    if(conf>70){
+    if(conf>70&&sig!=='WAIT'){
       if(sig==='BUY CALL'){confBar.classList.add('strong-bull');}
       else if(sig==='BUY PUT'){confBar.classList.add('strong-bear');}
       const label=conf>=85?'⚡ STRONG':(conf>=70?'✦ GOOD':'');
