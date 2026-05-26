@@ -28,7 +28,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-const PORT = process.env.PORT || 8080;
+const PORT    = process.env.PORT || 8080;
+const LOT_SIZE = 75;   // Nifty 50 lot size (updated Nov 2024 by SEBI: 50 → 75)
 
 // ── Market State ──────────────────────────────────────
 let marketState = {
@@ -555,7 +556,7 @@ async function updateOpenTradesMTM() {
         if (!livePremium || !t.premium) continue;
 
         t.currentPremium = livePremium;
-        t.currentPnl     = parseFloat(((livePremium - t.premium) * t.lots * 65).toFixed(0));
+        t.currentPnl     = parseFloat(((livePremium - t.premium) * t.lots * LOT_SIZE).toFixed(0));
 
         // ── Threshold calculation ────────────────────────
         const entry   = t.premium;
@@ -679,7 +680,7 @@ app.post('/api/trade/exit', (req,res) => {
     const trade=trades.find(t=>t.id===id);
     if(!trade) return res.json({success:false,msg:'Not found'});
     trade.exitPremium=parseFloat(exitPremium);
-    trade.pnl=parseFloat(((trade.exitPremium-trade.premium)*trade.lots*65).toFixed(0));
+    trade.pnl=parseFloat(((trade.exitPremium-trade.premium)*trade.lots*LOT_SIZE).toFixed(0));
     trade.status='CLOSED';
     const ist=getIST();
     trade.exitTime=`${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
