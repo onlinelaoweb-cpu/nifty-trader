@@ -18,10 +18,24 @@
  *   getPCRState()                     latest PCR snapshot + metadata
  *   getFIIState()                     latest FII/DII snapshot + metadata
  *   getOIBuildupState()               latest OI Buildup snapshot + metadata
+ *   getEarlyMomState()                latest Early Momentum snapshot + metadata
  *   interpretPCR(pcr)                 → { signal, strength, label }
  *   interpretFII(netFII, netDII)      → { signal, strength, label }
  *   interpretOIBuildup(state)         → { signal, strength, label }
+ *   interpretEarlyMomentum(state)     → { score, signal, strength, label, votes }
  *   isExpiryDay()                     true on Nifty weekly expiry (Tuesday)
+ *
+ * Early Momentum — WHY IT'S FASTER
+ * ─────────────────────────────────
+ * Root causes of late signals in the old implementation:
+ *   1. Ignored NSE's native changeinOpenInterest (intraday Δ, available cycle 1).
+ *      Was computing OI diff manually → needed 2 cycles (6 min) to warm up.
+ *   2. No premium velocity — LTP moves 30–60s BEFORE OI changes.
+ *   3. No order-book pressure — totalBuyQty/totalSellQty per strike ignored.
+ *   4. No IV skew — impliedVolatility per row ignored.
+ *   5. ATM-only PCR misses cluster effect; ATM ±100pt is far more sensitive.
+ *
+ * Fix: 7-vote scoring system (range −5 to +5) using all the above.
  */
 
 'use strict';
@@ -379,6 +393,273 @@ function interpretOIBuildup({ totalCEoiChange, totalPEoiChange, pcrChange } = {}
 
 
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Early Momentum Detector
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// SIGNAL SCORING — vote-based, range −5 to +5:
+//
+//   +1  NSE intraday PE OI Δ > CE OI Δ (whole chain)  ← works from cycle 1
+//   +1  ATM-cluster (±100pt) PE OI Δ > CE OI Δ        ← 5x more sensitive
+//   +1  ATM CE premium velocity > +5% this cycle       ← LEADING: price before OI
+//   −1  ATM PE premium velocity > +5% this cycle       ← LEADING: put demand
+//   +1  ATM CE buy-pressure > 65% (order book)         ← LEADING: real-time orders
+//   −1  ATM PE buy-pressure > 65% (order book)
+//   +1  IV skew: CE IV > PE IV + 3  (call demand skew)
+//   −1  IV skew: PE IV > CE IV + 3  (fear / put demand skew)
+//
+//   score ≥ +3 → BULL strength 2   (⚡ Early CE momentum)
+//   score +1/+2 → BULL strength 1  (↗ CE lean)
+//   score 0     → NEUTRAL
+//   score −1/−2 → BEAR strength 1  (↘ PE lean)
+//   score ≤ −3 → BEAR strength 2   (⚡ Early PE momentum)
+
+const _earlyMom = {
+    // NSE-native intraday OI deltas (available from fetch #1 — no warmup)
+    intraCEoiChange   : null,   // sum of CE changeinOpenInterest, whole chain
+    intraPEoiChange   : null,
+
+    // ATM ±100pt cluster (5 strikes): 5× more sensitive than whole chain
+    clusterCEoiChange : null,
+    clusterPEoiChange : null,
+
+    // Premium velocity — % LTP change vs previous cycle (LEADING signal)
+    atmCEvelocity     : null,   // +ve = call buyers pushing CE price up
+    atmPEvelocity     : null,   // +ve = put buyers pushing PE price up
+
+    // Order-book buy pressure at ATM (0–1 scale)
+    atmCEbuyPressure  : null,   // totalBuyQty / (buyQty + sellQty) for CE
+    atmPEbuyPressure  : null,
+
+    // IV skew at ATM
+    atmCEiv           : null,
+    atmPEiv           : null,
+    ivSkew            : null,   // PE IV − CE IV: +ve = fear/put-demand
+
+    // Scoring output
+    score             : null,   // −5 to +5
+    signal            : 'NEUTRAL',
+    strength          : 0,
+    label             : 'Early Momentum — awaiting data',
+    votes             : [],     // [{ name, vote, reason }] for transparency
+
+    fetchedAt         : null,
+    fetchCount        : 0,
+    lastError         : null,
+};
+
+// Store previous ATM premiums for velocity calculation
+let _prevATMce = null;
+let _prevATMpe = null;
+
+/**
+ * parseEarlyMomentum(records, atm)
+ * Extracts all early-signal data from a single option-chain response.
+ * Called every PCR cycle with the raw records array and current ATM strike.
+ */
+function parseEarlyMomentum(records, atm) {
+    if (!Array.isArray(records) || records.length === 0 || !atm) return null;
+
+    // ATM ±100pt cluster (5 strikes at 50pt spacing)
+    const cluster = new Set([atm - 100, atm - 50, atm, atm + 50, atm + 100]);
+
+    let intraCEoiChange = 0, intraPEoiChange = 0;
+    let clusterCEoiChange = 0, clusterPEoiChange = 0;
+    let atmCEltp = null, atmPEltp = null;
+    let atmCEiv = null, atmPEiv = null;
+    let atmCEbuyPressure = null, atmPEbuyPressure = null;
+
+    for (const row of records) {
+        const s  = row.strikePrice;
+        const ce = row.CE;
+        const pe = row.PE;
+
+        // ── 1. NSE-native intraday OI Δ (whole chain) ────────────────────────
+        // changeinOpenInterest = today's OI − yesterday's close OI (NSE calculates)
+        if (ce?.changeinOpenInterest) intraCEoiChange += ce.changeinOpenInterest;
+        if (pe?.changeinOpenInterest) intraPEoiChange += pe.changeinOpenInterest;
+
+        // ── 2. ATM-cluster intraday OI Δ ─────────────────────────────────────
+        if (cluster.has(s)) {
+            if (ce?.changeinOpenInterest) clusterCEoiChange += ce.changeinOpenInterest;
+            if (pe?.changeinOpenInterest) clusterPEoiChange += pe.changeinOpenInterest;
+        }
+
+        // ── 3. ATM-only metrics ───────────────────────────────────────────────
+        if (s === atm) {
+            // Premium (LTP) for velocity
+            if (ce) atmCEltp = ce.lastPrice  || null;
+            if (pe) atmPEltp = pe.lastPrice  || null;
+
+            // Implied volatility for skew
+            if (ce) atmCEiv = ce.impliedVolatility || null;
+            if (pe) atmPEiv = pe.impliedVolatility || null;
+
+            // Order-book buy pressure
+            if (ce) {
+                const b = ce.totalBuyQuantity  || 0;
+                const s_ = ce.totalSellQuantity || 0;
+                if (b + s_ > 0) atmCEbuyPressure = parseFloat((b / (b + s_)).toFixed(3));
+            }
+            if (pe) {
+                const b = pe.totalBuyQuantity  || 0;
+                const s_ = pe.totalSellQuantity || 0;
+                if (b + s_ > 0) atmPEbuyPressure = parseFloat((b / (b + s_)).toFixed(3));
+            }
+        }
+    }
+
+    // ── 4. Premium velocity (% change vs last cycle) ──────────────────────────
+    // First cycle: _prevATMce/_prevATMpe are null → velocity = null (safe)
+    const atmCEvelocity = (_prevATMce && atmCEltp && _prevATMce > 0)
+        ? parseFloat((((atmCEltp - _prevATMce) / _prevATMce) * 100).toFixed(2))
+        : null;
+    const atmPEvelocity = (_prevATMpe && atmPEltp && _prevATMpe > 0)
+        ? parseFloat((((atmPEltp - _prevATMpe) / _prevATMpe) * 100).toFixed(2))
+        : null;
+
+    const ivSkew = (atmPEiv !== null && atmCEiv !== null)
+        ? parseFloat((atmPEiv - atmCEiv).toFixed(2))
+        : null;
+
+    // Persist premiums for next cycle velocity calculation
+    if (atmCEltp) _prevATMce = atmCEltp;
+    if (atmPEltp) _prevATMpe = atmPEltp;
+
+    return {
+        intraCEoiChange   : Math.round(intraCEoiChange),
+        intraPEoiChange   : Math.round(intraPEoiChange),
+        clusterCEoiChange : Math.round(clusterCEoiChange),
+        clusterPEoiChange : Math.round(clusterPEoiChange),
+        atmCEvelocity,
+        atmPEvelocity,
+        atmCEbuyPressure,
+        atmPEbuyPressure,
+        atmCEiv,
+        atmPEiv,
+        ivSkew,
+    };
+}
+
+/**
+ * interpretEarlyMomentum(state)
+ * Vote-based scoring: each signal casts +1 (bull) or −1 (bear).
+ * Returns { score, signal, strength, label, votes }
+ */
+function interpretEarlyMomentum(state = {}) {
+    const {
+        intraCEoiChange, intraPEoiChange,
+        clusterCEoiChange, clusterPEoiChange,
+        atmCEvelocity, atmPEvelocity,
+        atmCEbuyPressure, atmPEbuyPressure,
+        ivSkew,
+    } = state;
+
+    if (intraCEoiChange === null && intraPEoiChange === null)
+        return { score: 0, signal: 'NEUTRAL', strength: 0,
+                 label: 'Early Momentum — awaiting data', votes: [] };
+
+    const OI_CHAIN   = 30_000;   // min whole-chain intraday OI Δ diff
+    const OI_CLUSTER = 6_000;    // min cluster OI Δ diff (lower — tighter scope)
+    const VEL_MIN    = 5;        // % premium change per 3-min cycle
+    const BP_MIN     = 0.65;     // buy-pressure threshold (65%)
+    const IV_MIN     = 3;        // minimum IV skew difference to matter
+
+    const votes = [];
+
+    // ── Vote 1: Whole-chain intraday OI ──────────────────────────────────────
+    if (intraPEoiChange !== null && intraCEoiChange !== null) {
+        const diff = intraPEoiChange - intraCEoiChange;
+        if (Math.abs(diff) >= OI_CHAIN) {
+            const v = diff > 0 ? +1 : -1;
+            const lbl = diff > 0
+                ? `PE intra OI Δ+${Math.round(intraPEoiChange/1000)}K > CE Δ${Math.round(intraCEoiChange/1000)}K`
+                : `CE intra OI Δ+${Math.round(intraCEoiChange/1000)}K > PE Δ${Math.round(intraPEoiChange/1000)}K`;
+            votes.push({ name: 'Chain OI Δ', vote: v, reason: lbl });
+        }
+    }
+
+    // ── Vote 2: ATM-cluster OI (more sensitive) ───────────────────────────────
+    if (clusterPEoiChange !== null && clusterCEoiChange !== null) {
+        const diff = clusterPEoiChange - clusterCEoiChange;
+        if (Math.abs(diff) >= OI_CLUSTER) {
+            const v = diff > 0 ? +1 : -1;
+            const lbl = diff > 0
+                ? `ATM±100 PE Δ+${Math.round(clusterPEoiChange/1000)}K > CE Δ${Math.round(clusterCEoiChange/1000)}K`
+                : `ATM±100 CE Δ+${Math.round(clusterCEoiChange/1000)}K > PE Δ${Math.round(clusterPEoiChange/1000)}K`;
+            votes.push({ name: 'ATM Cluster OI', vote: v, reason: lbl });
+        }
+    }
+
+    // ── Vote 3: CE premium velocity (LEADING) ─────────────────────────────────
+    if (atmCEvelocity !== null && Math.abs(atmCEvelocity) >= VEL_MIN) {
+        const v = atmCEvelocity > 0 ? +1 : -1;
+        votes.push({ name: 'CE Velocity', vote: v,
+            reason: `ATM CE LTP ${atmCEvelocity > 0 ? '+' : ''}${atmCEvelocity}%/cycle` });
+    }
+
+    // ── Vote 4: PE premium velocity (LEADING) ─────────────────────────────────
+    // PE premium rising = put buyers active = bearish; PE falling = puts abandoned = bullish
+    if (atmPEvelocity !== null && Math.abs(atmPEvelocity) >= VEL_MIN) {
+        const v = atmPEvelocity > 0 ? -1 : +1;
+        votes.push({ name: 'PE Velocity', vote: v,
+            reason: `ATM PE LTP ${atmPEvelocity > 0 ? '+' : ''}${atmPEvelocity}%/cycle` });
+    }
+
+    // ── Vote 5: CE order-book buy pressure (LEADING) ──────────────────────────
+    if (atmCEbuyPressure !== null && atmCEbuyPressure >= BP_MIN) {
+        votes.push({ name: 'CE Buy Pressure', vote: +1,
+            reason: `CE buyers ${Math.round(atmCEbuyPressure * 100)}% of orders` });
+    }
+
+    // ── Vote 6: PE order-book buy pressure (LEADING) ──────────────────────────
+    if (atmPEbuyPressure !== null && atmPEbuyPressure >= BP_MIN) {
+        votes.push({ name: 'PE Buy Pressure', vote: -1,
+            reason: `PE buyers ${Math.round(atmPEbuyPressure * 100)}% of orders` });
+    }
+
+    // ── Vote 7: IV skew ───────────────────────────────────────────────────────
+    if (ivSkew !== null) {
+        if (ivSkew < -IV_MIN) {   // CE IV > PE IV = call demand = bullish
+            votes.push({ name: 'IV Skew', vote: +1,
+                reason: `CE IV elevated (skew ${ivSkew.toFixed(1)})` });
+        } else if (ivSkew > IV_MIN) {   // PE IV > CE IV = fear/put demand = bearish
+            votes.push({ name: 'IV Skew', vote: -1,
+                reason: `Fear skew PE IV > CE IV by ${ivSkew.toFixed(1)}` });
+        }
+    }
+
+    // ── Tally ─────────────────────────────────────────────────────────────────
+    const score = votes.reduce((s, v) => s + v.vote, 0);
+    const bullReasons = votes.filter(v => v.vote > 0).map(v => v.reason);
+    const bearReasons = votes.filter(v => v.vote < 0).map(v => v.reason);
+
+    let signal, strength, label;
+
+    if (score >= 3) {
+        signal = 'BULL'; strength = 2;
+        label = `⚡ Early CE momentum: ${bullReasons.join(' · ')}`;
+    } else if (score >= 1) {
+        signal = 'BULL'; strength = 1;
+        label = `↗ CE lean: ${bullReasons.join(' · ') || 'weak bull signals'}`;
+    } else if (score <= -3) {
+        signal = 'BEAR'; strength = 2;
+        label = `⚡ Early PE momentum: ${bearReasons.join(' · ')}`;
+    } else if (score <= -1) {
+        signal = 'BEAR'; strength = 1;
+        label = `↘ PE lean: ${bearReasons.join(' · ') || 'weak bear signals'}`;
+    } else {
+        signal = 'NEUTRAL'; strength = 0;
+        label = `No directional edge (score ${score > 0 ? '+' : ''}${score})`;
+    }
+
+    return { score, signal, strength, label, votes };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PCR — state + fetch + schedule
+// ═══════════════════════════════════════════════════════════════════════════════
+
 const _pcr = {
     pcr         : null,
     atmPcr      : null,
@@ -469,6 +750,32 @@ async function _fetchPCR(spotPrice) {
         } catch (oiErr) {
             _oiBuildup.lastError = oiErr.message;
             console.error('[OI Buildup] Calc error:', oiErr.message);
+        }
+
+        // ── Early Momentum — 7-vote leading signal (no warmup needed) ─────────
+        try {
+            const emResult = parseEarlyMomentum(res.data?.records?.data, parsed.atm);
+            if (emResult) {
+                const emSignal = interpretEarlyMomentum(emResult);
+                Object.assign(_earlyMom, emResult, {
+                    score     : emSignal.score,
+                    signal    : emSignal.signal,
+                    strength  : emSignal.strength,
+                    label     : emSignal.label,
+                    votes     : emSignal.votes,
+                    fetchedAt : new Date(),
+                    fetchCount: _earlyMom.fetchCount + 1,
+                    lastError : null,
+                });
+                const scoreStr = `${emSignal.score >= 0 ? '+' : ''}${emSignal.score}`;
+                console.log(
+                    `⚡ [EARLY MOM] score=${scoreStr} → ${emSignal.signal} str=${emSignal.strength}` +
+                    ` | ${emSignal.label.substring(0, 80)} [#${_earlyMom.fetchCount}]`
+                );
+            }
+        } catch (emErr) {
+            _earlyMom.lastError = emErr.message;
+            console.error('[Early Mom] Calc error:', emErr.message);
         }
     } catch (e) {
         _pcr.lastError = e.message;
@@ -670,6 +977,7 @@ function interpretFII(fiiNet, diiNet) {
 function getPCRState()       { return { ..._pcr }; }
 function getFIIState()       { return { ..._fii }; }
 function getOIBuildupState() { return { ..._oiBuildup }; }
+function getEarlyMomState()  { return { ..._earlyMom }; }
 
 // Convenience getters for combineSignals()
 function getCurrentPCR()    { return _pcr.pcr; }
@@ -685,6 +993,7 @@ module.exports = {
     getPCRState,
     getFIIState,
     getOIBuildupState,
+    getEarlyMomState,
 
     // Scalar getters (for combineSignals)
     getCurrentPCR,
@@ -696,6 +1005,7 @@ module.exports = {
     interpretPCR,
     interpretFII,
     interpretOIBuildup,
+    interpretEarlyMomentum,
 
     // Utilities
     isExpiryDay,
