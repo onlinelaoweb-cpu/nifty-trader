@@ -275,8 +275,36 @@ function combineSignals(indicators) {
         else if (marketState.mtf.signal==='BUY PUT')  { bear+=3; reasons.push('All 3 timeframes BEARISH 🔥'); }
     } else if (marketState.mtf.bullCount===2) { bull++; reasons.push('2/3 TF bullish'); }
     else if   (marketState.mtf.bearCount===2) { bear++; reasons.push('2/3 TF bearish'); }
-    bull += indicators.signal==='BUY CALL' ? 3 : 0;
-    bear += indicators.signal==='BUY PUT'  ? 3 : 0;
+
+    // ── Real-time indicator signal ────────────────────────────────────────────
+    // Weight reduced from 3 → 2 to address double-counting:
+    // The MTF already includes a 5m component derived from the same Yahoo NSEI
+    // feed. When MTF is aligned, the 1m indicator almost always agrees (they're
+    // correlated) — adding full 3 pts from both inflates confidence unjustifiably.
+    // Reducing to 2 keeps the indicator meaningful (it has its own momentum gate
+    // the MTF doesn't have) without double-inflating the bull/bear pool.
+    bull += indicators.signal==='BUY CALL' ? 2 : 0;
+    bear += indicators.signal==='BUY PUT'  ? 2 : 0;
+
+    // ── Volume spike confirmation (+1) ────────────────────────────────────────
+    // A volume spike in the direction of the signal adds genuine conviction:
+    // a bull breakout on rising volume = real buying pressure, not thin-book noise.
+    // Only meaningful on the Angel One WebSocket feed (tick volume is a real proxy).
+    // On Yahoo fallback all candles have volume ≈ 1, so calcVolumeSpike() returns
+    // false and this block never fires — no phantom votes on polling data.
+    if (indicators.volumeSpike) {
+        if      (indicators.signal === 'BUY CALL') { bull += 1; reasons.push('📊 Volume spike — buying pressure confirmed ✅'); }
+        else if (indicators.signal === 'BUY PUT')  { bear += 1; reasons.push('📊 Volume spike — selling pressure confirmed ✅'); }
+    }
+
+    // ── DII (Domestic Institutional Investors) ────────────────────────────────
+    // DII net buy/sell direction is a supporting (not leading) signal.
+    // Weight = 1 (same as FII). DII are more contrarian than FII but their
+    // net direction on a given day indicates domestic fund positioning.
+    if (marketState.dii.net !== null) {
+        if      (marketState.dii.net > 0) { bull += 1; reasons.push(`DII Buy ₹${marketState.dii.net}Cr ✅`); }
+        else if (marketState.dii.net < 0) { bear += 1; reasons.push(`DII Sell ₹${Math.abs(marketState.dii.net)}Cr ⚠️`); }
+    }
 
     // Raw directional intention from the vote tally
     const total = bull + bear;
