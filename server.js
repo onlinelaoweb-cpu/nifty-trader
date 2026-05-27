@@ -747,6 +747,293 @@ async function updateOpenTradesMTM() {
     }
 }
 
+// ── TRADE SUGGESTION ENGINE ──────────────────────────────────────────────────
+// Added block — paste this entire section into server.js just before the
+// "── Routes ────" comment line.
+
+// ── PostgreSQL Trade History (Railway DB) ────────────────────────────────────
+const { Pool } = require('pg');
+let dbPool = null;
+
+async function initDB() {
+    if (!process.env.DATABASE_URL) {
+        console.log('⚠️  No DATABASE_URL — trade history will not be saved to DB');
+        return;
+    }
+    try {
+        dbPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS trade_history (
+                id          SERIAL PRIMARY KEY,
+                ts          TIMESTAMPTZ DEFAULT NOW(),
+                signal_type TEXT,
+                strike      INT,
+                entry       NUMERIC,
+                sl          NUMERIC,
+                target      NUMERIC,
+                nifty_level NUMERIC,
+                rsi         NUMERIC,
+                vix         NUMERIC,
+                pcr         NUMERIC,
+                mtf_signal  TEXT,
+                adx         NUMERIC,
+                confidence  INT,
+                outcome     TEXT DEFAULT 'OPEN',
+                exit_price  NUMERIC,
+                pnl         NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL trade_history table ready');
+    } catch (e) {
+        console.error('DB init error:', e.message);
+        dbPool = null;
+    }
+}
+
+async function saveTradeToHistory(tradeData) {
+    if (!dbPool) return;
+    try {
+        await dbPool.query(
+            `INSERT INTO trade_history (signal_type,strike,entry,sl,target,nifty_level,rsi,vix,pcr,mtf_signal,adx,confidence)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+            [
+                tradeData.type, tradeData.strike, tradeData.entry,
+                tradeData.sl, tradeData.target, tradeData.niftyLevel,
+                tradeData.rsi, tradeData.vix, tradeData.pcr,
+                tradeData.mtfSignal, tradeData.adx, tradeData.confidence
+            ]
+        );
+    } catch (e) {
+        console.error('DB save error:', e.message);
+    }
+}
+
+async function getWinRateFromHistory(signalType) {
+    if (!dbPool) return null;
+    try {
+        const r = await dbPool.query(
+            `SELECT COUNT(*) AS total,
+                    SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins
+             FROM trade_history
+             WHERE signal_type=$1 AND outcome IN ('WIN','LOSS')
+             ORDER BY ts DESC LIMIT 50`,
+            [signalType]
+        );
+        const row = r.rows[0];
+        if (!row || parseInt(row.total) === 0) return null;
+        return Math.round((parseInt(row.wins) / parseInt(row.total)) * 100);
+    } catch (e) {
+        return null;
+    }
+}
+
+// ── Strike + Premium Picker ────────────────────────────────────────────────
+// Picks the right strike and reads live LTP from option chain already in memory
+function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
+    if (!nifty || nifty <= 0) return null;
+
+    const isBull = signal === 'BUY CALL';
+    const type   = isBull ? 'CE' : 'PE';
+    const atm    = Math.round(nifty / 50) * 50;
+
+    // Strike selection logic:
+    // VIX < 13: market calm → OTM by 50pt (cheaper premium, more leverage)
+    // VIX 13-18: normal → ATM (best liquidity)
+    // VIX > 18: volatile → ATM (don't go OTM, decay risk too high)
+    let strike = atm;
+    if (vix && vix < 13) {
+        strike = isBull ? atm + 50 : atm - 50;
+    }
+
+    // Try to get live LTP from pcrState option chain data
+    let entryPremium = null;
+    if (pcrState && pcrState.atmCEpremium && pcrState.atmPEpremium) {
+        if (type === 'CE') {
+            // If OTM by 50, approximate: ATM CE premium × 0.55 (rough OTM discount)
+            entryPremium = strike === atm
+                ? pcrState.atmCEpremium
+                : parseFloat((pcrState.atmCEpremium * 0.55).toFixed(2));
+        } else {
+            entryPremium = strike === atm
+                ? pcrState.atmPEpremium
+                : parseFloat((pcrState.atmPEpremium * 0.55).toFixed(2));
+        }
+    }
+
+    // If no live premium available, use Black-Scholes estimate
+    if (!entryPremium && vix) {
+        const sigma = vix / 100;
+        const T = 3 / 365; // assume 3 days to expiry
+        entryPremium = parseFloat(bsEstimate(nifty, strike, T, sigma, type).toFixed(2));
+    }
+
+    if (!entryPremium || entryPremium <= 0) return null;
+
+    // SL = 25% of premium (standard option buyer SL)
+    // Target = 50% gain on premium (1:2 R:R)
+    const sl     = parseFloat((entryPremium * 0.75).toFixed(2));
+    const target = parseFloat((entryPremium * 1.50).toFixed(2));
+
+    return { type, strike, entry: entryPremium, sl, target };
+}
+
+// Simple Black-Scholes call/put price estimate
+function bsEstimate(S, K, T, sigma, type) {
+    const r = 0.065;
+    if (T <= 0) return Math.max(0, type === 'CE' ? S - K : K - S);
+    const d1 = (Math.log(S/K) + (r + 0.5*sigma*sigma)*T) / (sigma*Math.sqrt(T));
+    const d2 = d1 - sigma*Math.sqrt(T);
+    const N  = x => {
+        const a=[0.254829592,-0.284496736,1.421413741,-1.453152027,1.061405429],p=0.3275911;
+        const s=x<0?-1:1; x=Math.abs(x)/Math.sqrt(2);
+        const t=1/(1+p*x),y=1-(((((a[4]*t+a[3])*t)+a[2])*t+a[1])*t+a[0])*t*Math.exp(-x*x);
+        return 0.5*(1+s*y);
+    };
+    return type === 'CE'
+        ? S*N(d1) - K*Math.exp(-r*T)*N(d2)
+        : K*Math.exp(-r*T)*N(-d2) - S*N(-d1);
+}
+
+// ── AI Trade Suggestion via Claude API ────────────────────────────────────────
+let lastAISuggestion    = null;
+let lastAISuggestionAt  = 0;
+const AI_COOLDOWN_MS    = 5 * 60 * 1000; // only call AI every 5 min max
+
+async function getAITradeSuggestion(state, strikeData, winRate) {
+    if (!process.env.ANTHROPIC_API_KEY) return null;
+
+    // Don't spam the API — only refresh every 5 minutes
+    const now = Date.now();
+    if (lastAISuggestion && (now - lastAISuggestionAt) < AI_COOLDOWN_MS) {
+        return lastAISuggestion;
+    }
+
+    try {
+        const winRateLine = winRate !== null ? `Past similar setups win rate: ${winRate}%` : 'Not enough past trade data yet.';
+
+        const prompt = `You are a Nifty 50 options trading assistant for an Indian retail option BUYER.
+
+Current market snapshot:
+- Nifty: ${state.nifty}
+- Signal: ${state.signal} (confidence: ${state.confidence}%)
+- RSI (1m): ${state.rsi}
+- VIX: ${state.vix} (${state.vixSignal})
+- PCR: ${state.pcr} (${state.pcrSignal})
+- ATM PCR: ${state.atmPcr}
+- ADX: ${state.adx ? state.adx.adx : 'N/A'}
+- MTF aligned: ${state.mtf.aligned} (${state.mtf.bullCount}/3 bull, ${state.mtf.bearCount}/3 bear)
+- OI Buildup: ${state.oiBuildup.signal} — ${state.oiBuildup.label}
+- Early Momentum score: ${state.earlyMom.score} — ${state.earlyMom.label}
+- Entry window: ${state.entryWindow.label}
+- Quality gate passed: ${state.qualityGate.passed}
+- Suggested strike: ${strikeData ? strikeData.type + ' ' + strikeData.strike + ' @ ₹' + strikeData.entry : 'N/A'}
+- ${winRateLine}
+
+Based on ALL the above, give a concise trade suggestion. Keep reasoning to 2 sentences max.
+Reply ONLY in this exact JSON format (no extra text, no markdown):
+{"action":"BUY CE or BUY PE or WAIT","strike":24300,"entry":85,"sl":64,"target":128,"reasoning":"Two sentences max explaining why.","confidence":"HIGH or MEDIUM or LOW"}`;
+
+        const res = await axios.post('https://api.anthropic.com/v1/messages', {
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 300,
+            messages: [{ role: 'user', content: prompt }]
+        }, {
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': process.env.ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01'
+            },
+            timeout: 15000
+        });
+
+        const text = res.data?.content?.[0]?.text || '';
+        const cleaned = text.replace(/```json|```/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+        parsed.generatedAt = new Date().toISOString();
+
+        lastAISuggestion   = parsed;
+        lastAISuggestionAt = now;
+
+        // Save to DB for training
+        if (parsed.action !== 'WAIT' && strikeData) {
+            await saveTradeToHistory({
+                type: strikeData.type, strike: strikeData.strike,
+                entry: strikeData.entry, sl: strikeData.sl, target: strikeData.target,
+                niftyLevel: state.nifty, rsi: state.rsi, vix: state.vix,
+                pcr: state.pcr, mtfSignal: state.mtf.signal,
+                adx: state.adx?.adx, confidence: state.confidence
+            });
+            console.log(`💾 Trade saved to DB: ${strikeData.type} ${strikeData.strike}`);
+        }
+
+        console.log(`🤖 AI suggestion: ${parsed.action} | Strike: ${parsed.strike} | Entry: ₹${parsed.entry}`);
+        return parsed;
+
+    } catch (e) {
+        console.error('AI suggestion error:', e.message);
+        return null;
+    }
+}
+
+// ── /api/trade-suggestion endpoint ────────────────────────────────────────────
+// Called by the dashboard every 30 seconds when quality gate is passed.
+// Returns: { type, strike, entry, sl, target, reasoning, confidence, winRate }
+
+
+app.get('/api/trade-suggestion', async (req, res) => {
+    try {
+        const pcrState  = getPCRState();
+        const strikeData = marketState.qualityGate.passed && marketState.signal !== 'WAIT'
+            ? pickStrikeAndPremium(marketState.signal, marketState.nifty, marketState.vix, pcrState)
+            : null;
+        const winRate = strikeData ? await getWinRateFromHistory(strikeData.type) : null;
+        const aiSuggestion = (strikeData && marketState.qualityGate.passed)
+            ? await getAITradeSuggestion(marketState, strikeData, winRate)
+            : null;
+        res.json({
+            qualityGatePassed : marketState.qualityGate.passed,
+            signal            : marketState.signal,
+            confidence        : marketState.confidence,
+            strikeData        : strikeData,
+            aiSuggestion      : aiSuggestion,
+            winRate           : winRate,
+            entryWindow       : marketState.entryWindow,
+            nifty             : marketState.nifty
+        });
+    } catch (e) {
+        console.error('trade-suggestion route:', e.message);
+        res.json({ qualityGatePassed: false, signal: 'WAIT', error: e.message });
+    }
+});
+
+// Update trade outcome in DB (call when you manually exit a trade)
+app.post('/api/trade-history/outcome', async (req, res) => {
+    const { id, outcome, exitPrice } = req.body;
+    if (!dbPool) return res.json({ success: false, msg: 'No DB configured' });
+    try {
+        const pnl = exitPrice ? parseFloat(exitPrice) : null;
+        await dbPool.query(
+            'UPDATE trade_history SET outcome=$1, exit_price=$2, pnl=$3 WHERE id=$4',
+            [outcome, exitPrice || null, pnl, id]
+        );
+        res.json({ success: true });
+    } catch (e) {
+        res.json({ success: false, msg: e.message });
+    }
+});
+
+// View full trade history from DB
+app.get('/api/trade-history', async (req, res) => {
+    if (!dbPool) return res.json({ rows: [], msg: 'No DB — add DATABASE_URL to Railway' });
+    try {
+        const r = await dbPool.query('SELECT * FROM trade_history ORDER BY ts DESC LIMIT 100');
+        res.json({ rows: r.rows });
+    } catch (e) {
+        res.json({ rows: [], error: e.message });
+    }
+});
+
+
 // ── Routes ────────────────────────────────────────────
 app.get('/api/signal',  (req,res) => { updateOpenTradesMTM(); res.json(marketState); });
 app.get('/api/candles', (req,res) => res.json(getCandleHistory()));
@@ -920,6 +1207,7 @@ async function initializeLiveData() {
     console.log('Telegram:', isConfigured()?'✅':'❌');
     // Start the NSE data scheduler (PCR every 3 min + FII/DII every 15 min)
     // Must be called BEFORE refreshPCR so the internal state is populated.
+    await initDB();
     startNSEScheduler(() => marketState.nifty);
     // Initial data load (runs once at startup)
     await Promise.all([refreshMarketData(), refreshGlobal(), refreshBreadth()]);
