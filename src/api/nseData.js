@@ -17,8 +17,10 @@
  *   startNSEScheduler(getSpotPrice)   call once at server startup
  *   getPCRState()                     latest PCR snapshot + metadata
  *   getFIIState()                     latest FII/DII snapshot + metadata
+ *   getOIBuildupState()               latest OI Buildup snapshot + metadata
  *   interpretPCR(pcr)                 → { signal, strength, label }
  *   interpretFII(netFII, netDII)      → { signal, strength, label }
+ *   interpretOIBuildup(state)         → { signal, strength, label }
  *   isExpiryDay()                     true on Nifty weekly expiry (Tuesday)
  */
 
@@ -159,8 +161,223 @@ function calcMaxPain(records) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PCR — state + fetch + schedule
+// OI Buildup — state + logic
 // ═══════════════════════════════════════════════════════════════════════════════
+//
+// OI Buildup matrix (options chain perspective):
+//
+//   CE OI ↑  → call writers adding positions → bearish (resistance building)
+//   CE OI ↓  → call unwinding               → bullish (resistance weakening)
+//   PE OI ↑  → put writers adding positions → bullish (support building)
+//   PE OI ↓  → put unwinding               → bearish (support weakening)
+//
+// PCR change reinforces or diverges from the OI delta signal.
+//
+// Key levels derived from absolute OI:
+//   Strike with highest CE OI  → major resistance (call wall)
+//   Strike with highest PE OI  → major support    (put wall)
+//
+// Strike with biggest OI addition this cycle → fresh smart-money activity.
+
+const _oiBuildup = {
+    // Aggregate OI deltas vs previous fetch
+    totalCEoiChange  : null,
+    totalPEoiChange  : null,
+    pcrChange        : null,   // pcr delta since last cycle
+
+    // Key strike levels
+    maxCEoiStrike    : null,   // call wall (resistance)
+    maxPEoiStrike    : null,   // put wall  (support)
+    maxCEoiVal       : null,   // OI at call wall
+    maxPEoiVal       : null,   // OI at put wall
+
+    // Strike with biggest new OI addition this cycle
+    maxCEoiAddStrike : null,
+    maxPEoiAddStrike : null,
+    maxCEoiAdd       : null,
+    maxPEoiAdd       : null,
+
+    // Top-5 most active buildup strikes (for UI tables)
+    topCEbuildup     : [],   // [{ strike, ceOI, ceOIChange }, ...]
+    topPEbuildup     : [],   // [{ strike, peOI, peOIChange }, ...]
+
+    // Interpreted signal
+    signal           : 'NEUTRAL',
+    strength         : 0,
+    label            : 'OI Buildup — awaiting data',
+
+    fetchedAt        : null,
+    prevFetchedAt    : null,
+    fetchCount       : 0,
+    lastError        : null,
+};
+
+// Previous-cycle snapshots for delta calculation
+let _prevStrikeOI = {};   // { [strike]: { ceOI, peOI } }
+let _prevPCR      = null;
+
+/**
+ * calcOIBuildup(records, currentPCR)
+ * Called inside _fetchPCR after a successful option-chain parse.
+ * Mutates _prevStrikeOI and _prevPCR so the NEXT cycle has a baseline.
+ */
+function calcOIBuildup(records, currentPCR) {
+    if (!Array.isArray(records) || records.length === 0) return null;
+
+    // ── Build current strike map ──────────────────────────────────────────────
+    const currMap = {};
+    for (const row of records) {
+        const s = row.strikePrice;
+        if (!s) continue;
+        currMap[s] = {
+            ceOI: row.CE?.openInterest || 0,
+            peOI: row.PE?.openInterest || 0,
+        };
+    }
+
+    // ── Compute deltas ────────────────────────────────────────────────────────
+    const hasPrev = Object.keys(_prevStrikeOI).length > 0;
+
+    let totalCEoiChange = 0, totalPEoiChange = 0;
+    let maxCEoiStrike = null, maxPEoiStrike = null;
+    let maxCEoiVal = 0, maxPEoiVal = 0;
+    let maxCEoiAddStrike = null, maxPEoiAddStrike = null;
+    let maxCEoiAdd = -Infinity, maxPEoiAdd = -Infinity;
+
+    const strikeRows = [];
+
+    for (const [sStr, curr] of Object.entries(currMap)) {
+        const s      = Number(sStr);
+        const prev   = _prevStrikeOI[s] || { ceOI: curr.ceOI, peOI: curr.peOI };  // first fetch = 0 delta
+        const ceDiff = hasPrev ? curr.ceOI - prev.ceOI : 0;
+        const peDiff = hasPrev ? curr.peOI - prev.peOI : 0;
+
+        totalCEoiChange += ceDiff;
+        totalPEoiChange += peDiff;
+
+        if (curr.ceOI > maxCEoiVal) { maxCEoiVal = curr.ceOI; maxCEoiStrike = s; }
+        if (curr.peOI > maxPEoiVal) { maxPEoiVal = curr.peOI; maxPEoiStrike = s; }
+        if (ceDiff    > maxCEoiAdd) { maxCEoiAdd = ceDiff;    maxCEoiAddStrike = s; }
+        if (peDiff    > maxPEoiAdd) { maxPEoiAdd = peDiff;    maxPEoiAddStrike = s; }
+
+        strikeRows.push({ strike: s, ceOI: curr.ceOI, peOI: curr.peOI, ceOIChange: ceDiff, peOIChange: peDiff });
+    }
+
+    // Top-5 CE buildup (largest CE OI addition this cycle)
+    const topCEbuildup = [...strikeRows]
+        .sort((a, b) => b.ceOIChange - a.ceOIChange)
+        .slice(0, 5)
+        .map(({ strike, ceOI, ceOIChange }) => ({ strike, ceOI, ceOIChange }));
+
+    // Top-5 PE buildup (largest PE OI addition this cycle)
+    const topPEbuildup = [...strikeRows]
+        .sort((a, b) => b.peOIChange - a.peOIChange)
+        .slice(0, 5)
+        .map(({ strike, peOI, peOIChange }) => ({ strike, peOI, peOIChange }));
+
+    const pcrChange = (hasPrev && _prevPCR !== null && currentPCR !== null)
+        ? parseFloat((currentPCR - _prevPCR).toFixed(3))
+        : null;
+
+    // ── Persist for next cycle ────────────────────────────────────────────────
+    // Deep-copy so mutations don't bleed through
+    _prevStrikeOI = Object.fromEntries(
+        Object.entries(currMap).map(([k, v]) => [k, { ...v }])
+    );
+    _prevPCR = currentPCR;
+
+    return {
+        totalCEoiChange  : Math.round(totalCEoiChange),
+        totalPEoiChange  : Math.round(totalPEoiChange),
+        pcrChange,
+        maxCEoiStrike,
+        maxPEoiStrike,
+        maxCEoiVal       : Math.round(maxCEoiVal),
+        maxPEoiVal       : Math.round(maxPEoiVal),
+        maxCEoiAddStrike,
+        maxPEoiAddStrike,
+        maxCEoiAdd       : Math.round(maxCEoiAdd === -Infinity ? 0 : maxCEoiAdd),
+        maxPEoiAdd       : Math.round(maxPEoiAdd === -Infinity ? 0 : maxPEoiAdd),
+        topCEbuildup,
+        topPEbuildup,
+    };
+}
+
+/**
+ * interpretOIBuildup({ totalCEoiChange, totalPEoiChange, pcrChange })
+ *
+ * Smart-money read:
+ *   Put writers active (PE OI ↑)  → bullish (they sell puts = they expect market to hold/rise)
+ *   Call writers active (CE OI ↑) → bearish (they sell calls = they expect market to cap/fall)
+ *   PCR rising confirms bull; PCR falling confirms bear.
+ *
+ * Returns { signal: 'BULL'|'BEAR'|'NEUTRAL', strength: 0-2, label }
+ */
+function interpretOIBuildup({ totalCEoiChange, totalPEoiChange, pcrChange } = {}) {
+    if (totalCEoiChange === null || totalPEoiChange === null)
+        return { signal: 'NEUTRAL', strength: 0, label: 'OI Buildup — awaiting data' };
+
+    const OI_THRESH  = 50_000;   // contracts — below this treat as noise
+    const PCR_DELTA  = 0.02;     // minimum PCR move to be meaningful
+
+    const peRising   = totalPEoiChange >  OI_THRESH;
+    const peFalling  = totalPEoiChange < -OI_THRESH;
+    const ceRising   = totalCEoiChange >  OI_THRESH;
+    const ceFalling  = totalCEoiChange < -OI_THRESH;
+    const pcrUp      = pcrChange !== null && pcrChange >  PCR_DELTA;
+    const pcrDown    = pcrChange !== null && pcrChange < -PCR_DELTA;
+
+    const fmt = v => {
+        if (v === null) return 'N/A';
+        const k = Math.round(v / 1000);
+        return `${k >= 0 ? '+' : ''}${k}K`;
+    };
+    const pcrStr = pcrChange !== null
+        ? ` | PCR Δ${pcrChange >= 0 ? '+' : ''}${pcrChange}`
+        : '';
+    const base = `PE OI Δ${fmt(totalPEoiChange)} | CE OI Δ${fmt(totalCEoiChange)}${pcrStr}`;
+
+    // ── Strong BULL ───────────────────────────────────────────────────────────
+    // Put writers adding big + PCR rising = maximum conviction support
+    if (peRising && !ceRising && pcrUp)
+        return { signal: 'BULL', strength: 2, label: `${base} — Put writing + PCR ↑ 🐂` };
+
+    // CE unwinding (call writers exiting = resistance melting) + PCR rising
+    if (ceFalling && !peFalling && pcrUp)
+        return { signal: 'BULL', strength: 2, label: `${base} — Call unwinding + PCR ↑ 🐂` };
+
+    // ── Mild BULL ─────────────────────────────────────────────────────────────
+    if (peRising && !ceRising)
+        return { signal: 'BULL', strength: 1, label: `${base} — Put writing active ✅` };
+
+    if (ceFalling && !peFalling)
+        return { signal: 'BULL', strength: 1, label: `${base} — Call unwinding ✅` };
+
+    if (peRising && ceRising && pcrUp)
+        return { signal: 'BULL', strength: 1, label: `${base} — Both writing, PCR ↑ (slight bull)` };
+
+    // ── Strong BEAR ───────────────────────────────────────────────────────────
+    if (ceRising && !peRising && pcrDown)
+        return { signal: 'BEAR', strength: 2, label: `${base} — Call writing + PCR ↓ 🐻` };
+
+    if (peFalling && !ceFalling && pcrDown)
+        return { signal: 'BEAR', strength: 2, label: `${base} — Put unwinding + PCR ↓ 🐻` };
+
+    // ── Mild BEAR ─────────────────────────────────────────────────────────────
+    if (ceRising && !peRising)
+        return { signal: 'BEAR', strength: 1, label: `${base} — Call writing active ⚠️` };
+
+    if (peFalling && !ceFalling)
+        return { signal: 'BEAR', strength: 1, label: `${base} — Put unwinding ⚠️` };
+
+    if (ceRising && peRising && pcrDown)
+        return { signal: 'BEAR', strength: 1, label: `${base} — Both writing, PCR ↓ (slight bear)` };
+
+    // ── NEUTRAL ───────────────────────────────────────────────────────────────
+    return { signal: 'NEUTRAL', strength: 0, label: `${base} — Low OI activity / mixed` };
+}
+
+
 
 const _pcr = {
     pcr         : null,
@@ -225,6 +442,34 @@ async function _fetchPCR(spotPrice) {
             fetchCount: _pcr.fetchCount + 1,
         });
         console.log(`📊 [PCR] ${parsed.pcr} | ATM PCR: ${parsed.atmPcr} | ATM: ${parsed.atm} | MaxPain: ${parsed.maxPain?.strike ?? 'N/A'} [#${_pcr.fetchCount}]`);
+
+        // ── OI Buildup — computed on every PCR cycle ──────────────────────────
+        try {
+            const records  = res.data?.records?.data;
+            const oiResult = calcOIBuildup(records, parsed.pcr);
+            if (oiResult) {
+                const oiSignal = interpretOIBuildup(oiResult);
+                Object.assign(_oiBuildup, oiResult, {
+                    signal       : oiSignal.signal,
+                    strength     : oiSignal.strength,
+                    label        : oiSignal.label,
+                    prevFetchedAt: _oiBuildup.fetchedAt,
+                    fetchedAt    : new Date(),
+                    fetchCount   : _oiBuildup.fetchCount + 1,
+                    lastError    : null,
+                });
+                const fmtK = v => `${v >= 0 ? '+' : ''}${Math.round(v / 1000)}K`;
+                console.log(
+                    `📈 [OI BUILDUP] PE Δ${fmtK(oiResult.totalPEoiChange)} | CE Δ${fmtK(oiResult.totalCEoiChange)}` +
+                    ` | PCR Δ${oiResult.pcrChange ?? 'N/A'}` +
+                    ` | PutWall: ${oiResult.maxPEoiStrike} | CallWall: ${oiResult.maxCEoiStrike}` +
+                    ` → ${oiSignal.signal} [#${_oiBuildup.fetchCount}]`
+                );
+            }
+        } catch (oiErr) {
+            _oiBuildup.lastError = oiErr.message;
+            console.error('[OI Buildup] Calc error:', oiErr.message);
+        }
     } catch (e) {
         _pcr.lastError = e.message;
         console.error('[PCR] Fetch error:', e.message);
@@ -422,8 +667,9 @@ function interpretFII(fiiNet, diiNet) {
 // Public API
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function getPCRState()  { return { ..._pcr }; }
-function getFIIState()  { return { ..._fii }; }
+function getPCRState()       { return { ..._pcr }; }
+function getFIIState()       { return { ..._fii }; }
+function getOIBuildupState() { return { ..._oiBuildup }; }
 
 // Convenience getters for combineSignals()
 function getCurrentPCR()    { return _pcr.pcr; }
@@ -438,6 +684,7 @@ module.exports = {
     // Snapshots (for /debug routes)
     getPCRState,
     getFIIState,
+    getOIBuildupState,
 
     // Scalar getters (for combineSignals)
     getCurrentPCR,
@@ -448,6 +695,7 @@ module.exports = {
     // Interpreters (for combineSignals)
     interpretPCR,
     interpretFII,
+    interpretOIBuildup,
 
     // Utilities
     isExpiryDay,
