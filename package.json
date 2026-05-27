@@ -12,6 +12,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "otpauth": "^9.3.6",
+    "pg": "^8.12.0",
     "smartapi-javascript": "^1.0.23",
     "socket.io": "^4.7.5",
     "technicalindicators": "^3.1.0",
