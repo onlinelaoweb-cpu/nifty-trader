@@ -66,6 +66,57 @@ function todaySessionCandles(candles) {
     return session.length >= 2 ? session : candles.slice(-80);
 }
 
+// ── ADX Calculator (Wilder's smoothing, period=14) ────
+// Shared with server.js logic — kept in sync manually.
+// Uses today's session candles only to avoid overnight gap distortion.
+// Returns { adx, diPlus, diMinus } or null when insufficient data.
+function calculateADX(candles, period = 14) {
+    // FIX 3: Require 60+ candles before ADX fires.
+    // Early session (< 60 bars) ADX is noisy and tends to read high
+    // due to Wilder's warm-up phase, producing false "trend confirmed" signals
+    // before 10:00 AM. With fewer than 60 bars we simply skip the gate.
+    if (!candles || candles.length < Math.max(period * 2 + 2, 60)) return null;
+    try {
+        const valid = candles.filter(c =>
+            c.high != null && c.low != null && c.close != null && c.high > c.low
+        );
+        if (valid.length < Math.max(period * 2 + 2, 60)) return null;
+
+        const tr = [], dmp = [], dmm = [];
+        for (let i = 1; i < valid.length; i++) {
+            const h = valid[i].high,   l = valid[i].low,   pc = valid[i - 1].close;
+            const ph = valid[i - 1].high, pl = valid[i - 1].low;
+            tr .push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+            const up = h - ph, dn = pl - l;
+            dmp.push(up > dn && up > 0 ? up : 0);
+            dmm.push(dn > up && dn > 0 ? dn : 0);
+        }
+        function wilderSmooth(arr) {
+            let s = arr.slice(0, period).reduce((a, b) => a + b, 0);
+            const out = [s];
+            for (let i = period; i < arr.length; i++) { s = s - s / period + arr[i]; out.push(s); }
+            return out;
+        }
+        const atr  = wilderSmooth(tr);
+        const sdmp = wilderSmooth(dmp);
+        const sdmm = wilderSmooth(dmm);
+        const dip  = sdmp.map((v, i) => atr[i] > 0 ? (v / atr[i]) * 100 : 0);
+        const dim  = sdmm.map((v, i) => atr[i] > 0 ? (v / atr[i]) * 100 : 0);
+        const dx   = dip.map((v, i) => { const s = v + dim[i]; return s > 0 ? (Math.abs(v - dim[i]) / s) * 100 : 0; });
+        const adxArr = wilderSmooth(dx);
+        const n = adxArr.length - 1;
+        const adxVal = parseFloat(adxArr[n].toFixed(2));
+        if (adxVal > 100 || adxVal < 0) {
+            console.warn(`⚠️ MTF ADX out of range (${adxVal}) — skipping`);
+            return null;
+        }
+        return {
+            adx    : adxVal,
+            diPlus : parseFloat(Math.min(100, dip[dip.length - 1]).toFixed(2)),
+            diMinus: parseFloat(Math.min(100, dim[dim.length - 1]).toFixed(2))
+        };
+    } catch (_) { return null; }
+}
 
 function calcIndicators(candles) {
     if (!candles || candles.length < 5) {
@@ -74,6 +125,7 @@ function calcIndicators(candles) {
             ema9 : null,
             ema21: null,
             vwap : null,
+            adx  : null,   // ← NEW
             close: null,
             signal: 'NEUTRAL',
             score : 0
@@ -121,7 +173,16 @@ function calcIndicators(candles) {
         } catch(e) {}
     }
 
-    // Score
+    // ── FIX 1: Per-TF ADX check ───────────────────────
+    // Only compute ADX from today's session candles for this TF.
+    // Multi-day candles cause Wilder's warm-up distortion (ADX > 100).
+    // If ADX < 20, this timeframe is sideways/choppy and should NOT
+    // count toward MTF alignment — even if RSI/EMA/VWAP look bullish.
+    const adxData  = calculateADX(sessionCandles);
+    const adxVal   = adxData?.adx ?? null;
+    const adxValid = adxVal === null || adxVal >= 20;   // null = not enough data → don't penalise
+
+    // Score (only contributes when ADX confirms trend)
     let bull = 0, bear = 0;
 
     if (rsi !== null) {
@@ -143,10 +204,20 @@ function calcIndicators(candles) {
 
     const total  = bull + bear;
     const pct    = total > 0 ? (bull / total) * 100 : 50;
-    const signal = pct >= 60 ? 'BULLISH' : pct <= 40 ? 'BEARISH' : 'NEUTRAL';
-    const score  = parseFloat((pct).toFixed(0));
 
-    return { rsi, ema9, ema21, vwap, close, signal, score };
+    // FIX 1 (continued): A TF signal is only BULLISH/BEARISH when ADX confirms trend.
+    // If ADX < 20 for this TF, force NEUTRAL regardless of indicator score — a
+    // sideways TF should never count as "aligned" in the composite MTF badge.
+    let signal;
+    if (!adxValid) {
+        signal = 'NEUTRAL';   // choppy TF — excluded from alignment count
+    } else {
+        signal = pct >= 60 ? 'BULLISH' : pct <= 40 ? 'BEARISH' : 'NEUTRAL';
+    }
+
+    const score = parseFloat((pct).toFixed(0));
+
+    return { rsi, ema9, ema21, vwap, adx: adxVal, close, signal, score };
 }
 
 // ── Analyze all timeframes ────────────────────────────
@@ -163,10 +234,20 @@ async function analyzeMultiTimeframe() {
     const tf15m = calcIndicators(c15m);
     const tf1h  = calcIndicators(c1h);
 
-    // Alignment check
-    const signals = [tf5m.signal, tf15m.signal, tf1h.signal];
+    // FIX 1 (final): Alignment only counts TFs whose ADX >= 20 (or ADX unavailable).
+    // A TF forced to NEUTRAL by ADX < 20 does not contribute a bull or bear vote.
+    // This prevents 3/3 "aligned" calls on choppy mornings where all TFs are ranging.
+    const signals   = [tf5m.signal, tf15m.signal, tf1h.signal];
     const bullCount = signals.filter(s => s === 'BULLISH').length;
     const bearCount = signals.filter(s => s === 'BEARISH').length;
+
+    // Log which TFs were suppressed by ADX
+    [tf5m, tf15m, tf1h].forEach((tf, i) => {
+        const label = ['5m','15m','1h'][i];
+        if (tf.adx !== null && tf.adx < 20) {
+            console.log(`⚠️ MTF: ${label} ADX ${tf.adx} < 20 → forced NEUTRAL (excluded from alignment)`);
+        }
+    });
 
     let mtfSignal    = 'WAIT';
     let mtfStrength  = 'WEAK';
@@ -175,19 +256,19 @@ async function analyzeMultiTimeframe() {
     if (bullCount === 3) {
         mtfSignal     = 'BUY CALL';
         mtfStrength   = 'STRONG';
-        mtfConfidence = 90;
+        mtfConfidence = 85;    // FIX 2: hard cap — never exceed 85%
     } else if (bullCount === 2) {
         mtfSignal     = 'BUY CALL';
         mtfStrength   = 'MODERATE';
-        mtfConfidence = 65;
+        mtfConfidence = 60;
     } else if (bearCount === 3) {
         mtfSignal     = 'BUY PUT';
         mtfStrength   = 'STRONG';
-        mtfConfidence = 90;
+        mtfConfidence = 85;    // FIX 2: hard cap — never exceed 85%
     } else if (bearCount === 2) {
         mtfSignal     = 'BUY PUT';
         mtfStrength   = 'MODERATE';
-        mtfConfidence = 65;
+        mtfConfidence = 60;
     } else {
         mtfSignal     = 'WAIT';
         mtfStrength   = 'WEAK';
@@ -195,9 +276,9 @@ async function analyzeMultiTimeframe() {
     }
 
     console.log(
-        `MTF → 5m:${tf5m.signal}`,
-        `15m:${tf15m.signal}`,
-        `1h:${tf1h.signal}`,
+        `MTF → 5m:${tf5m.signal}(ADX:${tf5m.adx??'--'})`,
+        `15m:${tf15m.signal}(ADX:${tf15m.adx??'--'})`,
+        `1h:${tf1h.signal}(ADX:${tf1h.adx??'--'})`,
         `→ ${mtfSignal} (${mtfStrength})`
     );
 
