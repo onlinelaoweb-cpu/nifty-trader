@@ -426,6 +426,34 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .ps-note{font-size:11px;color:#9ab8d0;margin-top:4px;}
 
 .tool-note{font-size:10px;color:#9ab8d0;text-align:center;margin-top:6px;}
+
+/* ═══ MOMENTUM RADAR ═══ */
+.em-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:6px;transition:border-color 0.5s,background 0.5s;}
+.em-title-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;}
+.em-title{font-family:'Orbitron',monospace;font-size:10px;letter-spacing:2px;color:var(--purple);}
+.em-badge{padding:2px 10px;border-radius:10px;font-family:'Orbitron',monospace;font-size:10px;font-weight:700;letter-spacing:1px;border:1px solid;transition:all 0.4s;}
+.em-score-wrap{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+.em-score-track{flex:1;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden;position:relative;border:1px solid var(--border);}
+.em-score-center{position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.15);}
+.em-score-fill{position:absolute;top:0;height:100%;border-radius:4px;transition:all 0.7s cubic-bezier(.34,1.1,.64,1);}
+.em-score-label{font-size:9px;color:var(--dim);font-family:'Share Tech Mono',monospace;min-width:22px;text-align:center;}
+.em-score-num{font-family:'Orbitron',monospace;font-size:18px;font-weight:900;min-width:32px;text-align:right;transition:color 0.4s;}
+.em-desc{font-size:10px;margin-bottom:6px;line-height:1.5;transition:color 0.4s;}
+.em-votes{display:flex;flex-direction:column;gap:2px;}
+.em-vote-row{display:flex;align-items:center;gap:6px;padding:2px 0;border-bottom:1px solid rgba(26,58,90,0.45);font-size:10px;}
+.em-vote-row:last-child{border-bottom:none;}
+.em-vote-icon{font-family:'Share Tech Mono',monospace;font-size:11px;min-width:10px;font-weight:700;}
+.em-vote-name{color:var(--dim);min-width:90px;font-size:9px;letter-spacing:0.5px;}
+.em-vote-reason{color:#c8e0f4;flex:1;}
+.oi-walls{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+.oi-wall-card{border-radius:8px;padding:7px;text-align:center;}
+.oi-wall-label{font-size:8px;letter-spacing:2px;margin-bottom:2px;font-weight:700;}
+.oi-wall-val{font-family:'Share Tech Mono',monospace;font-size:16px;font-weight:700;line-height:1.2;}
+.oi-wall-delta{font-size:9px;color:var(--dim);margin-top:2px;font-family:'Share Tech Mono',monospace;}
+@keyframes emPulse{0%,100%{box-shadow:0 0 8px currentColor}50%{box-shadow:0 0 22px currentColor}}
+.em-card.em-bull{border-color:rgba(0,255,136,0.5);background:rgba(0,255,136,0.025);}
+.em-card.em-bear{border-color:rgba(255,34,68,0.5);background:rgba(255,34,68,0.025);}
+.em-card.em-strong{animation:emPulse 2s ease-in-out infinite;}
 </style>
 </head>
 <body>
@@ -568,8 +596,56 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="pv-card" style="color:var(--amber)" id="vix-card"><div class="pv-label">VIX</div><div class="pv-val" id="vix-val">--</div><div class="pv-sig" id="vix-sig">AUTO ✅</div></div>
   </div>
 
+  <!-- ═══ MOMENTUM RADAR ═══ -->
+  <div class="sec-label">MOMENTUM RADAR — EARLY CE/PE SIGNAL</div>
+  <div style="padding:0 12px;margin-bottom:7px;">
+
+    <!-- Early Momentum card -->
+    <div class="em-card" id="em-card">
+      <div class="em-title-row">
+        <div class="em-title">⚡ EARLY MOMENTUM</div>
+        <div class="em-badge" id="em-badge" style="color:var(--amber);border-color:var(--amber);background:rgba(255,187,0,0.1);">— NEUTRAL</div>
+      </div>
+      <!-- Score bar −5 to +5 with center axis -->
+      <div class="em-score-wrap">
+        <div class="em-score-label">−5</div>
+        <div class="em-score-track">
+          <div class="em-score-center"></div>
+          <div class="em-score-fill" id="em-score-fill" style="left:50%;width:0%;background:var(--amber);"></div>
+        </div>
+        <div class="em-score-label">+5</div>
+        <div class="em-score-num" id="em-score-num" style="color:var(--amber);">0</div>
+      </div>
+      <!-- Signal description label -->
+      <div class="em-desc" id="em-desc" style="color:#9ab8d0;">Waiting for first NSE option-chain cycle (~3 min after open)...</div>
+      <!-- 7-vote breakdown -->
+      <div class="em-votes" id="em-votes">
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">CHAIN OI Δ</span><span class="em-vote-reason" style="color:#4a6a8a;">Intraday CE vs PE change</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">ATM CLUSTER OI</span><span class="em-vote-reason" style="color:#4a6a8a;">±100pt around ATM (5 strikes)</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">CE VELOCITY</span><span class="em-vote-reason" style="color:#4a6a8a;">ATM CE premium %/cycle (leads OI)</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">PE VELOCITY</span><span class="em-vote-reason" style="color:#4a6a8a;">ATM PE premium %/cycle (leads OI)</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">CE BUY PRESSURE</span><span class="em-vote-reason" style="color:#4a6a8a;">Order-book buy% at ATM CE</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">PE BUY PRESSURE</span><span class="em-vote-reason" style="color:#4a6a8a;">Order-book buy% at ATM PE</span></div>
+        <div class="em-vote-row" style="border-bottom:none;"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">IV SKEW</span><span class="em-vote-reason" style="color:#4a6a8a;">PE IV vs CE IV demand skew</span></div>
+      </div>
+    </div>
+
+    <!-- OI Walls — Call Wall resistance / Put Wall support -->
+    <div class="oi-walls">
+      <div class="oi-wall-card" style="background:var(--bg2);border:1px solid rgba(255,34,68,0.3);">
+        <div class="oi-wall-label" style="color:var(--red);">CALL WALL ⛔</div>
+        <div class="oi-wall-val" id="oi-call-wall" style="color:var(--red);">--</div>
+        <div class="oi-wall-delta" id="oi-ce-delta">CE OI Δ --</div>
+      </div>
+      <div class="oi-wall-card" style="background:var(--bg2);border:1px solid rgba(0,255,136,0.3);">
+        <div class="oi-wall-label" style="color:var(--green);">PUT WALL 🛡️</div>
+        <div class="oi-wall-val" id="oi-put-wall" style="color:var(--green);">--</div>
+        <div class="oi-wall-delta" id="oi-pe-delta">PE OI Δ --</div>
+      </div>
+    </div>
+  </div>
+
   <div class="sec-label">1-MIN INDICATORS</div>
-  <div class="ind-grid">
     <div class="ind-card" id="rsi-card">
       <div class="ind-label"><span>RSI (14)</span><span id="rsi-zone" style="font-size:8px;">--</span></div>
       <div class="rsi-dial-wrap">
@@ -1482,6 +1558,124 @@ async function loadEvents(){
 
 async function deleteEvent(id){await fetch('/api/event/'+id,{method:'DELETE'});loadEvents();}
 
+// ── MOMENTUM RADAR ────────────────────────────────────────────────────────────
+// Renders the Early Momentum (7-vote score) + OI Walls cards.
+// Called from fetchSignal every 2s using data already in /api/signal response.
+function updateMomentumRadar(em, oi) {
+  // ── OI Walls (independent of em) ─────────────────────────────────────────
+  if (oi) {
+    const fmtK = v => v == null ? '--' : (v >= 0 ? '+' : '') + Math.round(v / 1000) + 'K';
+    if (oi.maxCEoiStrike) {
+      document.getElementById('oi-call-wall').textContent = oi.maxCEoiStrike.toLocaleString('en-IN');
+    }
+    if (oi.maxPEoiStrike) {
+      document.getElementById('oi-put-wall').textContent = oi.maxPEoiStrike.toLocaleString('en-IN');
+    }
+    const ceD = oi.totalCEoiChange, peD = oi.totalPEoiChange;
+    const ceDelta = document.getElementById('oi-ce-delta');
+    const peDelta = document.getElementById('oi-pe-delta');
+    if (ceD != null) {
+      ceDelta.textContent = 'CE OI Δ ' + fmtK(ceD);
+      // CE OI rising = call writers active = BEARISH (red); falling = bullish (green)
+      ceDelta.style.color = ceD > 0 ? 'var(--red)' : ceD < 0 ? 'var(--green)' : 'var(--dim)';
+    }
+    if (peD != null) {
+      peDelta.textContent = 'PE OI Δ ' + fmtK(peD);
+      // PE OI rising = put writers active = BULLISH (green); falling = bearish (red)
+      peDelta.style.color = peD > 0 ? 'var(--green)' : peD < 0 ? 'var(--red)' : 'var(--dim)';
+    }
+  }
+
+  // ── Early Momentum ────────────────────────────────────────────────────────
+  if (!em || em.score == null) return;
+
+  const card  = document.getElementById('em-card');
+  const badge = document.getElementById('em-badge');
+  const fill  = document.getElementById('em-score-fill');
+  const num   = document.getElementById('em-score-num');
+  const desc  = document.getElementById('em-desc');
+  const votes = document.getElementById('em-votes');
+
+  const score  = em.score;
+  const sig    = em.signal || 'NEUTRAL';
+  const str    = em.strength || 0;
+  const isBull = sig === 'BULL';
+  const isBear = sig === 'BEAR';
+
+  // Colour tokens
+  const color = isBull ? 'var(--green)' : isBear ? 'var(--red)' : 'var(--amber)';
+  const rgba  = isBull ? '0,255,136'    : isBear ? '255,34,68'  : '255,187,0';
+
+  // Card glow class
+  card.className = 'em-card' +
+    (isBull && str >= 2 ? ' em-bull em-strong' :
+     isBear && str >= 2 ? ' em-bear em-strong' :
+     isBull ? ' em-bull' :
+     isBear ? ' em-bear' : '');
+
+  // Badge text
+  const badgeText =
+    score >= 3  ? '⚡ BULL STR2' :
+    score >= 1  ? '↗ BULL STR1' :
+    score <= -3 ? '⚡ BEAR STR2' :
+    score <= -1 ? '↘ BEAR STR1' : '— NEUTRAL';
+  badge.textContent = badgeText;
+  badge.style.color       = color;
+  badge.style.borderColor = color;
+  badge.style.background  = `rgba(${rgba},0.12)`;
+
+  // Score number
+  num.textContent  = (score >= 0 ? '+' : '') + score;
+  num.style.color  = color;
+
+  // Score bar: fills from center (50%) outward; width = |score|/5 × 50%
+  const pct = Math.abs(score) / 5 * 50;
+  if (score > 0) {
+    fill.style.left       = '50%';
+    fill.style.right      = '';
+    fill.style.width      = pct + '%';
+    fill.style.background = `linear-gradient(90deg,rgba(0,255,136,0.5),var(--green))`;
+    fill.style.boxShadow  = '0 0 6px rgba(0,255,136,0.5)';
+  } else if (score < 0) {
+    fill.style.right      = '50%';
+    fill.style.left       = '';
+    fill.style.width      = pct + '%';
+    fill.style.background = `linear-gradient(270deg,rgba(255,34,68,0.5),var(--red))`;
+    fill.style.boxShadow  = '0 0 6px rgba(255,34,68,0.5)';
+  } else {
+    fill.style.left       = '50%';
+    fill.style.right      = '';
+    fill.style.width      = '2px';
+    fill.style.background = 'var(--dim)';
+    fill.style.boxShadow  = 'none';
+  }
+
+  // Description label
+  desc.textContent   = em.label || 'No directional edge';
+  desc.style.color   = isBull ? 'rgba(0,255,136,0.85)' : isBear ? 'rgba(255,34,68,0.85)' : '#9ab8d0';
+
+  // Vote rows — rebuild from live data
+  const vArr = em.votes || [];
+  if (vArr.length > 0) {
+    votes.innerHTML = vArr.map(v => {
+      const vc   = v.vote > 0 ? 'var(--green)' : v.vote < 0 ? 'var(--red)' : 'var(--dim)';
+      const icon = v.vote > 0 ? '▲' : v.vote < 0 ? '▼' : '●';
+      return `<div class="em-vote-row">` +
+        `<span class="em-vote-icon" style="color:${vc};">${icon}</span>` +
+        `<span class="em-vote-name">${v.name}</span>` +
+        `<span class="em-vote-reason">${v.reason}</span>` +
+        `</div>`;
+    }).join('');
+  }
+  // If no votes fired (score 0, all below threshold) show a neutral placeholder
+  if (vArr.length === 0) {
+    votes.innerHTML = `<div class="em-vote-row" style="border-bottom:none;">` +
+      `<span class="em-vote-icon" style="color:var(--dim);">●</span>` +
+      `<span class="em-vote-name" style="flex:1;color:#4a6a8a;">All 7 signals below threshold — no directional edge yet</span>` +
+      `</div>`;
+  }
+}
+
 // MAIN FETCH — Railway-safe with cold-start retry
 let _fetchFailCount=0;
 let _fetchInterval=null;
@@ -1600,6 +1794,8 @@ async function fetchSignal(){
     if(d.dii?.net!=null){const de=document.getElementById('dii-net');de.textContent=(d.dii.net>=0?'▲ +':'▼ ')+Math.abs(d.dii.net).toFixed(0)+'Cr';de.style.color=d.dii.net>=0?'var(--green)':'var(--red)';}
     if(d.global){updateGlobalUI(d.global);updateSectorHeatmap(d.global.sectors);}
     if(d.srLevels)updateSRLevels(d.srLevels);
+    // ── Momentum Radar — early CE/PE signal + OI walls ──────────────────────
+    updateMomentumRadar(d.earlyMom, d.oiBuildup);
   }catch(e){
     _fetchFailCount++;
     console.warn('fetchSignal failed ('+_fetchFailCount+'):', e.message||e);
