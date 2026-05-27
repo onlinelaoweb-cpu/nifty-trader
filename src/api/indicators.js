@@ -232,7 +232,7 @@ function processIndicators(price, bnLeadSignal) {
     return { rsi, ema9, ema21, vwap, signal, confidence, reasons, priceCount: priceHistory.length, initialized };
 }
 
-// ✅ Export candle history for chart
+// ✅ Export candle history for chart (multi-day — used by /api/candles)
 function getCandleHistory() {
     const all = currentCandle
         ? [...candleHistory, currentCandle]
@@ -240,4 +240,13 @@ function getCandleHistory() {
     return all.slice(-60); // last 60 candles
 }
 
-module.exports = { processIndicators, initializeHistory, getCandleHistory };
+// ✅ Export today-only session candles (no overnight gaps — used by server.js ADX)
+// sessionCandles resets at 9:15 IST so it never contains multi-day price gaps.
+// Overnight gaps cause Wilder's smoothing to produce ADX values > 100 (invalid).
+function getSessionCandles() {
+    return currentCandle
+        ? [...sessionCandles, currentCandle]
+        : [...sessionCandles];
+}
+
+module.exports = { processIndicators, initializeHistory, getCandleHistory, getSessionCandles };
