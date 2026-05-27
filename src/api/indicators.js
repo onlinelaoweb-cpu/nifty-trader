@@ -109,6 +109,38 @@ function calcVWAP() {
     } catch(e) { return null; }
 }
 
+// ── Volume spike detection ────────────────────────────
+// Compares the current candle's tick-volume against the rolling average of
+// the last 10 CLOSED candles. A "spike" = current volume ≥ 1.5× the average.
+//
+// Why tick volume works here:
+//   On the Angel One WebSocket feed, each tick ≈ one trade observation. More
+//   ticks per minute = more activity = a real proxy for volume. On the Yahoo
+//   Finance fallback the poller runs every 3 min, so all candles get volume ≈ 1
+//   and spikes can't be detected — the function returns false in that case.
+//
+// A volume spike in the direction of the signal adds conviction:
+//   bull breakout with rising volume → genuine buying pressure
+//   bear breakdown with rising volume → genuine selling pressure
+//   breakout on LOW volume → suspect (could be thin-book manipulation)
+//
+// The spike flag is passed through processIndicators() and used in server.js
+// to add +1 point when spike direction matches the emerging signal.
+function calcVolumeSpike() {
+    if (!currentCandle) return false;
+
+    const recent = candleHistory.slice(-10);
+    if (recent.length < 5) return false;   // not enough history yet
+
+    const avgVol = recent.reduce((s, c) => s + c.volume, 0) / recent.length;
+
+    // Guard: if average volume ≤ 2 ticks, we're on Yahoo fallback (1 tick/poll).
+    // Spikes are meaningless on polling data — return false to avoid false signals.
+    if (avgVol <= 2) return false;
+
+    return currentCandle.volume >= avgVol * 1.5;
+}
+
 // ── Momentum confirmation gate ────────────────────────
 // Returns the last *closed* candle (not the in-progress one).
 // The in-progress candle body can flip many times mid-minute,
@@ -224,12 +256,13 @@ function getIndicatorSignal(price, rsi, ema9, ema21, vwap, bnLeadSignal) {
 // so existing callers without globalData stay fully backward-compatible.
 function processIndicators(price, bnLeadSignal) {
     addTick(price);
-    const rsi   = calcRSI();
-    const ema9  = calcEMA(9);
-    const ema21 = calcEMA(21);
-    const vwap  = calcVWAP();
+    const rsi         = calcRSI();
+    const ema9        = calcEMA(9);
+    const ema21       = calcEMA(21);
+    const vwap        = calcVWAP();
+    const volumeSpike = calcVolumeSpike();   // ← NEW: true when current candle volume ≥ 1.5× avg
     const { signal, confidence, reasons } = getIndicatorSignal(price, rsi, ema9, ema21, vwap, bnLeadSignal);
-    return { rsi, ema9, ema21, vwap, signal, confidence, reasons, priceCount: priceHistory.length, initialized };
+    return { rsi, ema9, ema21, vwap, volumeSpike, signal, confidence, reasons, priceCount: priceHistory.length, initialized };
 }
 
 // ✅ Export candle history for chart (multi-day — used by /api/candles)
