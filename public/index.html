@@ -454,6 +454,28 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .em-card.em-bull{border-color:rgba(0,255,136,0.5);background:rgba(0,255,136,0.025);}
 .em-card.em-bear{border-color:rgba(255,34,68,0.5);background:rgba(255,34,68,0.025);}
 .em-card.em-strong{animation:emPulse 2s ease-in-out infinite;}
+
+/* ═══ AI TRADE SUGGESTION CARD ═══ */
+.suggest-wrap{padding:0 12px;margin-bottom:7px;}
+.suggest-card{border-radius:10px;padding:12px 14px;border:2px solid;transition:all 0.5s;position:relative;overflow:hidden;}
+.suggest-card.bull{background:rgba(0,255,136,0.04);border-color:rgba(0,255,136,0.6);}
+.suggest-card.bear{background:rgba(255,34,68,0.04);border-color:rgba(255,34,68,0.6);}
+.suggest-card.wait{background:rgba(255,187,0,0.04);border-color:rgba(255,187,0,0.4);}
+.suggest-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;}
+.suggest-title{font-family:'Orbitron',monospace;font-size:10px;letter-spacing:2px;color:var(--purple);}
+.suggest-refresh{background:transparent;border:1px solid var(--border);color:var(--dim);border-radius:4px;padding:2px 7px;font-size:9px;cursor:pointer;font-family:'Rajdhani',sans-serif;}
+.suggest-action{font-family:'Orbitron',monospace;font-size:18px;font-weight:900;letter-spacing:2px;margin-bottom:8px;}
+.suggest-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:5px;margin-bottom:8px;}
+.suggest-box{background:var(--bg3);border-radius:6px;padding:5px 4px;text-align:center;}
+.suggest-box-label{font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;}
+.suggest-box-val{font-family:'Share Tech Mono',monospace;font-size:13px;font-weight:700;}
+.suggest-reasoning{font-size:11px;color:#9ab8d0;line-height:1.5;padding:7px 0 3px;border-top:1px solid var(--border);}
+.suggest-footer{display:flex;align-items:center;justify-content:space-between;margin-top:6px;font-size:9px;color:var(--dim);font-family:'Share Tech Mono',monospace;}
+.suggest-winrate{padding:2px 8px;border-radius:99px;font-size:9px;font-weight:700;}
+.suggest-nogate{text-align:center;font-size:11px;color:var(--dim);padding:10px 0;}
+@keyframes suggestPulse{0%,100%{box-shadow:0 0 10px currentColor}50%{box-shadow:0 0 25px currentColor}}
+.suggest-card.bull.active{animation:suggestPulse 2.5s ease-in-out infinite;color:var(--green);}
+.suggest-card.bear.active{animation:suggestPulse 2.5s ease-in-out infinite;color:var(--red);}
 </style>
 </head>
 <body>
@@ -515,6 +537,21 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <span class="conf-strength" id="conf-strength" style="display:none"></span>
       </div>
       <div class="conf-ticks"><span>0</span><span>25</span><span style="color:var(--amber)">50</span><span id="conf-tick70" style="color:#4a6a8a">70</span><span>100</span></div>
+    </div>
+  </div>
+
+
+  <!-- ═══ AI TRADE SUGGESTION CARD ═══ -->
+  <div class="sec-label">🤖 AI TRADE SUGGESTION</div>
+  <div class="suggest-wrap">
+    <div class="suggest-card wait" id="suggest-card">
+      <div class="suggest-header">
+        <div class="suggest-title">⚡ SUGGESTED TRADE</div>
+        <button class="suggest-refresh" onclick="fetchTradeSuggestion()">↺ REFRESH</button>
+      </div>
+      <div id="suggest-body">
+        <div class="suggest-nogate">Quality gate not passed yet — waiting for all conditions to align...</div>
+      </div>
     </div>
   </div>
 
@@ -1945,6 +1982,110 @@ function calcSL(){
   document.getElementById('sl-pnl').textContent='₹'+targetPnl.toLocaleString('en-IN');
   document.getElementById('sl-invested').textContent='₹'+invested.toLocaleString('en-IN');
 }
+
+// ── AI TRADE SUGGESTION ─────────────────────────────────────────────────────
+let _lastSuggestion = null;
+let _suggestionInterval = null;
+
+async function fetchTradeSuggestion() {
+  try {
+    const res = await fetch('/api/trade-suggestion');
+    const d   = await res.json();
+    _lastSuggestion = d;
+    renderTradeSuggestion(d);
+  } catch(e) {
+    console.warn('Suggestion fetch failed:', e.message);
+  }
+}
+
+function renderTradeSuggestion(d) {
+  const card = document.getElementById('suggest-card');
+  const body = document.getElementById('suggest-body');
+  if (!card || !body) return;
+
+  // If gate not passed or market closed
+  if (!d.qualityGatePassed || d.signal === 'WAIT' || !d.nifty) {
+    card.className = 'suggest-card wait';
+    const reason = !d.nifty ? 'Market closed or no data.' :
+                   d.entryWindow && !d.entryWindow.safe ? d.entryWindow.label :
+                   'Quality gate not passed — waiting for all conditions to align...';
+    body.innerHTML = `<div class="suggest-nogate">${reason}</div>`;
+    return;
+  }
+
+  const ai    = d.aiSuggestion;
+  const sd    = d.strikeData;
+  const isCE  = d.signal === 'BUY CALL';
+  const cls   = isCE ? 'bull' : 'bear';
+
+  card.className = `suggest-card ${cls} active`;
+
+  // Use AI data if available, else fall back to computed strikeData
+  const action  = ai ? ai.action   : (isCE ? 'BUY CE' : 'BUY PE');
+  const strike  = ai ? ai.strike   : (sd ? sd.strike   : '--');
+  const entry   = ai ? ai.entry    : (sd ? sd.entry    : '--');
+  const sl      = ai ? ai.sl       : (sd ? sd.sl       : '--');
+  const target  = ai ? ai.target   : (sd ? sd.target   : '--');
+  const reason  = ai ? ai.reasoning : 'Signal computed from live indicators.';
+  const aiConf  = ai ? ai.confidence : null;
+
+  const acColor = isCE ? 'var(--green)' : 'var(--red)';
+  const slColor = 'var(--red)';
+  const tColor  = 'var(--green)';
+
+  const winHtml = d.winRate !== null
+    ? `<span class="suggest-winrate" style="background:rgba(0,255,136,0.1);color:var(--green);border:1px solid rgba(0,255,136,0.3);">Past win rate: ${d.winRate}%</span>`
+    : `<span class="suggest-winrate" style="background:rgba(255,187,0,0.1);color:var(--amber);border:1px solid rgba(255,187,0,0.25);">Building history...</span>`;
+
+  const genTime = ai && ai.generatedAt
+    ? 'AI: ' + new Date(ai.generatedAt).toLocaleTimeString('en-IN',{hour12:true,hour:'2-digit',minute:'2-digit'})
+    : '';
+
+  body.innerHTML = `
+    <div class="suggest-action" style="color:${acColor}">${action} ● ${strike}</div>
+    <div class="suggest-grid">
+      <div class="suggest-box">
+        <div class="suggest-box-label">ENTRY ₹</div>
+        <div class="suggest-box-val" style="color:${acColor}">${entry}</div>
+      </div>
+      <div class="suggest-box">
+        <div class="suggest-box-label">SL ₹</div>
+        <div class="suggest-box-val" style="color:${slColor}">${sl}</div>
+      </div>
+      <div class="suggest-box">
+        <div class="suggest-box-label">TARGET ₹</div>
+        <div class="suggest-box-val" style="color:${tColor}">${target}</div>
+      </div>
+      <div class="suggest-box">
+        <div class="suggest-box-label">R:R</div>
+        <div class="suggest-box-val" style="color:var(--amber)">${entry && sl && target ? (((target-entry)/(entry-sl)).toFixed(1)+':1') : '1:2'}</div>
+      </div>
+    </div>
+    <div class="suggest-reasoning">${reason}</div>
+    <div class="suggest-footer">
+      ${winHtml}
+      <span>${genTime}</span>
+    </div>
+  `;
+
+  // Auto-fill the journal form with suggested values
+  if (strike && entry && sl) {
+    document.getElementById('t-type').value   = isCE ? 'CE' : 'PE';
+    document.getElementById('t-strike').value = strike;
+    document.getElementById('t-premium').value = entry;
+    document.getElementById('t-sl').value      = sl;
+  }
+}
+
+// Fetch suggestion every 30s (only when quality gate could pass)
+function startSuggestionPolling() {
+  if (_suggestionInterval) clearInterval(_suggestionInterval);
+  _suggestionInterval = setInterval(fetchTradeSuggestion, 30000);
+}
+// Initial fetch after 5s (let server warm up)
+setTimeout(fetchTradeSuggestion, 5000);
+startSuggestionPolling();
+
 </script>
 </body>
 </html>
