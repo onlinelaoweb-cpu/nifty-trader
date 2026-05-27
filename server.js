@@ -16,7 +16,13 @@ const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
 const { fetchGlobalCues }           = require('./src/api/globalCues');
 const { fetchAdvanceDecline }       = require('./src/api/breadth');
 const { calculateSRLevels }         = require('./src/api/levels');
-const { fetchNSEPcr, isExpiryDay }           = require('./src/api/nseData');
+const {
+    startNSEScheduler,
+    getPCRState, getFIIState, getOIBuildupState, getEarlyMomState,
+    getCurrentFIINet, getCurrentDIINet,
+    interpretEarlyMomentum, interpretOIBuildup,
+    isExpiryDay,
+} = require('./src/api/nseData');
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
@@ -65,6 +71,8 @@ let marketState = {
     optionFlow: { atmCEpremium:null, atmPEpremium:null, ceChange:0, peChange:0, dominance:'NEUTRAL', history:[] },
     reason: ['Waiting...'], lastUpdated:null, connected:false, source:'none', dataPoints:0,
     adx: null,
+    earlyMom: { score: null, signal: 'NEUTRAL', strength: 0, label: 'Early Momentum — awaiting data', votes: [] },
+    oiBuildup: { signal: 'NEUTRAL', strength: 0, label: 'OI Buildup — awaiting data', maxCEoiStrike: null, maxPEoiStrike: null, totalCEoiChange: null, totalPEoiChange: null },
     entryWindow: { status:'closed', label:'Market Closed', safe:false },
     qualityGate: { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, srClear:true, passed:false }
 };
@@ -304,6 +312,22 @@ function combineSignals(indicators) {
     if (marketState.dii.net !== null) {
         if      (marketState.dii.net > 0) { bull += 1; reasons.push(`DII Buy ₹${marketState.dii.net}Cr ✅`); }
         else if (marketState.dii.net < 0) { bear += 1; reasons.push(`DII Sell ₹${Math.abs(marketState.dii.net)}Cr ⚠️`); }
+    }
+
+    // ── Early Momentum — 7-vote leading signal (no warmup) ────────────────────
+    // score ranges −5 to +5. Mapped to vote weight: each 2 score points = 1 vote.
+    // Leads other signals by 30–60s (premium velocity) or 1 full cycle (OI delta).
+    // Weighted HIGHER than FII/DII because it's intraday real-time, not daily.
+    const em = marketState.earlyMom;
+    if (em && em.score !== null) {
+        const emVotes = Math.sign(em.score) * Math.min(Math.ceil(Math.abs(em.score) / 2), 3);
+        if (emVotes > 0) {
+            bull += emVotes;
+            reasons.push(`⚡ Early Momentum CE: ${em.label} (+${emVotes}pts)`);
+        } else if (emVotes < 0) {
+            bear += Math.abs(emVotes);
+            reasons.push(`⚡ Early Momentum PE: ${em.label} (+${Math.abs(emVotes)}pts)`);
+        }
     }
 
     // Raw directional intention from the vote tally
@@ -555,54 +579,53 @@ async function refreshPCR() {
         console.log('🧹 Stale manual PCR cleared for new session');
     }
     try {
-        const data = await fetchNSEPcr(marketState.nifty);
-        if (!data || !data.pcr) return;
+        // nseData.js scheduler fetches on its own interval — we just READ the state.
+        const pcrState = getPCRState();
+        if (!pcrState || !pcrState.pcr) return;
 
         // Update PCR
-        marketState.pcr        = data.pcr;
-        marketState.pcrSignal  = pcrLabel(data.pcr);
-        trackPCRHistory(data.pcr);
+        marketState.pcr        = pcrState.pcr;
+        marketState.pcrSignal  = pcrLabel(pcrState.pcr);
+        trackPCRHistory(pcrState.pcr);
 
         // Update ATM PCR
-        if (data.atmPcr) {
-            marketState.atmPcr       = data.atmPcr;
-            marketState.atmPcrSignal = pcrLabel(data.atmPcr);
+        if (pcrState.atmPcr) {
+            marketState.atmPcr       = pcrState.atmPcr;
+            marketState.atmPcrSignal = pcrLabel(pcrState.atmPcr);
         }
 
         // Feed live ATM premiums into option flow tracker
-        if (data.atmCEpremium || data.atmPEpremium) {
-            updateOptionFlow(data.atmCEpremium, data.atmPEpremium);
+        if (pcrState.atmCEpremium || pcrState.atmPEpremium) {
+            updateOptionFlow(pcrState.atmCEpremium, pcrState.atmPEpremium);
             // Check open trades for SL/target hits using fresh premiums
             await updateOpenTradesMTM();
         }
 
         marketState.pcrSource = 'auto';
-        console.log(`✅ PCR auto-updated: ${data.pcr} | ATM: ${data.atmPcr} (source: NSE)`);
+        console.log(`✅ PCR auto-updated: ${pcrState.pcr} | ATM: ${pcrState.atmPcr} (source: NSE)`);
 
         // ── Max pain ──────────────────────────────────────
-        if (data.maxPain?.strike) {
+        if (pcrState.maxPain?.strike) {
             marketState.maxPain = {
-                strike    : data.maxPain.strike,
-                totalPain : data.maxPain.totalPain,
-                expiryDay : data.expiryDay,
+                strike    : pcrState.maxPain.strike,
+                totalPain : pcrState.maxPain.totalPain,
+                expiryDay : pcrState.expiryDay,
                 updatedAt : new Date().toISOString()
             };
-            if (data.expiryDay) {
-                console.log(`🎯 Max Pain: ${data.maxPain.strike} ⚡ EXPIRY DAY`);
+            if (pcrState.expiryDay) {
+                console.log(`🎯 Max Pain: ${pcrState.maxPain.strike} ⚡ EXPIRY DAY`);
             } else {
-                console.log(`🎯 Max Pain: ${data.maxPain.strike}`);
+                console.log(`🎯 Max Pain: ${pcrState.maxPain.strike}`);
             }
 
             // Live-patch srLevels so the dashboard reflects max pain immediately
-            // without waiting for the next 10-min SR refresh cycle.
             if (marketState.srLevels) {
                 marketState.srLevels.maxPain = marketState.maxPain;
-                // Remove any stale MP entry, then insert the fresh one
                 marketState.srLevels.levels = marketState.srLevels.levels
                     .filter(l => l.type !== 'MP');
-                const onExpiry = data.expiryDay;
+                const onExpiry = pcrState.expiryDay;
                 marketState.srLevels.levels.push({
-                    price   : data.maxPain.strike,
+                    price   : pcrState.maxPain.strike,
                     type    : 'MP',
                     label   : onExpiry ? 'Max Pain 🎯 EXPIRY' : 'Max Pain',
                     strength: onExpiry ? 5 : 4
@@ -610,6 +633,48 @@ async function refreshPCR() {
                 marketState.srLevels.levels.sort((a, b) => b.price - a.price);
             }
         }
+
+        // ── Early Momentum — sync from nseData internal state ─────────────────
+        const emState = getEarlyMomState();
+        if (emState && emState.score !== null) {
+            marketState.earlyMom = {
+                score    : emState.score,
+                signal   : emState.signal,
+                strength : emState.strength,
+                label    : emState.label,
+                votes    : emState.votes || [],
+                fetchedAt: emState.fetchedAt,
+            };
+        }
+
+        // ── OI Buildup — sync from nseData internal state ─────────────────────
+        const oiState = getOIBuildupState();
+        if (oiState && oiState.signal) {
+            marketState.oiBuildup = {
+                signal         : oiState.signal,
+                strength       : oiState.strength,
+                label          : oiState.label,
+                maxCEoiStrike  : oiState.maxCEoiStrike,
+                maxPEoiStrike  : oiState.maxPEoiStrike,
+                totalCEoiChange: oiState.totalCEoiChange,
+                totalPEoiChange: oiState.totalPEoiChange,
+                pcrChange      : oiState.pcrChange,
+                topCEbuildup   : oiState.topCEbuildup,
+                topPEbuildup   : oiState.topPEbuildup,
+                fetchedAt      : oiState.fetchedAt,
+            };
+        }
+
+        // ── FII/DII — sync from nseData auto-fetch ────────────────────────────
+        // nseData fetches FII/DII every 15 min on its own; we read it here.
+        const fiiState = getFIIState();
+        if (fiiState.fiiNet !== null) {
+            marketState.fii = { buy: fiiState.fiiBuy, sell: fiiState.fiiSell, net: fiiState.fiiNet };
+        }
+        if (fiiState.diiNet !== null) {
+            marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet };
+        }
+
     } catch(e) {
         console.error('refreshPCR:', e.message);
     }
@@ -733,6 +798,11 @@ app.post('/api/pcr', (req,res) => {
     res.json({success:true});
 });
 
+// NSE Early Momentum + OI Buildup debug endpoints
+app.get('/api/early-momentum', (req,res) => res.json(getEarlyMomState()));
+app.get('/api/oi-buildup',     (req,res) => res.json(getOIBuildupState()));
+app.get('/api/pcr-state',      (req,res) => res.json(getPCRState()));
+
 // FII DII
 app.post('/api/fiidii', (req,res) => {
     const {fiiBuy,fiiSell,diiBuy,diiSell}=req.body;
@@ -848,6 +918,9 @@ async function tryAngelLogin() {
 async function initializeLiveData() {
     console.log('Starting VardaanNifty AI...');
     console.log('Telegram:', isConfigured()?'✅':'❌');
+    // Start the NSE data scheduler (PCR every 3 min + FII/DII every 15 min)
+    // Must be called BEFORE refreshPCR so the internal state is populated.
+    startNSEScheduler(() => marketState.nifty);
     // Initial data load (runs once at startup)
     await Promise.all([refreshMarketData(), refreshGlobal(), refreshBreadth()]);
     await Promise.all([refreshMTF(), refreshSR(), refreshPCR()]);
