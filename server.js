@@ -66,7 +66,7 @@ let marketState = {
     reason: ['Waiting...'], lastUpdated:null, connected:false, source:'none', dataPoints:0,
     adx: null,
     entryWindow: { status:'closed', label:'Market Closed', safe:false },
-    qualityGate: { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, passed:false }
+    qualityGate: { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, srClear:true, passed:false }
 };
 
 // ── Trade Journal ─────────────────────────────────────
@@ -195,7 +195,7 @@ function combineSignals(indicators) {
     const ew = isSafeEntryWindow();
     marketState.entryWindow = ew;
     if (!ew.safe) {
-        marketState.qualityGate = { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, passed:false };
+        marketState.qualityGate = { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, srClear:true, passed:false };
         return {
             signal     : 'WAIT',
             confidence : 0,
@@ -304,7 +304,19 @@ function combineSignals(indicators) {
     // getCandleHistory() contains multi-day data — overnight price gaps cause
     // Wilder's smoothing to produce ADX > 100 (invalid). sessionCandles has no gaps.
     const sessionCandlesForADX = getSessionCandles();
-    const adxData = calculateADX(sessionCandlesForADX);
+
+    // FIX 3: Only engage ADX gate when we have 60+ session candles.
+    // Before ~10:00 AM the Wilder warm-up window (30 bars) hasn't settled,
+    // producing noisy ADX readings that either block valid setups or—worse—
+    // falsely confirm trend on a gap-open bar. 60 bars ≈ 60 minutes of 1m
+    // data, which reliably puts us past 10:15 IST before ADX gates anything.
+    const adxData = sessionCandlesForADX.length >= 60
+        ? calculateADX(sessionCandlesForADX)
+        : null;
+    if (sessionCandlesForADX.length < 60) {
+        const remaining = 60 - sessionCandlesForADX.length;
+        reasons.push(`⏳ ADX gate inactive — need ${remaining} more candles (before ~10:00 AM)`);
+    }
     marketState.adx = adxData;   // expose to frontend via /api/signal
 
     const adxVal      = adxData?.adx ?? null;
@@ -318,7 +330,7 @@ function combineSignals(indicators) {
     }
 
     const qualityGate = {
-        // 1. All three timeframes must agree
+        // 1. All three timeframes must agree (with ADX ≥ 20 per TF)
         mtfAligned : marketState.mtf.aligned,
 
         // 2. RSI must not already be stretched in the direction of entry.
@@ -339,14 +351,26 @@ function combineSignals(indicators) {
         // 5. ADX >= 20: trend must exist before betting directional premium.
         //    When ADX data is unavailable (insufficient history), default to true
         //    so we don't silently block signals during early session.
-        adxTrend   : !adxTooWeak
+        adxTrend   : !adxTooWeak,
+
+        // 6. FIX 4: Price must not be within 30 pts of an S/R level.
+        //    Evaluated inside the gate block below; initialise to true here.
+        srClear    : true
     };
     qualityGate.passed = qualityGate.mtfAligned && qualityGate.rsiClean
                       && qualityGate.safeWindow  && qualityGate.vixSafe
-                      && qualityGate.adxTrend;
+                      && qualityGate.adxTrend    && qualityGate.srClear;
 
     // Persist gate state so the UI can show which checks are passing / failing
     marketState.qualityGate = qualityGate;
+
+    // FIX 2: Hard cap confidence at 85%.
+    // The vote tally has many inputs (PCR, ATM PCR, breadth, global, MTF, FII,
+    // max pain, BankNifty lead…) so in extreme conditions all vote the same way
+    // and rawConfidence can reach 100%. 100% is epistemically wrong — no intraday
+    // signal has 100% certainty. Capped at 85 to keep the UI honest and prevent
+    // traders from over-sizing positions on "perfect" setups.
+    rawConfidence = Math.min(rawConfidence, 85);
 
     // Gate decision — check in priority order.
     // ADX is checked FIRST because a choppy market invalidates everything else.
@@ -365,6 +389,30 @@ function combineSignals(indicators) {
         } else if (!qualityGate.vixSafe) {
             signal = 'WAIT'; confidence = 0;
             reasons.push(`⛔ VIX ${marketState.vix} ≥ 20 — option premium too expensive for buyer, skip`);
+        } else {
+            // ── FIX 4: S/R proximity gate ─────────────────────────────────────────
+            // If price is within 30 points of a known Support/Resistance level, the
+            // risk/reward for option buyers is poor: price may stall or snap back at
+            // that level. The 30-pt buffer covers one full premium spread on Nifty.
+            // Exception: Max Pain levels get 50-pt buffer on expiry day (stronger wall).
+            // A WAIT here means "wait for a decisive break past the level, then re-enter."
+            const srLvls = marketState.srLevels?.levels;
+            if (srLvls?.length > 0 && marketState.nifty > 0) {
+                const bufferPts = marketState.maxPain?.expiryDay ? 50 : 30;
+                const nearbyLevel = srLvls.find(lvl =>
+                    Math.abs(marketState.nifty - lvl.price) <= bufferPts
+                );
+                if (nearbyLevel) {
+                    const dist = Math.abs(marketState.nifty - nearbyLevel.price).toFixed(0);
+                    signal     = 'WAIT';
+                    confidence = 0;
+                    qualityGate.srClear = false;
+                    reasons.push(
+                        `⛔ S/R wall: ${nearbyLevel.label || nearbyLevel.type} @ ${nearbyLevel.price} ` +
+                        `(${dist} pts away, buffer ${bufferPts} pts) — wait for clean break`
+                    );
+                }
+            }
         }
     }
 
