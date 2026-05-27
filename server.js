@@ -9,7 +9,8 @@ const loginAngel                    = require('./src/api/angelAuth');
 const startWebSocket                = require('./src/api/websocket');
 const { processIndicators,
         initializeHistory,
-        getCandleHistory }          = require('./src/api/indicators');
+        getCandleHistory,
+        getSessionCandles }         = require('./src/api/indicators');
 const { fetchMarketData }           = require('./src/api/marketData');
 const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
 const { fetchGlobalCues }           = require('./src/api/globalCues');
@@ -121,10 +122,15 @@ function pcrScore(v) {
 function calculateADX(candles, period = 14) {
     if (!candles || candles.length < period * 2 + 2) return null;
     try {
+        // Filter out flat candles (high == low) — zero True Range causes DI explosion
+        const valid = candles.filter(c =>
+            c.high != null && c.low != null && c.close != null && c.high > c.low
+        );
+        if (valid.length < period * 2 + 2) return null;
         const tr = [], dmp = [], dmm = [];
-        for (let i = 1; i < candles.length; i++) {
-            const h = candles[i].high,   l = candles[i].low,   pc = candles[i - 1].close;
-            const ph = candles[i - 1].high, pl = candles[i - 1].low;
+        for (let i = 1; i < valid.length; i++) {
+            const h = valid[i].high,   l = valid[i].low,   pc = valid[i - 1].close;
+            const ph = valid[i - 1].high, pl = valid[i - 1].low;
             tr .push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
             const up = h - ph, dn = pl - l;
             dmp.push(up > dn && up > 0 ? up : 0);
@@ -145,10 +151,16 @@ function calculateADX(candles, period = 14) {
         const dx   = dip .map((v, i) => { const s = v + dim[i]; return s > 0 ? (Math.abs(v - dim[i]) / s) * 100 : 0; });
         const adxArr = wilderSmooth(dx);
         const n = adxArr.length - 1;
+        const adxVal = parseFloat(adxArr[n].toFixed(2));
+        // ADX is mathematically bounded 0–100; anything above means data quality issue
+        if (adxVal > 100 || adxVal < 0) {
+            console.warn(`⚠️ ADX out of range (${adxVal}) — overnight gap in data, skipping`);
+            return null;
+        }
         return {
-            adx    : parseFloat(adxArr[n].toFixed(2)),
-            diPlus : parseFloat(dip[dip.length - 1].toFixed(2)),
-            diMinus: parseFloat(dim[dim.length - 1].toFixed(2))
+            adx    : adxVal,
+            diPlus : parseFloat(Math.min(100, dip[dip.length - 1]).toFixed(2)),
+            diMinus: parseFloat(Math.min(100, dim[dim.length - 1]).toFixed(2))
         };
     } catch (_) { return null; }
 }
@@ -288,8 +300,11 @@ function combineSignals(indicators) {
     // ADX >= 20 but < 25 = weak trend forming — allow signal but cap confidence.
     // ADX >= 25 = confirmed trend — full signal strength.
     // ADX >= 40 = explosive move — warn about wide premiums.
-    const candleHistory = getCandleHistory();
-    const adxData = calculateADX(candleHistory);
+    // Use session-only candles (9:15 IST onwards, no overnight gaps).
+    // getCandleHistory() contains multi-day data — overnight price gaps cause
+    // Wilder's smoothing to produce ADX > 100 (invalid). sessionCandles has no gaps.
+    const sessionCandlesForADX = getSessionCandles();
+    const adxData = calculateADX(sessionCandlesForADX);
     marketState.adx = adxData;   // expose to frontend via /api/signal
 
     const adxVal      = adxData?.adx ?? null;
