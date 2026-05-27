@@ -485,7 +485,21 @@ async function checkTelegramAlerts(newSignal) {
     const ist=getIST(), h=ist.getHours(), m=ist.getMinutes();
     if (h===9&&m>=16&&m<=20&&!morningSummarySent) { morningSummarySent=true; await sendMorningSummary(marketState); return; }
     if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;pcrClearedToday=false;},6*60*60*1000); return; }
-    if (newSignal!==prevSignal&&newSignal!=='WAIT') await sendSignalAlert(marketState,prevSignal);
+    if (newSignal!==prevSignal&&newSignal!=='WAIT') {
+        await sendSignalAlert(marketState,prevSignal);
+        // ── Trigger AI suggestion on fresh signal (costs 1 API call here only) ──
+        if (marketState.qualityGate.passed) {
+            try {
+                const pcrState   = getPCRState();
+                const strikeData = pickStrikeAndPremium(newSignal, marketState.nifty, marketState.vix, pcrState);
+                if (strikeData) {
+                    const winRate = await getWinRateFromHistory(strikeData.type);
+                    await getAITradeSuggestion(marketState, strikeData, winRate);
+                    console.log(`🤖 AI suggestion triggered by fresh signal: ${newSignal}`);
+                }
+            } catch(e) { console.error('AI on signal trigger:', e.message); }
+        }
+    }
     if (marketState.mtf.aligned&&!prevMTFAligned) await sendMTFAlert(marketState);
     prevMTFAligned=marketState.mtf.aligned;
     if (marketState.vix>20&&!vixAlertSent) { vixAlertSent=true; await sendVIXAlert(marketState.vix,marketState.vixNote); }
@@ -895,17 +909,20 @@ function bsEstimate(S, K, T, sigma, type) {
 }
 
 // ── AI Trade Suggestion via Claude API ────────────────────────────────────────
+// Only called when a FRESH signal fires (BUY CALL or BUY PUT transition).
+// The cached result is served to the frontend on every /api/trade-suggestion poll.
+// This means at most 3-5 API calls per trading day — cost under ₹5/day.
 let lastAISuggestion    = null;
-let lastAISuggestionAt  = 0;
-const AI_COOLDOWN_MS    = 5 * 60 * 1000; // only call AI every 5 min max
+let lastAISuggestionSignal = null;  // the signal string that triggered last AI call
 
 async function getAITradeSuggestion(state, strikeData, winRate) {
     if (!process.env.ANTHROPIC_API_KEY) return null;
 
-    // Don't spam the API — only refresh every 5 minutes
-    const now = Date.now();
-    if (lastAISuggestion && (now - lastAISuggestionAt) < AI_COOLDOWN_MS) {
-        return lastAISuggestion;
+    // Only call AI when signal has CHANGED to a new direction
+    // (fresh BUY CALL or BUY PUT — not a repeat of the same signal)
+    const currentSignal = state.signal + '_' + state.nifty;  // direction + rough level
+    if (lastAISuggestion && lastAISuggestionSignal === state.signal) {
+        return lastAISuggestion;  // return cached — no API call
     }
 
     try {
@@ -951,8 +968,8 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
         const parsed = JSON.parse(cleaned);
         parsed.generatedAt = new Date().toISOString();
 
-        lastAISuggestion   = parsed;
-        lastAISuggestionAt = now;
+        lastAISuggestion       = parsed;
+        lastAISuggestionSignal = state.signal;  // mark which signal triggered this
 
         // Save to DB for training
         if (parsed.action !== 'WAIT' && strikeData) {
@@ -981,21 +998,21 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
 
 
 app.get('/api/trade-suggestion', async (req, res) => {
+    // This route NEVER triggers an AI call directly.
+    // AI is called only when a fresh signal fires in checkTelegramAlerts().
+    // Here we just return the latest cached data instantly — no API cost.
     try {
-        const pcrState  = getPCRState();
+        const pcrState   = getPCRState();
         const strikeData = marketState.qualityGate.passed && marketState.signal !== 'WAIT'
             ? pickStrikeAndPremium(marketState.signal, marketState.nifty, marketState.vix, pcrState)
             : null;
         const winRate = strikeData ? await getWinRateFromHistory(strikeData.type) : null;
-        const aiSuggestion = (strikeData && marketState.qualityGate.passed)
-            ? await getAITradeSuggestion(marketState, strikeData, winRate)
-            : null;
         res.json({
             qualityGatePassed : marketState.qualityGate.passed,
             signal            : marketState.signal,
             confidence        : marketState.confidence,
             strikeData        : strikeData,
-            aiSuggestion      : aiSuggestion,
+            aiSuggestion      : lastAISuggestion,   // cached — only refreshes on new signal
             winRate           : winRate,
             entryWindow       : marketState.entryWindow,
             nifty             : marketState.nifty
