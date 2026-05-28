@@ -1244,17 +1244,17 @@ async function initializeLiveData() {
     // NSE blocks Railway IPs that send too many concurrent requests at startup.
     // Each group waits for the previous to finish before starting.
     console.log('📡 Initial data load — staggered to avoid NSE rate limits...');
-    await withTimeout(refreshMarketData(), 45000, 'refreshMarketData');
-    await new Promise(r => setTimeout(r, 1500));   // 1.5s gap
-    await withTimeout(refreshGlobal(),     25000, 'refreshGlobal');
+    await withTimeout(refreshMarketData(), 25000, 'refreshMarketData');
+    await new Promise(r => setTimeout(r, 1500));
+    await withTimeout(refreshGlobal(),     15000, 'refreshGlobal');
     await new Promise(r => setTimeout(r, 1000));
-    await withTimeout(refreshBreadth(),    35000, 'refreshBreadth');
+    await withTimeout(refreshBreadth(),    20000, 'refreshBreadth');
     await new Promise(r => setTimeout(r, 1000));
-    await withTimeout(refreshMTF(), 35000, 'refreshMTF');
+    await withTimeout(refreshMTF(), 20000, 'refreshMTF');
     await new Promise(r => setTimeout(r, 1000));
     await Promise.all([
-        withTimeout(refreshSR(),  25000, 'refreshSR'),
-        withTimeout(refreshPCR(), 25000, 'refreshPCR'),
+        withTimeout(refreshSR(),  15000, 'refreshSR'),
+        withTimeout(refreshPCR(), 15000, 'refreshPCR'),
     ]);
 
     // Polling intervals start regardless of whether initial fetches succeeded

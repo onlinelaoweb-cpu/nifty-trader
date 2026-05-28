@@ -384,4 +384,4 @@ async function yahooGet(path, params = {}, timeoutMs = 20000) {
     return { chart: { result: [chart], error: null } };
 }
 
-module.exports = { yahooGet, fetchYahooMeta, fetchYahooChart };
+module.exports = { yahooGet, fetchYahooMeta, fetchYahooChart, fetchNifty50Stocks, fetchAllIndices };
