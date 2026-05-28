@@ -54,15 +54,18 @@ const PCR_INTERVAL_MS    =  3 * 60 * 1000;   // re-fetch PCR every 3 min
 const FIIDII_INTERVAL_MS = 15 * 60 * 1000;   // re-fetch FII/DII every 15 min
 const COOKIE_TTL_MS      = 15 * 60 * 1000;   // proactive cookie re-warm
 
-// NSE will 403 any request that doesn't look like a real browser
+// NSE will 403 any request that doesn't look like a real browser.
+// Chrome 125+ UA + sec-fetch headers are required since late 2025 anti-scraping update.
 const HEADERS = {
-    'User-Agent'     : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'User-Agent'     : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     'Accept'         : 'application/json, text/plain, */*',
     'Accept-Language': 'en-US,en;q=0.9',
     'Accept-Encoding': 'gzip, deflate, br',
     'Referer'        : 'https://www.nseindia.com/option-chain',
     'Connection'     : 'keep-alive',
     'DNT'            : '1',
+    'sec-fetch-site' : 'same-origin',
+    'sec-fetch-mode' : 'cors',
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -76,7 +79,7 @@ async function refreshCookie() {
     try {
         const res = await axios.get(BASE_URL, {
             headers        : { ...HEADERS, Accept: 'text/html' },
-            timeout        : TIMEOUT_MS,
+            timeout        : 10_000,   // fail fast — 10 s matches spec
             maxRedirects   : 3,
             // Don't throw on 4xx so we can inspect the response
             validateStatus : s => s < 500,
@@ -900,10 +903,14 @@ async function _fetchFIIDII() {
 function startNSEScheduler(getSpotPrice) {
     console.log('[NSE] 🚀 Starting NSE scheduler (PCR: 3 min | FII/DII: 15 min)');
 
-    // Immediate first fetch
+    // Fire first fetches async — intentionally NOT awaited so the app never
+    // hangs at startup if NSE is slow or unreachable.  State objects stay at
+    // their null/default values until the fetch resolves; getPCRState() and
+    // getFIIState() expose _fallback:true in the meantime so the frontend can
+    // show "Live data unavailable, market may be closed" instead of spinning.
     const spot = getSpotPrice();
-    _fetchPCR(spot);
-    _fetchFIIDII();
+    _fetchPCR(spot).catch(e => console.error('[NSE] Initial PCR fetch error:', e.message));
+    _fetchFIIDII().catch(e => console.error('[NSE] Initial FII fetch error:', e.message));
 
     // Recurring PCR fetch (needs live spot price each cycle)
     setInterval(() => _fetchPCR(getSpotPrice()), PCR_INTERVAL_MS);
@@ -974,8 +981,19 @@ function interpretFII(fiiNet, diiNet) {
 // Public API
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function getPCRState()       { return { ..._pcr }; }
-function getFIIState()       { return { ..._fii }; }
+// _fallback:true is present when no successful fetch has completed yet.
+// The frontend should display "Live data unavailable, market may be closed"
+// instead of a spinner when it sees this flag.
+function getPCRState() {
+    const snap = { ..._pcr };
+    if (snap.fetchCount === 0) snap._fallback = true;
+    return snap;
+}
+function getFIIState() {
+    const snap = { ..._fii };
+    if (snap.fetchCount === 0) snap._fallback = true;
+    return snap;
+}
 function getOIBuildupState() { return { ..._oiBuildup }; }
 function getEarlyMomState()  { return { ..._earlyMom }; }
 
