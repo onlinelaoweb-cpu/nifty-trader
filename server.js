@@ -1219,25 +1219,56 @@ async function tryAngelLogin() {
     else      { console.log('Yahoo Finance fallback — retry in 30s'); setTimeout(tryAngelLogin, 30000); }
 }
 
+// ── Wrap any async task with a hard timeout so it never hangs startup ─────────
+function withTimeout(promise, ms, label) {
+    return Promise.race([
+        promise,
+        new Promise(resolve => setTimeout(() => {
+            console.warn(`⏱ ${label} timed out after ${ms}ms — continuing`);
+            resolve(null);
+        }, ms))
+    ]);
+}
+
 async function initializeLiveData() {
     console.log('Starting VardaanNifty AI...');
     console.log('Telegram:', isConfigured()?'✅':'❌');
-    // Start the NSE data scheduler (PCR every 3 min + FII/DII every 15 min)
-    // Must be called BEFORE refreshPCR so the internal state is populated.
-    await initDB();
+
+    // DB init — non-blocking; app works fine without it
+    initDB().catch(e => console.error('DB init error:', e.message));
+
+    // NSE scheduler fires its own async fetches (non-blocking per nseData.js fix)
     startNSEScheduler(() => marketState.nifty);
-    // Initial data load (runs once at startup)
-    await Promise.all([refreshMarketData(), refreshGlobal(), refreshBreadth()]);
-    await Promise.all([refreshMTF(), refreshSR(), refreshPCR()]);
-    // Start polling loops exactly once, no matter how many login retries follow
+
+    // Initial data load — each fetch gets a hard 20s timeout so a single
+    // unreachable endpoint (NSE, Yahoo, global cues) cannot stall startup.
+    await Promise.all([
+        withTimeout(refreshMarketData(), 20000, 'refreshMarketData'),
+        withTimeout(refreshGlobal(),     20000, 'refreshGlobal'),
+        withTimeout(refreshBreadth(),    20000, 'refreshBreadth'),
+    ]);
+    await Promise.all([
+        withTimeout(refreshMTF(), 20000, 'refreshMTF'),
+        withTimeout(refreshSR(),  20000, 'refreshSR'),
+        withTimeout(refreshPCR(), 20000, 'refreshPCR'),
+    ]);
+
+    // Polling intervals start regardless of whether initial fetches succeeded
     startPollingIntervals();
-    // Attempt Angel One login; retries go through tryAngelLogin() which never re-enters here
-    await tryAngelLogin();
+
+    // Angel login runs after server is listening — retries in the background
+    // and never block the HTTP server from accepting frontend connections.
+    tryAngelLogin().catch(e => console.error('Angel login error:', e.message));
 }
 
-initializeLiveData();
+// ── Listen FIRST so the frontend is never blocked by init ────────────────────
+// initializeLiveData() runs in the background. The frontend gets the default
+// marketState (nifty:0, signal:'WAIT') immediately, then live data populates
+// within 3-20 seconds as each fetch completes.
 server.listen(PORT, () => {
     console.log(`VardaanNifty AI running on port ${PORT}`);
     server.keepAliveTimeout = 120000;
     server.headersTimeout   = 125000;
+    // Start init AFTER server is already accepting connections
+    initializeLiveData().catch(e => console.error('Init error:', e.message));
 });
