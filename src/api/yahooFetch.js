@@ -34,32 +34,60 @@ const NSE_HEADERS = {
 };
 const NSE_BASE = 'https://www.nseindia.com';
 
+// ── Cookie fetch — serialised so parallel startup calls don't all hit NSE at once
+let _cookieFetchPromise = null;
+
 async function getNSECookie() {
     if (_nseCookie && Date.now() - _nseCookieAt < COOKIE_TTL) return _nseCookie;
-    try {
-        const res = await axios.get(NSE_BASE, {
-            headers: { ...NSE_HEADERS, Accept: 'text/html' },
-            timeout: 12000, maxRedirects: 3,
-            validateStatus: s => s < 500,
-        });
-        const raw = res.headers['set-cookie'];
-        if (raw && raw.length) {
-            _nseCookie   = raw.map(c => c.split(';')[0]).join('; ');
-            _nseCookieAt = Date.now();
-            console.log('[NSE] cookie refreshed');
+    // Serialise: if a refresh is already in flight, wait for it instead of firing another
+    if (_cookieFetchPromise) return _cookieFetchPromise;
+    _cookieFetchPromise = (async () => {
+        try {
+            const res = await axios.get(NSE_BASE, {
+                headers: { ...NSE_HEADERS, Accept: 'text/html' },
+                timeout: 15000, maxRedirects: 5,
+                validateStatus: s => s < 500,
+            });
+            const raw = res.headers['set-cookie'];
+            if (raw && raw.length) {
+                _nseCookie   = raw.map(c => c.split(';')[0]).join('; ');
+                _nseCookieAt = Date.now();
+                console.log('[NSE] cookie refreshed');
+            }
+        } catch (e) {
+            console.warn('[NSE] cookie refresh failed:', e.message);
+        } finally {
+            _cookieFetchPromise = null;
         }
-    } catch (e) {
-        console.warn('[NSE] cookie refresh failed:', e.message);
-    }
-    return _nseCookie;
+        return _nseCookie;
+    })();
+    return _cookieFetchPromise;
 }
 
+// ── nseGet with 1 auto-retry on timeout/network error (Railway IPs sometimes
+//    need a second attempt after the first request "wakes" the NSE edge cache)
 async function nseGet(path, timeoutMs = 18000) {
     const cookie = await getNSECookie();
     const headers = { ...NSE_HEADERS };
     if (cookie) headers['Cookie'] = cookie;
-    const res = await axios.get(`${NSE_BASE}${path}`, { headers, timeout: timeoutMs });
-    return res.data;
+    try {
+        const res = await axios.get(`${NSE_BASE}${path}`, { headers, timeout: timeoutMs });
+        return res.data;
+    } catch (e) {
+        // Retry once after a short pause — Railway datacenter IPs often succeed on 2nd attempt
+        if (e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT' || e.message.includes('timeout')) {
+            console.warn(`[NSE] timeout on ${path} — retrying in 3s`);
+            await new Promise(r => setTimeout(r, 3000));
+            // Refresh cookie before retry in case it expired
+            _nseCookie = null;
+            const cookie2 = await getNSECookie();
+            const headers2 = { ...NSE_HEADERS };
+            if (cookie2) headers2['Cookie'] = cookie2;
+            const res2 = await axios.get(`${NSE_BASE}${path}`, { headers: headers2, timeout: timeoutMs });
+            return res2.data;
+        }
+        throw e;
+    }
 }
 
 // ── Symbol routing ────────────────────────────────────────────────────────────
@@ -95,39 +123,53 @@ function toNSESymbol(symbol) {
 // ── Bulk NSE allIndices cache ─────────────────────────────────────────────────
 let _allIndicesCache = null;
 let _allIndicesAt    = 0;
+let _allIndicesFetch = null;   // serialise concurrent callers
 
 async function fetchAllIndices() {
     if (_allIndicesCache && Date.now() - _allIndicesAt < 60000) return _allIndicesCache;
-    try {
-        const data = await nseGet('/api/allIndices');
-        if (data?.data) {
-            _allIndicesCache = data.data;
-            _allIndicesAt    = Date.now();
-            console.log(`[NSE] allIndices loaded (${data.data.length} indices)`);
+    if (_allIndicesFetch) return _allIndicesFetch;
+    _allIndicesFetch = (async () => {
+        try {
+            const data = await nseGet('/api/allIndices');
+            if (data?.data) {
+                _allIndicesCache = data.data;
+                _allIndicesAt    = Date.now();
+                console.log(`[NSE] allIndices loaded (${data.data.length} indices)`);
+            }
+        } catch (e) {
+            console.warn('[NSE] allIndices failed:', e.message);
+        } finally {
+            _allIndicesFetch = null;
         }
-    } catch (e) {
-        console.warn('[NSE] allIndices failed:', e.message);
-    }
-    return _allIndicesCache || [];
+        return _allIndicesCache || [];
+    })();
+    return _allIndicesFetch;
 }
 
 // ── Bulk NSE Nifty 50 stocks cache ───────────────────────────────────────────
 let _nifty50Cache   = null;
 let _nifty50CacheAt = 0;
+let _nifty50Fetch   = null;   // serialise concurrent callers
 
 async function fetchNifty50Stocks() {
     if (_nifty50Cache && Date.now() - _nifty50CacheAt < 60000) return _nifty50Cache;
-    try {
-        const data = await nseGet('/api/equity-stockIndices?index=NIFTY%2050');
-        if (data?.data) {
-            _nifty50Cache   = data.data;
-            _nifty50CacheAt = Date.now();
-            console.log(`[NSE] Nifty50 stocks loaded (${data.data.length} rows)`);
+    if (_nifty50Fetch) return _nifty50Fetch;
+    _nifty50Fetch = (async () => {
+        try {
+            const data = await nseGet('/api/equity-stockIndices?index=NIFTY%2050');
+            if (data?.data) {
+                _nifty50Cache   = data.data;
+                _nifty50CacheAt = Date.now();
+                console.log(`[NSE] Nifty50 stocks loaded (${data.data.length} rows)`);
+            }
+        } catch (e) {
+            console.warn('[NSE] Nifty50 stocks failed:', e.message);
+        } finally {
+            _nifty50Fetch = null;
         }
-    } catch (e) {
-        console.warn('[NSE] Nifty50 stocks failed:', e.message);
-    }
-    return _nifty50Cache || [];
+        return _nifty50Cache || [];
+    })();
+    return _nifty50Fetch;
 }
 
 // ── NSE index quote ───────────────────────────────────────────────────────────
