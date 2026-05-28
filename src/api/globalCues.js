@@ -44,24 +44,21 @@ function calcVWAP(bars) {
 }
 
 async function bankNiftyVWAPLead() {
-    const empty = { signal: 0, label: 'NEUTRAL', crossedAt: null, bnPrice: null, vwap: null, distancePct: null, reason: 'Insufficient BankNifty intraday data' };
+    // Uses allIndices quote only — no intraday NSE call (which times out from Railway).
+    // Without tick data we can't compute a true VWAP cross, so we use the
+    // day's changePct as a directional proxy: >0.3% = above-VWAP-equivalent.
+    const empty = { signal: 0, label: 'NEUTRAL', crossedAt: null, bnPrice: null, vwap: null, distancePct: null, reason: 'BankNifty intraday unavailable — using day change proxy' };
     try {
-        const bars = await fetchIntradayBars('^NSEBANK', 1, 390);
-        if (bars.length < 7) return empty;
-        const vwap = calcVWAP(bars);
-        if (!vwap) return empty;
-        const latest     = bars[bars.length - 1];
-        const leadingBar = bars[bars.length - 5];
-        const priorBar   = bars[bars.length - 6];
-        const bnPrice    = parseFloat(latest.close.toFixed(2));
-        const vwapR      = parseFloat(vwap.toFixed(2));
-        const distancePct = parseFloat(((bnPrice - vwapR) / vwapR * 100).toFixed(3));
-        const crossedUp   = !( priorBar.close > vwap) && (leadingBar.close > vwap);
-        const crossedDown =  ( priorBar.close > vwap) && !(leadingBar.close > vwap);
-        const liveAbove   = bnPrice > vwapR;
-        if (crossedUp)   return { signal:  1, label: 'ABOVE_VWAP', crossedAt: new Date(leadingBar.time).toISOString(), bnPrice, vwap: vwapR, distancePct, reason: `BankNifty crossed ABOVE VWAP ~5 min ago (₹${bnPrice} > VWAP ₹${vwapR}) — Bullish lead for Nifty` };
-        if (crossedDown) return { signal: -1, label: 'BELOW_VWAP', crossedAt: new Date(leadingBar.time).toISOString(), bnPrice, vwap: vwapR, distancePct, reason: `BankNifty crossed BELOW VWAP ~5 min ago (₹${bnPrice} < VWAP ₹${vwapR}) — Bearish lead for Nifty` };
-        return { signal: 0, label: liveAbove ? 'ABOVE_VWAP' : 'BELOW_VWAP', crossedAt: null, bnPrice, vwap: vwapR, distancePct, reason: liveAbove ? `BankNifty holding above VWAP (₹${bnPrice} vs ₹${vwapR}) — no fresh cross` : `BankNifty holding below VWAP (₹${bnPrice} vs ₹${vwapR}) — no fresh cross` };
+        const { fetchAllIndices } = require('./yahooFetch');
+        const indices = await fetchAllIndices();
+        const row = indices.find(r => r.index === 'NIFTY BANK' || r.indexSymbol === 'NIFTY BANK');
+        if (!row) return empty;
+        const bnPrice   = parseFloat(row.last || row.previousClose);
+        const prevClose = parseFloat(row.previousClose || bnPrice);
+        const changePct = prevClose > 0 ? parseFloat(((bnPrice - prevClose) / prevClose * 100).toFixed(3)) : 0;
+        if (changePct > 0.3)  return { signal:  1, label: 'ABOVE_VWAP', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty up ${changePct}% today — Bullish lead for Nifty ✅` };
+        if (changePct < -0.3) return { signal: -1, label: 'BELOW_VWAP', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty down ${changePct}% today — Bearish lead for Nifty ⚠️` };
+        return { signal: 0, label: 'NEUTRAL', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty flat ${changePct}% — no directional lead` };
     } catch (e) { return empty; }
 }
 
