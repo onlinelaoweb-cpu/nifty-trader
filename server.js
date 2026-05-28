@@ -1063,9 +1063,9 @@ app.get('/api/chart', async (req,res) => {
     const interval = intervalMap[tf] || '5m';
     const range    = rangeMap[tf]    || '5d';
     try {
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=${interval}&range=${range}&includePrePost=false`;
-        const response = await axios.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 8000 });
-        const q = response.data?.chart?.result?.[0]?.indicators?.quote?.[0];
+        const { fetchYahooChart } = require('./src/api/yahooFetch');  // Stooq-backed
+        const result = await fetchYahooChart('%5ENSEI', { interval, range, includePrePost: false });
+        const q = result?.indicators?.quote?.[0];
         if (!q) return res.json([]);
         const { open, high, low, close, volume } = q;
         const candles = [];
