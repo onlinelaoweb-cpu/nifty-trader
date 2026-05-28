@@ -1243,14 +1243,14 @@ async function initializeLiveData() {
     // Initial data load — each fetch gets a hard 20s timeout so a single
     // unreachable endpoint (NSE, Yahoo, global cues) cannot stall startup.
     await Promise.all([
-        withTimeout(refreshMarketData(), 20000, 'refreshMarketData'),
-        withTimeout(refreshGlobal(),     20000, 'refreshGlobal'),
-        withTimeout(refreshBreadth(),    20000, 'refreshBreadth'),
+        withTimeout(refreshMarketData(), 45000, 'refreshMarketData'),
+        withTimeout(refreshGlobal(),     45000, 'refreshGlobal'),
+        withTimeout(refreshBreadth(),    45000, 'refreshBreadth'),
     ]);
     await Promise.all([
-        withTimeout(refreshMTF(), 20000, 'refreshMTF'),
-        withTimeout(refreshSR(),  20000, 'refreshSR'),
-        withTimeout(refreshPCR(), 20000, 'refreshPCR'),
+        withTimeout(refreshMTF(), 45000, 'refreshMTF'),
+        withTimeout(refreshSR(),  45000, 'refreshSR'),
+        withTimeout(refreshPCR(), 45000, 'refreshPCR'),
     ]);
 
     // Polling intervals start regardless of whether initial fetches succeeded
