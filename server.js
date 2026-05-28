@@ -1240,17 +1240,21 @@ async function initializeLiveData() {
     // NSE scheduler fires its own async fetches (non-blocking per nseData.js fix)
     startNSEScheduler(() => marketState.nifty);
 
-    // Initial data load — each fetch gets a hard 20s timeout so a single
-    // unreachable endpoint (NSE, Yahoo, global cues) cannot stall startup.
+    // Initial data load — staggered to avoid hammering NSE with simultaneous requests.
+    // NSE blocks Railway IPs that send too many concurrent requests at startup.
+    // Each group waits for the previous to finish before starting.
+    console.log('📡 Initial data load — staggered to avoid NSE rate limits...');
+    await withTimeout(refreshMarketData(), 45000, 'refreshMarketData');
+    await new Promise(r => setTimeout(r, 1500));   // 1.5s gap
+    await withTimeout(refreshGlobal(),     25000, 'refreshGlobal');
+    await new Promise(r => setTimeout(r, 1000));
+    await withTimeout(refreshBreadth(),    35000, 'refreshBreadth');
+    await new Promise(r => setTimeout(r, 1000));
+    await withTimeout(refreshMTF(), 35000, 'refreshMTF');
+    await new Promise(r => setTimeout(r, 1000));
     await Promise.all([
-        withTimeout(refreshMarketData(), 45000, 'refreshMarketData'),
-        withTimeout(refreshGlobal(),     45000, 'refreshGlobal'),
-        withTimeout(refreshBreadth(),    45000, 'refreshBreadth'),
-    ]);
-    await Promise.all([
-        withTimeout(refreshMTF(), 45000, 'refreshMTF'),
-        withTimeout(refreshSR(),  45000, 'refreshSR'),
-        withTimeout(refreshPCR(), 45000, 'refreshPCR'),
+        withTimeout(refreshSR(),  25000, 'refreshSR'),
+        withTimeout(refreshPCR(), 25000, 'refreshPCR'),
     ]);
 
     // Polling intervals start regardless of whether initial fetches succeeded
