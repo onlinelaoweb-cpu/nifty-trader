@@ -1195,13 +1195,48 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 
 <script>
 // ── BOOT SPLASH DISMISS ─────────────────────────────
+// Checks /api/health up to 3 times (every 1.5s). Dismisses as soon as the
+// server responds — even with no data — so the app never hangs on the splash.
+// Hard fallback at 5s: dismiss unconditionally so a slow server never blocks UI.
 (function(){
-  const splash=document.getElementById('boot-splash');
-  const status=document.getElementById('splash-status');
-  const msgs=['Initialising markets...','Loading global cues...','Syncing Nifty data...','Ready ✓'];
-  let i=0;
-  const tick=setInterval(()=>{i++;if(status&&msgs[i])status.textContent=msgs[i];if(i>=msgs.length-1)clearInterval(tick);},550);
-  setTimeout(()=>{if(splash)splash.classList.add('hide');},2300);
+  const splash = document.getElementById('boot-splash');
+  const status = document.getElementById('splash-status');
+  const msgs   = ['Connecting to server...','Loading market data...','Syncing signals...','Ready ✓'];
+  let i = 0;
+  const tick = setInterval(()=>{ i++; if(status && msgs[i]) status.textContent = msgs[i]; if(i >= msgs.length-1) clearInterval(tick); }, 800);
+
+  function dismissSplash(msg) {
+    clearInterval(tick);
+    if (status) status.textContent = msg || 'Ready ✓';
+    if (splash) splash.classList.add('hide');
+  }
+
+  let attempts = 0;
+  function checkReady() {
+    attempts++;
+    fetch('/api/health', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(d => {
+        // Server responded — dismiss regardless of data state
+        if (d.status === 'live') {
+          dismissSplash('Live data connected ✓');
+        } else {
+          dismissSplash('Market data loading...');
+        }
+      })
+      .catch(() => {
+        // Server not responding yet — retry up to 3 times then give up
+        if (attempts < 3) {
+          setTimeout(checkReady, 1500);
+        } else {
+          dismissSplash('Dashboard ready');
+        }
+      });
+  }
+
+  // Start checking after 1s, hard dismiss at 5s no matter what
+  setTimeout(checkReady, 1000);
+  setTimeout(()=>dismissSplash('Dashboard ready'), 5000);
 })();
 
 // Error handler — never let any JS error kill the whole page
