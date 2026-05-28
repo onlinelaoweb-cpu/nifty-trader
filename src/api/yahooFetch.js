@@ -92,7 +92,7 @@ function toStooq(yahooSymbol) {
  * Stooq l/ format:  Date,Time,Open,High,Low,Close,Volume
  * with header line: Symbol,...
  */
-async function stooqQuote(symbol, timeoutMs = 12000) {
+async function stooqQuote(symbol, timeoutMs = 20000) {
     const stooqSym = toStooq(symbol);
     // f=sd2t2ohlcv → Symbol, Date, Time, Open, High, Low, Close, Volume
     const url = `${STOOQ_BASE}/q/l/?s=${encodeURIComponent(stooqSym)}&f=sd2t2ohlcv&e=csv`;
@@ -128,7 +128,7 @@ async function stooqQuote(symbol, timeoutMs = 12000) {
  * Fetches daily OHLCV history from Stooq d/l/ endpoint.
  * Returns array of { date, open, high, low, close, volume } sorted ascending.
  */
-async function stooqHistory(symbol, days = 10, timeoutMs = 12000) {
+async function stooqHistory(symbol, days = 10, timeoutMs = 20000) {
     const stooqSym = toStooq(symbol);
     // Stooq daily CSV — returns last N trading days automatically (no date range needed)
     const url = `${STOOQ_BASE}/q/d/l/?s=${encodeURIComponent(stooqSym)}&i=d`;
@@ -165,7 +165,7 @@ async function stooqHistory(symbol, days = 10, timeoutMs = 12000) {
  * interval: 1, 5, 15, 60 (minutes)
  * Returns array of { ts (unix ms), open, high, low, close, volume } ascending.
  */
-async function stooqIntraday(symbol, intervalMins = 1, lookbackMins = 390, timeoutMs = 15000) {
+async function stooqIntraday(symbol, intervalMins = 1, lookbackMins = 390, timeoutMs = 25000) {
     const stooqSym = toStooq(symbol);
     // Stooq intraday: i=5 (5-min), i=60 (hourly) etc.
     const url = `${STOOQ_BASE}/q/d/l/?s=${encodeURIComponent(stooqSym)}&i=${intervalMins}`;
