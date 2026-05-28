@@ -1,22 +1,14 @@
-const axios = require('axios');
 const { RSI, EMA, VWAP } = require('technicalindicators');
+const { fetchYahooChart } = require('./yahooFetch');  // now backed by Stooq
 
-// ── Fetch candles from Yahoo Finance ─────────────────
+// ── Fetch candles via Stooq (through fetchYahooChart shim) ───────────────
 async function fetchCandles(interval, range) {
     try {
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=${interval}&range=${range}&includePrePost=false`;
+        const result = await fetchYahooChart('%5ENSEI', { interval, range, includePrePost: false });
+        if (!result) return [];
 
-        const res = await axios.get(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                'Accept'    : 'application/json'
-            },
-            timeout: 10000
-        });
-
-        const result     = res.data?.chart?.result?.[0];
-        const quotes     = result?.indicators?.quote?.[0];
-        const timestamps = result?.timestamp || [];
+        const quotes     = result.indicators?.quote?.[0];
+        const timestamps = result.timestamp || [];
         if (!quotes) return [];
 
         const closes  = quotes.close  || [];
