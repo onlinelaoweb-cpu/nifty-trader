@@ -1,9 +1,14 @@
-const CACHE = 'vardaannifty-v7';
-const ASSETS = ['/', '/manifest.json'];
+// VardaanNifty Service Worker v8 — network-first, no stale-shell blocking
+const CACHE = 'vardaannifty-v8';
 
 self.addEventListener('install', e => {
-    e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
     self.skipWaiting();
+    // Only pre-cache the manifest + icons — NOT the HTML shell.
+    // Pre-caching index.html caused PWA to launch a stale version that
+    // couldn't reach /api/health and stayed stuck on the splash screen.
+    e.waitUntil(
+        caches.open(CACHE).then(c => c.addAll(['/manifest.json']))
+    );
 });
 
 self.addEventListener('activate', e => {
@@ -16,18 +21,34 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-    if (e.request.url.includes('/api/')) {
-        e.respondWith(fetch(e.request).catch(() =>
-            new Response('{"error":"offline"}', { headers: {'Content-Type':'application/json'} })
-        ));
+    const url = e.request.url;
+
+    // API calls — always go to network, return JSON error stub if offline
+    if (url.includes('/api/')) {
+        e.respondWith(
+            fetch(e.request).catch(() =>
+                new Response('{"error":"offline","status":"waiting"}',
+                    { headers: { 'Content-Type': 'application/json' } })
+            )
+        );
         return;
     }
-    // Always network first for fresh HTML/JS
+
+    // HTML pages — always network-first, NO cache fallback for the shell.
+    // This ensures the app always loads fresh and the splash can contact /api/health.
+    if (e.request.destination === 'document' || url.endsWith('/')) {
+        e.respondWith(fetch(e.request));
+        return;
+    }
+
+    // Static assets (fonts, icons, manifest) — network-first with cache fallback
     e.respondWith(
         fetch(e.request)
             .then(res => {
-                const clone = res.clone();
-                caches.open(CACHE).then(c => c.put(e.request, clone));
+                if (res.ok) {
+                    const clone = res.clone();
+                    caches.open(CACHE).then(c => c.put(e.request, clone));
+                }
                 return res;
             })
             .catch(() => caches.match(e.request))
