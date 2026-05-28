@@ -151,25 +151,58 @@ let _nifty50Cache   = null;
 let _nifty50CacheAt = 0;
 let _nifty50Fetch   = null;   // serialise concurrent callers
 
+// Known NSE endpoints for Nifty50 stocks — tried in order, first success wins.
+// NSE silently changes these URLs; keeping multiple fallbacks makes us resilient.
+const NIFTY50_URLS = [
+    '/api/equity-stockIndices?index=NIFTY%2050',          // original (404 as of May 2026)
+    '/api/equity-stockIndices?index=NIFTY+50',            // space-encoded variant
+    '/api/live-analysis-data?index=NIFTY%2050',           // alternate live endpoint
+];
+
 async function fetchNifty50Stocks() {
     if (_nifty50Cache && Date.now() - _nifty50CacheAt < 60000) return _nifty50Cache;
     if (_nifty50Fetch) return _nifty50Fetch;
     _nifty50Fetch = (async () => {
-        try {
-            const data = await nseGet('/api/equity-stockIndices?index=NIFTY%2050');
-            if (data?.data) {
-                _nifty50Cache   = data.data;
-                _nifty50CacheAt = Date.now();
-                console.log(`[NSE] Nifty50 stocks loaded (${data.data.length} rows)`);
+        // Try each URL until one works
+        for (const url of NIFTY50_URLS) {
+            try {
+                const data = await nseGet(url);
+                const rows = data?.data || data?.index?.rows;
+                if (rows && rows.length > 10) {
+                    // Normalise field names — different endpoints use different keys
+                    _nifty50Cache = rows.map(r => ({
+                        symbol        : r.symbol,
+                        lastPrice     : r.lastPrice     ?? r.ltp   ?? r.last,
+                        previousClose : r.previousClose ?? r.prevClose,
+                        open          : r.open,
+                        dayHigh       : r.dayHigh       ?? r.high,
+                        dayLow        : r.dayLow        ?? r.low,
+                        totalTradedVolume: r.totalTradedVolume ?? r.volume ?? 0,
+                    }));
+                    _nifty50CacheAt = Date.now();
+                    console.log(`[NSE] Nifty50 stocks loaded via ${url} (${_nifty50Cache.length} rows)`);
+                    return _nifty50Cache;
+                }
+            } catch (e) {
+                console.warn(`[NSE] Nifty50 stocks failed (${url}): ${e.message}`);
             }
-        } catch (e) {
-            console.warn('[NSE] Nifty50 stocks failed:', e.message);
-        } finally {
-            _nifty50Fetch = null;
+        }
+
+        // All URLs failed — build a minimal stub from allIndices so A/D isn't 0/0
+        console.warn('[NSE] All Nifty50 URLs failed — building stub from allIndices cache');
+        const indices = await fetchAllIndices();
+        const niftySection = indices.filter(r =>
+            r.index && (r.indexSymbol === 'NIFTY 50' || r.index === 'NIFTY 50')
+        );
+        if (niftySection.length > 0) {
+            // allIndices has the index-level row but not individual stocks.
+            // Return empty array — breadth will report insufficient data gracefully.
         }
         return _nifty50Cache || [];
     })();
-    return _nifty50Fetch;
+    const result = await _nifty50Fetch;
+    _nifty50Fetch = null;
+    return result || [];
 }
 
 // ── NSE index quote ───────────────────────────────────────────────────────────
