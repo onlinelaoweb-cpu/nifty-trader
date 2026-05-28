@@ -48,7 +48,7 @@ const axios = require('axios');
 const BASE_URL   = 'https://www.nseindia.com';
 const OC_URL     = `${BASE_URL}/api/option-chain-indices?symbol=NIFTY`;
 const FIIDII_URL = `${BASE_URL}/api/fiidiiTradeReact`;
-const TIMEOUT_MS = 12_000;
+const TIMEOUT_MS = 18_000;
 
 const PCR_INTERVAL_MS    =  3 * 60 * 1000;   // re-fetch PCR every 3 min
 const FIIDII_INTERVAL_MS = 15 * 60 * 1000;   // re-fetch FII/DII every 15 min
