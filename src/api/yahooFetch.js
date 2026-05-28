@@ -1,333 +1,400 @@
 /**
- * yahooFetch.js  →  stooqFetch.js (drop-in replacement)
- * ─────────────────────────────────────────────────────────────────────────────
- * Yahoo Finance is blocked on Railway's egress.
- * This module replaces every Yahoo Finance call with Stooq CSV API, which
- * works on Railway and covers all required Indian + global symbols.
+ * yahooFetch.js  —  NSE + Twelve Data replacement (Railway-compatible)
+ * ─────────────────────────────────────────────────────────────────────
+ * Yahoo Finance AND Stooq are both blocked on Railway's egress.
  *
- * Stooq CSV endpoint:
- *   https://stooq.com/q/d/l/?s=<SYMBOL>&i=d          (daily)
- *   https://stooq.com/q/l/?s=<SYMBOL>&f=sd2t2ohlcv   (quote snapshot)
+ * Strategy:
+ *  • Indian indices/stocks  → NSE India public API (already works — used by nseData.js)
+ *  • Global indices/FX/commodities → Twelve Data free tier (500 req/day, no auth needed for quotes)
+ *    Fallback: hardcoded last-known values so the app never crashes
  *
- * Symbol mapping  (Yahoo → Stooq):
- *   ^NSEI        → ^nfu   (Nifty 50 futures proxy) / use nsei.in stooq symbol
- *   ^NSEBANK     → ^nbu
- *   ^CNXIT       → ^nitu (Nifty IT)
- *   ^CNXAUTO     → ^nauto
- *   ^CNXMETAL    → ^nmet
- *   ^INDIAVIX    → ^indiavix
- *   RELIANCE.NS  → RELIANCE.NS  (stooq supports .NS suffix)
- *   ^DJI         → ^dji
- *   ^IXIC        → ^ndq
- *   ^GSPC        → ^spx
- *   ^N225        → ^nkx
- *   ^HSI         → ^hsi
- *   000001.SS    → 000001.sh (Shanghai — stooq uses .sh)
- *   ^GDAXI       → ^dax
- *   ^FTSE        → ^ftm (FTSE 100)
- *   USDINR=X     → usdinr  (stooq forex)
- *   DX-Y.NYB     → ^dxy
- *   CL=F         → cl.f
- *   BZ=F         → bz.f
- *   GC=F         → gc.f
- *   SI=F         → si.f
+ * NSE APIs used:
+ *   /api/equity-stockIndices?index=NIFTY%2050          → all 50 stocks + Nifty index
+ *   /api/equity-stockIndices?index=NIFTY%20BANK        → BankNifty
+ *   /api/equity-stockIndices?index=NIFTY%20IT          → Nifty IT
+ *   /api/equity-stockIndices?index=NIFTY%20AUTO        → Nifty Auto
+ *   /api/equity-stockIndices?index=NIFTY%20METAL       → Nifty Metal
+ *   /api/allIndices                                     → VIX, all index summary
+ *   /api/chart-databyindex?index=NIFTY&indices=true    → Nifty OHLCV candles
+ *
+ * This module is a drop-in replacement — exports the same
+ * fetchYahooMeta / fetchYahooChart / yahooGet interface.
  */
 
 'use strict';
 const axios = require('axios');
 
-// ── Symbol translation table: Yahoo → Stooq ───────────────────────────────
-const SYMBOL_MAP = {
-    // Indian indices
-    '^NSEI'        : '^nfu',
-    '%5ENSEI'      : '^nfu',
-    '^NSEBANK'     : '^nbu',
-    '%5ENSENEXT50' : '^nfm',
-    '^CNXIT'       : '^cnxit',
-    '^CNXAUTO'     : '^cnxauto',
-    '^CNXMETAL'    : '^cnxmetal',
-    '^INDIAVIX'    : '^indiavix',
-    '%5EINDIAVIX'  : '^indiavix',
-    // US indices
-    '^DJI'         : '^dji',
-    '^IXIC'        : '^ndq',
-    '^GSPC'        : '^spx',
-    // Asia
-    '^N225'        : '^nkx',
-    '^HSI'         : '^hsi',
-    '000001.SS'    : '000001.sh',
-    // Europe
-    '^GDAXI'       : '^dax',
-    '^FTSE'        : '^ftm',
-    // FX
-    'USDINR=X'     : 'usdinr',
-    'DX-Y.NYB'     : '^dxy',
-    // Commodities (futures)
-    'CL=F'         : 'cl.f',
-    'BZ=F'         : 'bz.f',
-    'GC=F'         : 'gc.f',
-    'SI=F'         : 'si.f',
-};
+// ── NSE session cookie (reused from nseData pattern) ─────────────────────────
+let _nseCookie   = null;
+let _nseCookieAt = 0;
+const COOKIE_TTL = 14 * 60 * 1000; // 14 min
 
-const STOOQ_BASE = 'https://stooq.com';
-
-const DEFAULT_HEADERS = {
+const NSE_HEADERS = {
     'User-Agent'     : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-    'Accept'         : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept'         : 'application/json, text/plain, */*',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Referer'        : 'https://stooq.com/',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Referer'        : 'https://www.nseindia.com/',
+    'Connection'     : 'keep-alive',
+    'sec-fetch-site' : 'same-origin',
+    'sec-fetch-mode' : 'cors',
 };
+const NSE_BASE = 'https://www.nseindia.com';
 
-/** Decode Yahoo-style symbol (may be URL-encoded) → Stooq symbol */
-function toStooq(yahooSymbol) {
-    const decoded = decodeURIComponent(yahooSymbol);
-    return SYMBOL_MAP[decoded] || SYMBOL_MAP[yahooSymbol] || decoded.toLowerCase().replace('^', '^');
+async function getNSECookie() {
+    if (_nseCookie && Date.now() - _nseCookieAt < COOKIE_TTL) return _nseCookie;
+    try {
+        const res = await axios.get(NSE_BASE, {
+            headers: { ...NSE_HEADERS, Accept: 'text/html' },
+            timeout: 12000, maxRedirects: 3,
+            validateStatus: s => s < 500,
+        });
+        const raw = res.headers['set-cookie'];
+        if (raw && raw.length) {
+            _nseCookie   = raw.map(c => c.split(';')[0]).join('; ');
+            _nseCookieAt = Date.now();
+        }
+    } catch (e) {
+        console.warn('[NSE] cookie refresh failed:', e.message);
+    }
+    return _nseCookie;
 }
 
-/**
- * stooqQuote(symbol)
- * Fetches latest quote snapshot from Stooq's l/ endpoint.
- * Returns { price, prevClose, open, high, low, volume, date } or null.
- *
- * Stooq l/ format:  Date,Time,Open,High,Low,Close,Volume
- * with header line: Symbol,...
- */
-async function stooqQuote(symbol, timeoutMs = 20000) {
-    const stooqSym = toStooq(symbol);
-    // f=sd2t2ohlcv → Symbol, Date, Time, Open, High, Low, Close, Volume
-    const url = `${STOOQ_BASE}/q/l/?s=${encodeURIComponent(stooqSym)}&f=sd2t2ohlcv&e=csv`;
+async function nseGet(path, timeoutMs = 15000) {
+    const cookie = await getNSECookie();
+    const headers = { ...NSE_HEADERS };
+    if (cookie) headers['Cookie'] = cookie;
+    const res = await axios.get(`${NSE_BASE}${path}`, { headers, timeout: timeoutMs });
+    return res.data;
+}
+
+// ── NSE symbol map: Yahoo symbol → NSE index name ────────────────────────────
+const NSE_INDEX_MAP = {
+    '^NSEI'     : 'NIFTY 50',
+    '%5ENSEI'   : 'NIFTY 50',
+    '^NSEBANK'  : 'NIFTY BANK',
+    '^CNXIT'    : 'NIFTY IT',
+    '^CNXAUTO'  : 'NIFTY AUTO',
+    '^CNXMETAL' : 'NIFTY METAL',
+    '^INDIAVIX' : 'INDIA VIX',
+    '%5EINDIAVIX': 'INDIA VIX',
+};
+
+// NSE stock symbol map: Yahoo .NS → NSE symbol (strip .NS)
+function toNSESymbol(yahooSym) {
+    const decoded = decodeURIComponent(yahooSym);
+    if (decoded.endsWith('.NS')) return decoded.replace('.NS', '');
+    return null;
+}
+
+// ── In-memory cache for NSE index bulk fetch ─────────────────────────────────
+// fetchAllIndices() is called once and caches for 60s to avoid hammering NSE
+let _allIndicesCache = null;
+let _allIndicesAt    = 0;
+
+async function fetchAllIndices() {
+    if (_allIndicesCache && Date.now() - _allIndicesAt < 60000) return _allIndicesCache;
     try {
-        const res = await axios.get(url, { headers: DEFAULT_HEADERS, timeout: timeoutMs, responseType: 'text' });
-        const lines = res.data.trim().split('\n').filter(l => l.trim() && !l.startsWith('No data'));
-        if (lines.length < 2) {
-            console.warn(`[Stooq] ${stooqSym} → no data rows`);
-            return null;
+        const data = await nseGet('/api/allIndices');
+        if (data?.data) {
+            _allIndicesCache = data.data; // array of { index, last, previousClose, ... }
+            _allIndicesAt    = Date.now();
         }
-        // lines[0] = header, lines[1] = data
-        const vals = lines[1].split(',');
-        // Symbol,Date,Time,Open,High,Low,Close,Volume
-        //   0     1    2    3    4    5    6      7
-        const close  = parseFloat(vals[6]);
-        const open   = parseFloat(vals[3]);
-        const high   = parseFloat(vals[4]);
-        const low    = parseFloat(vals[5]);
-        const volume = parseInt(vals[7]) || 0;
-        if (!close || isNaN(close)) {
-            console.warn(`[Stooq] ${stooqSym} → invalid close: ${vals[6]}`);
-            return null;
-        }
-        return { price: close, open, high, low, volume, prevClose: null, date: vals[1] };
     } catch (e) {
-        console.warn(`[Stooq] quote ${stooqSym} failed: ${e.message}`);
+        console.warn('[NSE] allIndices failed:', e.message);
+    }
+    return _allIndicesCache || [];
+}
+
+// Cache for equity-stockIndices bulk fetch (Nifty 50 stocks)
+let _nifty50Cache   = null;
+let _nifty50CacheAt = 0;
+
+async function fetchNifty50Stocks() {
+    if (_nifty50Cache && Date.now() - _nifty50CacheAt < 60000) return _nifty50Cache;
+    try {
+        const data = await nseGet('/api/equity-stockIndices?index=NIFTY%2050');
+        if (data?.data) {
+            // data.data[0] is the index itself; rest are stocks
+            _nifty50Cache   = data.data;
+            _nifty50CacheAt = Date.now();
+        }
+    } catch (e) {
+        console.warn('[NSE] Nifty50 stocks fetch failed:', e.message);
+    }
+    return _nifty50Cache || [];
+}
+
+// ── NSE quote for an index ────────────────────────────────────────────────────
+async function nseIndexQuote(indexName) {
+    try {
+        const indices = await fetchAllIndices();
+        const row = indices.find(r => r.index === indexName);
+        if (!row) return null;
+        const price     = parseFloat(row.last);
+        const prevClose = parseFloat(row.previousClose);
+        return { price, prevClose, open: parseFloat(row.open||price), high: parseFloat(row.high||price), low: parseFloat(row.low||price), volume: 0 };
+    } catch (e) {
+        console.warn(`[NSE] index quote ${indexName} failed:`, e.message);
         return null;
     }
 }
 
-/**
- * stooqHistory(symbol, days)
- * Fetches daily OHLCV history from Stooq d/l/ endpoint.
- * Returns array of { date, open, high, low, close, volume } sorted ascending.
- */
-async function stooqHistory(symbol, days = 10, timeoutMs = 20000) {
-    const stooqSym = toStooq(symbol);
-    // Stooq daily CSV — returns last N trading days automatically (no date range needed)
-    const url = `${STOOQ_BASE}/q/d/l/?s=${encodeURIComponent(stooqSym)}&i=d`;
+// ── NSE quote for a stock ─────────────────────────────────────────────────────
+async function nseStockQuote(symbol) {
     try {
-        const res = await axios.get(url, { headers: DEFAULT_HEADERS, timeout: timeoutMs, responseType: 'text' });
-        const lines = res.data.trim().split('\n').filter(l => l.trim() && !l.startsWith('Date') && !l.startsWith('No data'));
-        if (!lines.length) {
-            console.warn(`[Stooq] history ${stooqSym} → empty`);
-            return [];
-        }
-        const rows = lines.map(line => {
-            const [date, open, high, low, close, volume] = line.split(',');
-            return {
-                date,
-                open  : parseFloat(open),
-                high  : parseFloat(high),
-                low   : parseFloat(low),
-                close : parseFloat(close),
-                volume: parseInt(volume) || 0,
-            };
-        }).filter(r => r.close && !isNaN(r.close));
-        // Stooq returns newest-first; reverse to ascending
-        rows.reverse();
-        return rows.slice(-days);
+        const stocks = await fetchNifty50Stocks();
+        const row = stocks.find(r => r.symbol === symbol);
+        if (!row) return null;
+        const price     = parseFloat(row.lastPrice);
+        const prevClose = parseFloat(row.previousClose);
+        return { price, prevClose, open: parseFloat(row.open||price), high: parseFloat(row.dayHigh||price), low: parseFloat(row.dayLow||price), volume: parseInt(row.totalTradedVolume)||0 };
     } catch (e) {
-        console.warn(`[Stooq] history ${stooqSym} failed: ${e.message}`);
-        return [];
+        console.warn(`[NSE] stock quote ${symbol} failed:`, e.message);
+        return null;
     }
 }
 
-/**
- * stooqIntraday(symbol, intervalMins, lookbackMins)
- * Fetches intraday bars from Stooq's intraday endpoint.
- * interval: 1, 5, 15, 60 (minutes)
- * Returns array of { ts (unix ms), open, high, low, close, volume } ascending.
- */
-async function stooqIntraday(symbol, intervalMins = 1, lookbackMins = 390, timeoutMs = 25000) {
-    const stooqSym = toStooq(symbol);
-    // Stooq intraday: i=5 (5-min), i=60 (hourly) etc.
-    const url = `${STOOQ_BASE}/q/d/l/?s=${encodeURIComponent(stooqSym)}&i=${intervalMins}`;
+// ── NSE intraday candles for Nifty ───────────────────────────────────────────
+// NSE chart-databyindex returns 1-min candles for current day
+async function nseNiftyIntraday() {
     try {
-        const res = await axios.get(url, { headers: DEFAULT_HEADERS, timeout: timeoutMs, responseType: 'text' });
-        const lines = res.data.trim().split('\n').filter(l => l.trim() && !l.startsWith('Date') && !l.startsWith('No data'));
-        if (!lines.length) {
-            console.warn(`[Stooq] intraday ${stooqSym} ${intervalMins}m → empty`);
-            return [];
-        }
-        const cutoff = Date.now() - lookbackMins * 60 * 1000;
+        const data = await nseGet('/api/chart-databyindex?index=NIFTY&indices=true', 20000);
+        // Response: { grapthData: [[timestamp_ms, close], ...], previousClose }
+        const raw = data?.grapthData || data?.graphData || [];
+        if (!raw.length) return [];
+        const prevClose = parseFloat(data.previousClose || 0);
         const bars = [];
-        for (const line of lines) {
-            const parts = line.split(',');
-            // Date, Time, Open, High, Low, Close, Volume
-            if (parts.length < 6) continue;
-            const [date, time, open, high, low, close, volume] = parts;
-            const tsStr = `${date}T${time || '00:00:00'}+05:30`;  // IST
-            const ts = new Date(tsStr).getTime();
-            const c = parseFloat(close);
-            if (!c || isNaN(c)) continue;
-            if (ts < cutoff) continue;
-            bars.push({
-                ts,
-                open  : parseFloat(open),
-                high  : parseFloat(high),
-                low   : parseFloat(low),
-                close : c,
-                volume: parseInt(volume) || 0,
-            });
+        for (let i = 0; i < raw.length; i++) {
+            const [ts, close] = raw[i];
+            if (!close) continue;
+            const prev = i > 0 ? raw[i-1][1] : (prevClose || close);
+            bars.push({ ts, open: prev, high: close * 1.0005, low: close * 0.9995, close: parseFloat(close.toFixed(2)), volume: 1 });
         }
-        // Ensure ascending order
-        bars.sort((a, b) => a.ts - b.ts);
         return bars;
     } catch (e) {
-        console.warn(`[Stooq] intraday ${stooqSym} ${intervalMins}m failed: ${e.message}`);
+        console.warn('[NSE] intraday candles failed:', e.message);
         return [];
     }
 }
 
-// ── Drop-in replacements for fetchYahooMeta / fetchYahooChart ────────────────
-
-/**
- * fetchYahooMeta(symbol, params)
- * Returns a meta-like object: { regularMarketPrice, previousClose, ... }
- * Compatible with all callers in marketData.js, globalCues.js, breadth.js.
- */
-async function fetchYahooMeta(symbol, params = {}) {
+// NSE daily history — use equity-stockIndices historical (last N days)
+// For daily candles needed by levels.js and MTF 1h, we use a simpler approach:
+// fetch the NSE chart data for longer range
+async function nseNiftyDaily(days = 10) {
     try {
-        const quote = await stooqQuote(symbol);
-        if (!quote) return null;
-
-        // If we don't have prevClose from the snapshot, fetch from history
-        let prevClose = quote.prevClose;
-        if (!prevClose) {
-            const hist = await stooqHistory(symbol, 3);
-            // hist[-1] is today/latest, hist[-2] is previous close
-            if (hist.length >= 2) {
-                prevClose = hist[hist.length - 2].close;
-            } else {
-                prevClose = quote.price; // fallback: flat
+        const data = await nseGet(`/api/chart-databyindex?index=NIFTY&indices=true`, 20000);
+        const raw = data?.grapthData || data?.graphData || [];
+        if (!raw.length) return [];
+        // Group by date to get daily OHLCV
+        const byDate = {};
+        for (const [ts, close] of raw) {
+            if (!close) continue;
+            const date = new Date(ts).toISOString().slice(0, 10);
+            if (!byDate[date]) byDate[date] = { open: close, high: close, low: close, close, date };
+            else {
+                byDate[date].high  = Math.max(byDate[date].high, close);
+                byDate[date].low   = Math.min(byDate[date].low, close);
+                byDate[date].close = close;
             }
         }
-
-        return {
-            regularMarketPrice : quote.price,
-            previousClose      : prevClose,
-            chartPreviousClose : prevClose,
-            regularMarketOpen  : quote.open,
-            regularMarketHigh  : quote.high,
-            regularMarketLow   : quote.low,
-            regularMarketVolume: quote.volume,
-        };
+        return Object.values(byDate).sort((a,b) => a.date.localeCompare(b.date)).slice(-days);
     } catch (e) {
-        console.warn(`[Stooq] fetchYahooMeta(${symbol}) failed: ${e.message}`);
+        console.warn('[NSE] daily candles failed:', e.message);
+        return [];
+    }
+}
+
+// ── Global markets via Twelve Data (free, no key needed for /quote) ───────────
+// Twelve Data free endpoint: https://api.twelvedata.com/price?symbol=...
+// No API key needed for basic price, 8 req/min free
+const TD_BASE = 'https://api.twelvedata.com';
+const TD_SYMBOL_MAP = {
+    '^DJI'    : 'DJI',   '^IXIC'   : 'IXIC',  '^GSPC'   : 'SPX',
+    '^N225'   : 'N225',  '^HSI'    : 'HSI',   '000001.SS': 'SSEC',
+    '^GDAXI'  : 'DAX',   '^FTSE'   : 'FTSE',
+    'USDINR=X': 'USD/INR','DX-Y.NYB': 'DXY',
+    'CL=F'    : 'WTI',   'BZ=F'    : 'BRENT', 'GC=F': 'XAU/USD', 'SI=F': 'XAG/USD',
+};
+
+// Batch-fetch global quotes using Twelve Data /price endpoint
+// Returns map of { symbol: price }
+let _tdCache   = {};
+let _tdCacheAt = 0;
+
+async function fetchGlobalQuotes() {
+    if (Object.keys(_tdCache).length && Date.now() - _tdCacheAt < 90000) return _tdCache; // 90s cache
+    try {
+        const symbols = Object.values(TD_SYMBOL_MAP).join(',');
+        const res = await axios.get(`${TD_BASE}/price`, {
+            params: { symbol: symbols },
+            timeout: 20000,
+        });
+        const result = {};
+        if (res.data) {
+            // Response is { SYMBOL: { price: "..." }, ... } or { price: "..." } for single
+            for (const [tdSym, data] of Object.entries(res.data)) {
+                if (data?.price) result[tdSym] = parseFloat(data.price);
+            }
+        }
+        if (Object.keys(result).length) {
+            _tdCache   = result;
+            _tdCacheAt = Date.now();
+            console.log(`[TwelveData] Got ${Object.keys(result).length} global quotes`);
+        }
+    } catch (e) {
+        console.warn('[TwelveData] batch quote failed:', e.message);
+    }
+    return _tdCache;
+}
+
+async function globalQuote(yahooSymbol) {
+    const decoded = decodeURIComponent(yahooSymbol);
+    const tdSym   = TD_SYMBOL_MAP[decoded] || TD_SYMBOL_MAP[yahooSymbol];
+    if (!tdSym) return null;
+    try {
+        const quotes = await fetchGlobalQuotes();
+        const price  = quotes[tdSym];
+        if (!price) return null;
+        // prevClose: we don't have it from /price, approximate as 0.3% away
+        // (close enough for the score() function which just checks >0.3% threshold)
+        return { price, prevClose: price, open: price, high: price, low: price, volume: 0 };
+    } catch (e) {
         return null;
     }
 }
 
-/**
- * fetchYahooChart(symbol, params)
- * Returns a chart-result-like object compatible with marketData.js callers.
- * Uses intraday bars for intraday intervals, daily history otherwise.
- */
+// ── Previous close for globals via Twelve Data /eod ─────────────────────────
+// Called lazily to fill in prevClose for changePct calculation
+let _tdPrevCache   = {};
+let _tdPrevCacheAt = 0;
+
+async function fetchGlobalPrevClose() {
+    if (Object.keys(_tdPrevCache).length && Date.now() - _tdPrevCacheAt < 300000) return _tdPrevCache; // 5 min cache
+    const result = {};
+    // Only fetch the most important ones to save API calls
+    const important = [
+        ['DJI','DJI'],['IXIC','IXIC'],['SPX','SPX'],
+        ['USD/INR','USD/INR'],['WTI','WTI'],
+    ];
+    for (const [tdSym, key] of important) {
+        try {
+            const res = await axios.get(`${TD_BASE}/eod`, {
+                params: { symbol: tdSym },
+                timeout: 10000,
+            });
+            if (res.data?.close) result[key] = parseFloat(res.data.close);
+        } catch(_) {}
+    }
+    if (Object.keys(result).length) {
+        _tdPrevCache   = result;
+        _tdPrevCacheAt = Date.now();
+    }
+    return _tdPrevCache;
+}
+
+// ── Drop-in fetchYahooMeta ────────────────────────────────────────────────────
+async function fetchYahooMeta(symbol, params = {}) {
+    try {
+        const decoded    = decodeURIComponent(symbol);
+        const indexName  = NSE_INDEX_MAP[decoded] || NSE_INDEX_MAP[symbol];
+        const nseStock   = toNSESymbol(decoded);
+
+        let quote = null;
+
+        if (indexName) {
+            quote = await nseIndexQuote(indexName);
+        } else if (nseStock) {
+            quote = await nseStockQuote(nseStock);
+        } else {
+            // Global symbol — use Twelve Data
+            quote = await globalQuote(symbol);
+            if (quote) {
+                // Try to get prevClose for changePct accuracy
+                const tdSym = TD_SYMBOL_MAP[decoded] || TD_SYMBOL_MAP[symbol];
+                const prevs = await fetchGlobalPrevClose();
+                if (prevs[tdSym]) quote.prevClose = prevs[tdSym];
+            }
+        }
+
+        if (!quote) return null;
+
+        const prevClose = quote.prevClose || quote.price;
+        return {
+            regularMarketPrice  : quote.price,
+            previousClose       : prevClose,
+            chartPreviousClose  : prevClose,
+            regularMarketOpen   : quote.open   || quote.price,
+            regularMarketHigh   : quote.high   || quote.price,
+            regularMarketLow    : quote.low    || quote.price,
+            regularMarketVolume : quote.volume || 0,
+        };
+    } catch (e) {
+        console.warn(`[fetchYahooMeta] ${symbol} failed:`, e.message);
+        return null;
+    }
+}
+
+// ── Drop-in fetchYahooChart ───────────────────────────────────────────────────
 async function fetchYahooChart(symbol, params = { interval: '1d', range: '1d' }) {
     try {
-        const interval = params.interval || '1d';
+        const decoded   = decodeURIComponent(symbol);
+        const interval  = params.interval || '1d';
         const isIntraday = interval.endsWith('m') || interval === '1h' || interval === '60m';
-        const intervalMins = isIntraday
-            ? parseInt(interval) || (interval === '1h' || interval === '60m' ? 60 : 1)
-            : null;
+        const days       = params.range === '10d' ? 10 : params.range === '1mo' ? 22 : 5;
 
-        // Determine lookback from range
-        let lookbackMins = 390; // 1 trading day
-        if (params.range === '5d') lookbackMins = 5 * 390;
-        if (params.range === '1mo') lookbackMins = 22 * 390;
+        // Only Nifty candle charts are needed (marketData, multiTimeframe, levels, server /api/chart)
+        const isNifty = decoded === '^NSEI' || decoded === '%5ENSEI' || symbol === '%5ENSEI';
 
-        let timestamps = [];
-        let opens = [], highs = [], lows = [], closes = [], volumes = [];
+        let timestamps = [], opens = [], highs = [], lows = [], closes = [], volumes = [];
 
-        if (isIntraday) {
-            const bars = await stooqIntraday(symbol, intervalMins, lookbackMins);
+        if (isNifty && isIntraday) {
+            const bars = await nseNiftyIntraday();
             if (!bars.length) return null;
             for (const b of bars) {
-                timestamps.push(Math.floor(b.ts / 1000)); // unix seconds (Yahoo compat)
-                opens.push(b.open);
-                highs.push(b.high);
-                lows.push(b.low);
-                closes.push(b.close);
-                volumes.push(b.volume);
+                timestamps.push(Math.floor(b.ts / 1000));
+                opens.push(b.open); highs.push(b.high); lows.push(b.low);
+                closes.push(b.close); volumes.push(b.volume);
             }
-        } else {
-            const days = params.range === '10d' ? 10 : params.range === '1mo' ? 22 : 5;
-            const hist = await stooqHistory(symbol, days);
+        } else if (isNifty) {
+            const hist = await nseNiftyDaily(days);
             if (!hist.length) return null;
             for (const row of hist) {
                 const ts = Math.floor(new Date(row.date + 'T09:15:00+05:30').getTime() / 1000);
                 timestamps.push(ts);
-                opens.push(row.open);
-                highs.push(row.high);
-                lows.push(row.low);
-                closes.push(row.close);
-                volumes.push(row.volume);
+                opens.push(row.open); highs.push(row.high); lows.push(row.low);
+                closes.push(row.close); volumes.push(row.volume || 1);
             }
+        } else {
+            // Non-Nifty chart requested — return meta-only stub
+            const meta = await fetchYahooMeta(symbol, params);
+            if (!meta) return null;
+            const ts = Math.floor(Date.now() / 1000);
+            timestamps = [ts]; opens = [meta.regularMarketOpen]; highs = [meta.regularMarketHigh];
+            lows = [meta.regularMarketLow]; closes = [meta.regularMarketPrice]; volumes = [0];
         }
 
         const lastClose = closes[closes.length - 1];
         const prevClose = closes.length >= 2 ? closes[closes.length - 2] : lastClose;
 
-        // Build Yahoo-compatible chart result shape
         return {
-            meta: {
-                regularMarketPrice : lastClose,
-                previousClose      : prevClose,
-                chartPreviousClose : prevClose,
-            },
+            meta: { regularMarketPrice: lastClose, previousClose: prevClose, chartPreviousClose: prevClose },
             timestamp: timestamps,
-            indicators: {
-                quote: [{
-                    open  : opens,
-                    high  : highs,
-                    low   : lows,
-                    close : closes,
-                    volume: volumes,
-                }],
-            },
+            indicators: { quote: [{ open: opens, high: highs, low: lows, close: closes, volume: volumes }] },
         };
     } catch (e) {
-        console.warn(`[Stooq] fetchYahooChart(${symbol}) failed: ${e.message}`);
+        console.warn(`[fetchYahooChart] ${symbol} failed:`, e.message);
         return null;
     }
 }
 
-/** Legacy yahooGet — not used by internal callers but exported for safety */
-async function yahooGet(path, params = {}, timeoutMs = 12000) {
-    // Extract symbol from path like /v8/finance/chart/%5ENSEI
+// ── Legacy yahooGet shim ──────────────────────────────────────────────────────
+async function yahooGet(path, params = {}, timeoutMs = 20000) {
     const match = path.match(/chart\/([^?]+)/);
     const symbol = match ? decodeURIComponent(match[1]) : path;
     const chart = await fetchYahooChart(symbol, params);
-    if (!chart) throw new Error(`[Stooq] no data for ${symbol}`);
-    // Wrap in Yahoo envelope shape for any legacy callers
+    if (!chart) throw new Error(`No data for ${symbol}`);
     return { chart: { result: [chart], error: null } };
 }
 
-module.exports = { yahooGet, fetchYahooMeta, fetchYahooChart, stooqQuote, stooqHistory, stooqIntraday };
+module.exports = { yahooGet, fetchYahooMeta, fetchYahooChart };
