@@ -1,19 +1,16 @@
-const axios = require('axios');
+const { fetchYahooChart } = require('./yahooFetch');  // now backed by Stooq
 
 async function calculateSRLevels(currentPrice, maxPainData = null) {
     try {
-        const res = await axios.get(
-            'https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=10d',
-            { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 8000 }
-        );
+        const result = await fetchYahooChart('%5ENSEI', { interval: '1d', range: '10d' });
+        if (!result) return null;
 
-        const result = res.data?.chart?.result?.[0];
-        const quotes = result?.indicators?.quote?.[0];
+        const quotes = result.indicators?.quote?.[0];
         if (!quotes) return null;
 
-        const highs  = quotes.high?.filter(v => v != null)  || [];
-        const lows   = quotes.low?.filter(v => v != null)   || [];
-        const closes = quotes.close?.filter(v => v != null) || [];
+        const highs  = (quotes.high  || []).filter(v => v != null);
+        const lows   = (quotes.low   || []).filter(v => v != null);
+        const closes = (quotes.close || []).filter(v => v != null);
 
         if (closes.length < 2) return null;
 
