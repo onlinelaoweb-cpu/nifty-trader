@@ -97,26 +97,32 @@ function toNSESymbol(symbol) {
 }
 
 // ── Bulk NSE allIndices cache ─────────────────────────────────────────────────
-let _allIndicesCache = null;
-let _allIndicesAt    = 0;
-let _allIndicesFetch = null;
+let _allIndicesCache   = null;
+let _allIndicesAt      = 0;
+let _allIndicesFailed  = false;  // true after a timeout — retry sooner
+let _allIndicesFetch   = null;
 
 async function fetchAllIndices() {
-    if (Date.now() - _allIndicesAt < 240000) return _allIndicesCache || [];
+    // On success: cache for 4 min. On failure: retry after 30s (not 4 min).
+    const ttl = _allIndicesFailed ? 30000 : 240000;
+    if (Date.now() - _allIndicesAt < ttl) return _allIndicesCache || [];
     if (_allIndicesFetch) return _allIndicesFetch;
     _allIndicesFetch = (async () => {
         try {
             const data = await nseGet('/api/allIndices');
             if (data?.data) {
-                _allIndicesCache = data.data;
-                _allIndicesAt    = Date.now();
+                _allIndicesCache  = data.data;
+                _allIndicesAt     = Date.now();
+                _allIndicesFailed = false;
                 console.log(`[NSE] allIndices loaded (${data.data.length} indices)`);
             } else {
-                _allIndicesAt = Date.now();
+                _allIndicesAt     = Date.now();
+                _allIndicesFailed = true;
             }
         } catch (e) {
             console.warn('[NSE] allIndices failed:', e.message);
-            _allIndicesAt = Date.now();
+            _allIndicesAt     = Date.now();
+            _allIndicesFailed = true;
         } finally {
             _allIndicesFetch = null;
         }
@@ -198,23 +204,81 @@ async function fetchNifty50Stocks() {
     return _nifty50Fetch;
 }
 
-// ── NSE index quote ───────────────────────────────────────────────────────────
+// ── Yahoo Finance symbol map for Indian indices (NSE fallback) ───────────────
+const YAHOO_FALLBACK_MAP = {
+    'INDIA VIX'  : '%5EINDIAVIX',
+    'NIFTY BANK' : '%5ENSEBANK',
+    'NIFTY IT'   : '%5ECNXIT',
+    'NIFTY AUTO' : '%5ECNXAUTO',
+    'NIFTY METAL': '%5ECNXMETAL',
+    'NIFTY 50'   : '%5ENSEI',
+};
+
+// ── Yahoo Finance direct HTTP (used only as NSE fallback) ────────────────────
+async function yahooDirectQuote(yahooSymbol) {
+    try {
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=2d`;
+        const res = await axios.get(url, {
+            timeout: 8000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                'Accept'    : 'application/json',
+            },
+        });
+        const result = res.data?.chart?.result?.[0];
+        if (!result) return null;
+        const meta      = result.meta;
+        const price     = parseFloat((meta.regularMarketPrice  || 0).toFixed(2));
+        const prevClose = parseFloat((meta.chartPreviousClose  || meta.previousClose || price).toFixed(2));
+        if (!price) return null;
+        return {
+            price,
+            prevClose,
+            open  : parseFloat((meta.regularMarketOpen    || price).toFixed(2)),
+            high  : parseFloat((meta.regularMarketDayHigh || price).toFixed(2)),
+            low   : parseFloat((meta.regularMarketDayLow  || price).toFixed(2)),
+            volume: meta.regularMarketVolume || 0,
+        };
+    } catch (e) {
+        console.warn(`[Yahoo fallback] ${yahooSymbol}:`, e.message);
+        return null;
+    }
+}
+
+// ── NSE index quote — NSE first, Yahoo Finance fallback ───────────────────────
 async function nseIndexQuote(indexName) {
     try {
         const indices = await fetchAllIndices();
         const row     = indices.find(r => r.index === indexName);
-        if (!row) { console.warn(`[NSE] index not found: ${indexName}`); return null; }
-        const price     = parseFloat(row.last);
-        const prevClose = parseFloat(row.previousClose);
-        return {
-            price,
-            prevClose,
-            open  : parseFloat(row.open   || price),
-            high  : parseFloat(row.high   || price),
-            low   : parseFloat(row.low    || price),
-            volume: 0,
-        };
+        if (row) {
+            const price     = parseFloat(row.last);
+            const prevClose = parseFloat(row.previousClose);
+            return {
+                price,
+                prevClose,
+                open  : parseFloat(row.open   || price),
+                high  : parseFloat(row.high   || price),
+                low   : parseFloat(row.low    || price),
+                volume: 0,
+            };
+        }
+        // NSE blocked / not found — try Yahoo Finance directly
+        const yahooSym = YAHOO_FALLBACK_MAP[indexName];
+        if (yahooSym) {
+            console.warn(`[NSE] index not found: ${indexName} — trying Yahoo fallback`);
+            const q = await yahooDirectQuote(yahooSym);
+            if (q) { console.log(`[Yahoo fallback] ${indexName}: ${q.price}`); return q; }
+        }
+        console.warn(`[NSE] index not found: ${indexName}`);
+        return null;
     } catch (e) {
+        // NSE threw an error — try Yahoo before giving up
+        const yahooSym = YAHOO_FALLBACK_MAP[indexName];
+        if (yahooSym) {
+            console.warn(`[NSE] index quote ${indexName} error — trying Yahoo fallback`);
+            const q = await yahooDirectQuote(yahooSym);
+            if (q) { console.log(`[Yahoo fallback] ${indexName}: ${q.price}`); return q; }
+        }
         console.warn(`[NSE] index quote ${indexName}:`, e.message);
         return null;
     }
