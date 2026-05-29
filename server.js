@@ -35,7 +35,7 @@ const app    = express();
 const server = http.createServer(app);
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static('public', { etag: false, maxAge: 0 }));
 
 const PORT    = process.env.PORT || 8080;
 const LOT_SIZE = 75;   // Nifty 50 lot size (updated Nov 2024 by SEBI: 50 → 75)
@@ -1194,7 +1194,12 @@ app.post('/api/telegram/test', async (req,res) => {
     res.json({success:true,msg:'Test sent!'});
 });
 
-app.get('/', (req,res) => res.sendFile(__dirname+'/public/index.html'));
+app.get('/', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.sendFile(__dirname + '/public/index.html');
+});
 
 // Serve stub sw.js
 app.get('/sw.js', (req,res) => { res.setHeader('Content-Type','application/javascript'); res.send('// Service Worker stub'); });
