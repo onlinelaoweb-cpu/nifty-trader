@@ -1,15 +1,14 @@
 'use strict';
 // breadth.js — Advance/Decline data for Nifty 50
 //
-// Strategy (Railway-compatible, 2-tier):
-//   Tier 1: fetchNifty50Stocks() from yahooFetch — uses equity-stockIndices endpoint.
-//           This is the richest source (all 50 stocks with prices).
-//   Tier 2: fetchAllIndices() fallback — allIndices IS working reliably from Railway.
-//           It contains Nifty50 sub-indices (NIFTY BANK, NIFTY IT, etc.) that we
-//           use as a proxy for sector-level breadth when stock data is unavailable.
+// Strategy (Railway-compatible):
+//   Tier 2 (sector indices) is used directly — fetchAllIndices() is reliable from
+//   Railway and contains Nifty50 sub-indices (NIFTY BANK, NIFTY IT, etc.) that
+//   serve as a proxy for sector-level breadth.
 //
-// The NSE equity-stockIndices endpoint returns 404 from Railway IPs as of May 2026,
-// so Tier 2 is the primary live source until NSE fixes their routing.
+//   Tier 1 (equity-stockIndices) is intentionally skipped: the NSE endpoint returns
+//   404 from Railway IPs as of May 2026, generating unnecessary error logs with no
+//   benefit since Tier 2 is sufficient for breadth analysis.
 
 const { fetchNifty50Stocks, fetchAllIndices } = require('./yahooFetch');
 
@@ -132,11 +131,8 @@ function buildResult(advances, declines, unchanged, bullWeight, bearWeight, stoc
 async function fetchAdvanceDecline() {
     try {
         console.log('📊 Fetching A/D data...');
-        // Try Tier 1 first (individual stocks)
-        const tier1 = await fetchBreadthFromStocks();
-        if (tier1) return tier1;
-        // Fall back to Tier 2 (sector indices — always works from Railway)
-        console.log('📊 Stock data unavailable — using sector indices for A/D');
+        // Skip Tier 1 (equity-stockIndices returns 404 from Railway IPs)
+        // Go straight to Tier 2 (sector indices — reliable from Railway)
         return await fetchBreadthFromIndices();
     } catch (err) {
         console.error('A/D fetch error:', err.message);
