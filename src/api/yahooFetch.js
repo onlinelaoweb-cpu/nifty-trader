@@ -111,7 +111,13 @@ let _allIndicesAt    = 0;
 let _allIndicesFetch = null;   // serialise concurrent callers
 
 async function fetchAllIndices() {
-    if (_allIndicesCache && Date.now() - _allIndicesAt < 240000) return _allIndicesCache;
+    // BUG FIX: previously _allIndicesAt was never stamped on failure, so the
+    // 240s TTL check was always expired -> every caller retried immediately,
+    // creating a polling storm of NSE requests every 10s when NSE is blocking
+    // Railway IPs.  Now we stamp _allIndicesAt on failure too, so the same
+    // 4-minute backoff window applies whether the last fetch succeeded or failed.
+    // Stale cache (if any) is still returned so the app stays functional.
+    if (Date.now() - _allIndicesAt < 240000) return _allIndicesCache || [];
     if (_allIndicesFetch) return _allIndicesFetch;
     _allIndicesFetch = (async () => {
         try {
@@ -120,9 +126,14 @@ async function fetchAllIndices() {
                 _allIndicesCache = data.data;
                 _allIndicesAt    = Date.now();
                 console.log(`[NSE] allIndices loaded (${data.data.length} indices)`);
+            } else {
+                // No data but no throw -- still stamp to avoid tight retry loop
+                _allIndicesAt = Date.now();
             }
         } catch (e) {
             console.warn('[NSE] allIndices failed:', e.message);
+            // Stamp so the 4-min TTL blocks further retries (prevents polling storm)
+            _allIndicesAt = Date.now();
         } finally {
             _allIndicesFetch = null;
         }

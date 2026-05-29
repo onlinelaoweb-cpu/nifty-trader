@@ -1195,48 +1195,41 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 
 <script>
 // ── BOOT SPLASH DISMISS ─────────────────────────────
-// Checks /api/health up to 3 times (every 1.5s). Dismisses as soon as the
-// server responds — even with no data — so the app never hangs on the splash.
-// Hard fallback at 5s: dismiss unconditionally so a slow server never blocks UI.
+// Single fetch attempt with a 1s AbortSignal timeout.
+// Dismisses immediately on success OR any failure (no retries — retries caused
+// the "round and round" hang when /api/health wasn't reachable from the client).
+// Hard fallback at 1.5s: guarantees splash never blocks the UI.
 (function(){
   const splash = document.getElementById('boot-splash');
   const status = document.getElementById('splash-status');
-  const msgs   = ['Connecting to server...','Loading market data...','Syncing signals...','Ready ✓'];
+  const msgs   = ['Connecting...','Loading data...','Syncing signals...','Ready ✓'];
   let i = 0;
-  const tick = setInterval(()=>{ i++; if(status && msgs[i]) status.textContent = msgs[i]; if(i >= msgs.length-1) clearInterval(tick); }, 800);
+  const tick = setInterval(()=>{ i++; if(status && msgs[i]) status.textContent = msgs[i]; if(i >= msgs.length-1) clearInterval(tick); }, 400);
 
+  let dismissed = false;
   function dismissSplash(msg) {
+    if (dismissed) return;
+    dismissed = true;
     clearInterval(tick);
     if (status) status.textContent = msg || 'Ready ✓';
     if (splash) splash.classList.add('hide');
   }
 
-  let attempts = 0;
   function checkReady() {
-    attempts++;
-    fetch('/api/health', { cache: 'no-store' })
+    // AbortSignal.timeout aborts the fetch after 1s — prevents hanging when
+    // /api/health is unreachable (no server, preview env, cold-start, etc.)
+    const signal = (typeof AbortSignal !== 'undefined' && AbortSignal.timeout)
+        ? AbortSignal.timeout(1000)
+        : undefined;
+    fetch('/api/health', { cache: 'no-store', signal })
       .then(r => r.json())
-      .then(d => {
-        // Server responded — dismiss regardless of data state
-        if (d.status === 'live') {
-          dismissSplash('Live data connected ✓');
-        } else {
-          dismissSplash('Market data loading...');
-        }
-      })
-      .catch(() => {
-        // Server not responding yet — retry up to 3 times then give up
-        if (attempts < 3) {
-          setTimeout(checkReady, 1500);
-        } else {
-          dismissSplash('Dashboard ready');
-        }
-      });
+      .then(d => dismissSplash(d.status === 'live' ? 'Live data connected ✓' : 'Market data loading...'))
+      .catch(() => dismissSplash('Dashboard ready'));   // no retry — dismiss immediately
   }
 
-  // Start checking after 1s, hard dismiss at 5s no matter what
-  setTimeout(checkReady, 1000);
-  setTimeout(()=>dismissSplash('Dashboard ready'), 5000);
+  // Start check after 300ms; hard dismiss at 1.5s no matter what
+  setTimeout(checkReady, 300);
+  setTimeout(()=>dismissSplash('Dashboard ready'), 1500);
 })();
 
 // Error handler — never let any JS error kill the whole page
