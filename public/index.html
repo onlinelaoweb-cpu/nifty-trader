@@ -532,10 +532,15 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="conf-label" id="conf-text">CONFIDENCE: 0%</div>
         <span class="conf-strength" id="conf-strength" style="display:none"></span>
       </div>
-      <div class="conf-ticks"><span>0</span><span>25</span><span style="color:var(--amber)">50</span><span id="conf-tick70" style="color:#4a6a8a">70</span><span>100</span></div>
+      <div class="conf-ticks"><span>0</span><span>25</span><span style="color:var(--amber)">50</span><span id="conf-tick70" style="color:#4a6a8a">65</span><span>100</span></div>
+      <div id="signal-streak" style="display:none;margin-top:5px;font-size:10px;font-family:'Orbitron',monospace;letter-spacing:1px;text-align:center;"></div>
     </div>
   </div>
 
+  <!-- Entry window badge -->
+  <div style="padding:0 12px 8px;text-align:center;">
+    <span id="entry-window-badge" style="display:none;font-size:10px;font-family:'Orbitron',monospace;letter-spacing:1px;font-weight:700;padding:3px 12px;border-radius:99px;border:1px solid;"></span>
+  </div>
 
   <!-- ═══ AI TRADE SUGGESTION CARD ═══ -->
   <div class="sec-label">🤖 AI TRADE SUGGESTION</div>
@@ -1432,12 +1437,42 @@ function renderDashboard(s) {
   // Strike range
   document.getElementById('strike-range').textContent = s.strikeRange || 'ATM ±200';
 
-  // Status dot
+  // Status dot + entry window label
   const dot = document.getElementById('status-dot');
   const statusTxt = document.getElementById('status-txt');
   if (dot && statusTxt) {
     dot.className = s.connected ? 'dot-live' : 'dot-off';
     statusTxt.textContent = s.connected ? 'LIVE' : 'WAITING';
+  }
+
+  // Entry window badge
+  const ewEl = document.getElementById('entry-window-badge');
+  if (ewEl && s.entryWindow) {
+    const ew = s.entryWindow;
+    const ewColor = ew.status === 'trade' ? 'var(--green)' : ew.status === 'caution' ? 'var(--amber)' : 'var(--red)';
+    const ewBg    = ew.status === 'trade' ? 'rgba(0,255,136,0.08)' : ew.status === 'caution' ? 'rgba(255,187,0,0.08)' : 'rgba(255,34,68,0.08)';
+    ewEl.textContent  = ew.label;
+    ewEl.style.color  = ewColor;
+    ewEl.style.background = ewBg;
+    ewEl.style.borderColor = ewColor;
+    ewEl.style.display = 'inline-block';
+  }
+
+  // Signal streak confirmation badge
+  const streakEl = document.getElementById('signal-streak');
+  if (streakEl) {
+    const streak = s.signalStreak || 0;
+    if (s.signal !== 'WAIT' && streak >= 2) {
+      streakEl.textContent = `✅ CONFIRMED (${streak} cycles)`;
+      streakEl.style.color = 'var(--green)';
+      streakEl.style.display = 'block';
+    } else if (streak === 1) {
+      streakEl.textContent = `⏳ CONFIRMING… (1/2)`;
+      streakEl.style.color = 'var(--amber)';
+      streakEl.style.display = 'block';
+    } else {
+      streakEl.style.display = 'none';
+    }
   }
 
   // Reasons

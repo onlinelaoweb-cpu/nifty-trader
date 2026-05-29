@@ -176,10 +176,12 @@ function getIndicatorSignal(price, rsi, ema9, ema21, vwap, bnLeadSignal) {
     }
 
     if (rsi !== null) {
-        if (rsi < 35)       { bull += 2; reasons.push(`RSI ${rsi} — Oversold ✅`); }
-        else if (rsi > 65)  { bear += 2; reasons.push(`RSI ${rsi} — Overbought ⚠️`); }
-        else if (rsi >= 50) { bull++;    reasons.push(`RSI ${rsi} — Bullish zone`); }
-        else                { bear++;    reasons.push(`RSI ${rsi} — Bearish zone`); }
+        // Option buyer zones: 40/60 for momentum, 30/70 are hard OB/OS
+        if      (rsi < 40)  { bull += 2; reasons.push(`RSI ${rsi} — Oversold, reversal zone ✅`); }
+        else if (rsi > 60)  { bear += 2; reasons.push(`RSI ${rsi} — Overbought, pullback zone ⚠️`); }
+        else if (rsi >= 52) { bull++;    reasons.push(`RSI ${rsi} — Bullish momentum zone`); }
+        else if (rsi <= 48) { bear++;    reasons.push(`RSI ${rsi} — Bearish momentum zone`); }
+        else                {            reasons.push(`RSI ${rsi} — Neutral band (48–52)`); }
     }
 
     if (ema9 !== null && ema21 !== null) {
@@ -195,24 +197,27 @@ function getIndicatorSignal(price, rsi, ema9, ema21, vwap, bnLeadSignal) {
 
     // ── Step 2: momentum confirmation gate ───────────
     // All three structural conditions must align AND the last closed
-    // candle body must confirm the direction. If momentum has already
-    // turned (e.g. bearish body on a bullish setup), we suppress the
-    // signal even if the score would have triggered it.
-    const lastCandle   = getLastClosedCandle();
-    const bullishBody  = lastCandle && lastCandle.close > lastCandle.open;
-    const bearishBody  = lastCandle && lastCandle.close < lastCandle.open;
+    // candle must have a meaningful body (not a doji).
+    // Doji candles = indecision. Body must be ≥25% of the full candle range.
+    // Tiny wicks-only candles frequently cause false signals for option buyers.
+    const lastCandle    = getLastClosedCandle();
+    const candleRange   = lastCandle ? (lastCandle.high - lastCandle.low) : 0;
+    const candleBody    = lastCandle ? Math.abs(lastCandle.close - lastCandle.open) : 0;
+    const meaningfulBody = lastCandle && candleRange > 0 && (candleBody / candleRange) >= 0.25;
+    const bullishBody   = lastCandle && lastCandle.close > lastCandle.open && meaningfulBody;
+    const bearishBody   = lastCandle && lastCandle.close < lastCandle.open && meaningfulBody;
 
     const bullGate =
         vwap   !== null && price > vwap &&   // price above VWAP
         ema9   !== null && ema21 !== null &&
         ema9   > ema21 &&                    // uptrend
-        bullishBody;                         // last candle closed green
+        bullishBody;                         // last candle: meaningful green body
 
     const bearGate =
         vwap   !== null && price < vwap &&   // price below VWAP
         ema9   !== null && ema21 !== null &&
         ema9   < ema21 &&                    // downtrend
-        bearishBody;                         // last candle closed red
+        bearishBody;                         // last candle: meaningful red body
 
     // ── Step 3: derive final signal ──────────────────
     const total = bull + bear;

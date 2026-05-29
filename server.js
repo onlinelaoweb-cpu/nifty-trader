@@ -89,6 +89,7 @@ let events       = [];
 let historyLoaded=false, prevSignal='WAIT', prevMTFAligned=false;
 let morningSummarySent=false, closeSummarySent=false, vixAlertSent=false;
 let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:15
+let signalStreak = { signal: 'WAIT', count: 0 }; // consecutive same-signal counter
 
 function isMarketOpen() {
     const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
@@ -99,11 +100,12 @@ function getIST() { return new Date(new Date().toLocaleString('en-US',{timeZone:
 function isSafeEntryWindow() {
     const ist = getIST();
     const m   = ist.getHours()*60 + ist.getMinutes();
-    if (m < 555) return { status:'pre',      label:'Pre-Open',                safe:false, reason:'Market not open yet' };
-    if (m < 570) return { status:'volatile', label:'Volatile (9:15–9:30)',    safe:false, reason:'Gap-fill window — wait for 9:30' };
-    if (m < 870) return { status:'trade',    label:'Safe Entry (9:30–14:30)', safe:true,  reason:null };
-    if (m <= 930) return { status:'theta',   label:'Theta Zone (14:30–15:30)',safe:false, reason:'Theta decay accelerating — avoid new entries' };
-    return              { status:'closed',   label:'Market Closed',           safe:false, reason:'Market closed' };
+    if (m < 555) return { status:'pre',      label:'Pre-Open',                   safe:false, reason:'Market not open yet' };
+    if (m < 570) return { status:'volatile', label:'Volatile (9:15–9:30)',        safe:false, reason:'Gap-fill window — wait for 9:30' };
+    if (m < 840) return { status:'trade',    label:'Safe Entry (9:30–14:00)',      safe:true,  reason:null };
+    if (m < 870) return { status:'caution',  label:'⚠️ Caution Zone (14:00–14:30)',safe:true,  reason:'Reduce position size — theta decay starting' };
+    if (m <= 930) return { status:'theta',   label:'Theta Zone (14:30–15:30)',     safe:false, reason:'Theta decay accelerating — avoid new entries' };
+    return              { status:'closed',   label:'Market Closed',               safe:false, reason:'Market closed' };
 }
 
 // PCR label — displayed on UI (thresholds tuned for real Nifty option chain behaviour)
@@ -333,6 +335,22 @@ function combineSignals(indicators) {
         }
     }
 
+    // ── ATM CE vs PE premium ratio — real-money directional bet ──────────────
+    // If CE premium is rising faster than PE, option buyers are positioning CALL.
+    // If PE premium is rising faster than CE, option buyers are positioning PUT.
+    // This is a 1-point vote using live optionFlow data already on state.
+    const of = marketState.optionFlow;
+    if (of?.atmCEpremium && of?.atmPEpremium && of.atmCEpremium > 0 && of.atmPEpremium > 0) {
+        const premRatio = of.atmCEpremium / of.atmPEpremium;
+        if (premRatio > 1.25) {
+            bull += 1;
+            reasons.push(`💰 CE premium ₹${of.atmCEpremium} >> PE ₹${of.atmPEpremium} — call buyers active ✅`);
+        } else if (premRatio < 0.8) {
+            bear += 1;
+            reasons.push(`💰 PE premium ₹${of.atmPEpremium} >> CE ₹${of.atmCEpremium} — put buyers active ⚠️`);
+        }
+    }
+
     // Raw directional intention from the vote tally
     const total = bull + bear;
     let rawSignal = 'WAIT', rawConfidence = 0;
@@ -389,12 +407,12 @@ function combineSignals(indicators) {
         mtfAligned : marketState.mtf.aligned,
 
         // 2. RSI must not already be stretched in the direction of entry.
-        //    For a CALL entry: RSI < 70 (not overbought — chasing a crowded move).
-        //    For a PUT  entry: RSI > 30 (not oversold  — fading a washed-out move).
-        //    WAIT signals are unconditionally clean (no direction to check).
+        //    For a CALL entry: RSI < 70 (not deeply overbought).
+        //    For a PUT  entry: RSI > 30 (not deeply oversold).
+        //    Tighter than before: chasing a 65+ RSI on calls often ends in reversal.
         rsiClean   : rawSignal === 'WAIT' || rsi === null
-                     || (rawSignal === 'BUY CALL' && rsi < 70)
-                     || (rawSignal === 'BUY PUT'  && rsi > 30),
+                     || (rawSignal === 'BUY CALL' && rsi < 68)
+                     || (rawSignal === 'BUY PUT'  && rsi > 32),
 
         // 3. Safe time window — already enforced at the top of this function.
         safeWindow : true,
@@ -453,7 +471,7 @@ function combineSignals(indicators) {
             // A WAIT here means "wait for a decisive break past the level, then re-enter."
             const srLvls = marketState.srLevels?.levels;
             if (srLvls?.length > 0 && marketState.nifty > 0) {
-                const bufferPts = marketState.maxPain?.expiryDay ? 50 : 30;
+                const bufferPts = marketState.maxPain?.expiryDay ? 75 : 50;  // raised from 30/50 → 50/75
                 const nearbyLevel = srLvls.find(lvl =>
                     Math.abs(marketState.nifty - lvl.price) <= bufferPts
                 );
@@ -479,6 +497,46 @@ function combineSignals(indicators) {
         confidence = Math.min(confidence, 60);
         if (confidence < before) reasons.push(`⚠️ Confidence capped at 60% — ADX ${adxVal} < 25 (trend weak, full size risky)`);
     }
+
+    // ── Caution zone confidence cap (14:00–14:30) ─────────────────────────────
+    // Theta decay accelerating — even valid signals have worse risk/reward.
+    // Cap at 70% to prevent overconfident entries in the danger zone.
+    if (signal !== 'WAIT' && ew.status === 'caution') {
+        const before = confidence;
+        confidence = Math.min(confidence, 70);
+        if (confidence < before) reasons.push(`⚠️ Caution zone 14:00–14:30 — confidence capped at 70%, reduce size`);
+    }
+
+    // ── Minimum confidence gate — 65% ────────────────────────────────────────
+    // As an option buyer, low-confidence entries lose to theta.
+    // Only trade when confidence is ≥65% — below that, the edge doesn't justify premium cost.
+    if (signal !== 'WAIT' && confidence < 65) {
+        signal = 'WAIT';
+        reasons.push(`⛔ Confidence ${confidence}% < 65% minimum — edge too thin for option buyer, wait`);
+    }
+
+    // ── Consecutive signal confirmation — 2 cycles needed ────────────────────
+    // Signal must appear in 2 consecutive poll cycles (≈6 seconds) before firing.
+    // Eliminates single-candle noise and RSI momentary spikes.
+    if (signal !== 'WAIT') {
+        if (signalStreak.signal === signal) {
+            signalStreak.count++;
+        } else {
+            signalStreak = { signal, count: 1 };
+        }
+        if (signalStreak.count < 2) {
+            reasons.push(`⏳ Signal confirming — cycle ${signalStreak.count}/2 (waiting for 2nd confirmation)`);
+            signal = 'WAIT';
+            confidence = Math.min(confidence, 40);
+        } else {
+            reasons.push(`✅ Signal confirmed ${signalStreak.count} consecutive cycles`);
+        }
+    } else {
+        signalStreak = { signal: 'WAIT', count: 0 };
+    }
+
+    // Expose streak count to frontend
+    marketState.signalStreak = signalStreak.count;
 
     return { signal, confidence, reasons };
 }
