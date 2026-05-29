@@ -509,7 +509,20 @@ async function fetchYahooMeta(symbol, params = {}) {
         const indexName = NSE_INDEX_MAP[decoded] || NSE_INDEX_MAP[symbol];
         const nseSym    = toNSESymbol(decoded);
 
-        if (isGlobal(symbol)) return null;
+        // Global symbols (world indices, forex, commodities) — fetch directly from Yahoo Finance
+        if (isGlobal(symbol)) {
+            const q = await yahooDirectQuote(encodeURIComponent(decoded));
+            if (!q) return null;
+            return {
+                regularMarketPrice  : q.price,
+                previousClose       : q.prevClose,
+                chartPreviousClose  : q.prevClose,
+                regularMarketOpen   : q.open   || q.price,
+                regularMarketHigh   : q.high   || q.price,
+                regularMarketLow    : q.low    || q.price,
+                regularMarketVolume : q.volume || 0,
+            };
+        }
 
         let quote = null;
         if (indexName)     quote = await nseIndexQuote(indexName);

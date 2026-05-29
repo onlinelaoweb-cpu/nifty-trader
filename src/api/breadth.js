@@ -154,6 +154,12 @@ async function fetchBreadthFromAngel() {
             }
         );
 
+        // Detect WAF/firewall HTML block (Angel One blocks Railway IPs sometimes)
+        if (typeof res.data === 'string' && res.data.includes('<html')) {
+            // Silently fail — this is an IP block, not an API error
+            return null;
+        }
+
         // Angel API: status can be boolean true or string 'true' — normalise both.
         // Response shape: { status: true, data: { fetched: [...] } }  (standard)
         //              OR { status: true, data: [...] }                (some versions)
@@ -164,7 +170,6 @@ async function fetchBreadthFromAngel() {
 
         if (!apiStatus || !fetched) {
             console.warn('[A/D Tier1] Angel API error:', res.data?.message || res.data?.errorcode || `HTTP ${res.status}`);
-            console.warn('[A/D Tier1] Response preview:', JSON.stringify(res.data).slice(0, 200));
             return null;
         }
 
