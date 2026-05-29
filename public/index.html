@@ -941,39 +941,45 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       </div>
     </div>
 
+    <!-- FII/DII auto-fetched display card -->
     <div class="fiidii-card">
-      <div class="fiidii-title">💼 FII / DII FLOW</div>
-      <div class="fiidii-grid">
-        <div class="fiidii-section">
-          <label>FII (₹ Crore)</label>
-          <div class="fiidii-row"><label>BUY</label><input class="fiidii-input" id="fii-buy" type="number" placeholder="12000" oninput="calcFIINet()"/></div>
-          <div class="fiidii-row"><label>SELL</label><input class="fiidii-input" id="fii-sell" type="number" placeholder="13500" oninput="calcFIINet()"/></div>
-        </div>
-        <div class="fiidii-section">
-          <label>DII (₹ Crore)</label>
-          <div class="fiidii-row"><label>BUY</label><input class="fiidii-input" id="dii-buy" type="number" placeholder="8000" oninput="calcFIINet()"/></div>
-          <div class="fiidii-row"><label>SELL</label><input class="fiidii-input" id="dii-sell" type="number" placeholder="6000" oninput="calcFIINet()"/></div>
-        </div>
-      </div>
-      <!-- Live NET preview — always visible, auto-updates on input -->
-      <div class="fii-live-preview" id="fiidii-result">
-        <div class="fii-nets-row">
-          <div class="fii-net-box">
-            <div class="fii-net-lbl">FII NET</div>
+      <div class="fiidii-title">💼 FII / DII FLOW <span style="font-size:8px;color:var(--dim);letter-spacing:1px;font-family:monospace;font-weight:400;">AUTO</span></div>
+      <!-- Buy / Sell breakdown row -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+        <div style="background:var(--bg3);border-radius:7px;padding:7px;">
+          <div style="font-size:9px;color:#9ab8d0;letter-spacing:1px;margin-bottom:4px;text-align:center;">FII (₹ Cr)</div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-bottom:2px;">
+            <span>BUY</span><span id="fii-buy-val" style="color:var(--green);">--</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-bottom:4px;">
+            <span>SELL</span><span id="fii-sell-val" style="color:var(--red);">--</span>
+          </div>
+          <div style="border-top:1px solid var(--border);padding-top:4px;text-align:center;">
+            <div style="font-size:9px;color:#9ab8d0;letter-spacing:1px;">NET</div>
             <div class="fii-net-big" id="fii-net" style="color:#9ab8d0;">--</div>
           </div>
-          <div class="fii-net-box">
-            <div class="fii-net-lbl">DII NET</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:7px;padding:7px;">
+          <div style="font-size:9px;color:#9ab8d0;letter-spacing:1px;margin-bottom:4px;text-align:center;">DII (₹ Cr)</div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-bottom:2px;">
+            <span>BUY</span><span id="dii-buy-val" style="color:var(--green);">--</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-bottom:4px;">
+            <span>SELL</span><span id="dii-sell-val" style="color:var(--red);">--</span>
+          </div>
+          <div style="border-top:1px solid var(--border);padding-top:4px;text-align:center;">
+            <div style="font-size:9px;color:#9ab8d0;letter-spacing:1px;">NET</div>
             <div class="fii-net-big" id="dii-net" style="color:#9ab8d0;">--</div>
           </div>
         </div>
-        <div class="fii-combined-row" id="fii-combined-row" style="display:none;">
-          <span class="fii-comb-lbl">INST. COMBINED</span>
-          <span class="fii-comb-val" id="fii-combined" style="color:#9ab8d0;">--</span>
-          <span class="fii-bias-tag" id="fii-bias-tag" style="background:rgba(255,187,0,0.1);color:var(--amber);border:1px solid var(--amber);">NEUTRAL</span>
-        </div>
       </div>
-      <button class="fiidii-submit" onclick="submitFIIDII()">💾 SAVE TO SERVER</button>
+      <!-- Combined institutional row — always visible -->
+      <div class="fii-combined-row" id="fii-combined-row">
+        <span style="font-size:9px;color:var(--dim);letter-spacing:1px;">INST. COMBINED</span>
+        <span class="fii-comb-val" id="fii-combined" style="color:#9ab8d0;">--</span>
+        <span class="fii-bias-tag" id="fii-bias-tag" style="background:rgba(255,187,0,0.1);color:var(--amber);border:1px solid var(--amber);">--</span>
+      </div>
+      <div style="text-align:center;font-size:9px;color:var(--dim);margin-top:6px;" id="fii-updated-at">Auto-fetched from NSE</div>
     </div>
 
     <div style="font-size:9px;letter-spacing:3px;color:var(--dim);margin-bottom:5px;">TOP 20 NIFTY STOCKS</div>
@@ -1217,8 +1223,7 @@ function switchTab(name,btn){
       if(_lastState.global){updateGlobalUI(_lastState.global);updateSectorHeatmap(_lastState.global.sectors);}
       if(_lastState.optionFlow){const dom=_lastState.optionFlow.dominance||'NEUTRAL';const c=dom.includes('CALL')?'var(--blue)':dom.includes('PUT')?'var(--red)':'var(--amber)';document.getElementById('flow-dominance').textContent=dom;document.getElementById('flow-dominance').style.color=c;if(_lastState.optionFlow.history)updateFlowHistory(_lastState.optionFlow.history);}
       if(_lastState.pcrHistory)updatePCRTrend(_lastState.pcrHistory);
-      if(_lastState.fii?.net!=null){const fe=document.getElementById('fii-net');fe.textContent=(_lastState.fii.net>=0?'▲ +':'▼ ')+Math.abs(_lastState.fii.net).toFixed(0)+'Cr';fe.style.color=_lastState.fii.net>=0?'var(--green)':'var(--red)';}
-      if(_lastState.dii?.net!=null){const de=document.getElementById('dii-net');de.textContent=(_lastState.dii.net>=0?'▲ +':'▼ ')+Math.abs(_lastState.dii.net).toFixed(0)+'Cr';de.style.color=_lastState.dii.net>=0?'var(--green)':'var(--red)';}
+      if(_lastState.fii||_lastState.dii) updateFIIDIIDisplay(_lastState.fii,_lastState.dii);
     } else {
       // No cache yet — do a single fetch to populate
       fetchSignal();
@@ -1541,15 +1546,8 @@ function renderDashboard(s) {
   if (s.calendarEvents && s.calendarEvents.length) {
     renderCalendarEvents(s.calendarEvents);
   }
-  // FII/DII (from server auto-fetched data)
-  if (s.fii?.net != null) {
-    const fe = document.getElementById('fii-net');
-    if (fe) { fe.textContent = (s.fii.net >= 0 ? '▲ +' : '▼ ') + Math.abs(s.fii.net).toFixed(0) + 'Cr'; fe.style.color = s.fii.net >= 0 ? 'var(--green)' : 'var(--red)'; }
-  }
-  if (s.dii?.net != null) {
-    const de = document.getElementById('dii-net');
-    if (de) { de.textContent = (s.dii.net >= 0 ? '▲ +' : '▼ ') + Math.abs(s.dii.net).toFixed(0) + 'Cr'; de.style.color = s.dii.net >= 0 ? 'var(--green)' : 'var(--red)'; }
-  }
+  // FII/DII (auto-fetched — update all display elements)
+  if (s.fii || s.dii) updateFIIDIIDisplay(s.fii, s.dii);
   // Option flow
   if (s.optionFlow) {
     const dom = s.optionFlow.dominance || 'NEUTRAL';
@@ -1756,31 +1754,47 @@ function submitOptionFlow() {
   const detEl = document.getElementById('flow-details'); if (detEl) detEl.textContent = `CE/PE Ratio: ${ratio} | CE ₹${ce} | PE ₹${pe}`;
 }
 
-// ─── FII/DII ─────────────────────────────────────────────
-function calcFIINet() {
-  const fb = parseFloat(document.getElementById('fii-buy').value) || 0;
-  const fs = parseFloat(document.getElementById('fii-sell').value) || 0;
-  const db = parseFloat(document.getElementById('dii-buy').value) || 0;
-  const ds = parseFloat(document.getElementById('dii-sell').value) || 0;
-  const fNet = fb - fs, dNet = db - ds;
-  const fe = document.getElementById('fii-net'); if (fe) { fe.textContent = (fNet >= 0 ? '▲ +' : '▼ ') + Math.abs(fNet).toFixed(0) + 'Cr'; fe.style.color = fNet >= 0 ? 'var(--green)' : 'var(--red)'; }
-  const de = document.getElementById('dii-net'); if (de) { de.textContent = (dNet >= 0 ? '▲ +' : '▼ ') + Math.abs(dNet).toFixed(0) + 'Cr'; de.style.color = dNet >= 0 ? 'var(--green)' : 'var(--red)'; }
-  const combined = fNet + dNet;
-  const combRow = document.getElementById('fii-combined-row');
-  if (combRow && (fb || fs || db || ds)) {
-    combRow.style.display = 'flex';
-    const combEl = document.getElementById('fii-combined'); if (combEl) { combEl.textContent = (combined >= 0 ? '+' : '') + combined.toFixed(0) + 'Cr'; combEl.style.color = combined >= 0 ? 'var(--green)' : 'var(--red)'; }
-    const biasTag = document.getElementById('fii-bias-tag');
-    if (biasTag) { biasTag.textContent = combined > 500 ? 'BULLISH' : combined < -500 ? 'BEARISH' : 'NEUTRAL'; biasTag.style.color = combined > 500 ? 'var(--green)' : combined < -500 ? 'var(--red)' : 'var(--amber)'; }
+// ─── FII/DII auto display ────────────────────────────────
+function updateFIIDIIDisplay(fii, dii) {
+  const fmt = (v, pos) => v == null ? '--' : (pos ? '+' : '') + Math.abs(v).toFixed(0) + 'Cr';
+  const col = v => v == null ? '#9ab8d0' : v >= 0 ? 'var(--green)' : 'var(--red)';
+
+  // FII buy/sell/net
+  const fbv = document.getElementById('fii-buy-val');
+  const fsv = document.getElementById('fii-sell-val');
+  const fe  = document.getElementById('fii-net');
+  if (fii) {
+    if (fbv) fbv.textContent = fii.buy  != null ? fii.buy.toFixed(0)  + 'Cr' : '--';
+    if (fsv) fsv.textContent = fii.sell != null ? fii.sell.toFixed(0) + 'Cr' : '--';
+    if (fe)  { fe.textContent = (fii.net >= 0 ? '▲ +' : '▼ ') + Math.abs(fii.net).toFixed(0) + 'Cr'; fe.style.color = col(fii.net); }
   }
-}
-function submitFIIDII() {
-  const fb = parseFloat(document.getElementById('fii-buy').value);
-  const fs = parseFloat(document.getElementById('fii-sell').value);
-  const db = parseFloat(document.getElementById('dii-buy').value);
-  const ds = parseFloat(document.getElementById('dii-sell').value);
-  if (isNaN(fb)||isNaN(fs)||isNaN(db)||isNaN(ds)) { alert('Please fill all FII/DII fields'); return; }
-  fetch('/api/fiidii',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fiiBuy:fb,fiiSell:fs,diiBuy:db,diiSell:ds})}).then(r=>r.json()).then(()=>{ const tg=document.getElementById('tg-msg'); if(tg){tg.textContent='✅ Saved!';setTimeout(()=>tg.textContent='',2000);} }).catch(()=>{});
+
+  // DII buy/sell/net
+  const dbv = document.getElementById('dii-buy-val');
+  const dsv = document.getElementById('dii-sell-val');
+  const de  = document.getElementById('dii-net');
+  if (dii) {
+    if (dbv) dbv.textContent = dii.buy  != null ? dii.buy.toFixed(0)  + 'Cr' : '--';
+    if (dsv) dsv.textContent = dii.sell != null ? dii.sell.toFixed(0) + 'Cr' : '--';
+    if (de)  { de.textContent = (dii.net >= 0 ? '▲ +' : '▼ ') + Math.abs(dii.net).toFixed(0) + 'Cr'; de.style.color = col(dii.net); }
+  }
+
+  // Combined institutional
+  const fNet = fii?.net, dNet = dii?.net;
+  if (fNet != null && dNet != null) {
+    const combined = fNet + dNet;
+    const combEl   = document.getElementById('fii-combined');
+    const biasTag  = document.getElementById('fii-bias-tag');
+    const combRow  = document.getElementById('fii-combined-row');
+    if (combEl)  { combEl.textContent = (combined >= 0 ? '+' : '') + combined.toFixed(0) + 'Cr'; combEl.style.color = col(combined); }
+    if (biasTag) {
+      const bias = combined > 500 ? 'BULLISH' : combined < -500 ? 'BEARISH' : 'NEUTRAL';
+      const bc   = combined > 500 ? 'var(--green)' : combined < -500 ? 'var(--red)' : 'var(--amber)';
+      biasTag.textContent = bias; biasTag.style.color = bc; biasTag.style.borderColor = bc;
+      biasTag.style.background = combined > 500 ? 'rgba(0,255,136,0.1)' : combined < -500 ? 'rgba(255,34,68,0.1)' : 'rgba(255,187,0,0.1)';
+    }
+    if (combRow) combRow.style.display = 'flex';
+  }
 }
 
 // ─── TELEGRAM TEST ───────────────────────────────────────
