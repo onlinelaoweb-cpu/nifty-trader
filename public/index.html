@@ -375,7 +375,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 @keyframes pulse-border{0%,100%{box-shadow:0 0 0 0 rgba(255,34,68,0.3);}50%{box-shadow:0 0 0 4px rgba(255,34,68,0);}}
 
 /* ── BOOT SPLASH ── */
-#boot-splash{position:fixed;inset:0;z-index:9999;background:#020508;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity 0.6s ease,visibility 0.6s ease;}
+#boot-splash{position:fixed;inset:0;z-index:9999;background:#020508;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity 0.7s ease,visibility 0.7s ease;}
 #boot-splash.hide{opacity:0;visibility:hidden;pointer-events:none;}
 .splash-logo-ring{width:80px;height:80px;border-radius:50%;border:2px solid rgba(0,255,136,0.12);display:flex;align-items:center;justify-content:center;margin-bottom:24px;position:relative;}
 .splash-logo-ring::before{content:'';position:absolute;inset:-4px;border-radius:50%;border:2px solid transparent;border-top-color:var(--green);border-right-color:var(--green);animation:splashSpin 1.1s linear infinite;}
@@ -1195,9 +1195,9 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 
 <script>
 // ── BOOT SPLASH DISMISS ─────────────────────────────
-// Uses XHR (not fetch) — XHR has a native .timeout property supported in all
-// browsers since IE10, so it can never hang. Hard dismiss at 1.5s is the
-// unconditional guarantee; XHR just lets us dismiss faster if server replies.
+// XHR with 1.2s native timeout — cannot hang. Hard dismiss at 1.5s is the
+// unconditional guarantee. No retries — retries were the root cause of the
+// "round and round" spinner when /api/health was slow to respond.
 (function(){
   var splash = document.getElementById('boot-splash');
   var status = document.getElementById('splash-status');
@@ -1206,23 +1206,33 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
   function dismissSplash(msg) {
     if (dismissed) return;
     dismissed = true;
-    if (status) status.textContent = msg || 'Ready \u2713';
-    if (splash) { splash.style.opacity = '0'; splash.style.visibility = 'hidden'; }
+    if (status) status.textContent = msg || 'Ready';
+    if (splash) {
+      splash.style.transition = 'opacity 0.5s ease';
+      splash.style.opacity    = '0';
+      splash.style.visibility = 'hidden';
+      // belt-and-suspenders: also add .hide class
+      setTimeout(function(){ splash.classList.add('hide'); }, 600);
+    }
   }
 
-  // Hard guarantee — fires at 1.5s regardless of anything else
+  // Hard guarantee: no matter what, dismiss by 1.5s
   setTimeout(function(){ dismissSplash('Dashboard ready'); }, 1500);
 
-  // Fast-path: try /api/health, dismiss the moment we get ANY response
+  // Fast path: XHR has a native .timeout — it MUST fire onerror/ontimeout
   try {
     var xhr = new XMLHttpRequest();
     xhr.timeout = 1200;
-    xhr.onload  = function(){ dismissSplash('Live \u2713'); };
-    xhr.onerror = function(){ dismissSplash('Dashboard ready'); };
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState === 4) {
+        dismissSplash(xhr.status >= 200 && xhr.status < 400 ? 'Live data connected' : 'Dashboard ready');
+      }
+    };
+    xhr.onerror   = function(){ dismissSplash('Dashboard ready'); };
     xhr.ontimeout = function(){ dismissSplash('Dashboard ready'); };
-    xhr.open('GET', '/api/health?nc=' + Date.now(), true);
+    xhr.open('GET', '/api/health?t=' + Date.now(), true);
     xhr.send();
-  } catch(e) { /* hard dismiss handles it */ }
+  } catch(e) { /* hard setTimeout handles it */ }
 })();
 
 // Error handler — never let any JS error kill the whole page
