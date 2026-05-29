@@ -1305,4 +1305,8 @@ function updateHeaderBadges(){
     expBadge.style.color='var(--red)';expBadge.style.borderColor='var(--red)';
   }else{
     expBadge.textContent=`⏳ Expiry: ${daysToExp}d`;
-    ex
+    expBadge.style.color='var(--accent)';expBadge.style.borderColor='var(--accent)';
+  }
+}
+updateHeaderBadges();
+setInterval(updateHeaderBadges, 1000);
