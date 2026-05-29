@@ -159,8 +159,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .pv-label{font-size:10px;color:var(--dim);letter-spacing:1.5px;margin-bottom:3px;font-family:'Share Tech Mono',monospace;}
 .pv-val{font-family:'Share Tech Mono',monospace;font-size:17px;font-weight:700;}
 .pv-sig{font-size:10px;font-weight:700;letter-spacing:1px;margin-top:2px;}
-.pcr-input{margin-top:4px;width:100%;background:#060d14;border:1px solid var(--border);color:#c8e0f4;padding:4px 4px;border-radius:5px;font-size:12px;font-family:'Share Tech Mono',monospace;text-align:center;outline:none;}
-.pcr-input::placeholder{color:#4a6a8a;}.pcr-input:focus{border-color:var(--blue);}
+
 
 /* INDICATORS */
 .ind-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0 12px;margin-bottom:8px;}
@@ -599,7 +598,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="checklist-body" id="checklist-body">
       <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🌍 Checked global markets &amp; overnight cues</div></div>
       <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">📊 India VIX checked — is it below 20?</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">📈 Noted PCR &amp; ATM PCR from Sensibull</div></div>
+      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">📈 Reviewed PCR &amp; ATM PCR (auto-fetched)</div></div>
       <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🏦 Checked Bank Nifty direction &amp; key levels</div></div>
       <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🛡️ Set max loss limit for today (₹_____)</div></div>
       <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🎯 Selected ATM strike based on VIX</div></div>
@@ -625,8 +624,8 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 
   <div class="sec-label">OPTIONS DATA</div>
   <div class="pcr-row">
-    <div class="pv-card" style="color:var(--amber)" id="pcr-card"><div class="pv-label">PCR</div><div class="pv-val" id="pcr-val">--</div><div class="pv-sig" id="pcr-sig">ENTER ↓</div><input class="pcr-input" id="pcr-input" type="number" step="0.01" min="0" max="5" placeholder="1.25" onchange="setPCR(this.value)"/></div>
-    <div class="pv-card" style="color:var(--amber)" id="atm-pcr-card"><div class="pv-label">ATM PCR</div><div class="pv-val" id="atm-pcr-val">--</div><div class="pv-sig" id="atm-pcr-sig">ENTER ↓</div><input class="pcr-input" id="atm-pcr-input" type="number" step="0.01" min="0" max="5" placeholder="1.40" onchange="setATMPCR(this.value)"/></div>
+    <div class="pv-card" style="color:var(--amber)" id="pcr-card"><div class="pv-label">PCR</div><div class="pv-val" id="pcr-val">--</div><div class="pv-sig" id="pcr-sig">FETCHING…</div><div class="pv-src" id="pcr-source-lbl" style="font-size:8px;letter-spacing:1px;margin-top:2px;color:var(--dim);">NSE AUTO</div></div>
+    <div class="pv-card" style="color:var(--amber)" id="atm-pcr-card"><div class="pv-label">ATM PCR</div><div class="pv-val" id="atm-pcr-val">--</div><div class="pv-sig" id="atm-pcr-sig">FETCHING…</div><div class="pv-src" id="atm-pcr-source-lbl" style="font-size:8px;letter-spacing:1px;margin-top:2px;color:var(--dim);">NSE AUTO</div></div>
     <div class="pv-card" style="color:var(--amber)" id="vix-card"><div class="pv-label">VIX</div><div class="pv-val" id="vix-val">--</div><div class="pv-sig" id="vix-sig">AUTO ✅</div></div>
   </div>
 
@@ -1412,17 +1411,23 @@ function renderDashboard(s) {
     });
   }
 
-  // PCR
+  // PCR — auto-fetched from NSE option chain every 3 min
   if (s.pcr != null) {
     document.getElementById('pcr-val').textContent = s.pcr.toFixed(2);
     document.getElementById('pcr-sig').textContent = s.pcrSignal || '--';
-    document.getElementById('pcr-input').value = s.pcr;
   }
   if (s.atmPcr != null) {
     document.getElementById('atm-pcr-val').textContent = s.atmPcr.toFixed(2);
     document.getElementById('atm-pcr-sig').textContent = s.atmPcrSignal || '--';
-    document.getElementById('atm-pcr-input').value = s.atmPcr;
   }
+  // Show AUTO ✅ or FETCHING… based on pcrSource
+  const isAuto = s.pcrSource === 'auto';
+  const srcLbl = isAuto ? 'AUTO ✅' : (s.pcr != null ? 'MANUAL' : 'FETCHING…');
+  const srcColor = isAuto ? 'var(--green)' : s.pcr != null ? 'var(--amber)' : 'var(--dim)';
+  const pcrSrcEl = document.getElementById('pcr-source-lbl');
+  const atmSrcEl = document.getElementById('atm-pcr-source-lbl');
+  if (pcrSrcEl) { pcrSrcEl.textContent = srcLbl; pcrSrcEl.style.color = srcColor; }
+  if (atmSrcEl) { atmSrcEl.textContent = srcLbl; atmSrcEl.style.color = srcColor; }
 
   // Strike range
   document.getElementById('strike-range').textContent = s.strikeRange || 'ATM ±200';
@@ -1754,8 +1759,7 @@ function updateFlowHistory(history) {
 }
 
 // ─── PCR SUBMIT ──────────────────────────────────────────
-function setPCR(v) { if (!v) return; fetch('/api/pcr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pcr:parseFloat(v)})}); }
-function setATMPCR(v) { if (!v) return; fetch('/api/pcr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({atmPcr:parseFloat(v)})}); }
+// PCR is now fully auto-fetched from NSE option chain — no manual entry needed
 
 // ─── OPTION FLOW ─────────────────────────────────────────
 function submitOptionFlow() {
