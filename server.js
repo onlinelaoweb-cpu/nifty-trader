@@ -15,7 +15,8 @@ const { processIndicators,
 const { fetchMarketData }           = require('./src/api/marketData');
 const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
 const { fetchGlobalCues }           = require('./src/api/globalCues');
-const { fetchAdvanceDecline }       = require('./src/api/breadth');
+const { fetchAdvanceDecline,
+        injectAngelSession }        = require('./src/api/breadth');
 const { calculateSRLevels }         = require('./src/api/levels');
 const {
     startNSEScheduler,
@@ -1226,7 +1227,14 @@ function startPollingIntervals() {
 // Retries Angel login only — intervals and initial data are already running
 async function tryAngelLogin() {
     const auth = await loginAngel();
-    if (auth) { console.log('Angel Login Success'); startWebSocket(auth, onTick); }
+    if (auth) {
+        console.log('Angel Login Success');
+        injectAngelSession({
+            jwtToken : auth.jwtToken,
+            apiKey   : process.env.ANGEL_API_KEY,
+        });
+        startWebSocket(auth, onTick);
+    }
     else      { console.log('Yahoo Finance fallback — retry in 30s'); setTimeout(tryAngelLogin, 30000); }
 }
 
