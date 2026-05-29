@@ -76,7 +76,8 @@ let marketState = {
     earlyMom: { score: null, signal: 'NEUTRAL', strength: 0, label: 'Early Momentum — awaiting data', votes: [] },
     oiBuildup: { signal: 'NEUTRAL', strength: 0, label: 'OI Buildup — awaiting data', maxCEoiStrike: null, maxPEoiStrike: null, totalCEoiChange: null, totalPEoiChange: null },
     entryWindow: { status:'closed', label:'Market Closed', safe:false },
-    qualityGate: { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, srClear:true, passed:false }
+    qualityGate: { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, srClear:true, passed:false },
+    calendarEvents: []
 };
 
 // ── Trade Journal ─────────────────────────────────────
@@ -704,6 +705,133 @@ async function refreshPCR() {
     }
 }
 
+// ── Economic Calendar Auto-Fetch ──────────────────────────────────────────────
+let _calendarCache = [];
+let _calendarFetchedDate = null;
+
+const HARDCODED_INDIA_EVENTS = [
+  { title: 'RBI MPC Decision',   date: '2025-06-06', impact: 'high',   country: 'IN', category: 'monetary'   },
+  { title: 'RBI MPC Decision',   date: '2025-08-06', impact: 'high',   country: 'IN', category: 'monetary'   },
+  { title: 'Union Budget 2025',  date: '2025-07-24', impact: 'high',   country: 'IN', category: 'fiscal'     },
+  { title: 'India CPI Inflation',date: '2025-06-12', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India IIP Data',     date: '2025-06-12', impact: 'medium', country: 'IN', category: 'industrial' },
+  { title: 'India GDP Q4',       date: '2025-05-30', impact: 'high',   country: 'IN', category: 'gdp'        },
+];
+
+async function fetchCalendarEvents() {
+  const ist      = getIST();
+  const todayStr = `${ist.getFullYear()}-${String(ist.getMonth()+1).padStart(2,'0')}-${String(ist.getDate()).padStart(2,'0')}`;
+
+  // Only fetch once per calendar day
+  if (_calendarFetchedDate === todayStr && _calendarCache.length > 0) return;
+
+  try {
+    const events2 = [];
+    const sevenDaysLater = new Date(ist);
+    sevenDaysLater.setDate(sevenDaysLater.getDate() + 7);
+    const toStr = `${sevenDaysLater.getFullYear()}-${String(sevenDaysLater.getMonth()+1).padStart(2,'0')}-${String(sevenDaysLater.getDate()).padStart(2,'0')}`;
+
+    const FINNHUB_KEY = process.env.FINNHUB_API_KEY;
+    if (FINNHUB_KEY) {
+      const url = `https://finnhub.io/api/v1/calendar/economic?from=${todayStr}&to=${toStr}&token=${FINNHUB_KEY}`;
+      const r   = await axios.get(url, { timeout: 8000 });
+      const data = r.data?.economicCalendar || [];
+
+      const IMPORTANT = [
+        'Fed Interest Rate Decision','FOMC','US CPI','US NFP','Nonfarm Payroll',
+        'US GDP','ECB Interest Rate','BOJ','US PPI','US Retail Sales','US ISM',
+        'India CPI','India GDP','India IIP','RBI'
+      ];
+
+      for (const ev of data) {
+        if (!ev.event) continue;
+        const isImportant = IMPORTANT.some(k => ev.event.toLowerCase().includes(k.toLowerCase()));
+        if (!isImportant && ev.impact !== 'high') continue;
+        events2.push({
+          title   : ev.event,
+          date    : ev.time ? ev.time.slice(0, 10) : todayStr,
+          time    : ev.time ? ev.time.slice(11, 16) : '--:--',
+          impact  : ev.impact  || 'medium',
+          country : ev.country || 'US',
+          actual  : ev.actual   || null,
+          estimate: ev.estimate || null,
+          previous: ev.previous || null,
+          category: 'macro',
+        });
+      }
+    }
+
+    // Merge hardcoded India events
+    for (const ev of HARDCODED_INDIA_EVENTS) {
+      if (ev.date >= todayStr) {
+        const exists = events2.some(e => e.title === ev.title && e.date === ev.date);
+        if (!exists) events2.push({ ...ev, time: '10:00', category: ev.category });
+      }
+    }
+
+    // Add NSE weekly expiry (every Thursday)
+    const d2 = new Date(ist);
+    for (let i = 0; i <= 7; i++) {
+      const dd = new Date(d2); dd.setDate(dd.getDate() + i);
+      if (dd.getDay() === 4) {
+        const ds = `${dd.getFullYear()}-${String(dd.getMonth()+1).padStart(2,'0')}-${String(dd.getDate()).padStart(2,'0')}`;
+        events2.push({ title: 'NSE Weekly F&O Expiry', date: ds, time: '15:30', impact: 'high', country: 'IN', category: 'expiry' });
+        break;
+      }
+    }
+
+    // Sort by date+time, high impact first
+    events2.sort((a, b) => {
+      const dt = (a.date + 'T' + (a.time || '00:00')).localeCompare(b.date + 'T' + (b.time || '00:00'));
+      if (dt !== 0) return dt;
+      const order = { high: 0, medium: 1, low: 2 };
+      return (order[a.impact] || 1) - (order[b.impact] || 1);
+    });
+
+    _calendarCache = events2;
+    _calendarFetchedDate = todayStr;
+    marketState.calendarEvents = events2;
+    console.log(`📅 Calendar: ${events2.length} events loaded (${events2.filter(e => e.impact === 'high').length} HIGH impact)`);
+
+    scheduleEventAlerts(events2);
+  } catch (e) {
+    console.error('Calendar fetch error:', e.message);
+    // Fallback to hardcoded only
+    _calendarCache = HARDCODED_INDIA_EVENTS.filter(e => e.date >= (() => { const i = getIST(); return `${i.getFullYear()}-${String(i.getMonth()+1).padStart(2,'0')}-${String(i.getDate()).padStart(2,'0')}`; })()).map(e => ({ ...e, time: '10:00' }));
+    marketState.calendarEvents = _calendarCache;
+  }
+}
+
+// Schedule Telegram warning 30 min before each HIGH impact event today
+const _alertedEvents = new Set();
+function scheduleEventAlerts(evList) {
+  if (!isConfigured()) return;
+  const ist      = getIST();
+  const todayStr = `${ist.getFullYear()}-${String(ist.getMonth()+1).padStart(2,'0')}-${String(ist.getDate()).padStart(2,'0')}`;
+  for (const ev of evList) {
+    if (ev.date !== todayStr || ev.impact !== 'high' || !ev.time || ev.time === '--:--') continue;
+    const key = ev.title + ev.date;
+    if (_alertedEvents.has(key)) continue;
+    const [h, m] = ev.time.split(':').map(Number);
+    const eventMs = new Date(ist).setHours(h, m, 0, 0);
+    const alertMs = eventMs - 30 * 60 * 1000;
+    const delay   = alertMs - Date.now();
+    if (delay > 0 && delay < 8 * 60 * 60 * 1000) {
+      _alertedEvents.add(key);
+      setTimeout(async () => {
+        const msg = `⚠️ HIGH IMPACT EVENT IN 30 MIN\n📌 ${ev.title}\n🕐 ${ev.time} IST\n🌍 ${ev.country}\nConsider reducing position size or avoiding new entries.`;
+        try {
+          const bot = require('./src/api/telegram');
+          if (bot.sendRawMessage) await bot.sendRawMessage(msg);
+        } catch(_) {}
+      }, delay);
+      console.log(`📅 Alert scheduled: ${ev.title} at ${ev.time} (in ${Math.round(delay/60000)} min)`);
+    }
+  }
+}
+
+app.get('/api/calendar', (req, res) => res.json(marketState.calendarEvents || []));
+
 // ── Trade journal helpers ─────────────────────────────
 function getTradeSummary() {
     const closed = trades.filter(t=>t.status==='CLOSED');
@@ -1226,6 +1354,7 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshBreadth,    3*60*1000), 90*1000);
     setTimeout(() => setInterval(refreshSR,        10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,        3*60*1000), 150*1000);
+    setTimeout(() => setInterval(fetchCalendarEvents, 60*60*1000), 180*1000); // refresh calendar hourly
     console.log('Polling intervals started (x1)');
 }
 
@@ -1286,6 +1415,7 @@ async function initializeLiveData() {
         withTimeout(refreshSR(),  15000, 'refreshSR'),
         withTimeout(refreshPCR(), 15000, 'refreshPCR'),
     ]);
+    await withTimeout(fetchCalendarEvents(), 10000, 'fetchCalendarEvents');
 
     // Polling intervals start regardless of whether initial fetches succeeded
     startPollingIntervals();

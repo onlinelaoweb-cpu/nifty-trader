@@ -372,6 +372,20 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .global-score-value{font-family:'Orbitron',monospace;font-size:13px;font-weight:900;letter-spacing:1px;}
 .global-score-bar{height:4px;border-radius:2px;margin-top:4px;background:var(--border);}
 .global-score-fill{height:4px;border-radius:2px;transition:width 0.5s;}
+/* ── Economic Calendar ── */
+.cal-event{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:8px;transition:border-color 0.2s;}
+.cal-event.impact-high{border-left:3px solid var(--red);}
+.cal-event.impact-medium{border-left:3px solid var(--amber);}
+.cal-event.impact-low{border-left:3px solid var(--dim);}
+.cal-impact{font-size:8px;font-weight:700;letter-spacing:1px;padding:2px 5px;border-radius:4px;text-transform:uppercase;flex-shrink:0;}
+.cal-impact.high{background:rgba(255,34,68,0.15);color:var(--red);}
+.cal-impact.medium{background:rgba(255,187,0,0.15);color:var(--amber);}
+.cal-impact.low{background:rgba(122,154,184,0.15);color:var(--dim);}
+.cal-title{font-size:11px;color:#c8e0f4;flex:1;line-height:1.4;}
+.cal-time{font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);text-align:right;flex-shrink:0;}
+.cal-country{font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(26,58,90,0.5);color:#7a9ab8;flex-shrink:0;}
+.cal-today{background:rgba(255,187,0,0.05);border-color:rgba(255,187,0,0.3);}
+.cal-date-sep{font-size:9px;letter-spacing:2px;color:var(--dim);padding:6px 2px 3px;text-transform:uppercase;}
 /* ── USD/INR Alert ── */
 .usdinr-alert{display:none;background:rgba(255,34,68,0.1);border:1px solid var(--red);border-radius:7px;padding:6px 10px;margin-bottom:8px;font-size:10px;color:var(--red);letter-spacing:1px;animation:pulse-border 1.5s ease-in-out infinite;}
 .usdinr-alert.show{display:flex;align-items:center;gap:6px;}
@@ -1026,6 +1040,13 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="gitem" id="g-shanghai"><div><div class="gitem-name">SHANGHAI</div></div><div class="gitem-right"><div class="gitem-price" id="g-shanghai-p" style="font-size:11px;">--</div><div class="gitem-chg flat" id="g-shanghai-c">--</div></div></div>
       </div>
     </div>
+    <!-- ── Economic Calendar ── -->
+    <div class="global-section" style="margin-top:4px;">
+      <div class="global-section-title">📅 ECONOMIC CALENDAR</div>
+      <div id="calendar-events-wrap" style="display:flex;flex-direction:column;gap:5px;">
+        <div style="text-align:center;font-size:11px;color:var(--dim);padding:10px;">Loading events...</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1515,6 +1536,10 @@ function renderDashboard(s) {
   if (s.global && document.getElementById('panel-global').classList.contains('active')) {
     updateGlobalUI(s.global);
     updateSectorHeatmap(s.global.sectors);
+  }
+  // Calendar (render whenever data is available)
+  if (s.calendarEvents && s.calendarEvents.length) {
+    renderCalendarEvents(s.calendarEvents);
   }
   // FII/DII (from server auto-fetched data)
   if (s.fii?.net != null) {
@@ -2062,6 +2087,65 @@ function toggleSound() {
 loadJournal();
 loadEvents();
 fetchSignal();
+
+// ─── ECONOMIC CALENDAR ───────────────────────────────────
+function renderCalendarEvents(events) {
+  const wrap = document.getElementById('calendar-events-wrap');
+  if (!wrap || !events || !events.length) {
+    if (wrap) wrap.innerHTML = '<div style="text-align:center;font-size:11px;color:var(--dim);padding:10px;">No major events this week</div>';
+    return;
+  }
+  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const todayStr = `${ist.getFullYear()}-${String(ist.getMonth()+1).padStart(2,'0')}-${String(ist.getDate()).padStart(2,'0')}`;
+  const grouped = {};
+  for (const ev of events) {
+    if (!grouped[ev.date]) grouped[ev.date] = [];
+    grouped[ev.date].push(ev);
+  }
+  let html = '';
+  for (const [date, evs] of Object.entries(grouped)) {
+    const isToday = date === todayStr;
+    const d = new Date(date + 'T00:00:00+05:30');
+    const label = isToday ? '📍 TODAY' : d.toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short' });
+    html += `<div class="cal-date-sep">${label}</div>`;
+    for (const ev of evs) {
+      const flag = ev.country === 'IN' ? '🇮🇳' : ev.country === 'US' ? '🇺🇸' : ev.country === 'EU' ? '🇪🇺' : ev.country === 'JP' ? '🇯🇵' : '🌍';
+      const countdownStr = isToday && ev.time && ev.time !== '--:--' ? calcCalCountdown(ev.time) : '';
+      html += `<div class="cal-event impact-${ev.impact} ${isToday ? 'cal-today' : ''}">
+        <span class="cal-impact ${ev.impact}">${ev.impact}</span>
+        <span class="cal-country">${flag} ${ev.country}</span>
+        <span class="cal-title">${ev.title}</span>
+        <span class="cal-time">${ev.time||'--:--'}${countdownStr ? '<br><span style="color:var(--amber);font-size:9px;">' + countdownStr + '</span>' : ''}</span>
+      </div>`;
+    }
+  }
+  wrap.innerHTML = html || '<div style="text-align:center;font-size:11px;color:var(--dim);padding:10px;">No major events this week</div>';
+}
+
+function calcCalCountdown(timeStr) {
+  if (!timeStr || timeStr === '--:--') return '';
+  const [h, m] = timeStr.split(':').map(Number);
+  const now = new Date();
+  const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const eventMs = new Date(ist).setHours(h, m, 0, 0);
+  const diff = eventMs - ist.getTime();
+  if (diff < 0) return 'passed';
+  const hh = Math.floor(diff / 3600000);
+  const mm = Math.floor((diff % 3600000) / 60000);
+  return hh > 0 ? `in ${hh}h ${mm}m` : `in ${mm}m`;
+}
+
+async function fetchAndRenderCalendar() {
+  try {
+    const r = await fetch('/api/calendar');
+    const data = await r.json();
+    if (data && data.length) renderCalendarEvents(data);
+  } catch(e) { console.warn('Calendar fetch error:', e.message); }
+}
+
+// Fetch calendar on load and refresh every 30 minutes
+fetchAndRenderCalendar();
+setInterval(fetchAndRenderCalendar, 30 * 60 * 1000);
 
 </script>
 </body>
