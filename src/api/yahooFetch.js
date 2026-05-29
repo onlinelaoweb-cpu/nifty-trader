@@ -147,58 +147,78 @@ let _nifty50Cache   = null;
 let _nifty50CacheAt = 0;
 let _nifty50Fetch   = null;   // serialise concurrent callers
 
-// Known NSE endpoints for Nifty50 stocks — tried in order, first success wins.
-// NSE silently changes these URLs; keeping multiple fallbacks makes us resilient.
+// Candidate NSE endpoints tried in order — first success wins.
+// equity-stockIndices and live-analysis-data are 404 on Railway as of May 2026.
+// market-data-pre-open returns the full Nifty50 pre-open list incl. prev-close/LTP.
 const NIFTY50_URLS = [
-    '/api/equity-stockIndices?index=NIFTY%2050',          // original (404 as of May 2026)
-    '/api/equity-stockIndices?index=NIFTY+50',            // space-encoded variant
-    '/api/live-analysis-data?index=NIFTY%2050',           // alternate live endpoint
+    { url: '/api/market-data-pre-open?key=NIFTY', extract: extractPreOpen },
+    { url: '/api/equity-stockIndices?index=NIFTY%2050', extract: extractStockIndex },
+    { url: '/api/equity-stockIndices?index=NIFTY+50',   extract: extractStockIndex },
 ];
 
+// Parser for /api/market-data-pre-open?key=NIFTY
+// Response shape: { data: { preOpenMarket: { preopen: [ {symbol,xDiff,lastPrice,previousClose,...} ] } } }
+function extractPreOpen(data) {
+    const rows = data?.data?.preOpenMarket?.preopen;
+    if (!Array.isArray(rows) || rows.length < 10) return null;
+    return rows
+        .filter(r => r.symbol)
+        .map(r => ({
+            symbol           : r.symbol,
+            lastPrice        : r.lastPrice  ?? r.iep  ?? r.previousClose,
+            previousClose    : r.previousClose,
+            open             : r.lastPrice  ?? r.iep,
+            dayHigh          : r.lastPrice  ?? r.iep,
+            dayLow           : r.lastPrice  ?? r.iep,
+            totalTradedVolume: r.totalTradedVolume ?? r.quantity ?? 0,
+        }));
+}
+
+// Parser for /api/equity-stockIndices (original format)
+function extractStockIndex(data) {
+    const rows = data?.data || data?.index?.rows;
+    if (!Array.isArray(rows) || rows.length < 10) return null;
+    return rows.map(r => ({
+        symbol           : r.symbol,
+        lastPrice        : r.lastPrice     ?? r.ltp   ?? r.last,
+        previousClose    : r.previousClose ?? r.prevClose,
+        open             : r.open,
+        dayHigh          : r.dayHigh       ?? r.high,
+        dayLow           : r.dayLow        ?? r.low,
+        totalTradedVolume: r.totalTradedVolume ?? r.volume ?? 0,
+    }));
+}
+
 async function fetchNifty50Stocks() {
-    if (_nifty50Cache && Date.now() - _nifty50CacheAt < 300000) return _nifty50Cache;
+    // BUG FIX: same polling storm fix as fetchAllIndices — stamp _nifty50CacheAt on
+    // failure so the 5-min TTL blocks retries instead of hammering NSE every cycle.
+    if (Date.now() - _nifty50CacheAt < 300000) return _nifty50Cache || [];
     if (_nifty50Fetch) return _nifty50Fetch;
     _nifty50Fetch = (async () => {
-        // Try each URL until one works
-        for (const url of NIFTY50_URLS) {
-            try {
-                const data = await nseGet(url);
-                const rows = data?.data || data?.index?.rows;
-                if (rows && rows.length > 10) {
-                    // Normalise field names — different endpoints use different keys
-                    _nifty50Cache = rows.map(r => ({
-                        symbol        : r.symbol,
-                        lastPrice     : r.lastPrice     ?? r.ltp   ?? r.last,
-                        previousClose : r.previousClose ?? r.prevClose,
-                        open          : r.open,
-                        dayHigh       : r.dayHigh       ?? r.high,
-                        dayLow        : r.dayLow        ?? r.low,
-                        totalTradedVolume: r.totalTradedVolume ?? r.volume ?? 0,
-                    }));
-                    _nifty50CacheAt = Date.now();
-                    console.log(`[NSE] Nifty50 stocks loaded via ${url} (${_nifty50Cache.length} rows)`);
-                    return _nifty50Cache;
+        try {
+            for (const { url, extract } of NIFTY50_URLS) {
+                try {
+                    const data = await nseGet(url);
+                    const rows = extract(data);
+                    if (rows && rows.length > 10) {
+                        _nifty50Cache   = rows;
+                        _nifty50CacheAt = Date.now();
+                        console.log(`[NSE] Nifty50 stocks loaded via ${url} (${rows.length} rows)`);
+                        return _nifty50Cache;
+                    }
+                } catch (e) {
+                    console.warn(`[NSE] Nifty50 stocks failed (${url}): ${e.message}`);
                 }
-            } catch (e) {
-                console.warn(`[NSE] Nifty50 stocks failed (${url}): ${e.message}`);
             }
-        }
-
-        // All URLs failed — build a minimal stub from allIndices so A/D isn't 0/0
-        console.warn('[NSE] All Nifty50 URLs failed — building stub from allIndices cache');
-        const indices = await fetchAllIndices();
-        const niftySection = indices.filter(r =>
-            r.index && (r.indexSymbol === 'NIFTY 50' || r.index === 'NIFTY 50')
-        );
-        if (niftySection.length > 0) {
-            // allIndices has the index-level row but not individual stocks.
-            // Return empty array — breadth will report insufficient data gracefully.
+            // All URLs failed — stamp so we back off for 5 min (prevents polling storm)
+            console.warn('[NSE] All Nifty50 URLs failed — sector-index breadth will be used');
+            _nifty50CacheAt = Date.now();
+        } finally {
+            _nifty50Fetch = null;
         }
         return _nifty50Cache || [];
     })();
-    const result = await _nifty50Fetch;
-    _nifty50Fetch = null;
-    return result || [];
+    return _nifty50Fetch;
 }
 
 // ── NSE index quote ───────────────────────────────────────────────────────────
