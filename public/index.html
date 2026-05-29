@@ -889,6 +889,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <!-- hidden bar elements kept for JS compat -->
       <div style="display:none"><div id="ad-bar-bull"></div><div id="ad-bar-bear"></div></div>
       <div><span class="ad-signal" id="ad-signal" style="background:rgba(255,187,0,0.1);color:var(--amber);border:1px solid var(--amber);">NEUTRAL</span></div>
+      <div style="text-align:center;margin-top:4px;"><span id="breadth-source-badge" style="font-size:9px;color:var(--dim);letter-spacing:1px;font-family:monospace;"></span></div>
     </div>
 
     <div class="weight-row">
@@ -1533,10 +1534,8 @@ function renderDashboard(s) {
   // PCR History
   if (s.pcrHistory) updatePCRTrend(s.pcrHistory);
 
-  // Breadth UI (if on breadth tab)
-  if (s.breadth && document.getElementById('panel-breadth').classList.contains('active')) {
-    updateBreadthUI(s.breadth);
-  }
+  // Breadth UI — always update so data is fresh when user switches to tab
+  if (s.breadth) updateBreadthUI(s.breadth);
   // Global UI (if on global tab)
   if (s.global && document.getElementById('panel-global').classList.contains('active')) {
     updateGlobalUI(s.global);
@@ -1569,6 +1568,14 @@ function updateBreadthUI(b) {
   const dnEl = document.getElementById('ad-dn'); if (dnEl) dnEl.textContent = dn;
   const unchEl = document.getElementById('ad-unch'); if (unchEl) unchEl.textContent = unch;
 
+  // Source badge
+  const srcBadge = document.getElementById('breadth-source-badge');
+  if (srcBadge && b.updatedAt) {
+    const srcLabel = { 'angel-nifty50': '✅ LIVE · ANGEL ONE (50 stocks)', 'stocks': '✅ LIVE · NSE stocks', 'sectors': '⚡ LIVE · Sector indices' }[b.stocks?.[0]?.source] || (b.updatedAt ? '🔄 ' + new Date(b.updatedAt).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'}) : '');
+    const time = b.updatedAt ? new Date(b.updatedAt).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'}) : '';
+    srcBadge.textContent = time ? `Updated ${time}` : '';
+  }
+
   // Dial needle
   const needle = document.getElementById('ad-needle-g');
   if (needle) {
@@ -1590,13 +1597,15 @@ function updateBreadthUI(b) {
     sigEl.style.borderColor = sig === 'BULLISH' ? 'var(--green)' : sig === 'BEARISH' ? 'var(--red)' : 'var(--amber)';
   }
 
-  // Stock list
+  // Stock list — use changePct (% move) not change (absolute ₹ diff)
   if (b.stocks && b.stocks.length) {
     const tbody = document.getElementById('stock-list-body');
     if (tbody) tbody.innerHTML = b.stocks.slice(0,20).map(s => {
-      const chg = s.change || 0;
+      const chg = s.changePct != null ? s.changePct : (s.change || 0);
       const color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : '#9ab8d0';
-      return `<div class="stock-row"><span>${s.weight != null ? s.weight.toFixed(1) : '--'}</span><span>${s.symbol||s.name||'--'}</span><span style="color:${color};text-align:right;">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span></div>`;
+      const label = s.name || s.symbol || '--';
+      const arrow = s.status === 'up' ? '▲' : s.status === 'down' ? '▼' : '→';
+      return `<div class="stock-row"><span style="color:${color};">${arrow}</span><span>${label}</span><span style="color:${color};text-align:right;">${chg >= 0 ? '+' : ''}${parseFloat(chg).toFixed(2)}%</span></div>`;
     }).join('');
   }
 }
@@ -1721,10 +1730,16 @@ function updatePCRTrend(history) {
   const el = document.getElementById('pcr-trend-list');
   if (!el || !history || !history.length) return;
   el.innerHTML = history.slice(-10).reverse().map(h => {
-    const t = new Date(h.ts || h.time || Date.now());
-    const timeStr = t.toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'});
+    // Server pushes { time: "HH:MM", pcr, signal } — handle both plain strings and ISO timestamps
+    let timeStr = h.time || h.ts || '';
+    if (timeStr && timeStr.includes('T')) {
+      // ISO timestamp — parse properly
+      timeStr = new Date(timeStr).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'});
+    }
+    // else plain "HH:MM" — use as-is
     const trend = h.pcr > 1.2 ? '🟢' : h.pcr < 0.8 ? '🔴' : '🟡';
-    return `<div class="trend-row">${trend} <span style="color:#9ab8d0;">${timeStr}</span> <span style="color:var(--amber);">PCR: ${parseFloat(h.pcr).toFixed(2)}</span></div>`;
+    const sig = h.signal || (h.pcr > 1.2 ? 'BULLISH' : h.pcr < 0.8 ? 'BEARISH' : 'NEUTRAL');
+    return `<div class="trend-row">${trend} <span style="color:#9ab8d0;">${timeStr}</span> <span style="color:var(--amber);">PCR: ${parseFloat(h.pcr).toFixed(2)}</span> <span style="color:var(--dim);font-size:9px;">${sig}</span></div>`;
   }).join('');
 }
 

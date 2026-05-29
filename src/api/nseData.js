@@ -819,13 +819,22 @@ const _fii = {
 };
 
 function parseFIIDII(data) {
-    if (!Array.isArray(data) || data.length === 0) return null;
+    // NSE fiidiiTradeReact can return either an array or { data: [...] }
+    const rows = Array.isArray(data) ? data
+               : Array.isArray(data?.data) ? data.data
+               : null;
+    if (!rows || rows.length === 0) return null;
+
+    // Log first row keys once to help diagnose field-name mismatches
+    if (rows.length > 0) {
+        console.log('[FII/DII] Sample row keys:', Object.keys(rows[0]).join(', '));
+        console.log('[FII/DII] Sample row:', JSON.stringify(rows[0]));
+    }
 
     // Data comes newest-first; group by date and pick the latest
     const byDate = {};
-    for (const row of data) {
-        const d = row.date || row.Date;
-        if (!d) continue;
+    for (const row of rows) {
+        const d = row.date || row.Date || row.tradeDate || row.TRADE_DATE || 'nodate';
         if (!byDate[d]) byDate[d] = [];
         byDate[d].push(row);
     }
@@ -833,33 +842,43 @@ function parseFIIDII(data) {
     // Most recent date
     const latestDate = Object.keys(byDate).sort().reverse()[0];
     if (!latestDate) return null;
-    const rows = byDate[latestDate];
+    const dateRows = byDate[latestDate];
 
     let fiiRow = null, diiRow = null;
-    for (const r of rows) {
-        const cat = (r.category || r.Category || '').toUpperCase();
-        if (cat.includes('FII') || cat.includes('FPI')) fiiRow = r;
-        if (cat.includes('DII'))                        diiRow = r;
+    for (const r of dateRows) {
+        // NSE uses 'FII/FPI', 'FII', 'FPI' for foreign and 'DII' for domestic
+        const cat = (r.category || r.Category || r.CATEGORY || r.name || r.Name || '').toString().toUpperCase();
+        if (cat.includes('FII') || cat.includes('FPI') || cat.includes('FOREIGN')) fiiRow = r;
+        if (cat.includes('DII') || cat.includes('DOMESTIC'))                       diiRow = r;
     }
 
-    // Helper — NSE sometimes uses camelCase, sometimes Title Case
+    if (!fiiRow && !diiRow) {
+        console.warn('[FII/DII] Could not identify FII/DII rows in:', JSON.stringify(dateRows));
+        return null;
+    }
+
+    // Helper — tries all key spellings; handles numbers stored as strings
     const num = (obj, ...keys) => {
         if (!obj) return null;
         for (const k of keys) {
-            const v = obj[k] ?? obj[k.charAt(0).toUpperCase() + k.slice(1)];
-            if (v !== undefined && v !== null) return parseFloat(v);
+            // try exact key, Title-case variant, UPPER_CASE variant
+            const variants = [k, k.charAt(0).toUpperCase() + k.slice(1), k.toUpperCase(), k.replace(/([A-Z])/g,'_$1').toUpperCase()];
+            for (const vk of variants) {
+                const v = obj[vk];
+                if (v !== undefined && v !== null && v !== '') return parseFloat(v);
+            }
         }
         return null;
     };
 
     return {
         date    : latestDate,
-        fiiNet  : num(fiiRow, 'netValue',  'net_value',  'NET'),
-        fiiBuy  : num(fiiRow, 'buyValue',  'buy_value',  'BUY'),
-        fiiSell : num(fiiRow, 'sellValue', 'sell_value', 'SELL'),
-        diiNet  : num(diiRow, 'netValue',  'net_value',  'NET'),
-        diiBuy  : num(diiRow, 'buyValue',  'buy_value',  'BUY'),
-        diiSell : num(diiRow, 'sellValue', 'sell_value', 'SELL'),
+        fiiNet  : num(fiiRow, 'netValue', 'net_value', 'NET', 'net', 'netval'),
+        fiiBuy  : num(fiiRow, 'buyValue', 'buy_value', 'BUY', 'buy', 'buyval', 'grossPurchase', 'grossBuy'),
+        fiiSell : num(fiiRow, 'sellValue', 'sell_value', 'SELL', 'sell', 'sellval', 'grossSale', 'grossSell'),
+        diiNet  : num(diiRow, 'netValue', 'net_value', 'NET', 'net', 'netval'),
+        diiBuy  : num(diiRow, 'buyValue', 'buy_value', 'BUY', 'buy', 'buyval', 'grossPurchase', 'grossBuy'),
+        diiSell : num(diiRow, 'sellValue', 'sell_value', 'SELL', 'sell', 'sellval', 'grossSale', 'grossSell'),
     };
 }
 

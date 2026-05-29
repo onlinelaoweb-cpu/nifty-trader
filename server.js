@@ -1244,6 +1244,7 @@ app.post('/api/pcr', (req,res) => {
 app.get('/api/early-momentum', (req,res) => res.json(getEarlyMomState()));
 app.get('/api/oi-buildup',     (req,res) => res.json(getOIBuildupState()));
 app.get('/api/pcr-state',      (req,res) => res.json(getPCRState()));
+app.get('/api/fii-state',      (req,res) => res.json(getFIIState()));   // debug: raw FII/DII snapshot
 
 // FII DII
 app.post('/api/fiidii', (req,res) => {
