@@ -10,7 +10,8 @@ const startWebSocket                = require('./src/api/websocket');
 const { processIndicators,
         initializeHistory,
         getCandleHistory,
-        getSessionCandles }         = require('./src/api/indicators');
+        getSessionCandles,
+        loadCandlesFromYahoo }      = require('./src/api/indicators');
 const { fetchMarketData }           = require('./src/api/marketData');
 const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
 const { fetchGlobalCues }           = require('./src/api/globalCues');
@@ -547,6 +548,14 @@ async function refreshMarketData() {
 
 async function refreshMTF() {
     try {
+        // ── Re-seed candles from Yahoo if NSE is blocked ──────────────────────
+        // getSessionCandles() returns [] when NSE intraday is blocked (Railway IP ban).
+        // Yahoo Finance ^NSEI 5m candles are never blocked — use as silent fallback.
+        const { getSessionCandles: _getSC } = require('./src/api/indicators');
+        if (_getSC().length < 5) {
+            loadCandlesFromYahoo().catch(e => console.warn('[Yahoo MTF refresh]', e.message));
+        }
+
         const d = await analyzeMultiTimeframe();
         if (!d) return;
 
@@ -1247,6 +1256,11 @@ async function initializeLiveData() {
     // NSE blocks Railway IPs that send too many concurrent requests at startup.
     // Each group waits for the previous to finish before starting.
     console.log('📡 Initial data load — staggered to avoid NSE rate limits...');
+    // ── Seed candle history from Yahoo Finance first ──────────────────────────
+    // NSE intraday candle API is blocked on Railway IPs. Yahoo Finance ^NSEI
+    // is not blocked and gives us today's 5m candles to warm up RSI/EMA/VWAP/ADX
+    // before the first refreshMarketData() call completes.
+    await withTimeout(loadCandlesFromYahoo(), 15000, 'loadCandlesFromYahoo');
     await withTimeout(refreshMarketData(), 25000, 'refreshMarketData');
     await new Promise(r => setTimeout(r, 3000));
     await withTimeout(refreshGlobal(),     15000, 'refreshGlobal');

@@ -1,4 +1,5 @@
 const { RSI, EMA, VWAP } = require('technicalindicators');
+const axios = require('axios');
 
 let priceHistory  = [];
 let candleHistory = [];
@@ -282,4 +283,66 @@ function getSessionCandles() {
         : [...sessionCandles];
 }
 
-module.exports = { processIndicators, initializeHistory, getCandleHistory, getSessionCandles };
+// ── Yahoo Finance candle bootstrap ───────────────────
+// Called once at server startup (and on every refreshMTF cycle) to seed
+// candleHistory when NSE is blocked (Railway IP ban is very common).
+// ^NSEI = Nifty 50 index on Yahoo Finance — free, no auth, no IP ban.
+//
+// interval=5m & range=1d gives today's 5-min candles (up to 75 bars).
+// We convert to the same {open,high,low,close,volume} shape used by addTick().
+// Returns number of candles loaded, or 0 on failure.
+async function loadCandlesFromYahoo() {
+    const YAHOO_URLS = [
+        'https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=5m&range=1d',
+        'https://query2.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=5m&range=1d',
+    ];
+    for (const url of YAHOO_URLS) {
+        try {
+            const res = await axios.get(url, {
+                timeout: 12000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json',
+                },
+            });
+            const result = res.data?.chart?.result?.[0];
+            if (!result) continue;
+
+            const timestamps = result.timestamp || [];
+            const q = result.indicators?.quote?.[0] || {};
+            if (timestamps.length === 0) continue;
+
+            // Convert to IST and build candle array
+            const newCandles = [];
+            for (let i = 0; i < timestamps.length; i++) {
+                const close = q.close?.[i];
+                if (close == null || isNaN(close)) continue;
+                newCandles.push({
+                    time  : timestamps[i] * 1000,
+                    open  : q.open?.[i]   ?? close,
+                    high  : q.high?.[i]   ?? close,
+                    low   : q.low?.[i]    ?? close,
+                    close,
+                    volume: q.volume?.[i] ?? 1,
+                });
+            }
+            if (newCandles.length === 0) continue;
+
+            // Seed priceHistory and candleHistory — only if we have more data than currently loaded
+            if (newCandles.length > candleHistory.length) {
+                const closes = newCandles.map(c => c.close);
+                initializeHistory(closes, newCandles);
+                // Also seed sessionCandles with today's candles for accurate VWAP
+                sessionCandles = [...newCandles.slice(-80)];
+                console.log(`📈 [Yahoo] Loaded ${newCandles.length} Nifty 5m candles — indicators warm`);
+            }
+            return newCandles.length;
+        } catch (e) {
+            console.warn(`[Yahoo candles] ${url.includes('query1') ? 'query1' : 'query2'} failed: ${e.message}`);
+        }
+    }
+    console.warn('[Yahoo candles] All URLs failed — starting cold');
+    return 0;
+}
+
+module.exports = { processIndicators, initializeHistory, getCandleHistory, getSessionCandles, loadCandlesFromYahoo };
