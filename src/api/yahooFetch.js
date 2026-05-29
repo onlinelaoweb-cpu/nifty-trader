@@ -64,30 +64,15 @@ async function getNSECookie() {
     return _cookieFetchPromise;
 }
 
-// ── nseGet with 1 auto-retry on timeout/network error (Railway IPs sometimes
-//    need a second attempt after the first request "wakes" the NSE edge cache)
-async function nseGet(path, timeoutMs = 18000) {
+// ── nseGet — single attempt, fail fast (no retry to avoid 36s hangs on Railway)
+// Railway US-West IPs can get rate-limited by NSE; retrying just makes it worse.
+// Callers that need resilience use the cache layer above to absorb transient failures.
+async function nseGet(path, timeoutMs = 10000) {
     const cookie = await getNSECookie();
     const headers = { ...NSE_HEADERS };
     if (cookie) headers['Cookie'] = cookie;
-    try {
-        const res = await axios.get(`${NSE_BASE}${path}`, { headers, timeout: timeoutMs });
-        return res.data;
-    } catch (e) {
-        // Retry once after a short pause — Railway datacenter IPs often succeed on 2nd attempt
-        if (e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT' || e.message.includes('timeout')) {
-            console.warn(`[NSE] timeout on ${path} — retrying in 3s`);
-            await new Promise(r => setTimeout(r, 3000));
-            // Refresh cookie before retry in case it expired
-            _nseCookie = null;
-            const cookie2 = await getNSECookie();
-            const headers2 = { ...NSE_HEADERS };
-            if (cookie2) headers2['Cookie'] = cookie2;
-            const res2 = await axios.get(`${NSE_BASE}${path}`, { headers: headers2, timeout: timeoutMs });
-            return res2.data;
-        }
-        throw e;
-    }
+    const res = await axios.get(`${NSE_BASE}${path}`, { headers, timeout: timeoutMs });
+    return res.data;
 }
 
 // ── Symbol routing ────────────────────────────────────────────────────────────
@@ -126,7 +111,7 @@ let _allIndicesAt    = 0;
 let _allIndicesFetch = null;   // serialise concurrent callers
 
 async function fetchAllIndices() {
-    if (_allIndicesCache && Date.now() - _allIndicesAt < 60000) return _allIndicesCache;
+    if (_allIndicesCache && Date.now() - _allIndicesAt < 240000) return _allIndicesCache;
     if (_allIndicesFetch) return _allIndicesFetch;
     _allIndicesFetch = (async () => {
         try {
@@ -160,7 +145,7 @@ const NIFTY50_URLS = [
 ];
 
 async function fetchNifty50Stocks() {
-    if (_nifty50Cache && Date.now() - _nifty50CacheAt < 60000) return _nifty50Cache;
+    if (_nifty50Cache && Date.now() - _nifty50CacheAt < 300000) return _nifty50Cache;
     if (_nifty50Fetch) return _nifty50Fetch;
     _nifty50Fetch = (async () => {
         // Try each URL until one works
@@ -238,7 +223,7 @@ async function nseStockQuote(nseSym) {
 // ── NSE intraday 1-min candles for Nifty ─────────────────────────────────────
 async function nseNiftyIntraday() {
     try {
-        const data = await nseGet('/api/chart-databyindex?index=NIFTY&indices=true', 22000);
+        const data = await nseGet('/api/chart-databyindex?index=NIFTY&indices=true', 12000);
         const raw  = data?.grapthData || data?.graphData || [];
         if (!raw.length) return [];
         const prevClose = parseFloat(data.previousClose || 0);
@@ -260,7 +245,7 @@ async function nseNiftyIntraday() {
 // ── NSE daily candles (derived from intraday grouping) ────────────────────────
 async function nseNiftyDaily(days = 10) {
     try {
-        const data = await nseGet('/api/chart-databyindex?index=NIFTY&indices=true', 22000);
+        const data = await nseGet('/api/chart-databyindex?index=NIFTY&indices=true', 12000);
         const raw  = data?.grapthData || data?.graphData || [];
         if (!raw.length) return [];
         const byDate = {};

@@ -1203,12 +1203,14 @@ let _intervalsStarted = false;
 function startPollingIntervals() {
     if (_intervalsStarted) return;          // guard — only ever runs once
     _intervalsStarted = true;
-    setInterval(refreshMarketData, 3*60*1000);
-    setInterval(refreshMTF,        5*60*1000);
-    setInterval(refreshGlobal,     5*60*1000);
-    setInterval(refreshBreadth,    3*60*1000);
-    setInterval(refreshSR,        10*60*1000);
-    setInterval(refreshPCR,        3*60*1000);  // NSE PCR every 3 min
+    // Stagger intervals by 30s each so they never all fire at the same time.
+    // This prevents NSE from seeing a burst of 6 requests every 3 minutes.
+    setTimeout(() => setInterval(refreshMarketData, 3*60*1000), 0);
+    setTimeout(() => setInterval(refreshMTF,        5*60*1000), 30*1000);
+    setTimeout(() => setInterval(refreshGlobal,     5*60*1000), 60*1000);
+    setTimeout(() => setInterval(refreshBreadth,    3*60*1000), 90*1000);
+    setTimeout(() => setInterval(refreshSR,        10*60*1000), 120*1000);
+    setTimeout(() => setInterval(refreshPCR,        3*60*1000), 150*1000);
     console.log('Polling intervals started (x1)');
 }
 
@@ -1221,10 +1223,11 @@ async function tryAngelLogin() {
 
 // ── Wrap any async task with a hard timeout so it never hangs startup ─────────
 function withTimeout(promise, ms, label) {
+    let resolved = false;
     return Promise.race([
-        promise,
+        promise.then(result => { resolved = true; return result; }),
         new Promise(resolve => setTimeout(() => {
-            console.warn(`⏱ ${label} timed out after ${ms}ms — continuing`);
+            if (!resolved) console.warn(`⏱ ${label} timed out after ${ms}ms — continuing`);
             resolve(null);
         }, ms))
     ]);
@@ -1245,13 +1248,13 @@ async function initializeLiveData() {
     // Each group waits for the previous to finish before starting.
     console.log('📡 Initial data load — staggered to avoid NSE rate limits...');
     await withTimeout(refreshMarketData(), 25000, 'refreshMarketData');
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, 3000));
     await withTimeout(refreshGlobal(),     15000, 'refreshGlobal');
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 2000));
     await withTimeout(refreshBreadth(),    20000, 'refreshBreadth');
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 2000));
     await withTimeout(refreshMTF(), 20000, 'refreshMTF');
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 2000));
     await Promise.all([
         withTimeout(refreshSR(),  15000, 'refreshSR'),
         withTimeout(refreshPCR(), 15000, 'refreshPCR'),
