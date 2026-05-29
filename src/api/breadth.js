@@ -154,12 +154,21 @@ async function fetchBreadthFromAngel() {
             }
         );
 
-        if (!res.data?.status || !Array.isArray(res.data?.data?.fetched)) {
-            console.warn('[A/D Tier1] Angel API error:', res.data?.message || `HTTP ${res.status}`);
+        // Angel API: status can be boolean true or string 'true' — normalise both.
+        // Response shape: { status: true, data: { fetched: [...] } }  (standard)
+        //              OR { status: true, data: [...] }                (some versions)
+        const apiStatus = res.data?.status === true || res.data?.status === 'true';
+        const fetched   = Array.isArray(res.data?.data?.fetched) ? res.data.data.fetched
+                        : Array.isArray(res.data?.data)           ? res.data.data
+                        : null;
+
+        if (!apiStatus || !fetched) {
+            console.warn('[A/D Tier1] Angel API error:', res.data?.message || res.data?.errorcode || `HTTP ${res.status}`);
+            console.warn('[A/D Tier1] Response preview:', JSON.stringify(res.data).slice(0, 200));
             return null;
         }
 
-        const stocks = res.data.data.fetched;
+        const stocks = fetched;
         if (stocks.length < 10) {
             console.warn(`[A/D Tier1] Only ${stocks.length} stocks returned — skipping`);
             return null;
@@ -227,7 +236,13 @@ async function fetchBreadthFromStocks() {
 
 // ── Tier 3: Sector index breadth (most reliable fallback from Railway) ────────
 async function fetchBreadthFromIndices() {
-    const allIdx = await fetchAllIndices();
+    // Retry once on timeout — Railway cold-start can cause first allIndices call to fail
+    let allIdx = await fetchAllIndices();
+    if (!allIdx || allIdx.length === 0) {
+        console.log('[A/D Tier3] First allIndices attempt failed — retrying in 3s...');
+        await new Promise(r => setTimeout(r, 3000));
+        allIdx = await fetchAllIndices();
+    }
     if (!allIdx || allIdx.length === 0) return null;
 
     let advances = 0, declines = 0, unchanged = 0, fetchedCount = 0;

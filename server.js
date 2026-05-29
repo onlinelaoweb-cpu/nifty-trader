@@ -1285,6 +1285,16 @@ async function initializeLiveData() {
     // Polling intervals start regardless of whether initial fetches succeeded
     startPollingIntervals();
 
+    // ── Bug fix: ensure frontend exits splash screen even when market is closed ──
+    // When market is closed, nifty=0 and connected=false, which traps the frontend
+    // on 'Initialising markets...' forever. Mark initialisation as done so the UI
+    // can render properly (it will show '--' for price, which is correct).
+    if (!marketState.connected) {
+        marketState.connected = true;
+        marketState.source    = 'init';
+        console.log('✅ Init complete — market closed, frontend unblocked');
+    }
+
     // Angel login runs after server is listening — retries in the background
     // and never block the HTTP server from accepting frontend connections.
     tryAngelLogin().catch(e => console.error('Angel login error:', e.message));

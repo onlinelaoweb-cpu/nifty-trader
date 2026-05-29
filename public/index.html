@@ -386,7 +386,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .splash-divider{width:60px;height:1px;background:linear-gradient(90deg,transparent,rgba(0,255,136,0.4),transparent);margin:18px auto;}
 .splash-tagline{font-family:'Share Tech Mono',monospace;font-size:9px;color:#3a5565;letter-spacing:2px;text-align:center;}
 .splash-bar-wrap{width:150px;height:2px;background:rgba(255,255,255,0.05);border-radius:1px;margin-top:28px;overflow:hidden;}
-.splash-bar{height:2px;background:linear-gradient(90deg,var(--green),#00bbff);border-radius:1px;width:0%;animation:splashLoad 1.9s cubic-bezier(0.4,0,0.2,1) forwards;}
+.splash-bar{height:2px;background:linear-gradient(90deg,var(--green),#00bbff);border-radius:1px;width:0%;animation:splashLoad 1.2s cubic-bezier(0.4,0,0.2,1) forwards;}
 .splash-status{font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a4050;margin-top:8px;letter-spacing:1px;text-align:center;}
 @keyframes splashLoad{0%{width:0%}50%{width:60%}80%{width:88%}100%{width:100%}}
 @keyframes splashSpin{to{transform:rotate(360deg)}}
@@ -502,7 +502,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
   <div class="splash-divider"></div>
   <div class="splash-tagline">NIFTY 50 · OPTIONS · REAL-TIME</div>
   <div class="splash-bar-wrap"><div class="splash-bar"></div></div>
-  <div class="splash-status" id="splash-status">Initialising markets...</div>
+  <div class="splash-status" id="splash-status">Initialising...</div>
 </div>
 
 <!-- HEADER -->
@@ -1208,16 +1208,16 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     dismissed = true;
     if (status) status.textContent = msg || 'Ready';
     if (splash) {
-      splash.style.transition = 'opacity 0.5s ease';
-      splash.style.opacity    = '0';
-      splash.style.visibility = 'hidden';
-      // belt-and-suspenders: also add .hide class
+      splash.style.transition      = 'opacity 0.5s ease';
+      splash.style.opacity         = '0';
+      splash.style.visibility      = 'hidden';
+      splash.style.pointerEvents   = 'none';   // immediately unblock clicks
       setTimeout(function(){ splash.classList.add('hide'); }, 600);
     }
   }
 
   // Hard guarantee: no matter what, dismiss by 1.5s
-  setTimeout(function(){ dismissSplash('Dashboard ready'); }, 1500);
+  setTimeout(function(){ dismissSplash('Dashboard ready'); }, 1200);
 
   // Fast path: XHR has a native .timeout — it MUST fire onerror/ontimeout
   try {
