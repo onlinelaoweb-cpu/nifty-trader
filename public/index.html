@@ -1288,7 +1288,7 @@ function renderDashboard(s) {
   const sigEl = document.getElementById('signal');
   sigEl.textContent = sig;
   const card = document.getElementById('signal-card');
-  card.className = 'signal-card ' + (sig === 'BUY CALL' ? 'bullish' : sig === 'BUY PUT' ? 'bearish' : 'wait');
+  card.className = 'signal-card ' + (sig === 'BUY CALL' ? 'buy-call' : sig === 'BUY PUT' ? 'buy-put' : 'wait');
   document.getElementById('conf-bar').style.width = conf + '%';
   document.getElementById('conf-text').textContent = 'CONFIDENCE: ' + conf + '%';
   const tick70 = document.getElementById('conf-tick70');
@@ -1304,7 +1304,7 @@ function renderDashboard(s) {
     }
     const zone = s.rsi < 30 ? 'OVERSOLD' : s.rsi > 70 ? 'OVERBOUGHT' : 'NEUTRAL';
     const zoneEl = document.getElementById('rsi-dial-zone');
-    if (zoneEl) { zoneEl.textContent = zone; zoneEl.className = 'rsi-dial-zone ' + (s.rsi < 30 ? 'low' : s.rsi > 70 ? 'hi' : 'neut'); }
+    if (zoneEl) { zoneEl.textContent = zone; zoneEl.className = 'rsi-dial-zone ' + (s.rsi < 30 ? 'os' : s.rsi > 70 ? 'ob' : 'neut'); }
     const rsiZone = document.getElementById('rsi-zone');
     if (rsiZone) rsiZone.textContent = zone;
     document.getElementById('rsi-val').style.color = s.rsi < 30 ? 'var(--blue)' : s.rsi > 70 ? 'var(--red)' : 'var(--green)';
@@ -1404,7 +1404,7 @@ function renderDashboard(s) {
   const dot = document.getElementById('status-dot');
   const statusTxt = document.getElementById('status-txt');
   if (dot && statusTxt) {
-    dot.className = s.connected ? 'dot-on' : 'dot-off';
+    dot.className = s.connected ? 'dot-live' : 'dot-off';
     statusTxt.textContent = s.connected ? 'LIVE' : 'WAITING';
   }
 
@@ -1417,7 +1417,7 @@ function renderDashboard(s) {
   // Footer
   const footDot = document.getElementById('foot-dot');
   const footTxt = document.getElementById('footer-txt');
-  if (footDot) footDot.className = s.connected ? 'dot-on' : 'dot-off';
+  if (footDot) footDot.className = s.connected ? 'dot-live' : 'dot-off';
   if (footTxt) {
     if (s.lastUpdated) {
       const d = new Date(s.lastUpdated);
@@ -1868,14 +1868,14 @@ function toggleChecklist() {
   if (body) body.style.display = body.style.display === 'none' ? '' : 'none';
 }
 function toggleCL(el) {
-  el.classList.toggle('done');
+  el.classList.toggle('checked');
   const items = document.querySelectorAll('.cl-item');
-  const done = document.querySelectorAll('.cl-item.done').length;
+  const done = document.querySelectorAll('.cl-item.checked').length;
   const progEl = document.getElementById('cl-progress'); if (progEl) progEl.textContent = done + '/' + items.length;
   const fillEl = document.getElementById('cl-mini-fill'); if (fillEl) fillEl.style.width = ((done/items.length)*100) + '%';
 }
 function resetChecklist() {
-  document.querySelectorAll('.cl-item').forEach(el => el.classList.remove('done'));
+  document.querySelectorAll('.cl-item').forEach(el => el.classList.remove('checked'));
   const progEl = document.getElementById('cl-progress'); if (progEl) progEl.textContent = '0/7';
   const fillEl = document.getElementById('cl-mini-fill'); if (fillEl) fillEl.style.width = '0%';
 }
