@@ -126,14 +126,38 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .checklist-progress{font-size:11px;font-family:'Share Tech Mono',monospace;color:var(--amber);}
 .checklist-body{padding:8px 14px;display:none;}
 .checklist-body.open{display:block;}
-.cl-item{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(26,58,90,0.5);cursor:pointer;}
+/* Auto items */
+.cl-item{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(26,58,90,0.5);cursor:pointer;}
 .cl-item:last-child{border-bottom:none;}
 .cl-box{width:18px;height:18px;border-radius:4px;border:1.5px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.2s;}
 .cl-item.checked .cl-box{background:var(--green);border-color:var(--green);box-shadow:0 0 8px rgba(0,255,136,0.4);}
 .cl-item.checked .cl-box::after{content:'✓';color:#000;font-size:11px;font-weight:900;}
-.cl-item.checked .cl-text{color:var(--dim);text-decoration:line-through;}
+.cl-item.checked .cl-text{color:var(--dim);}
+.cl-item.auto-pass .cl-box{background:var(--green);border-color:var(--green);box-shadow:0 0 8px rgba(0,255,136,0.3);}
+.cl-item.auto-pass .cl-box::after{content:'✓';color:#000;font-size:11px;font-weight:900;}
+.cl-item.auto-fail .cl-box{background:rgba(255,34,68,0.15);border-color:var(--red);}
+.cl-item.auto-fail .cl-box::after{content:'✕';color:var(--red);font-size:11px;font-weight:900;}
+.cl-item.auto-wait .cl-box{background:rgba(255,187,0,0.08);border-color:var(--amber);}
+.cl-item.auto-wait .cl-box::after{content:'…';color:var(--amber);font-size:10px;}
+.cl-text-wrap{flex:1;min-width:0;}
 .cl-text{font-size:12px;color:#c8e0f4;}
+.cl-auto-val{font-family:'Share Tech Mono',monospace;font-size:10px;margin-top:1px;transition:color 0.3s;}
+.cl-auto-tag{font-size:9px;font-family:'Orbitron',monospace;font-weight:700;padding:1px 5px;border-radius:99px;margin-left:4px;letter-spacing:0.5px;vertical-align:middle;}
+.cl-auto-tag.auto{background:rgba(0,170,255,0.12);color:var(--blue);border:1px solid rgba(0,170,255,0.25);}
+.cl-auto-tag.manual{background:rgba(255,187,0,0.1);color:var(--amber);border:1px solid rgba(255,187,0,0.25);}
 .cl-reset{background:transparent;border:1px solid var(--border);color:var(--dim);border-radius:5px;padding:3px 9px;font-size:10px;cursor:pointer;font-family:'Rajdhani',sans-serif;}
+/* VERDICT BADGE */
+.cl-verdict{margin:10px 0 4px;border-radius:10px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;border:1.5px solid var(--border);transition:all 0.5s;}
+.cl-verdict.bull{background:rgba(0,255,136,0.07);border-color:rgba(0,255,136,0.4);box-shadow:0 0 18px rgba(0,255,136,0.1);}
+.cl-verdict.bear{background:rgba(255,34,68,0.07);border-color:rgba(255,34,68,0.4);box-shadow:0 0 18px rgba(255,34,68,0.1);}
+.cl-verdict.side{background:rgba(255,187,0,0.06);border-color:rgba(255,187,0,0.35);}
+.cl-verdict.wait{background:rgba(26,58,90,0.4);border-color:var(--border);}
+.cl-verd-left{display:flex;flex-direction:column;gap:2px;}
+.cl-verd-label{font-size:9px;color:var(--dim);letter-spacing:2px;font-family:'Share Tech Mono',monospace;}
+.cl-verd-main{font-family:'Orbitron',monospace;font-size:13px;font-weight:900;letter-spacing:1px;transition:color 0.5s;}
+.cl-verd-right{text-align:right;}
+.cl-verd-score{font-family:'Orbitron',monospace;font-size:22px;font-weight:900;line-height:1;transition:color 0.5s;}
+.cl-verd-scorelab{font-size:9px;color:var(--dim);letter-spacing:1px;font-family:'Share Tech Mono',monospace;}
 
 /* MTF */
 .mtf-header{margin:0 12px 8px;background:linear-gradient(150deg,var(--bg2),#0c1a28);border:1px solid var(--border);border-radius:var(--card-radius);padding:11px;box-shadow:var(--card-shadow);}
@@ -595,20 +619,36 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="checklist-header" onclick="toggleChecklist()">
       <div class="checklist-title">📋 PRE-MARKET CHECKLIST</div>
       <div style="display:flex;align-items:center;gap:8px;">
-        <div class="checklist-progress" id="cl-progress">0/7</div>
+        <div class="checklist-progress" id="cl-progress">0/10</div>
         <span id="cl-arrow" style="color:var(--amber);font-size:12px;transition:transform 0.3s;transform:rotate(0deg);">▼</span>
         <button class="cl-reset" onclick="event.stopPropagation();resetChecklist()">↺</button>
       </div>
     </div>
     <div class="cl-mini-bar"><div class="cl-mini-fill" id="cl-mini-fill" style="width:0%"></div></div>
     <div class="checklist-body" id="checklist-body">
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🌍 Checked global markets &amp; overnight cues</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">📊 India VIX checked — is it below 20?</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">📈 Reviewed PCR &amp; ATM PCR (auto-fetched)</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🏦 Checked Bank Nifty direction &amp; key levels</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🛡️ Set max loss limit for today (₹_____)</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🎯 Selected ATM strike based on VIX</div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text">🧭 Market bias confirmed (Bull / Bear / Sideways)</div></div>
+      <!-- AUTO items — evaluated by updateChecklistAuto(s) -->
+      <div class="cl-item auto-wait" id="cl-gift" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🌏 GIFT Nifty Gap <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-gift-val" style="color:var(--dim);">Waiting for data…</div></div></div>
+      <div class="cl-item auto-wait" id="cl-global" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🌍 Global Markets Bias <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-global-val" style="color:var(--dim);">Waiting for data…</div></div></div>
+      <div class="cl-item auto-wait" id="cl-vix" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📊 India VIX — below 20? <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-vix-val" style="color:var(--dim);">Waiting for data…</div></div></div>
+      <div class="cl-item auto-wait" id="cl-pcr" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📈 PCR Bias <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-pcr-val" style="color:var(--dim);">Waiting for data…</div></div></div>
+      <div class="cl-item auto-wait" id="cl-bn" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🏦 Bank Nifty Lead <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-bn-val" style="color:var(--dim);">Waiting for data…</div></div></div>
+      <div class="cl-item auto-wait" id="cl-fii" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">💼 FII + DII Net Flow <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-fii-val" style="color:var(--dim);">Waiting for data…</div></div></div>
+      <div class="cl-item auto-wait" id="cl-em" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">⚡ Early Momentum Score <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-em-val" style="color:var(--dim);">Waiting for first cycle…</div></div></div>
+      <div class="cl-item auto-wait" id="cl-events" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📅 High-Impact Events Today <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-events-val" style="color:var(--dim);">Checking calendar…</div></div></div>
+      <!-- MANUAL items -->
+      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🛡️ Max loss limit set for today <span class="cl-auto-tag manual">MANUAL</span></div><div class="cl-auto-val" style="color:var(--dim);">Tap to confirm ₹ limit decided</div></div></div>
+      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🎯 ATM strike confirmed <span class="cl-auto-tag manual">MANUAL</span></div><div class="cl-auto-val" style="color:var(--dim);">Tap to confirm strike selected</div></div></div>
+      <!-- VERDICT -->
+      <div class="cl-verdict wait" id="cl-verdict">
+        <div class="cl-verd-left">
+          <div class="cl-verd-label">MARKET VERDICT</div>
+          <div class="cl-verd-main" id="cl-verd-main" style="color:var(--amber);">AWAITING DATA</div>
+        </div>
+        <div class="cl-verd-right">
+          <div class="cl-verd-score" id="cl-verd-score" style="color:var(--amber);">--</div>
+          <div class="cl-verd-scorelab">AUTO SCORE</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1281,6 +1321,7 @@ let _pollTimer = null;
 let _soundOn = false;
 let _chartTF = '1m';
 let _chartData = [];
+let _clCalendarReady = false; // becomes true once calendar API returns data
 
 // ─── POLL /api/signal ────────────────────────────────────
 async function fetchSignal() {
@@ -1589,6 +1630,8 @@ function renderDashboard(s) {
   }
   // FII/DII (auto-fetched — update all display elements)
   if (s.fii || s.dii) updateFIIDIIDisplay(s.fii, s.dii);
+  // Auto-checklist evaluation (runs on every state update)
+  updateChecklistAuto(s);
   // Option flow
   if (s.optionFlow) {
     const dom = s.optionFlow.dominance || 'NEUTRAL';
@@ -1963,23 +2006,195 @@ function toggleChecklist() {
   if (!body) return;
   const isOpen = body.classList.contains('open');
   body.classList.toggle('open', !isOpen);
-  // Arrow: rotate(0deg) = ▼ closed, rotate(180deg) = ▲ open
   const arrow = document.getElementById('cl-arrow');
   if (arrow) arrow.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
-  // Persist state
   try { localStorage.setItem('vn_cl_open', (!isOpen).toString()); } catch(e) {}
 }
 function toggleCL(el) {
+  if (el.dataset.auto === '1') return; // auto items not manually toggleable
   el.classList.toggle('checked');
+  _updateCLProgress();
+}
+function _updateCLProgress() {
   const items = document.querySelectorAll('.cl-item');
-  const done = document.querySelectorAll('.cl-item.checked').length;
+  let done = 0;
+  items.forEach(el => {
+    if (el.classList.contains('checked') || el.classList.contains('auto-pass')) done++;
+  });
   const progEl = document.getElementById('cl-progress'); if (progEl) progEl.textContent = done + '/' + items.length;
   const fillEl = document.getElementById('cl-mini-fill'); if (fillEl) fillEl.style.width = ((done/items.length)*100) + '%';
 }
 function resetChecklist() {
-  document.querySelectorAll('.cl-item').forEach(el => el.classList.remove('checked'));
-  const progEl = document.getElementById('cl-progress'); if (progEl) progEl.textContent = '0/7';
-  const fillEl = document.getElementById('cl-mini-fill'); if (fillEl) fillEl.style.width = '0%';
+  document.querySelectorAll('.cl-item:not([data-auto])').forEach(el => el.classList.remove('checked'));
+  _updateCLProgress();
+}
+
+// ─── AUTO CHECKLIST EVALUATOR ────────────────────────────
+function updateChecklistAuto(s) {
+  let autoPass = 0, autoFail = 0, autoWait = 0;
+  const bulletScore = []; // +1 bull, -1 bear, 0 neutral
+
+  // Helper: set item state
+  function setItem(id, state, valText, valColor) {
+    const el = document.getElementById(id);
+    const valEl = document.getElementById(id + '-val');
+    if (!el) return;
+    el.classList.remove('auto-pass','auto-fail','auto-wait');
+    el.classList.add('auto-' + state);
+    if (valEl) { valEl.textContent = valText; valEl.style.color = valColor; }
+    if (state === 'pass') autoPass++;
+    else if (state === 'fail') autoFail++;
+    else autoWait++;
+  }
+
+  // 1. GIFT Nifty Gap
+  const giftData = s.global?.asia?.giftNifty;
+  if (giftData && giftData.change != null) {
+    const chg = giftData.change;
+    const dir = chg > 50 ? 'GAP UP' : chg < -50 ? 'GAP DOWN' : chg > 0 ? 'FLAT UP' : 'FLAT DOWN';
+    const isBull = chg > 0;
+    setItem('cl-gift', isBull ? 'pass' : 'fail',
+      dir + ' · ' + (chg >= 0 ? '+' : '') + chg.toFixed(0) + ' pts',
+      isBull ? 'var(--green)' : 'var(--red)');
+    bulletScore.push(chg > 50 ? 1 : chg < -50 ? -1 : 0);
+  } else {
+    setItem('cl-gift', 'wait', 'Waiting for GIFT Nifty…', 'var(--dim)');
+  }
+
+  // 2. Global Markets Bias
+  const global = s.global;
+  if (global && global.bias) {
+    const bias = global.bias;
+    const score = global.score || 50;
+    const isBull = bias === 'BULLISH';
+    const isBear = bias === 'BEARISH';
+    setItem('cl-global', isBull ? 'pass' : isBear ? 'fail' : 'wait',
+      bias + ' · Score ' + Math.round(score / 10) + '/10',
+      isBull ? 'var(--green)' : isBear ? 'var(--red)' : 'var(--amber)');
+    bulletScore.push(isBull ? 1 : isBear ? -1 : 0);
+  } else {
+    setItem('cl-global', 'wait', 'Waiting for global data…', 'var(--dim)');
+  }
+
+  // 3. India VIX
+  if (s.vix != null) {
+    const ok = s.vix < 20;
+    const warn = s.vix >= 20 && s.vix < 25;
+    setItem('cl-vix', ok ? 'pass' : warn ? 'wait' : 'fail',
+      'VIX ' + s.vix.toFixed(2) + (ok ? ' — LOW RISK ✅' : warn ? ' — ELEVATED ⚠️' : ' — DANGER ❌'),
+      ok ? 'var(--green)' : warn ? 'var(--amber)' : 'var(--red)');
+    bulletScore.push(ok ? 1 : s.vix >= 25 ? -1 : 0);
+  } else {
+    setItem('cl-vix', 'wait', 'Waiting for VIX…', 'var(--dim)');
+  }
+
+  // 4. PCR Bias
+  if (s.pcr != null) {
+    const pcr = s.pcr;
+    const isBull = pcr > 1.1;
+    const isBear = pcr < 0.8;
+    const label = pcr > 1.3 ? 'STRONG BULL' : pcr > 1.1 ? 'BULLISH' : pcr < 0.7 ? 'STRONG BEAR' : pcr < 0.8 ? 'BEARISH' : 'NEUTRAL';
+    setItem('cl-pcr', isBull ? 'pass' : isBear ? 'fail' : 'wait',
+      'PCR ' + pcr.toFixed(2) + ' · ATM ' + (s.atmPcr?.toFixed(2)||'--') + ' → ' + label,
+      isBull ? 'var(--green)' : isBear ? 'var(--red)' : 'var(--amber)');
+    bulletScore.push(isBull ? 1 : isBear ? -1 : 0);
+  } else {
+    setItem('cl-pcr', 'wait', 'Waiting for PCR…', 'var(--dim)');
+  }
+
+  // 5. Bank Nifty Lead
+  const bnData = s.global?.sectors?.bankNifty;
+  if (bnData && bnData.changePct != null) {
+    const chg = bnData.changePct;
+    const isBull = chg > 0;
+    setItem('cl-bn', isBull ? 'pass' : 'fail',
+      'BN ' + (chg >= 0 ? '+' : '') + chg.toFixed(2) + '% · ' + (isBull ? 'Leading UP ▲' : 'Leading DOWN ▼'),
+      isBull ? 'var(--green)' : 'var(--red)');
+    bulletScore.push(chg > 0.3 ? 1 : chg < -0.3 ? -1 : 0);
+  } else {
+    setItem('cl-bn', 'wait', 'Waiting for Bank Nifty…', 'var(--dim)');
+  }
+
+  // 6. FII + DII Net Flow
+  if (s.fii || s.dii) {
+    const fNet = s.fii?.net || 0;
+    const dNet = s.dii?.net || 0;
+    const combined = fNet + dNet;
+    const hasBoth = s.fii?.net != null && s.dii?.net != null;
+    const isBull = combined > 500;
+    const isBear = combined < -500;
+    const label = isBull ? 'BUYING ▲' : isBear ? 'SELLING ▼' : 'NEUTRAL';
+    const valTxt = 'FII ' + (fNet >= 0 ? '+' : '') + fNet.toFixed(0) + 'Cr · DII ' + (dNet >= 0 ? '+' : '') + dNet.toFixed(0) + 'Cr → ' + label;
+    setItem('cl-fii', isBull ? 'pass' : isBear ? 'fail' : 'wait',
+      hasBoth ? valTxt : 'FII ' + (fNet >= 0 ? '+' : '') + fNet.toFixed(0) + 'Cr (DII pending)',
+      isBull ? 'var(--green)' : isBear ? 'var(--red)' : 'var(--amber)');
+    bulletScore.push(isBull ? 1 : isBear ? -1 : 0);
+  } else {
+    setItem('cl-fii', 'wait', 'Waiting for FII/DII…', 'var(--dim)');
+  }
+
+  // 7. Early Momentum
+  if (s.earlyMom && s.earlyMom.score != null) {
+    const em = s.earlyMom;
+    const isBull = em.score >= 2;
+    const isBear = em.score <= -2;
+    setItem('cl-em', isBull ? 'pass' : isBear ? 'fail' : 'wait',
+      'Score ' + (em.score > 0 ? '+' : '') + em.score + '/5 · ' + (em.signal || 'NEUTRAL'),
+      isBull ? 'var(--green)' : isBear ? 'var(--red)' : 'var(--amber)');
+    bulletScore.push(isBull ? 1 : isBear ? -1 : 0);
+  } else {
+    setItem('cl-em', 'wait', 'Waiting for first option-chain cycle…', 'var(--dim)');
+  }
+
+  // 8. High-Impact Events (server initialises calendarEvents:[] so wait if empty + early poll)
+  if (Array.isArray(s.calendarEvents) && (s.calendarEvents.length > 0 || _clCalendarReady)) {
+    _clCalendarReady = true;
+    const highImpact = s.calendarEvents.filter(e => (e.impact||'').toLowerCase() === 'high');
+    if (highImpact.length > 0) {
+      setItem('cl-events', 'fail',
+        highImpact.length + ' HIGH-IMPACT event(s) today — trade with caution ⚠️',
+        'var(--amber)');
+      bulletScore.push(-1);
+    } else {
+      setItem('cl-events', 'pass',
+        'No high-impact events today ✅',
+        'var(--green)');
+      bulletScore.push(1);
+    }
+  } else {
+    setItem('cl-events', 'wait', 'Checking economic calendar…', 'var(--dim)');
+  }
+
+  // ── VERDICT ──────────────────────────────────────────
+  const scored = bulletScore.filter(v => v !== undefined);
+  if (scored.length >= 4) {
+    const bullVotes = scored.filter(v => v > 0).length;
+    const bearVotes = scored.filter(v => v < 0).length;
+    const total = scored.length;
+    const netScore = bullVotes - bearVotes; // range: -8 to +8
+    const pct = Math.round(((netScore + total) / (2 * total)) * 100);
+
+    const verdEl = document.getElementById('cl-verdict');
+    const mainEl = document.getElementById('cl-verd-main');
+    const scoreEl = document.getElementById('cl-verd-score');
+
+    let verdict, cls, color;
+    if (netScore >= 3) { verdict = '🟢 READY TO TRADE BULL'; cls = 'bull'; color = 'var(--green)'; }
+    else if (netScore <= -3) { verdict = '🔴 READY TO TRADE BEAR'; cls = 'bear'; color = 'var(--red)'; }
+    else if (netScore >= 1) { verdict = '🟡 CAUTIOUS BULL'; cls = 'bull'; color = 'var(--green)'; }
+    else if (netScore <= -1) { verdict = '🟡 CAUTIOUS BEAR'; cls = 'bear'; color = 'var(--red)'; }
+    else { verdict = '⚪ SIDEWAYS / WAIT'; cls = 'side'; color = 'var(--amber)'; }
+
+    if (verdEl) { verdEl.className = 'cl-verdict ' + cls; }
+    if (mainEl) { mainEl.textContent = verdict; mainEl.style.color = color; }
+    if (scoreEl) { scoreEl.textContent = bullVotes + '/' + total; scoreEl.style.color = color; }
+  }
+
+  _updateCLProgress();
+}
+function resetChecklist() {
+  document.querySelectorAll('.cl-item:not([data-auto])').forEach(el => el.classList.remove('checked'));
+  _updateCLProgress();
 }
 // Restore checklist open/closed state from localStorage on load
 (function() {
