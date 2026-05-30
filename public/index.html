@@ -685,14 +685,14 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="em-title">⚡ EARLY MOMENTUM</div>
         <div class="em-badge" id="em-badge" style="color:var(--amber);border-color:var(--amber);background:rgba(255,187,0,0.1);">— NEUTRAL</div>
       </div>
-      <!-- Score bar −5 to +5 with center axis -->
+      <!-- Score bar −9 to +9 with center axis -->
       <div class="em-score-wrap">
-        <div class="em-score-label">−5</div>
+        <div class="em-score-label">−9</div>
         <div class="em-score-track">
           <div class="em-score-center"></div>
           <div class="em-score-fill" id="em-score-fill" style="left:50%;width:0%;background:var(--amber);"></div>
         </div>
-        <div class="em-score-label">+5</div>
+        <div class="em-score-label">+9</div>
         <div class="em-score-num" id="em-score-num" style="color:var(--amber);">0</div>
       </div>
       <!-- Signal description label -->
@@ -1217,12 +1217,14 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div class="tool-grid">
         <div class="tool-field"><label>PREMIUM PAID (₹)</label><input class="tool-input" id="sl-premium" type="number" placeholder="80" step="1" oninput="calcSL()"/></div>
         <div class="tool-field"><label>LOTS</label><input class="tool-input" id="sl-qty" type="number" placeholder="1" step="1" min="1" value="1" oninput="calcSL()"/></div>
+        <div class="tool-field"><label>INDIA VIX (for dynamic SL)</label><input class="tool-input" id="sl-vix" type="number" placeholder="15.0" step="0.1" oninput="calcSL()"/></div>
       </div>
       <div class="result-grid-3">
         <div class="res-card"><div class="res-label">SL 20%</div><div class="res-val" id="sl-20" style="color:var(--red);">--</div><div class="res-sub">per unit</div></div>
         <div class="res-card"><div class="res-label">SL 25%</div><div class="res-val" id="sl-25" style="color:var(--red);">--</div><div class="res-sub">per unit</div></div>
+        <div class="res-card" style="border:1px solid var(--amber);"><div class="res-label" style="color:var(--amber);">VIX SL ⚡</div><div class="res-val" id="sl-vix-val" style="color:var(--amber);">--</div><div class="res-sub" id="sl-vix-pct">enter VIX</div></div>
         <div class="res-card"><div class="res-label">TARGET 1:1</div><div class="res-val" id="sl-t1" style="color:var(--green);">--</div><div class="res-sub">per unit</div></div>
-        <div class="res-card"><div class="res-label">MAX LOSS</div><div class="res-val" id="sl-maxloss" style="color:var(--red);">--</div><div class="res-sub" id="sl-qty-lbl">1lot=75</div></div>
+        <div class="res-card"><div class="res-label">MAX LOSS</div><div class="res-val" id="sl-maxloss" style="color:var(--red);">--</div><div class="res-sub" id="sl-qty-lbl">1lot=65</div></div>
         <div class="res-card"><div class="res-label">TARGET P&L</div><div class="res-val" id="sl-pnl" style="color:var(--green);">--</div></div>
         <div class="res-card"><div class="res-label">INVESTED</div><div class="res-val" id="sl-invested" style="color:var(--blue);">--</div></div>
       </div>
@@ -1567,6 +1569,26 @@ function renderDashboard(s) {
     if (cur > 0) document.getElementById('sr-current').textContent = cur.toFixed(2);
     const updEl = document.getElementById('sr-updated');
     if (updEl && s.srLevels.updatedAt) updEl.textContent = new Date(s.srLevels.updatedAt).toLocaleTimeString('en-IN');
+    // Render full pivot table in sr-levels-list
+    const listEl = document.getElementById('sr-levels-list');
+    if (listEl && s.srLevels.levels && s.srLevels.levels.length) {
+      const TYPE_COLOR = { R3:'#ff4d4d', R2:'#ff6b6b', R1:'#ff9999', PP:'#ffd700',
+                           S1:'#99ddff', S2:'#66bbff', S3:'#3399ff',
+                           PDH:'#ffaa55', PDL:'#55aaff', WH:'#ff77aa', WL:'#77aaff', MP:'#cc88ff' };
+      listEl.innerHTML = s.srLevels.levels.map(lv => {
+        const isAbove = lv.price > cur;
+        const dist    = cur > 0 ? Math.abs(cur - lv.price).toFixed(0) : '--';
+        const color   = TYPE_COLOR[lv.type] || 'var(--dim)';
+        const arrow   = isAbove ? '▲' : '▼';
+        const arrowColor = isAbove ? 'var(--green)' : 'var(--red)';
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:11px;">` +
+          `<span style="color:${color};font-weight:700;min-width:36px;">${lv.type}</span>` +
+          `<span style="color:var(--dim);flex:1;padding:0 4px;">${lv.label}</span>` +
+          `<span style="color:${color};font-family:'Share Tech Mono',monospace;min-width:52px;text-align:right;">${lv.price}</span>` +
+          `<span style="color:${arrowColor};min-width:22px;text-align:right;padding-left:4px;">${arrow}${dist}</span>` +
+          `</div>`;
+      }).join('');
+    }
   }
 
   // Early momentum
@@ -1812,18 +1834,26 @@ async function fetchTradeSuggestion() {
     const r = await fetch('/api/trade-suggestion');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
-    if (!d || d.error || !d.action) {
+    // Server returns { aiSuggestion:{action,strike,entry,sl,target,reasoning,confidence}, strikeData, qualityGatePassed, ... }
+    const ai = d.aiSuggestion;
+    if (!d || d.error || !ai || !ai.action) {
       body.innerHTML = `<div class="suggest-nogate">${d?.reason || 'Quality gate not passed yet — waiting for all conditions to align...'}</div>`;
       if (card) card.className = 'suggest-card wait';
       return;
     }
-    if (card) card.className = 'suggest-card ' + (d.action.includes('CALL') ? 'bull' : d.action.includes('PUT') ? 'bear' : 'wait');
+    const strike     = ai.strike  || d.strikeData?.strike;
+    const entry      = ai.entry   || d.strikeData?.entry;
+    const sl         = ai.sl      || d.strikeData?.sl;
+    const target     = ai.target  || d.strikeData?.target;
+    const confidence = ai.confidence || d.confidence || '';
+    const reasoning  = ai.reasoning  || ai.rationale || '';  // server uses 'reasoning'
+    if (card) card.className = 'suggest-card ' + (ai.action.includes('CALL') ? 'bull' : ai.action.includes('PUT') ? 'bear' : 'wait');
     body.innerHTML = `
-      <div class="suggest-action" style="color:${d.action.includes('CALL') ? 'var(--green)' : d.action.includes('PUT') ? 'var(--red)' : 'var(--amber)'};">${d.action}</div>
-      ${d.strike ? `<div class="suggest-detail">Strike: <b>${d.strike}</b> | Premium: <b>₹${d.premium || '--'}</b></div>` : ''}
-      ${d.sl ? `<div class="suggest-detail">SL: ₹${d.sl} | Target: ₹${d.target || '--'}</div>` : ''}
-      ${d.rationale ? `<div class="suggest-rationale">${d.rationale}</div>` : ''}
-      ${d.confidence ? `<div class="suggest-conf">Confidence: ${d.confidence}%</div>` : ''}
+      <div class="suggest-action" style="color:${ai.action.includes('CALL') ? 'var(--green)' : ai.action.includes('PUT') ? 'var(--red)' : 'var(--amber)'}">${ai.action}</div>
+      ${strike ? `<div class="suggest-detail">Strike: <b>${strike}</b> | Entry: <b>₹${entry || '--'}</b></div>` : ''}
+      ${sl ? `<div class="suggest-detail">SL: ₹${sl} | Target: ₹${target || '--'}</div>` : ''}
+      ${reasoning ? `<div class="suggest-rationale">${reasoning}</div>` : ''}
+      ${confidence ? `<div class="suggest-conf">Confidence: ${confidence}</div>` : ''}
     `;
   } catch (e) {
     if (body) body.innerHTML = `<div class="suggest-nogate">⚠️ Error fetching suggestion: ${e.message}</div>`;
@@ -1990,7 +2020,7 @@ function exitTrade(id) {
   const t = _trades.find(x => x.id === id);
   if (!t) return;
   t.exit = exitPrice;
-  t.pnl = (exitPrice - t.premium) * t.lots * 75;
+  t.pnl = (exitPrice - t.premium) * t.lots * 65;
   localStorage.setItem('vn_trades', JSON.stringify(_trades));
   loadJournal();
 }
@@ -2044,11 +2074,6 @@ function _updateCLProgress() {
   const progEl = document.getElementById('cl-progress'); if (progEl) progEl.textContent = done + '/' + items.length;
   const fillEl = document.getElementById('cl-mini-fill'); if (fillEl) fillEl.style.width = ((done/items.length)*100) + '%';
 }
-function resetChecklist() {
-  document.querySelectorAll('.cl-item:not([data-auto])').forEach(el => el.classList.remove('checked'));
-  _updateCLProgress();
-}
-
 // ─── AUTO CHECKLIST EVALUATOR ────────────────────────────
 function updateChecklistAuto(s) {
   let autoPass = 0, autoFail = 0, autoWait = 0;
@@ -2159,7 +2184,7 @@ function updateChecklistAuto(s) {
     const isBull = em.score >= 3;
     const isBear = em.score <= -3;
     setItem('cl-em', isBull ? 'pass' : isBear ? 'fail' : 'wait',
-      'Score ' + (em.score > 0 ? '+' : '') + em.score + '/5 · ' + (em.signal || 'NEUTRAL'),
+      'Score ' + (em.score > 0 ? '+' : '') + em.score + '/9 · ' + (em.signal || 'NEUTRAL'),
       isBull ? 'var(--green)' : isBear ? 'var(--red)' : 'var(--amber)');
     bulletScore.push(isBull ? 1 : isBear ? -1 : 0);
   } else {
@@ -2372,15 +2397,15 @@ function calcPositionSize() {
   const sl = parseFloat(document.getElementById('ps-sl').value);
   if (isNaN(cap)||isNaN(riskPct)||isNaN(entry)||isNaN(sl)) return;
   const riskAmt = cap * riskPct / 100;
-  const riskPerLot = (entry - sl) * 75;
+  const riskPerLot = (entry - sl) * 65;
   if (riskPerLot <= 0) return;
   const lots = Math.floor(riskAmt / riskPerLot);
   document.getElementById('ps-lots').textContent = lots + ' Lots';
-  document.getElementById('ps-note').textContent = `${lots} × 75 = ${lots*75} units`;
+  document.getElementById('ps-note').textContent = `${lots} × 65 = ${lots*65} units`;
   document.getElementById('ps-riskamt').textContent = '₹' + riskAmt.toFixed(0);
   document.getElementById('ps-maxloss').textContent = '₹' + (lots * riskPerLot).toFixed(0);
-  document.getElementById('ps-invested').textContent = '₹' + (lots * entry * 75).toFixed(0);
-  document.getElementById('ps-target').textContent = '₹' + (lots * (entry - sl) * 75).toFixed(0);
+  document.getElementById('ps-invested').textContent = '₹' + (lots * entry * 65).toFixed(0);
+  document.getElementById('ps-target').textContent = '₹' + (lots * (entry - sl) * 65).toFixed(0);
   document.getElementById('ps-result').style.display = 'block';
   document.getElementById('ps-details').style.display = 'grid';
 }
@@ -2394,10 +2419,28 @@ function calcSL() {
   document.getElementById('sl-20').textContent = '₹' + sl20;
   document.getElementById('sl-25').textContent = '₹' + sl25;
   document.getElementById('sl-t1').textContent = '₹' + t1;
-  document.getElementById('sl-maxloss').textContent = '₹' + (prem * 0.20 * qty * 75).toFixed(0);
-  document.getElementById('sl-pnl').textContent = '₹' + (prem * 0.20 * qty * 75).toFixed(0);
-  document.getElementById('sl-invested').textContent = '₹' + (prem * qty * 75).toFixed(0);
-  document.getElementById('sl-qty-lbl').textContent = qty + 'lot=' + (qty*75);
+  document.getElementById('sl-maxloss').textContent = '₹' + (prem * 0.20 * qty * 65).toFixed(0);
+  document.getElementById('sl-pnl').textContent = '₹' + (prem * 0.20 * qty * 65).toFixed(0);
+  document.getElementById('sl-invested').textContent = '₹' + (prem * qty * 65).toFixed(0);
+  document.getElementById('sl-qty-lbl').textContent = qty + 'lot=' + (qty*65);
+  // VIX-dynamic SL (Murarka strategy: <12→20%, 12-16→25%, 16-20→30%, >20→35%)
+  const vix = parseFloat(document.getElementById('sl-vix').value);
+  const vixValEl = document.getElementById('sl-vix-val');
+  const vixPctEl = document.getElementById('sl-vix-pct');
+  if (!isNaN(vix) && vixValEl) {
+    let slPct, slLabel;
+    if      (vix < 12) { slPct = 0.20; slLabel = 'VIX<12 → 20%'; }
+    else if (vix < 16) { slPct = 0.25; slLabel = 'VIX<16 → 25%'; }
+    else if (vix < 20) { slPct = 0.30; slLabel = 'VIX<20 → 30%'; }
+    else               { slPct = 0.35; slLabel = 'VIX≥20 → 35%'; }
+    const dynSL = (prem * (1 - slPct)).toFixed(2);
+    const maxLoss = (prem * slPct * qty * 65).toFixed(0);
+    vixValEl.textContent = '₹' + dynSL;
+    if (vixPctEl) vixPctEl.textContent = slLabel + ' | MaxLoss ₹' + maxLoss;
+  } else if (vixValEl) {
+    vixValEl.textContent = '--';
+    if (vixPctEl) vixPctEl.textContent = 'enter VIX';
+  }
 }
 
 // ─── SOUND ───────────────────────────────────────────────
