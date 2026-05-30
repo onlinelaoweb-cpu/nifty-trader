@@ -726,7 +726,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 
   <div class="sec-label">1-MIN INDICATORS</div>
     <div class="ind-card" id="rsi-card">
-      <div class="ind-label"><span>RSI (14)</span><span id="rsi-zone" style="font-size:8px;">--</span></div>
+      <div class="ind-label"><span>RSI (9)</span><span id="rsi-zone" style="font-size:8px;">--</span></div>
       <div class="rsi-dial-wrap">
         <svg class="rsi-dial-svg" width="130" height="72" viewBox="0 0 130 72">
           <!-- Track -->
@@ -750,6 +750,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         </svg>
         <div class="rsi-dial-val" id="rsi-val" style="color:var(--amber);">--</div>
         <div class="rsi-dial-zone neut" id="rsi-dial-zone">NEUTRAL</div>
+        <div id="candle-source-badge" style="font-size:9px;color:var(--dim);text-align:center;margin-top:3px;letter-spacing:0.5px;"></div>
       </div>
     </div>
     <div class="ind-card" id="vwap-card"><div class="ind-label"><span>VWAP</span><span id="vwap-pos" style="font-size:8px;">--</span></div><div class="ind-val" id="vwap-val" style="font-size:15px;">--</div><div class="ind-sub" id="vwap-sub">Fair value</div></div>
@@ -1371,6 +1372,19 @@ function renderDashboard(s) {
   // RSI
   if (s.rsi != null) {
     document.getElementById('rsi-val').textContent = s.rsi.toFixed(1);
+    const srcBadgeEl = document.getElementById('candle-source-badge');
+    if (srcBadgeEl) {
+      if (s.candleSource === 'yahoo_5m') {
+        srcBadgeEl.textContent = '⚠ 5m candles (RSI less precise)';
+        srcBadgeEl.style.color = 'var(--amber)';
+      } else if (s.candleSource === 'yahoo_1m') {
+        srcBadgeEl.textContent = 'Yahoo 1m';
+        srcBadgeEl.style.color = 'var(--dim)';
+      } else {
+        srcBadgeEl.textContent = 'WS 1m ✓';
+        srcBadgeEl.style.color = 'var(--dim)';
+      }
+    }
     const needle = document.getElementById('rsi-needle-g');
     if (needle) {
       const angle = ((s.rsi / 100) * 180) - 90;

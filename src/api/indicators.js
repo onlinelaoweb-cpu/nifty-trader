@@ -7,6 +7,12 @@ let currentCandle = null;
 let lastMinute    = null;   // now stores hours*60+minutes, not just minutes
 let initialized   = false;
 
+// ── Candle resolution tracking ────────────────────────
+// 'websocket' = true 1-min ticks from Angel One (accurate)
+// 'yahoo_5m'  = 5-min candles from Yahoo Finance (disguised as 1m — RSI/volume degrade)
+// 'yahoo_1m'  = 1-min candles from Yahoo Finance (acceptable but polled, not streamed)
+let candleSource = 'websocket';
+
 // ── Session-scoped VWAP state ─────────────────────────
 // Resets at 9:15 IST every day so VWAP only uses today's candles
 let sessionCandles  = [];   // candles from 9:15 IST today only
@@ -49,7 +55,7 @@ function initializeHistory(closes, candles) {
     }
 
     console.log(`✅ Indicators initialized: ${priceHistory.length} prices loaded`);
-    console.log(`   RSI ready: ${priceHistory.length >= 15 ? 'YES' : 'NO'}`);
+    console.log(`   RSI ready: ${priceHistory.length >= 10 ? 'YES' : 'NO'}`);
     console.log(`   EMA ready: ${priceHistory.length >= 21 ? 'YES' : 'NO'}`);
 }
 
@@ -84,8 +90,11 @@ function addTick(price) {
 }
 
 function calcRSI() {
-    if (priceHistory.length < 15) return null;
-    const r = RSI.calculate({ values: priceHistory, period: 14 });
+    // RSI(9) on 1-min feed — responds faster than RSI(14) on short timeframes.
+    // Needs at least 10 bars (9+1) to produce a value.
+    const period = 9;
+    if (priceHistory.length < period + 1) return null;
+    const r = RSI.calculate({ values: priceHistory, period });
     return r.length > 0 ? parseFloat(r[r.length - 1].toFixed(2)) : null;
 }
 
@@ -112,7 +121,12 @@ function calcVWAP() {
 
 // ── Volume spike detection ────────────────────────────
 // Compares the current candle's tick-volume against the rolling average of
-// the last 10 CLOSED candles. A "spike" = current volume ≥ 1.5× the average.
+// the last 10 CLOSED candles. A "spike" = current volume ≥ 2.0× the average.
+//
+// Why 2.0× (was 1.5×):
+//   1.5× fired too often — minor fluctuations triggered it. 2.0× means the
+//   candle has roughly double the normal activity, a genuine surge. Keeps the
+//   volume vote meaningful rather than adding noise on every other bar.
 //
 // Why tick volume works here:
 //   On the Angel One WebSocket feed, each tick ≈ one trade observation. More
@@ -139,7 +153,7 @@ function calcVolumeSpike() {
     // Spikes are meaningless on polling data — return false to avoid false signals.
     if (avgVol <= 2) return false;
 
-    return currentCandle.volume >= avgVol * 1.5;
+    return currentCandle.volume >= avgVol * 2.0;
 }
 
 // ── Momentum confirmation gate ────────────────────────
@@ -293,61 +307,77 @@ function getSessionCandles() {
 // candleHistory when NSE is blocked (Railway IP ban is very common).
 // ^NSEI = Nifty 50 index on Yahoo Finance — free, no auth, no IP ban.
 //
-// interval=5m & range=1d gives today's 5-min candles (up to 75 bars).
-// We convert to the same {open,high,low,close,volume} shape used by addTick().
-// Returns number of candles loaded, or 0 on failure.
+// Strategy: try 1m candles first (more accurate for RSI(9)/entry timing).
+// If 1m is throttled/empty, fall back to 5m and tag candleSource='yahoo_5m'
+// so the UI can warn that indicators are running on lower resolution.
 async function loadCandlesFromYahoo() {
-    const YAHOO_URLS = [
-        'https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=5m&range=1d',
-        'https://query2.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=5m&range=1d',
+    const ATTEMPTS = [
+        { interval: '1m', label: 'yahoo_1m',
+          urls: [
+              'https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1m&range=1d',
+              'https://query2.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1m&range=1d',
+          ]},
+        { interval: '5m', label: 'yahoo_5m',
+          urls: [
+              'https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=5m&range=1d',
+              'https://query2.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=5m&range=1d',
+          ]},
     ];
-    for (const url of YAHOO_URLS) {
-        try {
-            const res = await axios.get(url, {
-                timeout: 12000,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': 'application/json',
-                },
-            });
-            const result = res.data?.chart?.result?.[0];
-            if (!result) continue;
 
-            const timestamps = result.timestamp || [];
-            const q = result.indicators?.quote?.[0] || {};
-            if (timestamps.length === 0) continue;
-
-            // Convert to IST and build candle array
-            const newCandles = [];
-            for (let i = 0; i < timestamps.length; i++) {
-                const close = q.close?.[i];
-                if (close == null || isNaN(close)) continue;
-                newCandles.push({
-                    time  : timestamps[i] * 1000,
-                    open  : q.open?.[i]   ?? close,
-                    high  : q.high?.[i]   ?? close,
-                    low   : q.low?.[i]    ?? close,
-                    close,
-                    volume: q.volume?.[i] ?? 1,
+    for (const attempt of ATTEMPTS) {
+        for (const url of attempt.urls) {
+            try {
+                const res = await axios.get(url, {
+                    timeout: 12000,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Accept': 'application/json',
+                    },
                 });
-            }
-            if (newCandles.length === 0) continue;
+                const result = res.data?.chart?.result?.[0];
+                if (!result) continue;
 
-            // Seed priceHistory and candleHistory — only if we have more data than currently loaded
-            if (newCandles.length > candleHistory.length) {
-                const closes = newCandles.map(c => c.close);
-                initializeHistory(closes, newCandles);
-                // Also seed sessionCandles with today's candles for accurate VWAP
-                sessionCandles = [...newCandles.slice(-80)];
-                console.log(`📈 [Yahoo] Loaded ${newCandles.length} Nifty 5m candles — indicators warm`);
+                const timestamps = result.timestamp || [];
+                const q = result.indicators?.quote?.[0] || {};
+                if (timestamps.length === 0) continue;
+
+                // Convert to IST and build candle array
+                const newCandles = [];
+                for (let i = 0; i < timestamps.length; i++) {
+                    const close = q.close?.[i];
+                    if (close == null || isNaN(close)) continue;
+                    newCandles.push({
+                        time  : timestamps[i] * 1000,
+                        open  : q.open?.[i]   ?? close,
+                        high  : q.high?.[i]   ?? close,
+                        low   : q.low?.[i]    ?? close,
+                        close,
+                        volume: q.volume?.[i] ?? 1,
+                    });
+                }
+                if (newCandles.length === 0) continue;
+
+                // Seed priceHistory and candleHistory — only if we have more data than currently loaded
+                if (newCandles.length > candleHistory.length) {
+                    const closes = newCandles.map(c => c.close);
+                    initializeHistory(closes, newCandles);
+                    // Also seed sessionCandles with today's candles for accurate VWAP
+                    sessionCandles = [...newCandles.slice(-80)];
+                    candleSource = attempt.label;
+                    const resNote = attempt.label === 'yahoo_5m'
+                        ? ' ⚠️ 5m resolution — RSI/volume less precise' : '';
+                    console.log(`📈 [Yahoo] Loaded ${newCandles.length} Nifty ${attempt.interval} candles — indicators warm${resNote}`);
+                }
+                return newCandles.length;
+            } catch (e) {
+                console.warn(`[Yahoo candles] ${url.includes('query1') ? 'query1' : 'query2'} ${attempt.interval} failed: ${e.message}`);
             }
-            return newCandles.length;
-        } catch (e) {
-            console.warn(`[Yahoo candles] ${url.includes('query1') ? 'query1' : 'query2'} failed: ${e.message}`);
         }
     }
     console.warn('[Yahoo candles] All URLs failed — starting cold');
     return 0;
 }
 
-module.exports = { processIndicators, initializeHistory, getCandleHistory, getSessionCandles, loadCandlesFromYahoo };
+function getCandleSource() { return candleSource; }
+
+module.exports = { processIndicators, initializeHistory, getCandleHistory, getSessionCandles, loadCandlesFromYahoo, getCandleSource };

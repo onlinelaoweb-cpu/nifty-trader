@@ -11,7 +11,7 @@ const { processIndicators,
         initializeHistory,
         getCandleHistory,
         getSessionCandles,
-        loadCandlesFromYahoo }      = require('./src/api/indicators');
+        loadCandlesFromYahoo, getCandleSource }      = require('./src/api/indicators');
 const { fetchMarketData }           = require('./src/api/marketData');
 const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
 const { fetchGlobalCues }           = require('./src/api/globalCues');
@@ -576,6 +576,7 @@ async function updatePrice(price, change, changePct, source) {
     marketState.ema21=indicators.ema21; marketState.vwap=indicators.vwap;
     marketState.reason=reasons; marketState.lastUpdated=new Date().toISOString();
     marketState.connected=true; marketState.source=source; marketState.dataPoints=indicators.priceCount;
+    marketState.candleSource=getCandleSource();
     if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%)`);
     await checkTelegramAlerts(signal);
     prevSignal=signal;
