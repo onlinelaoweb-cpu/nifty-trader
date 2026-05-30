@@ -131,6 +131,15 @@ const SECTOR_INDICES = [
 async function fetchBreadthFromAngel() {
     if (!_angelSession?.jwtToken) return null;
 
+    // Angel getMarketData returns an error when the market is closed — skip Tier 1
+    // outside trading hours (9:15–15:30 IST) to avoid noisy false failures.
+    const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istMin = istNow.getHours() * 60 + istNow.getMinutes();
+    if (istMin < 555 || istMin > 930) {   // outside 9:15–15:30
+        console.log('[A/D Tier1] Market closed — skipping Angel getMarketData');
+        return null;
+    }
+
     try {
         const res = await axios.post(
             'https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/getMarketData',
@@ -169,7 +178,10 @@ async function fetchBreadthFromAngel() {
                         : null;
 
         if (!apiStatus || !fetched) {
-            console.warn('[A/D Tier1] Angel API error:', res.data?.message || res.data?.errorcode || `HTTP ${res.status}`);
+            const errMsg = res.data?.message || res.data?.errorcode || `HTTP ${res.status}`;
+            const errCode = res.data?.errorcode || res.status;
+            console.warn(`[A/D Tier1] Angel API error (${errCode}): ${errMsg}`);
+            console.warn('[A/D Tier1] Full response:', JSON.stringify(res.data).substring(0, 200));
             return null;
         }
 

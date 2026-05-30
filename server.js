@@ -1488,9 +1488,8 @@ async function initializeLiveData() {
     // ── Angel login BEFORE breadth ────────────────────────────────────────────
     // Login is attempted here with a 12s timeout. On success, Tier 1 Angel data
     // is used for the refreshBreadth() call below (real 50 stocks, not 10 sectors).
-    // On timeout/failure, login retries in the background via tryAngelLogin() below
-    // and triggers a fresh breadth read as soon as it succeeds.
-    console.log('Trying Angel One Login...');
+    // On timeout/failure, tryAngelLogin() keeps retrying internally every 30s and
+    // calls refreshBreadth() automatically when it eventually succeeds.
     await withTimeout(tryAngelLogin(), 12000, 'angelLogin');
 
     await new Promise(r => setTimeout(r, 2000));
@@ -1517,11 +1516,9 @@ async function initializeLiveData() {
         console.log('✅ Init complete — market closed, frontend unblocked');
     }
 
-    // If Angel login timed out above, keep retrying in the background.
-    // tryAngelLogin() will call refreshBreadth() automatically on success.
-    if (!_angelLoggedIn) {
-        tryAngelLogin().catch(e => console.error('Angel login error:', e.message));
-    }
+    // Note: if the withTimeout above resolved null (login still in-flight or slow),
+    // tryAngelLogin() is ALREADY running in the background — it will call
+    // refreshBreadth() automatically when it succeeds. No need to call it again.
 }
 
 // ── Listen FIRST so the frontend is never blocked by init ────────────────────
