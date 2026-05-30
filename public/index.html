@@ -1047,6 +1047,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     </div>
     <div class="global-section"><div class="global-section-title">🌏 ASIA</div>
       <div class="global-grid-3">
+        <div class="gitem" id="g-giftNifty"><div><div class="gitem-name">GIFT NIFTY</div></div><div class="gitem-right"><div class="gitem-price" id="g-giftNifty-p" style="font-size:11px;">--</div><div class="gitem-chg flat" id="g-giftNifty-c">--</div></div></div>
         <div class="gitem" id="g-nikkei"><div><div class="gitem-name">NIKKEI</div></div><div class="gitem-right"><div class="gitem-price" id="g-nikkei-p" style="font-size:11px;">--</div><div class="gitem-chg flat" id="g-nikkei-c">--</div></div></div>
         <div class="gitem" id="g-hangseng"><div><div class="gitem-name">HANG SENG</div></div><div class="gitem-right"><div class="gitem-price" id="g-hangseng-p" style="font-size:11px;">--</div><div class="gitem-chg flat" id="g-hangseng-c">--</div></div></div>
         <div class="gitem" id="g-shanghai"><div><div class="gitem-name">SHANGHAI</div></div><div class="gitem-right"><div class="gitem-price" id="g-shanghai-p" style="font-size:11px;">--</div><div class="gitem-chg flat" id="g-shanghai-c">--</div></div></div>
@@ -1697,7 +1698,7 @@ function updateGlobalUI(g) {
   }
 
   // Global indices
-  const indexMap = { 'us': ['dow','sp500','nasdaq'], 'asia': ['sgx','nikkei','hangseng'], 'europe': ['dax','ftse'] };
+  const indexMap = { 'us': ['dow','sp500','nasdaq'], 'asia': ['giftNifty','nikkei','hangseng','shanghai'], 'europe': ['dax','ftse'] };
   for (const [region, keys] of Object.entries(indexMap)) {
     const regionData = g[region] || {};
     keys.forEach(k => {

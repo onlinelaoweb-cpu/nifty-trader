@@ -75,7 +75,8 @@ async function fetchGlobalCues() {
     const [
         dow, nasdaq, sp500, nikkei, hangseng, shanghai, dax, ftse,
         usdinr, dxy, crude, brent, gold, silver,
-        banknifty, niftyIT, niftyAuto, niftyMetal, bnVWAPLead
+        banknifty, niftyIT, niftyAuto, niftyMetal,
+        giftNifty, bnVWAPLead
     ] = await Promise.all([
         fetchQuote('^DJI'), fetchQuote('^IXIC'), fetchQuote('^GSPC'),
         fetchQuote('^N225'), fetchQuote('^HSI'), fetchQuote('000001.SS'),
@@ -83,13 +84,14 @@ async function fetchGlobalCues() {
         fetchQuote('USDINR=X'), fetchQuote('DX-Y.NYB'),
         fetchQuote('CL=F'), fetchQuote('BZ=F'), fetchQuote('GC=F'), fetchQuote('SI=F'),
         fetchQuote('^NSEBANK'), fetchQuote('^CNXIT'), fetchQuote('^CNXAUTO'), fetchQuote('^CNXMETAL'),
+        fetchQuote('NIFTY_FUT.NS').catch(() => fetchQuote('%5ENSEI')),  // GIFT Nifty futures proxy
         bankNiftyVWAPLead(),
     ]);
 
     const mk = (d, name, rev) => d ? { ...d, name, score: score(d.changePct, rev) } : null;
     const globalData = {
         us         : { dow: mk(dow,'Dow Jones'), nasdaq: mk(nasdaq,'NASDAQ'), sp500: mk(sp500,'S&P 500') },
-        asia       : { nikkei: mk(nikkei,'Nikkei'), hangseng: mk(hangseng,'Hang Seng'), shanghai: mk(shanghai,'Shanghai') },
+        asia       : { giftNifty: mk(giftNifty,'GIFT Nifty'), nikkei: mk(nikkei,'Nikkei'), hangseng: mk(hangseng,'Hang Seng'), shanghai: mk(shanghai,'Shanghai') },
         europe     : { dax: mk(dax,'DAX'), ftse: mk(ftse,'FTSE') },
         currency   : { usdinr: mk(usdinr,'USD/INR',true), dxy: mk(dxy,'DXY',true) },
         commodities: { crude: mk(crude,'Crude WTI',true), brent: mk(brent,'Brent',true), gold: mk(gold,'Gold',true), silver: mk(silver,'Silver') },

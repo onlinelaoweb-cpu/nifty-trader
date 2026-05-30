@@ -38,7 +38,7 @@ app.use(express.json());
 app.use(express.static('public', { etag: false, maxAge: 0 }));
 
 const PORT    = process.env.PORT || 8080;
-const LOT_SIZE = 75;   // Nifty 50 lot size (updated Nov 2024 by SEBI: 50 → 75)
+const LOT_SIZE = 65;   // Nifty 50 lot size (revised Jan 2026 by NSE: 75 → 65)
 
 // ── Market State ──────────────────────────────────────
 let marketState = {
@@ -768,12 +768,26 @@ let _calendarCache = [];
 let _calendarFetchedDate = null;
 
 const HARDCODED_INDIA_EVENTS = [
-  { title: 'RBI MPC Decision',   date: '2025-06-06', impact: 'high',   country: 'IN', category: 'monetary'   },
-  { title: 'RBI MPC Decision',   date: '2025-08-06', impact: 'high',   country: 'IN', category: 'monetary'   },
-  { title: 'Union Budget 2025',  date: '2025-07-24', impact: 'high',   country: 'IN', category: 'fiscal'     },
-  { title: 'India CPI Inflation',date: '2025-06-12', impact: 'medium', country: 'IN', category: 'inflation'  },
-  { title: 'India IIP Data',     date: '2025-06-12', impact: 'medium', country: 'IN', category: 'industrial' },
-  { title: 'India GDP Q4',       date: '2025-05-30', impact: 'high',   country: 'IN', category: 'gdp'        },
+  // RBI MPC FY2026-27 schedule (decision announced on last day of 3-day meeting)
+  { title: 'RBI MPC Decision',    date: '2026-06-05', impact: 'high',   country: 'IN', category: 'monetary'   },
+  { title: 'RBI MPC Decision',    date: '2026-08-06', impact: 'high',   country: 'IN', category: 'monetary'   },
+  { title: 'RBI MPC Decision',    date: '2026-10-08', impact: 'high',   country: 'IN', category: 'monetary'   },
+  { title: 'RBI MPC Decision',    date: '2026-12-03', impact: 'high',   country: 'IN', category: 'monetary'   },
+  { title: 'RBI MPC Decision',    date: '2027-02-04', impact: 'high',   country: 'IN', category: 'monetary'   },
+  // India macro data releases (approximate monthly dates — NSE/MOSPI schedule)
+  { title: 'India CPI Inflation', date: '2026-06-12', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India WPI Inflation', date: '2026-06-15', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India IIP Data',      date: '2026-06-12', impact: 'medium', country: 'IN', category: 'industrial' },
+  { title: 'India CPI Inflation', date: '2026-07-14', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India IIP Data',      date: '2026-07-11', impact: 'medium', country: 'IN', category: 'industrial' },
+  { title: 'India CPI Inflation', date: '2026-08-13', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India IIP Data',      date: '2026-08-12', impact: 'medium', country: 'IN', category: 'industrial' },
+  { title: 'India GDP Q1 FY27',   date: '2026-08-31', impact: 'high',   country: 'IN', category: 'gdp'        },
+  { title: 'India CPI Inflation', date: '2026-09-14', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India CPI Inflation', date: '2026-10-13', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India GDP Q2 FY27',   date: '2026-11-30', impact: 'high',   country: 'IN', category: 'gdp'        },
+  { title: 'India CPI Inflation', date: '2026-11-12', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India CPI Inflation', date: '2026-12-14', impact: 'medium', country: 'IN', category: 'inflation'  },
 ];
 
 async function fetchCalendarEvents() {
@@ -827,11 +841,11 @@ async function fetchCalendarEvents() {
       }
     }
 
-    // Add NSE weekly expiry (every Thursday)
+    // Add NSE weekly expiry (every Tuesday, effective Sep 2025)
     const d2 = new Date(ist);
     for (let i = 0; i <= 7; i++) {
       const dd = new Date(d2); dd.setDate(dd.getDate() + i);
-      if (dd.getDay() === 4) {
+      if (dd.getDay() === 2) {
         const ds = `${dd.getFullYear()}-${String(dd.getMonth()+1).padStart(2,'0')}-${String(dd.getDate()).padStart(2,'0')}`;
         events2.push({ title: 'NSE Weekly F&O Expiry', date: ds, time: '15:30', impact: 'high', country: 'IN', category: 'expiry' });
         break;

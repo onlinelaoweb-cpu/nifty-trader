@@ -83,6 +83,7 @@ const GLOBAL_SYMBOLS = new Set([
     '^DJI','^IXIC','^GSPC','^N225','^HSI','000001.SS',
     '^GDAXI','^FTSE','USDINR=X','DX-Y.NYB',
     'CL=F','BZ=F','GC=F','SI=F',
+    'NIFTY_FUT.NS',  // GIFT Nifty futures (pre-market Nifty indicator)
 ]);
 
 function isGlobal(symbol) {
