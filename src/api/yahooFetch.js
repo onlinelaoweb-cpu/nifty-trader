@@ -59,11 +59,21 @@ async function getNSECookie() {
 }
 
 // ── nseGet — single attempt, fail fast ───────────────────────────────────────
+// validateStatus: accept 200-299 and 404 (return null data) — 404 no longer
+// throws, so the NIFTY50_URLS waterfall can continue to the next URL cleanly.
 async function nseGet(path, timeoutMs = 10000) {
     const cookie = await getNSECookie();
     const headers = { ...NSE_HEADERS };
     if (cookie) headers['Cookie'] = cookie;
-    const res = await axios.get(`${NSE_BASE}${path}`, { headers, timeout: timeoutMs });
+    const res = await axios.get(`${NSE_BASE}${path}`, {
+        headers,
+        timeout: timeoutMs,
+        validateStatus: s => s < 500,   // 404 returns null data, not a throw
+    });
+    if (res.status === 404) {
+        console.warn(`[NSE] 404 on ${path} — skipping`);
+        return null;
+    }
     return res.data;
 }
 
@@ -141,12 +151,15 @@ let _nifty50Fetch   = null;
 // equity-stockIndices is 404 on Railway as of May 2026.
 // market-data-pre-open returns full Nifty50 pre-open list incl. prev-close/LTP.
 const NIFTY50_URLS = [
-    { url: '/api/market-data-pre-open?key=NIFTY', extract: extractPreOpen },
-    { url: '/api/equity-stockIndices?index=NIFTY%2050', extract: extractStockIndex },
-    { url: '/api/equity-stockIndices?index=NIFTY+50',   extract: extractStockIndex },
+    { url: '/api/market-data-pre-open?key=NIFTY',        extract: extractPreOpen      },
+    { url: '/api/market-data-pre-open?key=NIFTY50',      extract: extractPreOpen      },
+    { url: '/api/equity-stockIndices?index=NIFTY%2050',  extract: extractStockIndex   },
+    { url: '/api/equity-stockIndices?index=NIFTY+50',    extract: extractStockIndex   },
+    { url: '/api/equity-stockIndices?index=NIFTY50',     extract: extractStockIndex   },
 ];
 
 function extractPreOpen(data) {
+    if (!data) return null;   // guard against 404 null
     const rows = data?.data?.preOpenMarket?.preopen;
     if (!Array.isArray(rows) || rows.length < 10) return null;
     return rows
@@ -163,6 +176,7 @@ function extractPreOpen(data) {
 }
 
 function extractStockIndex(data) {
+    if (!data) return null;   // guard against 404 null
     const rows = data?.data || data?.index?.rows;
     if (!Array.isArray(rows) || rows.length < 10) return null;
     return rows.map(r => ({
@@ -177,13 +191,21 @@ function extractStockIndex(data) {
 }
 
 async function fetchNifty50Stocks() {
-    if (Date.now() - _nifty50CacheAt < 300000) return _nifty50Cache || [];
+    // During market hours (9:15-15:30 IST) cache for 60s so failed URLs retry quickly.
+    // Outside market hours cache for 5 min.
+    const istNow  = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istMin  = istNow.getHours() * 60 + istNow.getMinutes();
+    const inMarket = istMin >= 555 && istMin <= 930;   // 9:15-15:30
+    const cacheTTL = inMarket ? 60_000 : 300_000;
+
+    if (Date.now() - _nifty50CacheAt < cacheTTL) return _nifty50Cache || [];
     if (_nifty50Fetch) return _nifty50Fetch;
     _nifty50Fetch = (async () => {
         try {
             for (const { url, extract } of NIFTY50_URLS) {
                 try {
                     const data = await nseGet(url);
+                    if (!data) continue;   // 404 returns null — try next URL
                     const rows = extract(data);
                     if (rows && rows.length > 10) {
                         _nifty50Cache   = rows;
@@ -196,7 +218,7 @@ async function fetchNifty50Stocks() {
                 }
             }
             console.warn('[NSE] All Nifty50 URLs failed — sector-index breadth will be used');
-            _nifty50CacheAt = Date.now();
+            _nifty50CacheAt = Date.now() - cacheTTL + 30_000;   // retry in 30s, not full TTL
         } finally {
             _nifty50Fetch = null;
         }
