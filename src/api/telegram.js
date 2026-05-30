@@ -207,6 +207,40 @@ P&L : ${pnlSign}₹${Math.abs(totalPnl)} (${pnlSign}₹${Math.abs(pnlPerLot)}/lo
     await sendMessage(msg);
 }
 
+// ── Nishanebaaz Window Alert (14:00–14:30) ───────────────────────────────────
+// Proactive alert at 14:00 IST — prime scalping window per Murarka strategy.
+// Sent once per day; the caller (server.js) guards the one-shot flag.
+async function sendNishanebaazAlert(state) {
+    const emoji = state.signal === 'BUY CALL' ? '🟢'
+                : state.signal === 'BUY PUT'  ? '🔴'
+                : '🟡';
+
+    const signalLine = state.signal !== 'WAIT'
+        ? `${emoji} Active signal: <b>${state.signal}</b> (${state.confidence}% confidence)`
+        : '🟡 No active signal — watch for breakout';
+
+    const msg = `
+⚡ <b>NISHANEBAAZ WINDOW OPEN — 14:00–14:30</b>
+━━━━━━━━━━━━━━━━━━
+📊 NIFTY: ${state.nifty > 0 ? state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2}) : '--'}
+
+${signalLine}
+
+⚠️ High-probability scalp zone — reduce position size
+🎯 Theta decay starting: target quick 30–40% premium gain
+❌ Avoid holding past 14:30
+━━━━━━━━━━━━━━━━━━
+<i>VardaanNifty AI — Murarka Strategy</i>
+`.trim();
+
+    await sendMessage(msg);
+}
+
+// ── Raw message passthrough (for calendar event alerts) ───────────────────────
+async function sendRawMessage(text) {
+    await sendMessage(text);
+}
+
 module.exports = {
     sendSignalAlert,
     sendMTFAlert,
@@ -214,5 +248,7 @@ module.exports = {
     sendVIXAlert,
     sendCloseSummary,
     sendExitAlert,
+    sendNishanebaazAlert,
+    sendRawMessage,
     isConfigured
 };

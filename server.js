@@ -28,7 +28,8 @@ const {
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
-    sendCloseSummary, sendExitAlert, isConfigured
+    sendCloseSummary, sendExitAlert,
+    sendNishanebaazAlert, isConfigured
 }                                   = require('./src/api/telegram');
 
 const app    = express();
@@ -88,6 +89,7 @@ let events       = [];
 // ── Helpers ───────────────────────────────────────────
 let historyLoaded=false, prevSignal='WAIT', prevMTFAligned=false;
 let morningSummarySent=false, closeSummarySent=false, vixAlertSent=false;
+let nishanebaazAlertSent=false;  // one-shot: fired once at 14:00 per day
 let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:15
 let signalStreak = { signal: 'WAIT', count: 0 }; // consecutive same-signal counter
 
@@ -101,8 +103,8 @@ function isSafeEntryWindow() {
     const ist = getIST();
     const m   = ist.getHours()*60 + ist.getMinutes();
     if (m < 555) return { status:'pre',      label:'Pre-Open',                   safe:false, reason:'Market not open yet' };
-    if (m < 570) return { status:'volatile', label:'Volatile (9:15–9:30)',        safe:false, reason:'Gap-fill window — wait for 9:30' };
-    if (m < 840) return { status:'trade',    label:'Safe Entry (9:30–14:00)',      safe:true,  reason:null };
+    if (m < 600) return { status:'volatile', label:'Volatile (9:15–10:00)',        safe:false, reason:'Gap-fill window — wait for 10:00 (Murarka strategy)' };
+    if (m < 840) return { status:'trade',    label:'Safe Entry (10:00–14:00)',      safe:true,  reason:null };
     if (m < 870) return { status:'caution',  label:'⚠️ Caution Zone (14:00–14:30)',safe:true,  reason:'Reduce position size — theta decay starting' };
     if (m <= 930) return { status:'theta',   label:'Theta Zone (14:30–15:30)',     safe:false, reason:'Theta decay accelerating — avoid new entries' };
     return              { status:'closed',   label:'Market Closed',               safe:false, reason:'Market closed' };
@@ -545,7 +547,8 @@ async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return;
     const ist=getIST(), h=ist.getHours(), m=ist.getMinutes();
     if (h===9&&m>=16&&m<=20&&!morningSummarySent) { morningSummarySent=true; await sendMorningSummary(marketState); return; }
-    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;pcrClearedToday=false;},6*60*60*1000); return; }
+    if (h===14&&m===0&&!nishanebaazAlertSent) { nishanebaazAlertSent=true; await sendNishanebaazAlert(marketState); }
+    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;nishanebaazAlertSent=false;pcrClearedToday=false;},6*60*60*1000); return; }
     if (newSignal!==prevSignal&&newSignal!=='WAIT') {
         await sendSignalAlert(marketState,prevSignal);
         // ── Trigger AI suggestion on fresh signal (costs 1 API call here only) ──
@@ -941,8 +944,17 @@ async function updateOpenTradesMTM() {
 
         // ── Threshold calculation ────────────────────────
         const entry   = t.premium;
-        const risk    = t.sl > 0 ? (entry - t.sl) : entry * 0.25;  // fallback: 25% of entry
-        const sl      = t.sl > 0 ? t.sl : parseFloat((entry * 0.75).toFixed(2));
+        // VIX-dynamic fallback SL (matches pickStrikeAndPremium logic)
+        const vixNow  = marketState.vix;
+        let slFallbackPct = 0.25;
+        if (vixNow) {
+            if      (vixNow < 12) slFallbackPct = 0.20;
+            else if (vixNow < 16) slFallbackPct = 0.25;
+            else if (vixNow < 20) slFallbackPct = 0.30;
+            else                  slFallbackPct = 0.35;
+        }
+        const risk    = t.sl > 0 ? (entry - t.sl) : entry * slFallbackPct;
+        const sl      = t.sl > 0 ? t.sl : parseFloat((entry * (1 - slFallbackPct)).toFixed(2));
         const target1R  = parseFloat((entry + risk).toFixed(2));         // 1:1
         const target15R = parseFloat((entry + risk * 1.5).toFixed(2));   // 1:1.5
 
@@ -1094,10 +1106,24 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
 
     if (!entryPremium || entryPremium <= 0) return null;
 
-    // SL = 25% of premium (standard option buyer SL)
-    // Target = 50% gain on premium (1:2 R:R)
-    const sl     = parseFloat((entryPremium * 0.75).toFixed(2));
-    const target = parseFloat((entryPremium * 1.50).toFixed(2));
+    // ── VIX-dynamic SL (Murarka strategy) ────────────────────────────────────
+    // Flat 25% SL is too tight on high-VIX days (frequent noise stops) and
+    // too loose on calm days (poor R:R). Scale SL width with realised volatility:
+    //   VIX < 12  → 20% SL (tight, calm market, premiums cheap)
+    //   VIX 12-16 → 25% SL (baseline)
+    //   VIX 16-20 → 30% SL (wider, more premium noise)
+    //   VIX > 20  → 35% SL (very wide, but signal is blocked by gate anyway)
+    // Target always = SL risk × 2 (1:2 R:R) from entry.
+    let slPct = 0.25;  // default
+    if (vix) {
+        if      (vix < 12) slPct = 0.20;
+        else if (vix < 16) slPct = 0.25;
+        else if (vix < 20) slPct = 0.30;
+        else               slPct = 0.35;
+    }
+    const slWidth  = parseFloat((entryPremium * slPct).toFixed(2));
+    const sl       = parseFloat((entryPremium - slWidth).toFixed(2));
+    const target   = parseFloat((entryPremium + slWidth * 2).toFixed(2));  // 1:2 R:R
 
     return { type, strike, entry: entryPremium, sl, target };
 }
