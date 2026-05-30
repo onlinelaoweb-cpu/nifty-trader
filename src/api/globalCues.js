@@ -84,7 +84,7 @@ async function fetchGlobalCues() {
         fetchQuote('USDINR=X'), fetchQuote('DX-Y.NYB'),
         fetchQuote('CL=F'), fetchQuote('BZ=F'), fetchQuote('GC=F'), fetchQuote('SI=F'),
         fetchQuote('^NSEBANK'), fetchQuote('^CNXIT'), fetchQuote('^CNXAUTO'), fetchQuote('^CNXMETAL'),
-        fetchQuote('NIFTY_FUT.NS').catch(() => fetchQuote('%5ENSEI')),  // GIFT Nifty futures proxy
+        fetchQuote('NIFTY_GIFT.NS').catch(() => fetchQuote('NIFTYBEES.NS')).catch(() => fetchQuote('%5ENSEI')),  // GIFT Nifty proxy
         bankNiftyVWAPLead(),
     ]);
 
