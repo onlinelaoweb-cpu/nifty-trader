@@ -897,8 +897,7 @@ function scheduleEventAlerts(evList) {
       setTimeout(async () => {
         const msg = `⚠️ HIGH IMPACT EVENT IN 30 MIN\n📌 ${ev.title}\n🕐 ${ev.time} IST\n🌍 ${ev.country}\nConsider reducing position size or avoiding new entries.`;
         try {
-          const bot = require('./src/api/telegram');
-          if (bot.sendRawMessage) await bot.sendRawMessage(msg);
+          await sendRawMessage(msg);
         } catch(_) {}
       }, delay);
       console.log(`📅 Alert scheduled: ${ev.title} at ${ev.time} (in ${Math.round(delay/60000)} min)`);

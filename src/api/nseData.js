@@ -485,8 +485,8 @@ let _peVelStreak = 0;
  * Late session (14:00–15:30): can be thicker or noise → 25K
  */
 function getDynamicOIThreshold() {
-    const now = new Date();
-    const hhmm = now.getHours() * 60 + now.getMinutes();
+    const ist  = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const hhmm = ist.getHours() * 60 + ist.getMinutes();
     if (hhmm < 9 * 60 + 45)  return 10_000;   // 9:15–9:45 open
     if (hhmm < 10 * 60 + 30) return 20_000;   // 9:45–10:30 early
     if (hhmm < 14 * 60)      return 30_000;   // 10:30–14:00 normal
@@ -498,8 +498,8 @@ function getDynamicOIThreshold() {
  * ATM-cluster threshold also scales with time of day.
  */
 function getDynamicClusterThreshold() {
-    const now = new Date();
-    const hhmm = now.getHours() * 60 + now.getMinutes();
+    const ist  = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const hhmm = ist.getHours() * 60 + ist.getMinutes();
     if (hhmm < 9 * 60 + 45)  return 2_000;
     if (hhmm < 10 * 60 + 30) return 4_000;
     return 6_000;

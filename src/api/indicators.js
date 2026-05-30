@@ -45,11 +45,11 @@ function initializeHistory(closes, candles) {
     candleHistory = candles ? [...candles] : [];
     initialized   = true;
 
-    // Seed sessionCandles with only today's candles (last 75 = ~75 min of 1m bars)
+    // Seed sessionCandles with only today's candles (last 390 = full session of 1m bars)
     // This gives VWAP a warm start on app launch during market hours
     const todayStr = getISTDateStr();
     if (sessionDate !== todayStr) {
-        sessionCandles = candleHistory.slice(-75);
+        sessionCandles = candleHistory.slice(-390);
         sessionDate    = todayStr;
         console.log(`📅 VWAP seeded with ${sessionCandles.length} candles for today`);
     }
@@ -73,7 +73,7 @@ function addTick(price) {
             // Only add to sessionCandles during market hours (9:15–15:30)
             if (istMin >= 555 && istMin <= 930) {
                 sessionCandles.push({ ...currentCandle });
-                if (sessionCandles.length > 80) sessionCandles.shift(); // max 75-min session
+                if (sessionCandles.length > 390) sessionCandles.shift(); // full 375-min session + buffer
             }
         }
         currentCandle = { open: price, high: price, low: price, close: price, volume: 1 };
@@ -362,7 +362,7 @@ async function loadCandlesFromYahoo() {
                     const closes = newCandles.map(c => c.close);
                     initializeHistory(closes, newCandles);
                     // Also seed sessionCandles with today's candles for accurate VWAP
-                    sessionCandles = [...newCandles.slice(-80)];
+                    sessionCandles = [...newCandles.slice(-390)];
                     candleSource = attempt.label;
                     const resNote = attempt.label === 'yahoo_5m'
                         ? ' ⚠️ 5m resolution — RSI/volume less precise' : '';
