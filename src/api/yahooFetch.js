@@ -653,39 +653,64 @@ let _yahooStocksCache   = null;
 let _yahooStocksCacheAt = 0;
 
 // ── Yahoo crumb/cookie auth (required since ~2024) ────────────────────────────
+// Strategy: use Yahoo's lightweight consent/crumb API — avoids header overflow
+// from fetching the full finance.yahoo.com homepage.
 let _yahooCrumb      = null;
 let _yahooCookie     = null;
 let _yahooCrumbAt    = 0;
 const YAHOO_CRUMB_TTL = 55 * 60 * 1000;  // 55 min
 
+const YAHOO_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+
 async function getYahooCrumb() {
     if (_yahooCrumb && Date.now() - _yahooCrumbAt < YAHOO_CRUMB_TTL) {
         return { crumb: _yahooCrumb, cookie: _yahooCookie };
     }
-    try {
-        // Step 1: hit finance.yahoo.com to get session cookie
-        const homeRes = await axios.get('https://finance.yahoo.com/', {
-            timeout: 8000,
-            headers: {
-                'User-Agent'     : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-                'Accept'         : 'text/html,application/xhtml+xml,*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
-            },
-            maxRedirects: 5,
-        });
-        const rawCookies = homeRes.headers['set-cookie'] || [];
-        const cookieStr  = rawCookies.map(c => c.split(';')[0]).join('; ');
-        if (!cookieStr) { console.warn('[Yahoo] No cookie from homepage'); return null; }
+    // Method 1: lightweight consent cookie endpoint (no huge HTML page)
+    const methods = [
+        async () => {
+            const res = await axios.get('https://consent.yahoo.com/v2/collectConsent?sessionId=1', {
+                timeout: 8000,
+                maxRedirects: 3,
+                headers: { 'User-Agent': YAHOO_UA, 'Accept': 'text/html' },
+                // Limit response size to avoid header overflow
+                maxContentLength: 500_000,
+                maxBodyLength: 500_000,
+            });
+            const rawCookies = res.headers['set-cookie'] || [];
+            const cookie = rawCookies.map(c => c.split(';')[0]).join('; ');
+            return cookie || null;
+        },
+        // Method 2: hit query2 directly — sometimes issues a session cookie without full page
+        async () => {
+            const res = await axios.get('https://query2.finance.yahoo.com/v1/test/getcrumb', {
+                timeout: 8000,
+                headers: { 'User-Agent': YAHOO_UA, 'Accept': '*/*' },
+                maxContentLength: 100_000,
+                validateStatus: () => true,  // don't throw on 4xx
+            });
+            const rawCookies = res.headers['set-cookie'] || [];
+            return rawCookies.map(c => c.split(';')[0]).join('; ') || null;
+        },
+    ];
 
-        // Step 2: fetch crumb using the session cookie
+    let cookieStr = null;
+    for (const method of methods) {
+        try { cookieStr = await method(); if (cookieStr) break; } catch (_) {}
+    }
+    if (!cookieStr) { console.warn('[Yahoo] Could not get session cookie'); return null; }
+
+    try {
+        // Fetch crumb with the session cookie
         const crumbRes = await axios.get('https://query1.finance.yahoo.com/v1/test/getcrumb', {
             timeout: 8000,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                'User-Agent': YAHOO_UA,
                 'Cookie'    : cookieStr,
                 'Accept'    : '*/*',
                 'Referer'   : 'https://finance.yahoo.com/',
             },
+            maxContentLength: 100_000,
         });
         const crumb = typeof crumbRes.data === 'string' ? crumbRes.data.trim() : null;
         if (!crumb || crumb.length < 3) { console.warn('[Yahoo] Bad crumb:', crumb); return null; }
