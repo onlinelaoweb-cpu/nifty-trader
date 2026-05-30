@@ -596,6 +596,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div class="checklist-title">📋 PRE-MARKET CHECKLIST</div>
       <div style="display:flex;align-items:center;gap:8px;">
         <div class="checklist-progress" id="cl-progress">0/7</div>
+        <span id="cl-arrow" style="color:var(--amber);font-size:12px;transition:transform 0.3s;transform:rotate(0deg);">▼</span>
         <button class="cl-reset" onclick="event.stopPropagation();resetChecklist()">↺</button>
       </div>
     </div>
@@ -1958,7 +1959,14 @@ function removeEvent(id) { _events = _events.filter(e => e.id !== id); localStor
 // ─── CHECKLIST ───────────────────────────────────────────
 function toggleChecklist() {
   const body = document.getElementById('checklist-body');
-  if (body) body.style.display = body.style.display === 'none' ? '' : 'none';
+  if (!body) return;
+  const isOpen = body.classList.contains('open');
+  body.classList.toggle('open', !isOpen);
+  // Arrow: rotate(0deg) = ▼ closed, rotate(180deg) = ▲ open
+  const arrow = document.getElementById('cl-arrow');
+  if (arrow) arrow.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
+  // Persist state
+  try { localStorage.setItem('vn_cl_open', (!isOpen).toString()); } catch(e) {}
 }
 function toggleCL(el) {
   el.classList.toggle('checked');
@@ -1972,6 +1980,18 @@ function resetChecklist() {
   const progEl = document.getElementById('cl-progress'); if (progEl) progEl.textContent = '0/7';
   const fillEl = document.getElementById('cl-mini-fill'); if (fillEl) fillEl.style.width = '0%';
 }
+// Restore checklist open/closed state from localStorage on load
+(function() {
+  try {
+    const saved = localStorage.getItem('vn_cl_open');
+    if (saved === 'true') {
+      const body = document.getElementById('checklist-body');
+      const arrow = document.getElementById('cl-arrow');
+      if (body) body.classList.add('open');
+      if (arrow) arrow.style.transform = 'rotate(180deg)';
+    }
+  } catch(e) {}
+})();
 
 // ─── CHART ───────────────────────────────────────────────
 function setChartTF(tf, btn) {

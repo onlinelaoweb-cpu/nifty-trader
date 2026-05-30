@@ -4,9 +4,9 @@ const { TOTP, Secret } = require('otpauth');
 async function loginAngel() {
     try {
         console.log('Trying Angel One Login...');
+        // CLIENT_ID logged for debug — safe (not a secret)
         console.log('CLIENT_ID:', process.env.ANGEL_CLIENT_ID);
-
-        const totpCode = new TOTP({
+        // SECURITY: never log TOTP codes or tokens
             secret   : Secret.fromBase32(
                            process.env.ANGEL_TOTP_SECRET
                                .toUpperCase()
@@ -17,7 +17,7 @@ async function loginAngel() {
             algorithm: 'SHA1'
         }).generate();
 
-        console.log('TOTP Generated:', totpCode);
+        console.log('TOTP: generated ✅ (6-digit, not logged)');
 
         // ✅ Direct REST API — no SDK
         const response = await axios.post(
@@ -42,17 +42,19 @@ async function loginAngel() {
         );
 
         const data = response.data;
-        console.log('FULL RESPONSE:', JSON.stringify(data, null, 2));
+        // SECURITY: never log full response — contains live JWT tokens
+        // console.log('FULL RESPONSE:', JSON.stringify(data, null, 2)); // REMOVED
 
         if (!data?.data?.jwtToken) {
             throw new Error(
-                'Login failed: ' + JSON.stringify(data)
+                'Login failed: ' + (data?.message || data?.errorcode || 'No jwtToken in response')
             );
         }
 
         console.log('✅ Login Success!');
-        console.log('jwtToken  :', data.data.jwtToken  ? '✅' : '❌');
-        console.log('feedToken :', data.data.feedToken ? '✅' : '❌');
+        console.log('jwtToken  :', data.data.jwtToken  ? '✅ present' : '❌ missing');
+        console.log('feedToken :', data.data.feedToken ? '✅ present' : '❌ missing');
+        // SECURITY: return only the token values — never log them
 
         return data.data;
 
