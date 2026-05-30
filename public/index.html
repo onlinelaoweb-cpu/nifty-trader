@@ -1571,22 +1571,28 @@ function renderDashboard(s) {
       scoreNum.style.color = em.score > 0 ? 'var(--green)' : em.score < 0 ? 'var(--red)' : 'var(--amber)';
     }
     if (scoreFill && em.score != null) {
-      const pct = ((em.score + 5) / 10) * 100;
+      const pct = ((em.score + 9) / 18) * 100;
       const half = 50;
       if (em.score >= 0) { scoreFill.style.left = half + '%'; scoreFill.style.width = (pct - half) + '%'; scoreFill.style.background = 'var(--green)'; }
       else { scoreFill.style.left = pct + '%'; scoreFill.style.width = (half - pct) + '%'; scoreFill.style.background = 'var(--red)'; }
     }
     const descEl = document.getElementById('em-desc');
     if (descEl) descEl.textContent = em.label || '--';
-    // Votes
+    // Votes — use structured vote objects {name, vote, reason}
     const votesEl = document.getElementById('em-votes');
     if (votesEl && em.votes && em.votes.length) {
-      votesEl.innerHTML = em.votes.map((v,i) => {
-        const names = ['CHAIN OI Δ','ATM CLUSTER OI','CE VELOCITY','PE VELOCITY','CE BUY PRESSURE','PE BUY PRESSURE','IV SKEW'];
-        const reasons = ['Intraday CE vs PE change','±100pt around ATM (5 strikes)','ATM CE premium %/cycle (leads OI)','ATM PE premium %/cycle (leads OI)','Order-book buy% at ATM CE','Order-book buy% at ATM PE','PE IV vs CE IV demand skew'];
-        const icon = v > 0 ? '▲' : v < 0 ? '▼' : '○';
-        const color = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--dim)';
-        return `<div class="em-vote-row${i===em.votes.length-1?' style="border-bottom:none;"':''}"><span class="em-vote-icon" style="color:${color};">${icon}</span><span class="em-vote-name">${names[i]||'Vote '+(i+1)}</span><span class="em-vote-reason" style="color:#4a6a8a;">${reasons[i]||''}</span></div>`;
+      votesEl.innerHTML = em.votes.map((v, i) => {
+        const vote = typeof v === 'object' ? v.vote : v;
+        const name = (typeof v === 'object' && v.name) ? v.name : ('Vote ' + (i+1));
+        const reason = (typeof v === 'object' && v.reason) ? v.reason : '';
+        const icon = vote > 0 ? '▲' : vote < 0 ? '▼' : '○';
+        const color = vote > 0 ? 'var(--green)' : vote < 0 ? 'var(--red)' : 'var(--dim)';
+        const isLast = i === em.votes.length - 1;
+        return `<div class="em-vote-row"${isLast?' style="border-bottom:none;"':''}>`
+          + `<span class="em-vote-icon" style="color:${color};">${icon}</span>`
+          + `<span class="em-vote-name">${name}</span>`
+          + `<span class="em-vote-reason" style="color:#4a6a8a;">${reason}</span>`
+          + `</div>`;
       }).join('');
     }
   }
@@ -2136,8 +2142,8 @@ function updateChecklistAuto(s) {
   // 7. Early Momentum
   if (s.earlyMom && s.earlyMom.score != null) {
     const em = s.earlyMom;
-    const isBull = em.score >= 2;
-    const isBear = em.score <= -2;
+    const isBull = em.score >= 3;
+    const isBear = em.score <= -3;
     setItem('cl-em', isBull ? 'pass' : isBear ? 'fail' : 'wait',
       'Score ' + (em.score > 0 ? '+' : '') + em.score + '/5 · ' + (em.signal || 'NEUTRAL'),
       isBull ? 'var(--green)' : isBear ? 'var(--red)' : 'var(--amber)');

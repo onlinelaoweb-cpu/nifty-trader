@@ -400,22 +400,27 @@ function interpretOIBuildup({ totalCEoiChange, totalPEoiChange, pcrChange } = {}
 // Early Momentum Detector
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// SIGNAL SCORING — vote-based, range −5 to +5:
+// SIGNAL SCORING — vote-based, range −9 to +9:
 //
-//   +1  NSE intraday PE OI Δ > CE OI Δ (whole chain)  ← works from cycle 1
+//   +1  NSE intraday PE OI Δ > CE OI Δ (whole chain, dynamic thr 10K–30K by session)
 //   +1  ATM-cluster (±100pt) PE OI Δ > CE OI Δ        ← 5x more sensitive
-//   +1  ATM CE premium velocity > +5% this cycle       ← LEADING: price before OI
-//   −1  ATM PE premium velocity > +5% this cycle       ← LEADING: put demand
+//   +1  ATM CE premium velocity > +2.5% this cycle     ← LEADING: price before OI
+//   −1  ATM PE premium velocity > +2.5% this cycle     ← LEADING: put demand
 //   +1  ATM CE buy-pressure > 65% (order book)         ← LEADING: real-time orders
 //   −1  ATM PE buy-pressure > 65% (order book)
 //   +1  IV skew: CE IV > PE IV + 3  (call demand skew)
 //   −1  IV skew: PE IV > CE IV + 3  (fear / put demand skew)
+//   ±1  Strike OI Shift: dominant single-strike CE/PE buildup (Murarka primary read)
+//   ±1  Wall Alignment: top-3 buildup strikes concentrated on same side
 //
-//   score ≥ +3 → BULL strength 2   (⚡ Early CE momentum)
-//   score +1/+2 → BULL strength 1  (↗ CE lean)
-//   score 0     → NEUTRAL
-//   score −1/−2 → BEAR strength 1  (↘ PE lean)
-//   score ≤ −3 → BEAR strength 2   (⚡ Early PE momentum)
+//   [CE/PE Velocity includes streak note after 2+ consecutive cycles]
+//   [OI thresholds dynamically scale: 10K at open, 20K early, 30K mid-session]
+//
+//   score ≥ +4 → BULL strength 2   (⚡ Early CE momentum)
+//   score +2/+3 → BULL strength 1  (↗ CE lean)
+//   score 0/±1  → NEUTRAL
+//   score −2/−3 → BEAR strength 1  (↘ PE lean)
+//   score ≤ −4 → BEAR strength 2   (⚡ Early PE momentum)
 
 const _earlyMom = {
     // NSE-native intraday OI deltas (available from fetch #1 — no warmup)
@@ -430,6 +435,10 @@ const _earlyMom = {
     atmCEvelocity     : null,   // +ve = call buyers pushing CE price up
     atmPEvelocity     : null,   // +ve = put buyers pushing PE price up
 
+    // Velocity streak (consecutive cycles in same direction)
+    ceVelStreak       : 0,
+    peVelStreak       : 0,
+
     // Order-book buy pressure at ATM (0–1 scale)
     atmCEbuyPressure  : null,   // totalBuyQty / (buyQty + sellQty) for CE
     atmPEbuyPressure  : null,
@@ -439,8 +448,16 @@ const _earlyMom = {
     atmPEiv           : null,
     ivSkew            : null,   // PE IV − CE IV: +ve = fear/put-demand
 
+    // Strike-by-strike OI shift (Murarka primary read)
+    topCEbuildup      : [],     // [{strike, ceOI, ceOIChange}] top-5 CE additions
+    topPEbuildup      : [],     // [{strike, peOI, peOIChange}] top-5 PE additions
+    maxCEoiAddStrike  : null,   // strike with biggest CE OI addition this cycle
+    maxPEoiAddStrike  : null,   // strike with biggest PE OI addition this cycle
+    maxCEoiAdd        : null,
+    maxPEoiAdd        : null,
+
     // Scoring output
-    score             : null,   // −5 to +5
+    score             : null,   // −9 to +9
     signal            : 'NEUTRAL',
     strength          : 0,
     label             : 'Early Momentum — awaiting data',
@@ -454,6 +471,39 @@ const _earlyMom = {
 // Store previous ATM premiums for velocity calculation
 let _prevATMce = null;
 let _prevATMpe = null;
+
+// Velocity streak tracking — consecutive cycles in same direction
+let _ceVelStreak = 0;   // +ve = consecutive bullish cycles, -ve = bearish
+let _peVelStreak = 0;
+
+/**
+ * getDynamicOIThreshold()
+ * Returns a time-of-day-adjusted OI threshold for whole-chain signals.
+ * Market open (9:15–9:45): very thin OI changes → use 10K
+ * Early session (9:45–10:30): building momentum → 20K
+ * Mid session (10:30–14:00): normal → 30K
+ * Late session (14:00–15:30): can be thicker or noise → 25K
+ */
+function getDynamicOIThreshold() {
+    const now = new Date();
+    const hhmm = now.getHours() * 60 + now.getMinutes();
+    if (hhmm < 9 * 60 + 45)  return 10_000;   // 9:15–9:45 open
+    if (hhmm < 10 * 60 + 30) return 20_000;   // 9:45–10:30 early
+    if (hhmm < 14 * 60)      return 30_000;   // 10:30–14:00 normal
+    return 25_000;                              // 14:00–15:30 late
+}
+
+/**
+ * getDynamicClusterThreshold()
+ * ATM-cluster threshold also scales with time of day.
+ */
+function getDynamicClusterThreshold() {
+    const now = new Date();
+    const hhmm = now.getHours() * 60 + now.getMinutes();
+    if (hhmm < 9 * 60 + 45)  return 2_000;
+    if (hhmm < 10 * 60 + 30) return 4_000;
+    return 6_000;
+}
 
 /**
  * parseEarlyMomentum(records, atm)
@@ -521,6 +571,19 @@ function parseEarlyMomentum(records, atm) {
         ? parseFloat((((atmPEltp - _prevATMpe) / _prevATMpe) * 100).toFixed(2))
         : null;
 
+    // ── 5. Velocity streak tracking ──────────────────────────────────────────
+    // Count consecutive cycles where velocity has same sign — persistence matters
+    if (atmCEvelocity !== null) {
+        if (atmCEvelocity > 0) _ceVelStreak = Math.max(0, _ceVelStreak) + 1;
+        else if (atmCEvelocity < 0) _ceVelStreak = Math.min(0, _ceVelStreak) - 1;
+        else _ceVelStreak = 0;
+    }
+    if (atmPEvelocity !== null) {
+        if (atmPEvelocity > 0) _peVelStreak = Math.max(0, _peVelStreak) + 1;
+        else if (atmPEvelocity < 0) _peVelStreak = Math.min(0, _peVelStreak) - 1;
+        else _peVelStreak = 0;
+    }
+
     const ivSkew = (atmPEiv !== null && atmCEiv !== null)
         ? parseFloat((atmPEiv - atmCEiv).toFixed(2))
         : null;
@@ -536,6 +599,8 @@ function parseEarlyMomentum(records, atm) {
         clusterPEoiChange : Math.round(clusterPEoiChange),
         atmCEvelocity,
         atmPEvelocity,
+        ceVelStreak       : _ceVelStreak,
+        peVelStreak       : _peVelStreak,
         atmCEbuyPressure,
         atmPEbuyPressure,
         atmCEiv,
@@ -556,33 +621,41 @@ function interpretEarlyMomentum(state = {}) {
         atmCEvelocity, atmPEvelocity,
         atmCEbuyPressure, atmPEbuyPressure,
         ivSkew,
+        // Strike-by-strike shift analysis (Murarka primary read)
+        topCEbuildup, topPEbuildup,
+        maxCEoiAddStrike, maxPEoiAddStrike,
+        maxCEoiAdd, maxPEoiAdd,
+        ceVelStreak, peVelStreak,
     } = state;
 
     if (intraCEoiChange === null && intraPEoiChange === null)
         return { score: 0, signal: 'NEUTRAL', strength: 0,
                  label: 'Early Momentum — awaiting data', votes: [] };
 
-    const OI_CHAIN   = 30_000;   // min whole-chain intraday OI Δ diff
-    const OI_CLUSTER = 6_000;    // min cluster OI Δ diff (lower — tighter scope)
-    const VEL_MIN    = 5;        // % premium change per 3-min cycle
+    // ── Dynamic thresholds — scale with time of day ───────────────────────────
+    const OI_CHAIN   = getDynamicOIThreshold();   // 10K→20K→30K by session
+    const OI_CLUSTER = getDynamicClusterThreshold(); // 2K→4K→6K by session
+    const VEL_MIN    = 2.5;      // % premium change per cycle (was 5 — too rare)
+    const STREAK_MIN = 2;        // consecutive cycles before streak bonus
     const BP_MIN     = 0.65;     // buy-pressure threshold (65%)
     const IV_MIN     = 3;        // minimum IV skew difference to matter
+    const STRIKE_ADD_MIN = 5_000; // min single-strike OI add to count as signal
 
     const votes = [];
 
-    // ── Vote 1: Whole-chain intraday OI ──────────────────────────────────────
+    // ── Vote 1: Whole-chain intraday OI (dynamic threshold) ──────────────────
     if (intraPEoiChange !== null && intraCEoiChange !== null) {
         const diff = intraPEoiChange - intraCEoiChange;
         if (Math.abs(diff) >= OI_CHAIN) {
             const v = diff > 0 ? +1 : -1;
             const lbl = diff > 0
-                ? `PE intra OI Δ+${Math.round(intraPEoiChange/1000)}K > CE Δ${Math.round(intraCEoiChange/1000)}K`
-                : `CE intra OI Δ+${Math.round(intraCEoiChange/1000)}K > PE Δ${Math.round(intraPEoiChange/1000)}K`;
+                ? `PE intra OI Δ+${Math.round(intraPEoiChange/1000)}K > CE Δ${Math.round(intraCEoiChange/1000)}K (thr ${OI_CHAIN/1000}K)`
+                : `CE intra OI Δ+${Math.round(intraCEoiChange/1000)}K > PE Δ${Math.round(intraPEoiChange/1000)}K (thr ${OI_CHAIN/1000}K)`;
             votes.push({ name: 'Chain OI Δ', vote: v, reason: lbl });
         }
     }
 
-    // ── Vote 2: ATM-cluster OI (more sensitive) ───────────────────────────────
+    // ── Vote 2: ATM-cluster OI (dynamic threshold) ────────────────────────────
     if (clusterPEoiChange !== null && clusterCEoiChange !== null) {
         const diff = clusterPEoiChange - clusterCEoiChange;
         if (Math.abs(diff) >= OI_CLUSTER) {
@@ -594,19 +667,23 @@ function interpretEarlyMomentum(state = {}) {
         }
     }
 
-    // ── Vote 3: CE premium velocity (LEADING) ─────────────────────────────────
+    // ── Vote 3: CE premium velocity (LEADING) — 2.5% threshold ──────────────
     if (atmCEvelocity !== null && Math.abs(atmCEvelocity) >= VEL_MIN) {
         const v = atmCEvelocity > 0 ? +1 : -1;
+        const streakNote = ceVelStreak && Math.abs(ceVelStreak) >= STREAK_MIN
+            ? ` [${Math.abs(ceVelStreak)}-cycle streak]` : '';
         votes.push({ name: 'CE Velocity', vote: v,
-            reason: `ATM CE LTP ${atmCEvelocity > 0 ? '+' : ''}${atmCEvelocity}%/cycle` });
+            reason: `ATM CE LTP ${atmCEvelocity > 0 ? '+' : ''}${atmCEvelocity}%/cycle${streakNote}` });
     }
 
-    // ── Vote 4: PE premium velocity (LEADING) ─────────────────────────────────
+    // ── Vote 4: PE premium velocity (LEADING) — 2.5% threshold ──────────────
     // PE premium rising = put buyers active = bearish; PE falling = puts abandoned = bullish
     if (atmPEvelocity !== null && Math.abs(atmPEvelocity) >= VEL_MIN) {
         const v = atmPEvelocity > 0 ? -1 : +1;
+        const streakNote = peVelStreak && Math.abs(peVelStreak) >= STREAK_MIN
+            ? ` [${Math.abs(peVelStreak)}-cycle streak]` : '';
         votes.push({ name: 'PE Velocity', vote: v,
-            reason: `ATM PE LTP ${atmPEvelocity > 0 ? '+' : ''}${atmPEvelocity}%/cycle` });
+            reason: `ATM PE LTP ${atmPEvelocity > 0 ? '+' : ''}${atmPEvelocity}%/cycle${streakNote}` });
     }
 
     // ── Vote 5: CE order-book buy pressure (LEADING) ──────────────────────────
@@ -632,6 +709,38 @@ function interpretEarlyMomentum(state = {}) {
         }
     }
 
+    // ── Vote 8 (NEW): Strike-by-strike OI shift — Murarka primary read ────────
+    // The single strike with the biggest OI addition tells you where smart money
+    // is writing. CE add at one strike = resistance building there (bearish lean).
+    // PE add at one strike = support being written there (bullish lean).
+    const hasCEshift = maxCEoiAdd != null && maxCEoiAdd >= STRIKE_ADD_MIN;
+    const hasPEshift = maxPEoiAdd != null && maxPEoiAdd >= STRIKE_ADD_MIN;
+    if (hasCEshift || hasPEshift) {
+        // If both are building, compare magnitude — dominant one wins
+        if (hasCEshift && (!hasPEshift || maxCEoiAdd >= maxPEoiAdd)) {
+            votes.push({ name: 'Strike OI Shift', vote: -1,
+                reason: `Call writing at ${maxCEoiAddStrike}: +${Math.round(maxCEoiAdd/1000)}K CE OI (resistance)` });
+        } else if (hasPEshift) {
+            votes.push({ name: 'Strike OI Shift', vote: +1,
+                reason: `Put writing at ${maxPEoiAddStrike}: +${Math.round(maxPEoiAdd/1000)}K PE OI (support)` });
+        }
+    }
+
+    // ── Vote 9 (NEW): Top-5 buildup alignment ─────────────────────────────────
+    // If top-3 buildup strikes are all same side (CE or PE), it's a strong wall
+    if (Array.isArray(topCEbuildup) && topCEbuildup.length >= 3) {
+        const top3CEadd = topCEbuildup.slice(0, 3).reduce((s, r) => s + (r.ceOIChange || 0), 0);
+        const top3PEadd = Array.isArray(topPEbuildup)
+            ? topPEbuildup.slice(0, 3).reduce((s, r) => s + (r.peOIChange || 0), 0) : 0;
+        if (top3CEadd > top3PEadd * 1.5 && top3CEadd >= 15_000) {
+            votes.push({ name: 'Wall Alignment', vote: -1,
+                reason: `Top-3 CE buildup +${Math.round(top3CEadd/1000)}K (call wall forming)` });
+        } else if (top3PEadd > top3CEadd * 1.5 && top3PEadd >= 15_000) {
+            votes.push({ name: 'Wall Alignment', vote: +1,
+                reason: `Top-3 PE buildup +${Math.round(top3PEadd/1000)}K (put wall = support)` });
+        }
+    }
+
     // ── Tally ─────────────────────────────────────────────────────────────────
     const score = votes.reduce((s, v) => s + v.vote, 0);
     const bullReasons = votes.filter(v => v.vote > 0).map(v => v.reason);
@@ -639,16 +748,16 @@ function interpretEarlyMomentum(state = {}) {
 
     let signal, strength, label;
 
-    if (score >= 3) {
+    if (score >= 4) {
         signal = 'BULL'; strength = 2;
         label = `⚡ Early CE momentum: ${bullReasons.join(' · ')}`;
-    } else if (score >= 1) {
+    } else if (score >= 2) {
         signal = 'BULL'; strength = 1;
         label = `↗ CE lean: ${bullReasons.join(' · ') || 'weak bull signals'}`;
-    } else if (score <= -3) {
+    } else if (score <= -4) {
         signal = 'BEAR'; strength = 2;
         label = `⚡ Early PE momentum: ${bearReasons.join(' · ')}`;
-    } else if (score <= -1) {
+    } else if (score <= -2) {
         signal = 'BEAR'; strength = 1;
         label = `↘ PE lean: ${bearReasons.join(' · ') || 'weak bear signals'}`;
     } else {
@@ -755,12 +864,23 @@ async function _fetchPCR(spotPrice) {
             console.error('[OI Buildup] Calc error:', oiErr.message);
         }
 
-        // ── Early Momentum — 7-vote leading signal (no warmup needed) ─────────
+        // ── Early Momentum — 9-vote leading signal (no warmup needed) ─────────
         try {
             const emResult = parseEarlyMomentum(res.data?.records?.data, parsed.atm);
             if (emResult) {
-                const emSignal = interpretEarlyMomentum(emResult);
-                Object.assign(_earlyMom, emResult, {
+                // Merge in strike-level OI shift fields from oiResult (Murarka primary read)
+                const oiState = getOIBuildupState();
+                const emWithStrike = {
+                    ...emResult,
+                    topCEbuildup     : oiState.topCEbuildup   || [],
+                    topPEbuildup     : oiState.topPEbuildup   || [],
+                    maxCEoiAddStrike : oiState.maxCEoiAddStrike,
+                    maxPEoiAddStrike : oiState.maxPEoiAddStrike,
+                    maxCEoiAdd       : oiState.maxCEoiAdd,
+                    maxPEoiAdd       : oiState.maxPEoiAdd,
+                };
+                const emSignal = interpretEarlyMomentum(emWithStrike);
+                Object.assign(_earlyMom, emWithStrike, {
                     score     : emSignal.score,
                     signal    : emSignal.signal,
                     strength  : emSignal.strength,
