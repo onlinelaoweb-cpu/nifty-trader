@@ -7,6 +7,7 @@ async function loginAngel() {
         // CLIENT_ID logged for debug — safe (not a secret)
         console.log('CLIENT_ID:', process.env.ANGEL_CLIENT_ID);
         // SECURITY: never log TOTP codes or tokens
+        const totpCode = new TOTP({
             secret   : Secret.fromBase32(
                            process.env.ANGEL_TOTP_SECRET
                                .toUpperCase()
