@@ -16,7 +16,7 @@
 // SETUP: Call injectAngelSession({ jwtToken, apiKey }) after Angel One login succeeds.
 // The Angel session auto-refreshes when the main login re-runs every 24h.
 
-const { fetchNifty50Stocks, fetchAllIndices } = require('./yahooFetch');
+const { fetchNifty50Stocks, fetchAllIndices, fetchNifty50FromYahoo } = require('./yahooFetch');
 const axios = require('axios');
 
 // ── Angel One session holder ──────────────────────────────────────────────────
@@ -307,7 +307,35 @@ function buildResult(advances, declines, unchanged, bullWeight, bearWeight, stoc
     };
 }
 
-// ── Main export — 3-tier waterfall ────────────────────────────────────────────
+// ── Tier 2.5: Yahoo Finance batch quote (Railway-compatible, no NSE needed) ──
+async function fetchBreadthFromYahoo() {
+    const rows = await fetchNifty50FromYahoo();
+    if (!rows || rows.length < 8) return null;
+
+    let advances = 0, declines = 0, unchanged = 0, fetchedCount = 0;
+    let bullWeight = 0, bearWeight = 0;
+    const stocks = [];
+
+    for (const info of NIFTY_STOCKS) {
+        const row = rows.find(r => r.symbol === info.symbol);
+        if (!row || !row.lastPrice) continue;
+        fetchedCount++;
+        const price     = parseFloat(row.lastPrice);
+        const prevClose = parseFloat(row.previousClose || price);
+        const change    = parseFloat((price - prevClose).toFixed(2));
+        const changePct = prevClose > 0 ? parseFloat(((change / prevClose) * 100).toFixed(2)) : 0;
+        let status = 'unchanged';
+        if      (changePct >  0.1) { advances++; status = 'up';   bullWeight += info.weight; }
+        else if (changePct < -0.1) { declines++; status = 'down'; bearWeight += info.weight; }
+        else                        { unchanged++; }
+        stocks.push({ name: info.name, symbol: info.symbol, weight: info.weight, price, change, changePct, status });
+    }
+
+    if (fetchedCount < 8) return null;
+    return buildResult(advances, declines, unchanged, bullWeight, bearWeight, stocks, 'yahoo-stocks');
+}
+
+// ── Main export — 4-tier waterfall ────────────────────────────────────────────
 async function fetchAdvanceDecline() {
     try {
         console.log('📊 Fetching A/D data...');
@@ -316,13 +344,18 @@ async function fetchAdvanceDecline() {
         const tier1 = await fetchBreadthFromAngel();
         if (tier1) return tier1;
 
-        // Tier 2: NSE equity-stockIndices (blocked on Railway as of May 2026)
+        // Tier 2: NSE equity-stockIndices (404 on Railway as of May 2026 — kept for future)
         console.log('📊 Angel A/D unavailable — trying NSE stocks...');
         const tier2 = await fetchBreadthFromStocks();
         if (tier2) return tier2;
 
+        // Tier 2.5: Yahoo Finance batch quote (Railway-compatible, 20 weighted stocks)
+        console.log('📊 NSE stocks unavailable — trying Yahoo Finance batch...');
+        const tier25 = await fetchBreadthFromYahoo();
+        if (tier25) return tier25;
+
         // Tier 3: Sector indices (always works from Railway)
-        console.log('📊 Stock data unavailable — using sector indices for A/D');
+        console.log('📊 Yahoo stocks unavailable — using sector indices for A/D');
         return await fetchBreadthFromIndices();
 
     } catch (err) {

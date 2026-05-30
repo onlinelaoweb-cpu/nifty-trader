@@ -637,4 +637,58 @@ async function yahooGet(path, params = {}, timeoutMs = 20000) {
     return { chart: { result: [chart], error: null } };
 }
 
-module.exports = { yahooGet, fetchYahooMeta, fetchYahooChart, fetchNifty50Stocks, fetchAllIndices };
+// ── Yahoo Finance batch quote for Nifty 50 weighted stocks ───────────────────
+// Used as Tier 2.5 breadth fallback when NSE equity-stockIndices is 404 on Railway.
+// Fetches up to 50 .NS symbols in ONE request — fast and Railway-compatible.
+const NIFTY50_YAHOO_SYMBOLS = [
+    'RELIANCE.NS','HDFCBANK.NS','ICICIBANK.NS','INFY.NS','TCS.NS',
+    'KOTAKBANK.NS','LT.NS','SBIN.NS','AXISBANK.NS','BHARTIARTL.NS',
+    'ITC.NS','WIPRO.NS','HCLTECH.NS','MARUTI.NS','BAJFINANCE.NS',
+    'TITAN.NS','ASIANPAINT.NS','NTPC.NS','POWERGRID.NS','NESTLEIND.NS',
+];
+
+let _yahooStocksCache   = null;
+let _yahooStocksCacheAt = 0;
+
+async function fetchNifty50FromYahoo() {
+    const istNow  = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istMin  = istNow.getHours() * 60 + istNow.getMinutes();
+    const inMarket = istMin >= 555 && istMin <= 930;   // 9:15-15:30
+    const cacheTTL = inMarket ? 60_000 : 300_000;
+
+    if (_yahooStocksCache && Date.now() - _yahooStocksCacheAt < cacheTTL) return _yahooStocksCache;
+
+    try {
+        const symbols = NIFTY50_YAHOO_SYMBOLS.join(',');
+        // Yahoo Finance v7 multi-quote — single call, no auth required
+        const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbols}&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketChangePercent`;
+        const res = await axios.get(url, {
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept'    : 'application/json',
+                'Origin'    : 'https://finance.yahoo.com',
+                'Referer'   : 'https://finance.yahoo.com/',
+            },
+        });
+        const quotes = res.data?.quoteResponse?.result;
+        if (!Array.isArray(quotes) || quotes.length < 5) return null;
+
+        const rows = quotes.map(q => {
+            const symbol = (q.symbol || '').replace('.NS', '');
+            const price     = parseFloat((q.regularMarketPrice           || 0).toFixed(2));
+            const prevClose = parseFloat((q.regularMarketPreviousClose   || price).toFixed(2));
+            return { symbol, lastPrice: price, previousClose: prevClose };
+        }).filter(r => r.lastPrice > 0);
+
+        _yahooStocksCache   = rows;
+        _yahooStocksCacheAt = Date.now();
+        console.log(`[Yahoo] Nifty50 batch quote: ${rows.length} stocks loaded`);
+        return rows;
+    } catch (e) {
+        console.warn(`[Yahoo] Nifty50 batch quote failed: ${e.message}`);
+        return null;
+    }
+}
+
+module.exports = { yahooGet, fetchYahooMeta, fetchYahooChart, fetchNifty50Stocks, fetchAllIndices, fetchNifty50FromYahoo };
