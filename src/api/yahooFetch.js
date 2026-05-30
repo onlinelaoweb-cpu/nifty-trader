@@ -240,14 +240,16 @@ const YAHOO_FALLBACK_MAP = {
 // ── Yahoo Finance direct HTTP (used only as NSE fallback) ────────────────────
 async function yahooDirectQuote(yahooSymbol) {
     try {
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=2d`;
-        const res = await axios.get(url, {
-            timeout: 8000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                'Accept'    : 'application/json',
-            },
-        });
+        const auth = await getYahooCrumb();
+        const crumbParam = auth?.crumb ? `&crumb=${encodeURIComponent(auth.crumb)}` : '';
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=2d${crumbParam}`;
+        const headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'Accept'    : 'application/json',
+            'Referer'   : 'https://finance.yahoo.com/',
+        };
+        if (auth?.cookie) headers['Cookie'] = auth.cookie;
+        const res = await axios.get(url, { timeout: 8000, headers });
         const result = res.data?.chart?.result?.[0];
         if (!result) return null;
         const meta      = result.meta;
@@ -650,6 +652,55 @@ const NIFTY50_YAHOO_SYMBOLS = [
 let _yahooStocksCache   = null;
 let _yahooStocksCacheAt = 0;
 
+// ── Yahoo crumb/cookie auth (required since ~2024) ────────────────────────────
+let _yahooCrumb      = null;
+let _yahooCookie     = null;
+let _yahooCrumbAt    = 0;
+const YAHOO_CRUMB_TTL = 55 * 60 * 1000;  // 55 min
+
+async function getYahooCrumb() {
+    if (_yahooCrumb && Date.now() - _yahooCrumbAt < YAHOO_CRUMB_TTL) {
+        return { crumb: _yahooCrumb, cookie: _yahooCookie };
+    }
+    try {
+        // Step 1: hit finance.yahoo.com to get session cookie
+        const homeRes = await axios.get('https://finance.yahoo.com/', {
+            timeout: 8000,
+            headers: {
+                'User-Agent'     : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                'Accept'         : 'text/html,application/xhtml+xml,*/*',
+                'Accept-Language': 'en-US,en;q=0.9',
+            },
+            maxRedirects: 5,
+        });
+        const rawCookies = homeRes.headers['set-cookie'] || [];
+        const cookieStr  = rawCookies.map(c => c.split(';')[0]).join('; ');
+        if (!cookieStr) { console.warn('[Yahoo] No cookie from homepage'); return null; }
+
+        // Step 2: fetch crumb using the session cookie
+        const crumbRes = await axios.get('https://query1.finance.yahoo.com/v1/test/getcrumb', {
+            timeout: 8000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                'Cookie'    : cookieStr,
+                'Accept'    : '*/*',
+                'Referer'   : 'https://finance.yahoo.com/',
+            },
+        });
+        const crumb = typeof crumbRes.data === 'string' ? crumbRes.data.trim() : null;
+        if (!crumb || crumb.length < 3) { console.warn('[Yahoo] Bad crumb:', crumb); return null; }
+
+        _yahooCrumb   = crumb;
+        _yahooCookie  = cookieStr;
+        _yahooCrumbAt = Date.now();
+        console.log('[Yahoo] Crumb refreshed ✅');
+        return { crumb, cookie: cookieStr };
+    } catch (e) {
+        console.warn('[Yahoo] Crumb fetch failed:', e.message);
+        return null;
+    }
+}
+
 async function fetchNifty50FromYahoo() {
     const istNow  = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const istMin  = istNow.getHours() * 60 + istNow.getMinutes();
@@ -660,33 +711,55 @@ async function fetchNifty50FromYahoo() {
 
     try {
         const symbols = NIFTY50_YAHOO_SYMBOLS.join(',');
-        // Yahoo Finance v7 multi-quote — single call, no auth required
-        const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbols}&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketChangePercent`;
-        const res = await axios.get(url, {
-            timeout: 10000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept'    : 'application/json',
-                'Origin'    : 'https://finance.yahoo.com',
-                'Referer'   : 'https://finance.yahoo.com/',
-            },
-        });
-        const quotes = res.data?.quoteResponse?.result;
+
+        // Get crumb+cookie for auth
+        const auth = await getYahooCrumb();
+        const headers = {
+            'User-Agent'     : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'Accept'         : 'application/json',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer'        : 'https://finance.yahoo.com/',
+        };
+        if (auth?.cookie) headers['Cookie'] = auth.cookie;
+
+        // Try v8/finance/quote with crumb (new required endpoint)
+        const crumbParam = auth?.crumb ? `&crumb=${encodeURIComponent(auth.crumb)}` : '';
+        const urlV8 = `https://query1.finance.yahoo.com/v8/finance/quote?symbols=${symbols}&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketChangePercent${crumbParam}`;
+
+        let quotes = null;
+        try {
+            const res = await axios.get(urlV8, { timeout: 10000, headers });
+            quotes = res.data?.quoteResponse?.result;
+        } catch (e1) {
+            console.warn(`[Yahoo] v8 quote failed (${e1.response?.status || e1.message}) — trying v7...`);
+            // Fallback: v7 with crumb
+            const urlV7 = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbols}&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketChangePercent${crumbParam}`;
+            const res2  = await axios.get(urlV7, { timeout: 10000, headers });
+            quotes = res2.data?.quoteResponse?.result;
+        }
+
         if (!Array.isArray(quotes) || quotes.length < 5) return null;
 
         const rows = quotes.map(q => {
-            const symbol = (q.symbol || '').replace('.NS', '');
-            const price     = parseFloat((q.regularMarketPrice           || 0).toFixed(2));
-            const prevClose = parseFloat((q.regularMarketPreviousClose   || price).toFixed(2));
+            const symbol    = (q.symbol || '').replace('.NS', '');
+            const price     = parseFloat((q.regularMarketPrice         || 0).toFixed(2));
+            const prevClose = parseFloat((q.regularMarketPreviousClose || price).toFixed(2));
             return { symbol, lastPrice: price, previousClose: prevClose };
         }).filter(r => r.lastPrice > 0);
 
         _yahooStocksCache   = rows;
         _yahooStocksCacheAt = Date.now();
-        console.log(`[Yahoo] Nifty50 batch quote: ${rows.length} stocks loaded`);
+        console.log(`[Yahoo] Nifty50 batch quote: ${rows.length} stocks loaded ✅`);
         return rows;
     } catch (e) {
-        console.warn(`[Yahoo] Nifty50 batch quote failed: ${e.message}`);
+        // Invalidate crumb on 401 so next call re-fetches
+        if (e.response?.status === 401) {
+            _yahooCrumb = null;
+            _yahooCrumbAt = 0;
+            console.warn('[Yahoo] Nifty50 batch quote 401 — crumb invalidated, will retry next cycle');
+        } else {
+            console.warn(`[Yahoo] Nifty50 batch quote failed: ${e.message}`);
+        }
         return null;
     }
 }
