@@ -96,7 +96,6 @@ let nishanebaazAlertSent=false;  // one-shot: fired once at 14:00 per day
 let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:15
 let signalStreak = { signal: 'WAIT', count: 0 }; // consecutive same-signal counter
 let btstSentToday=false;     // one-shot: BTST/STBT Telegram alert per day
-let telegramAlertInFlight=false; // race-condition guard — prevents duplicate sends when onTick fires concurrently
 
 function isMarketOpen() {
     const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
@@ -698,16 +697,10 @@ function evaluateBTST() {
 
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return;
-    // ── Race-condition guard: onTick fires synchronously on every websocket tick,
-    //    so multiple concurrent calls can pass a flag check before any one of them
-    //    sets the flag. This in-flight lock ensures only one alert send runs at a time.
-    if (telegramAlertInFlight) return;
-    telegramAlertInFlight = true;
-    try {
     const ist=getIST(), h=ist.getHours(), m=ist.getMinutes();
     if (h===9&&m>=16&&m<=20&&!morningSummarySent) { morningSummarySent=true; await sendMorningSummary(marketState); return; }
     if (h===14&&m===0&&!nishanebaazAlertSent) { nishanebaazAlertSent=true; await sendNishanebaazAlert(marketState); }
-    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;nishanebaazAlertSent=false;pcrClearedToday=false;btstSentToday=false;telegramAlertInFlight=false;},6*60*60*1000); return; }
+    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;nishanebaazAlertSent=false;pcrClearedToday=false;btstSentToday=false;},6*60*60*1000); return; }
     // ── BTST/STBT Telegram alert — fires once in 3:00–3:20 window if signal passed ──
     if (!btstSentToday && marketState.btst?.passed) {
         btstSentToday = true;
@@ -752,9 +745,6 @@ async function checkTelegramAlerts(newSignal) {
     prevMTFAligned=marketState.mtf.aligned;
     if (marketState.vix>20&&!vixAlertSent) { vixAlertSent=true; await sendVIXAlert(marketState.vix,marketState.vixNote); }
     if (marketState.vix<=20) vixAlertSent=false;
-    } finally {
-        telegramAlertInFlight = false;
-    }
 }
 
 async function updatePrice(price, change, changePct, source) {
@@ -773,11 +763,11 @@ async function updatePrice(price, change, changePct, source) {
     prevSignal=signal;
 }
 
-async function onTick(tickData) {
+function onTick(tickData) {
     const price=tickData.price; if(!price||price<=0) return;
     const prev=marketState.nifty||price, change=parseFloat((price-prev).toFixed(2));
     const chgPct=prev>0?parseFloat(((change/prev)*100).toFixed(2)):0;
-    await updatePrice(price,change,chgPct,'websocket');
+    updatePrice(price,change,chgPct,'websocket');
 }
 
 async function refreshMarketData() {
@@ -821,20 +811,29 @@ async function refreshMTF() {
         const preMarket = mins < 555;   // 09:15 = 555 minutes from midnight
 
         marketState.mtf = {
-            signal    : preMarket ? 'NEUTRAL' : d.mtfSignal,
-            strength  : preMarket ? 'WEAK'    : d.mtfStrength,
-            confidence: preMarket ? 0         : d.mtfConfidence,
-            aligned   : preMarket ? false      : d.aligned,
-            bullCount : preMarket ? 0          : d.bullCount,
-            bearCount : preMarket ? 0          : d.bearCount,
-            tf5m      : d.tf5m,
-            tf15m     : d.tf15m,
-            tf1h      : d.tf1h
+            signal        : preMarket ? 'NEUTRAL' : d.mtfSignal,
+            strength      : preMarket ? 'WEAK'    : d.mtfStrength,
+            confidence    : preMarket ? 0         : d.mtfConfidence,
+            aligned       : preMarket ? false      : d.aligned,
+            bullCount     : preMarket ? 0          : d.bullCount,
+            bearCount     : preMarket ? 0          : d.bearCount,
+            tf5m          : d.tf5m,
+            tf15m         : d.tf15m,
+            tf1h          : d.tf1h,
+            tf5mWarming   : d.tf5mWarming      ?? false, // true for ~22 min after restart
+            tf5mBarsNeeded: d.tf5mBarsNeeded   ?? 0,     // how many more 5m bars until warm
         };
     } catch(e) { console.error('MTF:', e.message); }
 }
 async function refreshGlobal() { try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); } }
-async function refreshBreadth() { try { const d=await fetchAdvanceDecline(); if(d) marketState.breadth=d; } catch(e) { console.error('Breadth:',e.message); } }
+let _breadthInFlight = false;
+async function refreshBreadth() {
+    if (_breadthInFlight) return; // prevent duplicate A/D fetches (e.g. post-login call overlapping staggered init)
+    _breadthInFlight = true;
+    try { const d=await fetchAdvanceDecline(); if(d) marketState.breadth=d; }
+    catch(e) { console.error('Breadth:',e.message); }
+    finally { _breadthInFlight = false; }
+}
 async function refreshSR() { try { if(marketState.nifty>0) { const sr=await calculateSRLevels(marketState.nifty, marketState.maxPain?.strike ? marketState.maxPain : null); if(sr) marketState.srLevels=sr; } } catch(e) { console.error('SR:',e.message); } }
 
 async function refreshPCR() {

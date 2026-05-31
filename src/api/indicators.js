@@ -41,6 +41,14 @@ function checkSessionReset() {
 
 function initializeHistory(closes, candles) {
     if (!closes || closes.length === 0) return;
+    // Never overwrite a richer history with a smaller one.
+    // refreshMarketData() fetches only the last 60 candles and will be called
+    // right after loadCandlesFromYahoo() which seeds 376. Without this guard
+    // the second call shrinks priceHistory from 376 → 60, degrading RSI/EMA.
+    if (closes.length < priceHistory.length) {
+        console.log(`⏭ Indicators skip re-init: new data (${closes.length}) smaller than current (${priceHistory.length}) — keeping richer history`);
+        return;
+    }
     priceHistory  = [...closes];
     candleHistory = candles ? [...candles] : [];
     initialized   = true;

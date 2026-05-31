@@ -431,6 +431,8 @@ async function analyzeMultiTimeframe() {
         bullCount, bearCount,
         aligned,
         validTFCount: validCount,
+        tf5mWarming: tf5m.signal === 'INSUFFICIENT', // true during first ~22 min after restart
+        tf5mBarsNeeded: tf5m.signal === 'INSUFFICIENT' ? (MIN_BARS['5m'] - (tf5m.barCount ?? 0)) : 0,
     };
 }
 

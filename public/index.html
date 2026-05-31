@@ -743,7 +743,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div class="mtf-align-badge wait" id="mtf-badge">WAIT</div>
     </div>
     <div class="mtf-grid">
-      <div class="mtf-card" id="mtf-5m"><div class="mtf-tf">5 MIN</div><div class="mtf-sig sig-neut" id="mtf-5m-sig">NEUTRAL</div><div class="mtf-stats"><div>RSI:<span class="mtf-rsi" id="mtf-5m-rsi">--</span></div><div>EMA:<span class="mtf-rsi" id="mtf-5m-ema">--</span></div><div>VWAP:<span class="mtf-rsi" id="mtf-5m-vwap">--</span></div></div></div>
+      <div class="mtf-card" id="mtf-5m"><div class="mtf-tf">5 MIN <span id="mtf-5m-warming" style="display:none;font-size:9px;color:var(--amber);background:rgba(255,170,0,0.12);border:1px solid var(--amber);border-radius:4px;padding:1px 5px;letter-spacing:.5px;" title="">WARMING</span></div><div class="mtf-sig sig-neut" id="mtf-5m-sig">NEUTRAL</div><div class="mtf-stats"><div>RSI:<span class="mtf-rsi" id="mtf-5m-rsi">--</span></div><div>EMA:<span class="mtf-rsi" id="mtf-5m-ema">--</span></div><div>VWAP:<span class="mtf-rsi" id="mtf-5m-vwap">--</span></div></div></div>
       <div class="mtf-card" id="mtf-15m"><div class="mtf-tf">15 MIN</div><div class="mtf-sig sig-neut" id="mtf-15m-sig">NEUTRAL</div><div class="mtf-stats"><div>RSI:<span class="mtf-rsi" id="mtf-15m-rsi">--</span></div><div>EMA:<span class="mtf-rsi" id="mtf-15m-ema">--</span></div><div>VWAP:<span class="mtf-rsi" id="mtf-15m-vwap">--</span></div></div></div>
       <div class="mtf-card" id="mtf-1h"><div class="mtf-tf">1 HR</div><div class="mtf-sig sig-neut" id="mtf-1h-sig">NEUTRAL</div><div class="mtf-stats"><div>RSI:<span class="mtf-rsi" id="mtf-1h-rsi">--</span></div><div>EMA:<span class="mtf-rsi" id="mtf-1h-ema">--</span></div><div>VWAP:<span class="mtf-rsi" id="mtf-1h-vwap">--</span></div></div></div>
     </div>
@@ -1675,6 +1675,15 @@ function renderDashboard(s) {
     const badge = document.getElementById('mtf-badge');
     badge.textContent = mtf.signal || 'WAIT';
     badge.className = 'mtf-align-badge ' + (mtf.signal === 'BUY CALL' ? 'bull' : mtf.signal === 'BUY PUT' ? 'bear' : 'wait');
+
+    // Show/hide the 5m warmup notice
+    const warming5m = document.getElementById('mtf-5m-warming');
+    if (warming5m) {
+      warming5m.style.display = mtf.tf5mWarming ? 'inline-block' : 'none';
+      if (mtf.tf5mWarming && mtf.tf5mBarsNeeded > 0) {
+        warming5m.title = `5m needs ${mtf.tf5mBarsNeeded} more bars (~${mtf.tf5mBarsNeeded * 5} min) to be ready`;
+      }
+    }
     ['5m','15m','1h'].forEach(tf => {
       const key = 'tf' + tf.replace('m','m').replace('1h','1h');
       const data = mtf['tf' + tf.replace('m','').replace('h','')] || mtf['tf'+tf] || {};

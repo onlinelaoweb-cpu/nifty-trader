@@ -4,8 +4,10 @@ const { TOTP, Secret } = require('otpauth');
 async function loginAngel() {
     try {
         console.log('Trying Angel One Login...');
-        // CLIENT_ID logged for debug — safe (not a secret)
-        console.log('CLIENT_ID:', process.env.ANGEL_CLIENT_ID);
+        // Mask CLIENT_ID in logs — visible in log services; show only partial ID
+        const cid = process.env.ANGEL_CLIENT_ID || '';
+        const maskedCid = cid.length > 4 ? cid.slice(0,2) + '****' + cid.slice(-2) : '****';
+        console.log('CLIENT_ID:', maskedCid);
         // SECURITY: never log TOTP codes or tokens
         const totpCode = new TOTP({
             secret   : Secret.fromBase32(
