@@ -27,8 +27,8 @@
 //   in the quality gate's mtfAligned check.  This caused the quality gate to
 //   block real signals for the first 5–6 hours of the session on Railway.
 
+const axios              = require('axios');
 const { RSI, EMA, VWAP } = require('technicalindicators');
-const { fetchYahooChart }                        = require('./yahooFetch');
 const { getCandleHistory, getSessionCandles }    = require('./indicators');
 
 // ── Per-TF minimum candle thresholds ─────────────────────────────────────────
@@ -82,13 +82,30 @@ function todaySessionCandles(candles) {
     return session.length >= 2 ? session : candles.slice(-80);
 }
 
-// ── Yahoo Finance fallback (used when resampled bars are insufficient) ────────
-// Cache results for 5 min per timeframe to avoid hammering Yahoo on every MTF cycle.
+// ── Direct Yahoo Finance fallback (bypasses NSE/fetchYahooChart entirely) ─────
+// fetchYahooChart in yahooFetch.js is actually an NSE wrapper — it times out on
+// Railway IPs. This function hits Yahoo Finance's v8 chart API DIRECTLY with
+// real HTTP calls. Yahoo Finance is not blocked on Railway. No cookies, no NSE.
+//
+// Cache TTL: 5 min per TF — avoids hammering Yahoo on every 5-min MTF cycle.
+// Two query hosts (query1 / query2) — rotate on failure.
+//
+// TF → Yahoo interval / range:
+//   5m  → interval=5m,  range=5d   → ~390 bars (5 days × ~78 bars/day)
+//   15m → interval=15m, range=5d   → ~130 bars (5 days × ~26 bars/day)
+//   1h  → interval=60m, range=1mo  → ~130 bars (~1 month of hourly)
+
 const _yahooCache = {};   // { '15m': { ts, candles }, '1h': { ts, candles } }
 const YAHOO_CACHE_TTL_MS = 5 * 60 * 1000;
 
+const YAHOO_DIRECT_HEADERS = {
+    'User-Agent'     : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept'         : 'application/json',
+    'Accept-Language': 'en-US,en;q=0.9',
+};
+
 async function fetchCandlesFromYahoo(intervalKey) {
-    // Check cache first
+    // Return cached data if still fresh
     const cached = _yahooCache[intervalKey];
     if (cached && (Date.now() - cached.ts) < YAHOO_CACHE_TTL_MS) {
         return cached.candles;
@@ -102,38 +119,55 @@ async function fetchCandlesFromYahoo(intervalKey) {
     const cfg = cfgMap[intervalKey];
     if (!cfg) return [];
 
-    try {
-        const result = await fetchYahooChart('%5ENSEI', { interval: cfg.interval, range: cfg.range, includePrePost: false });
-        if (!result) return [];
-        const quotes     = result.indicators?.quote?.[0];
-        const timestamps = result.timestamp || [];
-        if (!quotes) return [];
-        const closes  = quotes.close  || [];
-        const highs   = quotes.high   || [];
-        const lows    = quotes.low    || [];
-        const opens   = quotes.open   || [];
-        const volumes = quotes.volume || [];
-        const candles = [];
-        for (let i = 0; i < closes.length; i++) {
-            if (closes[i] != null && highs[i] != null && lows[i] != null) {
+    // Try query1 then query2 — Yahoo load-balances across these two hosts
+    const SYMBOL = '%5ENSEI';  // ^NSEI = Nifty 50 index
+    const urls = [
+        `https://query1.finance.yahoo.com/v8/finance/chart/${SYMBOL}?interval=${cfg.interval}&range=${cfg.range}&includePrePost=false`,
+        `https://query2.finance.yahoo.com/v8/finance/chart/${SYMBOL}?interval=${cfg.interval}&range=${cfg.range}&includePrePost=false`,
+    ];
+
+    for (const url of urls) {
+        try {
+            const res = await axios.get(url, {
+                timeout: 12000,
+                headers: YAHOO_DIRECT_HEADERS,
+            });
+            const result = res.data?.chart?.result?.[0];
+            if (!result) continue;
+
+            const timestamps = result.timestamp || [];
+            const q          = result.indicators?.quote?.[0] || {};
+            if (!timestamps.length) continue;
+
+            const candles = [];
+            for (let i = 0; i < timestamps.length; i++) {
+                const close = q.close?.[i];
+                const high  = q.high?.[i];
+                const low   = q.low?.[i];
+                if (close == null || high == null || low == null) continue;
                 candles.push({
-                    ts    : timestamps[i] ? timestamps[i] * 1000 : null,
-                    time  : timestamps[i] ? timestamps[i] * 1000 : null,
-                    open  : parseFloat((opens[i]  ?? closes[i]).toFixed(2)),
-                    close : parseFloat(closes[i].toFixed(2)),
-                    high  : parseFloat(highs[i].toFixed(2)),
-                    low   : parseFloat(lows[i].toFixed(2)),
-                    volume: volumes[i] || 1,
+                    ts    : timestamps[i] * 1000,
+                    time  : timestamps[i] * 1000,
+                    open  : parseFloat((q.open?.[i] ?? close).toFixed(2)),
+                    high  : parseFloat(high.toFixed(2)),
+                    low   : parseFloat(low.toFixed(2)),
+                    close : parseFloat(close.toFixed(2)),
+                    volume: q.volume?.[i] || 1,
                 });
             }
+
+            if (candles.length > 0) {
+                console.log(`[MTF] Yahoo direct ${intervalKey}: ${candles.length} bars ✅`);
+                _yahooCache[intervalKey] = { ts: Date.now(), candles };
+                return candles;
+            }
+        } catch (err) {
+            console.warn(`[MTF Yahoo direct] ${intervalKey} ${url.includes('query1') ? 'q1' : 'q2'} failed: ${err.message}`);
         }
-        // Cache result
-        _yahooCache[intervalKey] = { ts: Date.now(), candles };
-        return candles;
-    } catch (err) {
-        console.warn(`[MTF Yahoo fallback] ${intervalKey} failed: ${err.message}`);
-        return [];
     }
+
+    console.warn(`[MTF Yahoo direct] ${intervalKey}: all URLs failed — MTF will use INSUFFICIENT for this TF`);
+    return [];
 }
 
 // ── ADX (Wilder's smoothing, period=14) ───────────────────────────────────────
