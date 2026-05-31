@@ -1,27 +1,55 @@
 'use strict';
 // multiTimeframe.js — RSI/EMA/VWAP/ADX across 5m, 15m, 1h
 //
-// Candle source priority (same logic as marketData.js):
-//   1. In-memory 1m candles from Angel WebSocket → resample to 5m/15m/1h
-//   2. NSE intraday fallback (often times out from Railway — used only if memory empty)
+// ── Candle sourcing strategy (May 2026) ──────────────────────────────────────
 //
-// Resampling 1m → 5m/15m/1h avoids all NSE chart API calls entirely.
-// Once the WebSocket has been running for 60+ minutes there is enough
-// 1m history to produce reliable 5m (12+ bars), 15m (4+ bars), 1h (1+ bar).
+//   Primary:  resample in-memory 1m candles from Angel WebSocket / Yahoo
+//             getCandleHistory(true) returns ALL stored candles (up to 300)
+//             instead of the old slice(-60), giving:
+//               5m  → up to 60 bars   (was 12) ✅ reliable
+//               15m → up to 20 bars   (was  4) ✅ EMA21 and RSI14 now possible
+//               1h  → up to 5 bars    (was  1) ⚠️ still thin early session
+//
+//   Secondary: when resampled bars are still below per-TF minimums, fetch
+//              Yahoo Finance historical candles for that specific timeframe.
+//              Yahoo `5d` at 15m gives ~130 bars.  Yahoo `1mo` at 60m gives ~130 bars.
+//              This covers the first 90 minutes of the session until memory fills up.
+//
+//   Per-TF minimum bar requirements (conservative — must ALL be met):
+//     RSI(14) needs 15+ closes, EMA21 needs 22+ closes, ADX(14) needs 30+ valid candles.
+//     If a TF can't meet minimums even after Yahoo fallback, it returns
+//     signal:'INSUFFICIENT' and is excluded from bullCount/bearCount/aligned.
+//
+// ── Why this matters ─────────────────────────────────────────────────────────
+//   With only 4 × 15m bars, EMA21 is undefined, RSI(14) is undefined, and
+//   ADX is undefined — the entire TF was producing signal:'NEUTRAL' from a
+//   score=50 default, which has no informational value but still participates
+//   in the quality gate's mtfAligned check.  This caused the quality gate to
+//   block real signals for the first 5–6 hours of the session on Railway.
 
 const { RSI, EMA, VWAP } = require('technicalindicators');
-const { fetchYahooChart } = require('./yahooFetch');
-const { getCandleHistory, getSessionCandles } = require('./indicators');
+const { fetchYahooChart }                        = require('./yahooFetch');
+const { getCandleHistory, getSessionCandles }    = require('./indicators');
+
+// ── Per-TF minimum candle thresholds ─────────────────────────────────────────
+// RSI(14) warmup = 15, EMA21 warmup = 22, ADX(14) warmup = 30
+// We use 30 as the universal minimum — if fewer bars are available after all
+// fallbacks, the TF signal is marked INSUFFICIENT and excluded from voting.
+const MIN_BARS = {
+    '5m' : 22,   // 5m: 22 bars = 110 min. Achievable from memory within ~2h of open.
+    '15m': 30,   // 15m: 30 bars = 7.5h. Needs Yahoo fallback for most of the session.
+    '1h' : 30,   // 1h:  30 bars = 30h. Always needs Yahoo multi-day fallback.
+};
 
 // ── Resample 1m candles → higher timeframe ────────────────────────────────────
 function resample(candles1m, periodMins) {
     if (!candles1m || candles1m.length === 0) return [];
-    const out = [];
+    const out  = [];
     let bucket = null;
     let count  = 0;
     for (const c of candles1m) {
         if (!bucket) {
-            bucket = { open: c.close, high: c.high, low: c.low, close: c.close, volume: c.volume || 1, ts: c.ts };
+            bucket = { open: c.close, high: c.high, low: c.low, close: c.close, volume: c.volume || 1, ts: c.ts || c.time };
         } else {
             bucket.high   = Math.max(bucket.high, c.high);
             bucket.low    = Math.min(bucket.low,  c.low);
@@ -35,7 +63,7 @@ function resample(candles1m, periodMins) {
             count  = 0;
         }
     }
-    // Include partial last bucket so the latest price is always reflected
+    // Include partial last bucket so latest price is always reflected
     if (bucket) out.push({ ...bucket });
     return out;
 }
@@ -43,20 +71,39 @@ function resample(candles1m, periodMins) {
 // ── Filter to today's IST session ────────────────────────────────────────────
 function todaySessionCandles(candles) {
     const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const nowIST   = new Date(Date.now() + IST_OFFSET_MS);
-    const todayStr = nowIST.toISOString().slice(0, 10);
-    const session  = candles.filter(c => {
-        if (!c.ts) return false;
-        const istDate = new Date(c.ts + IST_OFFSET_MS).toISOString().slice(0, 10);
+    const nowIST        = new Date(Date.now() + IST_OFFSET_MS);
+    const todayStr      = nowIST.toISOString().slice(0, 10);
+    const session       = candles.filter(c => {
+        const ts = c.ts || c.time;
+        if (!ts) return false;
+        const istDate = new Date(ts + IST_OFFSET_MS).toISOString().slice(0, 10);
         return istDate === todayStr;
     });
     return session.length >= 2 ? session : candles.slice(-80);
 }
 
-// ── NSE fallback fetch (only used when memory is empty) ───────────────────────
-async function fetchCandlesFromNSE(interval, range) {
+// ── Yahoo Finance fallback (used when resampled bars are insufficient) ────────
+// Cache results for 5 min per timeframe to avoid hammering Yahoo on every MTF cycle.
+const _yahooCache = {};   // { '15m': { ts, candles }, '1h': { ts, candles } }
+const YAHOO_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function fetchCandlesFromYahoo(intervalKey) {
+    // Check cache first
+    const cached = _yahooCache[intervalKey];
+    if (cached && (Date.now() - cached.ts) < YAHOO_CACHE_TTL_MS) {
+        return cached.candles;
+    }
+
+    const cfgMap = {
+        '5m' : { interval: '5m',  range: '5d'  },
+        '15m': { interval: '15m', range: '5d'  },
+        '1h' : { interval: '60m', range: '1mo' },
+    };
+    const cfg = cfgMap[intervalKey];
+    if (!cfg) return [];
+
     try {
-        const result = await fetchYahooChart('%5ENSEI', { interval, range, includePrePost: false });
+        const result = await fetchYahooChart('%5ENSEI', { interval: cfg.interval, range: cfg.range, includePrePost: false });
         if (!result) return [];
         const quotes     = result.indicators?.quote?.[0];
         const timestamps = result.timestamp || [];
@@ -64,34 +111,39 @@ async function fetchCandlesFromNSE(interval, range) {
         const closes  = quotes.close  || [];
         const highs   = quotes.high   || [];
         const lows    = quotes.low    || [];
+        const opens   = quotes.open   || [];
         const volumes = quotes.volume || [];
         const candles = [];
         for (let i = 0; i < closes.length; i++) {
             if (closes[i] != null && highs[i] != null && lows[i] != null) {
                 candles.push({
                     ts    : timestamps[i] ? timestamps[i] * 1000 : null,
+                    time  : timestamps[i] ? timestamps[i] * 1000 : null,
+                    open  : parseFloat((opens[i]  ?? closes[i]).toFixed(2)),
                     close : parseFloat(closes[i].toFixed(2)),
                     high  : parseFloat(highs[i].toFixed(2)),
                     low   : parseFloat(lows[i].toFixed(2)),
-                    volume: volumes[i] || 1
+                    volume: volumes[i] || 1,
                 });
             }
         }
+        // Cache result
+        _yahooCache[intervalKey] = { ts: Date.now(), candles };
         return candles;
     } catch (err) {
-        console.error(`Candle fetch error (${interval}):`, err.message);
+        console.warn(`[MTF Yahoo fallback] ${intervalKey} failed: ${err.message}`);
         return [];
     }
 }
 
 // ── ADX (Wilder's smoothing, period=14) ───────────────────────────────────────
 function calculateADX(candles, period = 14) {
-    if (!candles || candles.length < Math.max(period * 2 + 2, 60)) return null;
+    if (!candles || candles.length < period * 2 + 2) return null;
     try {
         const valid = candles.filter(c =>
             c.high != null && c.low != null && c.close != null && c.high > c.low
         );
-        if (valid.length < Math.max(period * 2 + 2, 60)) return null;
+        if (valid.length < period * 2 + 2) return null;
         const tr = [], dmp = [], dmm = [];
         for (let i = 1; i < valid.length; i++) {
             const h = valid[i].high, l = valid[i].low, pc = valid[i-1].close;
@@ -107,45 +159,71 @@ function calculateADX(candles, period = 14) {
             for (let i = period; i < arr.length; i++) { s = s - s / period + arr[i]; out.push(s); }
             return out;
         }
-        const atr  = wilderSmooth(tr);
-        const sdmp = wilderSmooth(dmp);
-        const sdmm = wilderSmooth(dmm);
-        const dip  = sdmp.map((v, i) => atr[i] > 0 ? (v / atr[i]) * 100 : 0);
-        const dim  = sdmm.map((v, i) => atr[i] > 0 ? (v / atr[i]) * 100 : 0);
-        const dx   = dip.map((v, i) => { const s = v + dim[i]; return s > 0 ? (Math.abs(v - dim[i]) / s) * 100 : 0; });
+        const atr    = wilderSmooth(tr);
+        const sdmp   = wilderSmooth(dmp);
+        const sdmm   = wilderSmooth(dmm);
+        const dip    = sdmp.map((v, i) => atr[i] > 0 ? (v / atr[i]) * 100 : 0);
+        const dim    = sdmm.map((v, i) => atr[i] > 0 ? (v / atr[i]) * 100 : 0);
+        const dx     = dip.map((v, i) => { const s = v + dim[i]; return s > 0 ? (Math.abs(v - dim[i]) / s) * 100 : 0; });
         const adxArr = wilderSmooth(dx);
         const adxVal = parseFloat(adxArr[adxArr.length - 1].toFixed(2));
         if (adxVal > 100 || adxVal < 0) return null;
         return {
             adx    : adxVal,
             diPlus : parseFloat(Math.min(100, dip[dip.length - 1]).toFixed(2)),
-            diMinus: parseFloat(Math.min(100, dim[dim.length - 1]).toFixed(2))
+            diMinus: parseFloat(Math.min(100, dim[dim.length - 1]).toFixed(2)),
         };
     } catch (_) { return null; }
 }
 
-function calcIndicators(candles) {
-    if (!candles || candles.length < 5) {
-        return { rsi: null, ema9: null, ema21: null, vwap: null, adx: null, close: null, signal: 'NEUTRAL', score: 0 };
+// ── Compute indicators + signal for one timeframe ────────────────────────────
+// Returns signal:'INSUFFICIENT' (not 'NEUTRAL') when candle count is below
+// MIN_BARS so the caller can exclude this TF from the voting tally.
+function calcIndicators(candles, tfLabel) {
+    const minBars = MIN_BARS[tfLabel] || 22;
+
+    // INSUFFICIENT guard — not enough candles for meaningful indicators
+    if (!candles || candles.length < minBars) {
+        return {
+            rsi: null, ema9: null, ema21: null, vwap: null, adx: null,
+            close: candles?.length ? candles[candles.length - 1].close : null,
+            signal: 'INSUFFICIENT',
+            score : 50,
+            barCount: candles?.length || 0,
+        };
     }
+
     const closes = candles.map(c => c.close);
     const close  = closes[closes.length - 1];
 
+    // RSI(14) — needs at least 15 closes
     let rsi = null;
     if (closes.length >= 15) {
-        const r = RSI.calculate({ values: closes, period: 14 });
-        rsi = r.length > 0 ? parseFloat(r[r.length - 1].toFixed(2)) : null;
+        try {
+            const r = RSI.calculate({ values: closes, period: 14 });
+            rsi = r.length > 0 ? parseFloat(r[r.length - 1].toFixed(2)) : null;
+        } catch (_) {}
     }
+
+    // EMA9 — needs at least 9 closes
     let ema9 = null;
     if (closes.length >= 9) {
-        const r = EMA.calculate({ values: closes, period: 9 });
-        ema9 = r.length > 0 ? parseFloat(r[r.length - 1].toFixed(2)) : null;
+        try {
+            const r = EMA.calculate({ values: closes, period: 9 });
+            ema9 = r.length > 0 ? parseFloat(r[r.length - 1].toFixed(2)) : null;
+        } catch (_) {}
     }
+
+    // EMA21 — needs at least 22 closes
     let ema21 = null;
-    if (closes.length >= 21) {
-        const r = EMA.calculate({ values: closes, period: 21 });
-        ema21 = r.length > 0 ? parseFloat(r[r.length - 1].toFixed(2)) : null;
+    if (closes.length >= 22) {
+        try {
+            const r = EMA.calculate({ values: closes, period: 21 });
+            ema21 = r.length > 0 ? parseFloat(r[r.length - 1].toFixed(2)) : null;
+        } catch (_) {}
     }
+
+    // VWAP — session candles only
     let vwap = null;
     const sessionC = todaySessionCandles(candles);
     if (sessionC.length >= 2) {
@@ -154,23 +232,32 @@ function calcIndicators(candles) {
                 high  : sessionC.map(c => c.high),
                 low   : sessionC.map(c => c.low),
                 close : sessionC.map(c => c.close),
-                volume: sessionC.map(c => c.volume)
+                volume: sessionC.map(c => c.volume || 1),
             });
             vwap = r.length > 0 ? parseFloat(r[r.length - 1].toFixed(2)) : null;
-        } catch(e) {}
+        } catch (_) {}
     }
 
-    const adxData  = calculateADX(sessionC);
+    // ADX(14) — min 30 candles (2 × period + buffer), used for NEUTRAL override only
+    const adxData  = calculateADX(sessionC.length >= 30 ? sessionC : candles);
     const adxVal   = adxData?.adx ?? null;
+    // ADX < 20 = choppy, override signal to NEUTRAL even if bull/bear votes pass
     const adxValid = adxVal === null || adxVal >= 20;
 
+    // ── Bull / bear vote ──────────────────────────────
     let bull = 0, bear = 0;
+
     if (rsi !== null) {
-        if (rsi < 35) bull += 2; else if (rsi > 65) bear += 2;
-        else if (rsi >= 50) bull += 1; else bear += 1;
+        if      (rsi < 35) { bull += 2; }
+        else if (rsi > 65) { bear += 2; }
+        else if (rsi >= 50){ bull += 1; }
+        else               { bear += 1; }
     }
     if (ema9 !== null && ema21 !== null) {
         if (ema9 > ema21) bull += 2; else bear += 2;
+    } else if (ema9 !== null) {
+        // EMA21 not yet available but EMA9 is — use close vs EMA9 as weaker signal
+        if (close > ema9) bull += 1; else bear += 1;
     }
     if (vwap !== null) {
         if (close > vwap) bull += 2; else bear += 2;
@@ -178,66 +265,139 @@ function calcIndicators(candles) {
 
     const total  = bull + bear;
     const pct    = total > 0 ? (bull / total) * 100 : 50;
-    const signal = !adxValid ? 'NEUTRAL' : pct >= 60 ? 'BULLISH' : pct <= 40 ? 'BEARISH' : 'NEUTRAL';
+    // ADX choppy override: keep signal NEUTRAL so it doesn't pollute mtfAligned
+    const signal = !adxValid  ? 'NEUTRAL'
+                 : pct >= 60  ? 'BULLISH'
+                 : pct <= 40  ? 'BEARISH'
+                 :              'NEUTRAL';
     const score  = parseFloat(pct.toFixed(0));
 
-    return { rsi, ema9, ema21, vwap, adx: adxVal, close, signal, score };
+    return { rsi, ema9, ema21, vwap, adx: adxVal, close, signal, score, barCount: candles.length };
 }
 
+// ── Main entry point ─────────────────────────────────────────────────────────
 async function analyzeMultiTimeframe() {
     console.log('📊 Fetching multi-timeframe data...');
 
-    // ── Primary: resample in-memory 1m candles ────────────────────────────────
-    const mem1m = getCandleHistory();
+    // ── Step 1: Get full in-memory 1m candle buffer (up to 300) ──────────────
+    // getCandleHistory(true) returns all stored candles, not just last 60.
+    // This gives us 300 bars to resample, producing:
+    //   5m  → up to 60 bars  (was 12)
+    //   15m → up to 20 bars  (was  4)
+    //   1h  → up to 5 bars   (was  1)
+    const mem1m = getCandleHistory(true);
+
     let c5m, c15m, c1h;
 
     if (mem1m && mem1m.length >= 15) {
-        // Enough in-memory data — resample, no NSE call needed
         c5m  = resample(mem1m, 5);
         c15m = resample(mem1m, 15);
         c1h  = resample(mem1m, 60);
         console.log(`📊 MTF using memory: ${mem1m.length} 1m bars → 5m:${c5m.length} 15m:${c15m.length} 1h:${c1h.length}`);
     } else {
-        // Fallback: fetch from NSE (startup only, before WS warms up)
-        console.log('📊 MTF memory empty — fetching from NSE (startup fallback)');
+        // Startup: memory empty, fetch all from Yahoo directly
+        console.log('📊 MTF memory empty — fetching all TFs from Yahoo (startup fallback)');
         [c5m, c15m, c1h] = await Promise.all([
-            fetchCandlesFromNSE('5m',  '5d'),
-            fetchCandlesFromNSE('15m', '5d'),
-            fetchCandlesFromNSE('60m', '1mo')
+            fetchCandlesFromYahoo('5m'),
+            fetchCandlesFromYahoo('15m'),
+            fetchCandlesFromYahoo('1h'),
         ]);
     }
 
-    const tf5m  = calcIndicators(c5m);
-    const tf15m = calcIndicators(c15m);
-    const tf1h  = calcIndicators(c1h);
+    // ── Step 2: Yahoo fallback per TF when resampled bars are insufficient ────
+    // After resampling, check each TF against its minimum. If still short,
+    // fetch historical Yahoo candles for that specific TF. This runs mostly
+    // for 15m and 1h during the first 90 min of the session.
+    const fetchPromises = [];
 
-    const signals   = [tf5m.signal, tf15m.signal, tf1h.signal];
-    const bullCount = signals.filter(s => s === 'BULLISH').length;
-    const bearCount = signals.filter(s => s === 'BEARISH').length;
+    if (c15m.length < MIN_BARS['15m']) {
+        fetchPromises.push(
+            fetchCandlesFromYahoo('15m').then(yc => {
+                if (yc.length > c15m.length) {
+                    console.log(`📊 MTF 15m: resampled ${c15m.length} bars < ${MIN_BARS['15m']} min → Yahoo gave ${yc.length} bars ✅`);
+                    c15m = yc;
+                }
+            })
+        );
+    }
 
-    [tf5m, tf15m, tf1h].forEach((tf, i) => {
-        const label = ['5m','15m','1h'][i];
-        if (tf.adx !== null && tf.adx < 20) {
-            console.log(`⚠️ MTF: ${label} ADX ${tf.adx} < 20 → forced NEUTRAL`);
+    if (c1h.length < MIN_BARS['1h']) {
+        fetchPromises.push(
+            fetchCandlesFromYahoo('1h').then(yc => {
+                if (yc.length > c1h.length) {
+                    console.log(`📊 MTF 1h: resampled ${c1h.length} bars < ${MIN_BARS['1h']} min → Yahoo gave ${yc.length} bars ✅`);
+                    c1h = yc;
+                }
+            })
+        );
+    }
+
+    if (fetchPromises.length > 0) {
+        await Promise.all(fetchPromises);
+    }
+
+    // ── Step 3: Compute indicators per TF ────────────────────────────────────
+    const tf5m  = calcIndicators(c5m,  '5m');
+    const tf15m = calcIndicators(c15m, '15m');
+    const tf1h  = calcIndicators(c1h,  '1h');
+
+    // ── Step 4: Build MTF composite signal ───────────────────────────────────
+    // INSUFFICIENT TFs are excluded from voting — they don't count as NEUTRAL
+    // and don't block the quality gate. They are logged so the user knows.
+    const validTFs    = [tf5m, tf15m, tf1h].filter(tf => tf.signal !== 'INSUFFICIENT');
+    const allTFs      = [tf5m, tf15m, tf1h];
+    const tfLabels    = ['5m', '15m', '1h'];
+
+    allTFs.forEach((tf, i) => {
+        const bars = tf.barCount ?? '?';
+        if (tf.signal === 'INSUFFICIENT') {
+            console.log(`⚠️ MTF ${tfLabels[i]}: INSUFFICIENT data (${bars} bars < ${MIN_BARS[tfLabels[i]]} min) — excluded from vote`);
+        } else if (tf.adx !== null && tf.adx < 20) {
+            console.log(`⚠️ MTF ${tfLabels[i]}: ADX ${tf.adx} < 20 → NEUTRAL override`);
         }
     });
 
-    let mtfSignal = 'WAIT', mtfStrength = 'WEAK', mtfConfidence = 0;
-    if      (bullCount === 3) { mtfSignal = 'BUY CALL'; mtfStrength = 'STRONG';   mtfConfidence = 85; }
-    else if (bullCount === 2) { mtfSignal = 'BUY CALL'; mtfStrength = 'MODERATE'; mtfConfidence = 60; }
-    else if (bearCount === 3) { mtfSignal = 'BUY PUT';  mtfStrength = 'STRONG';   mtfConfidence = 85; }
-    else if (bearCount === 2) { mtfSignal = 'BUY PUT';  mtfStrength = 'MODERATE'; mtfConfidence = 60; }
-    else                      { mtfSignal = 'WAIT';     mtfStrength = 'WEAK';     mtfConfidence = 20; }
+    const bullCount = validTFs.filter(tf => tf.signal === 'BULLISH').length;
+    const bearCount = validTFs.filter(tf => tf.signal === 'BEARISH').length;
+    const validCount = validTFs.length;
 
+    // aligned = all valid TFs agree (minimum 2 valid TFs required to claim alignment)
+    const aligned = validCount >= 2 && (bullCount === validCount || bearCount === validCount);
+
+    let mtfSignal = 'WAIT', mtfStrength = 'WEAK', mtfConfidence = 0;
+
+    if (validCount === 0) {
+        // No usable TFs at all — happens only in first few minutes of session
+        mtfSignal = 'WAIT'; mtfStrength = 'WEAK'; mtfConfidence = 0;
+    } else if (aligned && bullCount === validCount) {
+        mtfStrength   = validCount === 3 ? 'STRONG' : 'MODERATE';
+        mtfSignal     = 'BUY CALL';
+        mtfConfidence = validCount === 3 ? 85 : 65;
+    } else if (aligned && bearCount === validCount) {
+        mtfStrength   = validCount === 3 ? 'STRONG' : 'MODERATE';
+        mtfSignal     = 'BUY PUT';
+        mtfConfidence = validCount === 3 ? 85 : 65;
+    } else if (bullCount > bearCount) {
+        mtfSignal = 'WAIT'; mtfStrength = 'WEAK'; mtfConfidence = 25;
+    } else if (bearCount > bullCount) {
+        mtfSignal = 'WAIT'; mtfStrength = 'WEAK'; mtfConfidence = 25;
+    }
+
+    // ── Step 5: Integrity log ─────────────────────────────────────────────────
     console.log(
-        `MTF → 5m:${tf5m.signal}(ADX:${tf5m.adx??'--'})`,
-        `15m:${tf15m.signal}(ADX:${tf15m.adx??'--'})`,
-        `1h:${tf1h.signal}(ADX:${tf1h.adx??'--'})`,
-        `→ ${mtfSignal} (${mtfStrength})`
+        `MTF → 5m:${tf5m.signal}(${tf5m.barCount}bars,ADX:${tf5m.adx??'--'})`,
+        `15m:${tf15m.signal}(${tf15m.barCount}bars,ADX:${tf15m.adx??'--'})`,
+        `1h:${tf1h.signal}(${tf1h.barCount}bars,ADX:${tf1h.adx??'--'})`,
+        `→ ${mtfSignal} (${mtfStrength}) [${validCount}/3 valid TFs]`
     );
 
-    return { tf5m, tf15m, tf1h, mtfSignal, mtfStrength, mtfConfidence,
-             bullCount, bearCount, aligned: bullCount === 3 || bearCount === 3 };
+    return {
+        tf5m, tf15m, tf1h,
+        mtfSignal, mtfStrength, mtfConfidence,
+        bullCount, bearCount,
+        aligned,
+        validTFCount: validCount,
+    };
 }
 
 module.exports = { analyzeMultiTimeframe };

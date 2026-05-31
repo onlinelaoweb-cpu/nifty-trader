@@ -286,11 +286,16 @@ function processIndicators(price, bnLeadSignal) {
 }
 
 // ✅ Export candle history for chart (multi-day — used by /api/candles)
-function getCandleHistory() {
+// full=false  → last 60 candles  (default — used by server.js 1m indicators & ADX)
+// full=true   → all stored candles up to 300  (used by multiTimeframe.js for 15m/1h resampling)
+// Why 60 default: server.js ADX uses session-only candles separately; the 1m RSI/EMA only
+// needs recent history. Returning 300 there would be wasteful and risk overnight-gap ADX bugs.
+// multiTimeframe.js needs the full buffer so resampling 1m→15m gives 20 bars instead of 4.
+function getCandleHistory(full = false) {
     const all = currentCandle
         ? [...candleHistory, currentCandle]
         : [...candleHistory];
-    return all.slice(-60); // last 60 candles
+    return full ? all : all.slice(-60); // last 60 for 1m indicators, full for MTF resampling
 }
 
 // ✅ Export today-only session candles (no overnight gaps — used by server.js ADX)
