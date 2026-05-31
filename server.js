@@ -1637,8 +1637,9 @@ app.use('/icons', require('express').static(__dirname+'/public/icons'));
 app.get('/apple-touch-icon.png', (req,res) => res.sendFile(__dirname+'/public/icons/apple-touch-icon.png'));
 
 // ── Init ──────────────────────────────────────────────
-let _intervalsStarted = false;
-let _angelLoggedIn    = false;   // true once Angel session is injected
+let _intervalsStarted     = false;
+let _angelLoggedIn        = false;   // true once Angel session is injected
+let _initSequenceComplete = false;   // true once initializeLiveData() finishes; gates retry-only logic
 
 function startPollingIntervals() {
     if (_intervalsStarted) return;          // guard — only ever runs once
@@ -1666,9 +1667,13 @@ async function tryAngelLogin() {
         });
         startWebSocket(auth, onTick);
         _angelLoggedIn = true;
-        // Immediately refresh breadth with real Nifty50 stock data now that
-        // Angel session is available — don't wait for the next 2-min interval.
-        refreshBreadth().catch(e => console.error('Post-login breadth error:', e.message));
+        // On retry logins (after init is complete), immediately refresh breadth
+        // with the real Angel Nifty50 data. During initial startup this is skipped
+        // because initializeLiveData() calls refreshBreadth() 2s after tryAngelLogin()
+        // returns — firing it here too causes the double A/D fetch seen in logs.
+        if (_initSequenceComplete) {
+            refreshBreadth().catch(e => console.error('Post-login breadth error:', e.message));
+        }
     }
     else      { console.log('Yahoo Finance fallback — retry in 30s'); setTimeout(tryAngelLogin, 30000); }
 }
@@ -1738,6 +1743,8 @@ async function initializeLiveData() {
         marketState.source    = 'init';
         console.log('✅ Init complete — market closed, frontend unblocked');
     }
+
+    _initSequenceComplete = true; // allow retry-login path to call refreshBreadth() independently
 
     // Note: if the withTimeout above resolved null (login still in-flight or slow),
     // tryAngelLogin() is ALREADY running in the background — it will call
