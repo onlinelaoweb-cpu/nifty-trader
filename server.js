@@ -11,7 +11,8 @@ const { processIndicators,
         initializeHistory,
         getCandleHistory,
         getSessionCandles,
-        loadCandlesFromYahoo, getCandleSource }      = require('./src/api/indicators');
+        loadCandlesFromYahoo, getCandleSource,
+        calcMomentumBreakdown }                      = require('./src/api/indicators');
 const { fetchMarketData }           = require('./src/api/marketData');
 const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
 const { fetchGlobalCues }           = require('./src/api/globalCues');
@@ -79,7 +80,8 @@ let marketState = {
     entryWindow: { status:'closed', label:'Market Closed', safe:false },
     qualityGate: { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, srClear:true, passed:false },
     calendarEvents: [],
-    btst: null,   // BTST/STBT signal — populated 3:00–3:20 PM, null otherwise
+    btst: null,
+    momentum: { signal: 'NONE', strength: 0, velocity: 0, volumeRatio: 0, candleBody: 0, reason: '', canTrade: false },
 };
 
 // ── Trade Journal ─────────────────────────────────────
@@ -352,6 +354,25 @@ function combineSignals(indicators) {
         } else if (premRatio < 0.8) {
             bear += 1;
             reasons.push(`💰 PE premium ₹${of.atmPEpremium} >> CE ₹${of.atmCEpremium} — put buyers active ⚠️`);
+        }
+    }
+
+    // ── Momentum Breakdown / Breakout detector ────────────────────────────────
+    // Detects explosive candle moves (velocity + body + volume + acceleration).
+    // Strength 2 = 1 vote, Strength 3 = 2 votes, Strength 4 = 3 votes.
+    // Votes are directional — breakdown adds bear, breakout adds bull.
+    // Only fires when canTrade=true (strength >= 2) to avoid noise.
+    // This is what would have caught Friday's 14:30 collapse early.
+    const mom = calcMomentumBreakdown();
+    marketState.momentum = mom;
+    if (mom.canTrade) {
+        const momVotes = mom.strength - 1;   // str2=1, str3=2, str4=3
+        if (mom.signal === 'BREAKDOWN') {
+            bear += momVotes;
+            reasons.push(`${mom.reason} (+${momVotes}pts ⚠️)`);
+        } else if (mom.signal === 'BREAKOUT') {
+            bull += momVotes;
+            reasons.push(`${mom.reason} (+${momVotes}pts ✅)`);
         }
     }
 

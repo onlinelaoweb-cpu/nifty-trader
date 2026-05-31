@@ -545,6 +545,27 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .btst-check.pass{background:rgba(0,255,136,0.12);color:var(--green);border:1px solid rgba(0,255,136,0.3);}
 .btst-check.fail{background:rgba(255,34,68,0.12);color:var(--red);border:1px solid rgba(255,34,68,0.3);}
 .btst-footer{font-size:9px;color:var(--dim);font-family:'Share Tech Mono',monospace;border-top:1px solid rgba(255,255,255,0.06);padding-top:6px;line-height:1.6;}
+/* ── Momentum Breakdown Card ── */
+.mom-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--card-radius);padding:11px 13px;transition:border-color 0.4s,box-shadow 0.4s;}
+.mom-card.active-break{border-color:rgba(255,34,68,0.7);box-shadow:0 0 20px rgba(255,34,68,0.15);}
+.mom-card.active-out{border-color:rgba(0,255,136,0.7);box-shadow:0 0 20px rgba(0,255,136,0.15);}
+.mom-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;}
+.mom-title{font-family:'Orbitron',monospace;font-size:9px;letter-spacing:2px;color:var(--purple);}
+.mom-badge{font-family:'Share Tech Mono',monospace;font-size:9px;padding:2px 8px;border-radius:10px;border:1px solid var(--border);color:var(--dim);}
+.mom-badge.break{background:rgba(255,34,68,0.15);color:var(--red);border-color:rgba(255,34,68,0.4);}
+.mom-badge.out{background:rgba(0,255,136,0.15);color:var(--green);border-color:rgba(0,255,136,0.4);}
+.mom-signal{font-size:11px;color:var(--text);margin-bottom:9px;font-family:'Share Tech Mono',monospace;line-height:1.4;}
+.mom-bars{display:flex;flex-direction:column;gap:5px;margin-bottom:9px;}
+.mom-bar-row{display:flex;align-items:center;gap:7px;}
+.mom-bar-label{font-size:8px;color:var(--dim);width:52px;flex-shrink:0;font-family:'Share Tech Mono',monospace;letter-spacing:1px;}
+.mom-bar-track{flex:1;height:4px;background:rgba(255,255,255,0.07);border-radius:2px;overflow:hidden;}
+.mom-bar-fill{height:100%;border-radius:2px;background:var(--amber);transition:width 0.5s ease,background 0.4s;}
+.mom-bar-val{font-size:9px;color:var(--dim);width:32px;text-align:right;font-family:'Share Tech Mono',monospace;}
+.mom-strength{display:flex;align-items:center;gap:6px;}
+.mom-dot{width:10px;height:10px;border-radius:50%;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);transition:all 0.3s;}
+.mom-dot.active-break{background:var(--red);border-color:var(--red);box-shadow:0 0 6px rgba(255,34,68,0.6);}
+.mom-dot.active-out{background:var(--green);border-color:var(--green);box-shadow:0 0 6px rgba(0,255,136,0.6);}
+.mom-strength-label{font-size:9px;color:var(--dim);font-family:'Share Tech Mono',monospace;margin-left:4px;}
 </style>
 </head>
 <body>
@@ -854,6 +875,30 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
   </div>
 
   <div class="reasons-wrap"><div class="reasons-card"><div class="reasons-title">SIGNAL REASONING</div><div id="reasons"><div class="reason-row">Waiting for market data...</div></div></div></div>
+
+  <!-- ═══ MOMENTUM BREAKDOWN CARD ═══ -->
+  <div style="padding:0 12px;margin-bottom:7px;" id="mom-wrap">
+    <div class="mom-card" id="mom-card">
+      <div class="mom-header">
+        <div class="mom-title">🔥 MOMENTUM DETECTOR</div>
+        <div class="mom-badge" id="mom-badge">WATCHING</div>
+      </div>
+      <div class="mom-signal" id="mom-signal">Monitoring price velocity...</div>
+      <div class="mom-bars" id="mom-bars">
+        <div class="mom-bar-row"><span class="mom-bar-label">VELOCITY</span><div class="mom-bar-track"><div class="mom-bar-fill" id="mom-vel-bar" style="width:0%"></div></div><span class="mom-bar-val" id="mom-vel-val">--</span></div>
+        <div class="mom-bar-row"><span class="mom-bar-label">BODY</span><div class="mom-bar-track"><div class="mom-bar-fill" id="mom-body-bar" style="width:0%"></div></div><span class="mom-bar-val" id="mom-body-val">--</span></div>
+        <div class="mom-bar-row"><span class="mom-bar-label">VOLUME</span><div class="mom-bar-track"><div class="mom-bar-fill" id="mom-vol-bar" style="width:0%"></div></div><span class="mom-bar-val" id="mom-vol-val">--</span></div>
+      </div>
+      <div class="mom-strength" id="mom-strength">
+        <span class="mom-dot inactive" id="mom-dot-1"></span>
+        <span class="mom-dot inactive" id="mom-dot-2"></span>
+        <span class="mom-dot inactive" id="mom-dot-3"></span>
+        <span class="mom-dot inactive" id="mom-dot-4"></span>
+        <span class="mom-strength-label" id="mom-strength-label">Strength: 0/4</span>
+      </div>
+    </div>
+  </div>
+
   <div class="tg-wrap"><button class="tg-btn" onclick="testTG(this)">📱 TEST TELEGRAM</button><div id="tg-msg"></div></div>
   <div class="footer"><div class="dot-off" id="foot-dot"></div><span id="footer-txt">Waiting...</span></div>
 </div>
@@ -1865,6 +1910,8 @@ function renderDashboard(s) {
   }
   // BTST / STBT card (visible only in 3:00–3:20 PM window)
   renderBTST(s.btst || null);
+  // Momentum Breakdown card
+  renderMomentum(s.momentum || null);
 }
 
 // ─── BREADTH UI ──────────────────────────────────────────
@@ -2100,6 +2147,91 @@ function renderBTST(btst) {
     🎯 Exit: ${btst.exitTarget}<br>
     ⚠️ ${btst.risk}
   `;
+}
+
+// ─── MOMENTUM BREAKDOWN RENDERER ─────────────────────────────────────────────
+function renderMomentum(mom) {
+  const card   = document.getElementById('mom-card');
+  const badge  = document.getElementById('mom-badge');
+  const signal = document.getElementById('mom-signal');
+  if (!card || !badge || !signal) return;
+
+  // Bars
+  const velBar  = document.getElementById('mom-vel-bar');
+  const bodyBar = document.getElementById('mom-body-bar');
+  const volBar  = document.getElementById('mom-vol-bar');
+  const velVal  = document.getElementById('mom-vel-val');
+  const bodyVal = document.getElementById('mom-body-val');
+  const volVal  = document.getElementById('mom-vol-val');
+
+  // Strength dots
+  const dots = [1,2,3,4].map(i => document.getElementById(`mom-dot-${i}`));
+  const strengthLabel = document.getElementById('mom-strength-label');
+
+  if (!mom || mom.signal === 'NONE' || !mom.canTrade) {
+    // Reset to idle
+    card.className = 'mom-card';
+    badge.className = 'mom-badge';
+    badge.textContent = 'WATCHING';
+    signal.style.color = 'var(--dim)';
+    signal.textContent = mom?.velocity
+      ? `Velocity: ${mom.velocity > 0 ? '+' : ''}${mom.velocity}% — below threshold`
+      : 'Monitoring price velocity...';
+
+    // Bars — show current values even if not firing
+    if (mom && velBar) {
+      const vPct = Math.min(Math.abs(mom.velocity) / 1.5 * 100, 100);
+      velBar.style.width  = vPct + '%';
+      velBar.style.background = 'var(--amber)';
+      velVal.textContent  = (mom.velocity > 0 ? '+' : '') + mom.velocity + '%';
+      const bPct = Math.min(mom.candleBody / 0.8 * 100, 100);
+      bodyBar.style.width = bPct + '%';
+      bodyBar.style.background = 'var(--amber)';
+      bodyVal.textContent = mom.candleBody + '%';
+      const voPct = mom.volumeRatio > 0 ? Math.min(mom.volumeRatio / 3 * 100, 100) : 0;
+      volBar.style.width  = voPct + '%';
+      volBar.style.background = 'var(--amber)';
+      volVal.textContent  = mom.volumeRatio > 0 ? mom.volumeRatio + 'x' : 'N/A';
+    }
+    dots.forEach(d => { if(d) d.className = 'mom-dot inactive'; });
+    if (strengthLabel) strengthLabel.textContent = `Strength: ${mom?.strength || 0}/4`;
+    return;
+  }
+
+  const isBreak = mom.signal === 'BREAKDOWN';
+  const color   = isBreak ? 'var(--red)' : 'var(--green)';
+  const barCol  = isBreak ? 'var(--red)' : 'var(--green)';
+  const dotCls  = isBreak ? 'active-break' : 'active-out';
+
+  card.className  = `mom-card ${isBreak ? 'active-break' : 'active-out'}`;
+  badge.className = `mom-badge ${isBreak ? 'break' : 'out'}`;
+  badge.textContent = mom.signal;
+  signal.style.color = color;
+  signal.textContent = mom.reason;
+
+  // Bars with color
+  if (velBar) {
+    const vPct = Math.min(Math.abs(mom.velocity) / 1.5 * 100, 100);
+    velBar.style.width = vPct + '%'; velBar.style.background = barCol;
+    velVal.textContent = (mom.velocity > 0 ? '+' : '') + mom.velocity + '%';
+  }
+  if (bodyBar) {
+    const bPct = Math.min(mom.candleBody / 0.8 * 100, 100);
+    bodyBar.style.width = bPct + '%'; bodyBar.style.background = barCol;
+    bodyVal.textContent = mom.candleBody + '%';
+  }
+  if (volBar) {
+    const voPct = mom.volumeRatio > 0 ? Math.min(mom.volumeRatio / 3 * 100, 100) : 0;
+    volBar.style.width = voPct + '%'; volBar.style.background = barCol;
+    volVal.textContent = mom.volumeRatio > 0 ? mom.volumeRatio + 'x' : 'N/A';
+  }
+
+  // Strength dots
+  dots.forEach((d, i) => {
+    if (!d) return;
+    d.className = i < mom.strength ? `mom-dot ${dotCls}` : 'mom-dot inactive';
+  });
+  if (strengthLabel) strengthLabel.textContent = `Strength: ${mom.strength}/4`;
 }
 
 // ─── PCR TREND ───────────────────────────────────────────

@@ -380,4 +380,95 @@ async function loadCandlesFromYahoo() {
 
 function getCandleSource() { return candleSource; }
 
-module.exports = { processIndicators, initializeHistory, getCandleHistory, getSessionCandles, loadCandlesFromYahoo, getCandleSource };
+// ═══════════════════════════════════════════════════════════════════════════════
+// MOMENTUM BREAKDOWN DETECTOR
+// ─────────────────────────────────────────────────────────────────────────────
+// Captures the kind of explosive move that happened on Friday May 30 —
+// a late-session S/R breach with velocity + ADX confirmation.
+//
+// Returns:
+//   { signal: 'BREAKDOWN'|'BREAKOUT'|'NONE', strength: 0-3,
+//     velocity: number, volumeRatio: number, candleBody: number,
+//     reason: string, canTrade: boolean }
+//
+// Design — 4 independent evidence layers, each adds 1 strength point:
+//   Layer 1 — VELOCITY   : price moved > 0.35% in last 3 closed candles
+//   Layer 2 — CANDLE BODY: last closed candle body > 0.25% of price (impulsive)
+//   Layer 3 — VOLUME     : current candle volume ≥ 1.8× 20-bar avg (surge)
+//   Layer 4 — MOMENTUM   : 3-candle close slope steepening (acceleration)
+//
+// strength 3 = all 4 layers agree → high conviction momentum
+// strength 2 = 3 layers agree     → moderate conviction
+// strength 1 = 2 layers agree     → weak, informational only
+// strength 0 = <2 layers          → noise, ignored
+//
+// canTrade = strength >= 2 (used for vote injection into combineSignals)
+// ═══════════════════════════════════════════════════════════════════════════════
+function calcMomentumBreakdown() {
+    const result = { signal: 'NONE', strength: 0, velocity: 0, volumeRatio: 0, candleBody: 0, reason: '', canTrade: false };
+
+    // Need at least 25 candles for reliable detection
+    const hist = candleHistory;
+    if (hist.length < 25) return result;
+
+    const last  = hist[hist.length - 1];   // most recent closed candle
+    const prev1 = hist[hist.length - 2];
+    const prev2 = hist[hist.length - 3];
+    const prev3 = hist[hist.length - 4];
+    if (!last || !prev1 || !prev2 || !prev3) return result;
+
+    const price = last.close;
+    if (!price || price <= 0) return result;
+
+    // ── Layer 1: Velocity — 3-candle price move ───────────────────────────────
+    const velocity = ((last.close - prev3.close) / prev3.close) * 100;
+    result.velocity = parseFloat(velocity.toFixed(3));
+    const velDown = velocity <= -0.35;
+    const velUp   = velocity >=  0.35;
+    const velFire = velDown || velUp;
+
+    // ── Layer 2: Candle body size — impulsive vs indecisive ──────────────────
+    const body = Math.abs(last.close - last.open) / last.open * 100;
+    result.candleBody = parseFloat(body.toFixed(3));
+    const bodyFire = body >= 0.25;
+
+    // ── Layer 3: Volume surge ─────────────────────────────────────────────────
+    const recentVols = hist.slice(-21, -1).map(c => c.volume || 1);
+    const avgVol = recentVols.length > 0
+        ? recentVols.reduce((a, b) => a + b, 0) / recentVols.length
+        : 0;
+    const volRatio = avgVol > 2 ? (last.volume || 1) / avgVol : 0;  // 0 on Yahoo (fake vol)
+    result.volumeRatio = parseFloat(volRatio.toFixed(2));
+    const volFire = volRatio >= 1.8;
+
+    // ── Layer 4: Acceleration — slope steepening ──────────────────────────────
+    // Compare last 2-candle move vs 2-candle move before that
+    const slope1 = last.close  - prev1.close;   // most recent 2-bar slope
+    const slope2 = prev1.close - prev3.close;   // prior 2-bar slope
+    const accelFire = Math.sign(slope1) === Math.sign(slope2) &&
+                      Math.abs(slope1) > Math.abs(slope2) * 0.8;
+
+    // ── Direction ─────────────────────────────────────────────────────────────
+    const isBearish = velocity < 0 && last.close < last.open;
+    const isBullish = velocity > 0 && last.close > last.open;
+    if (!isBearish && !isBullish) return result;
+
+    // ── Strength scoring ──────────────────────────────────────────────────────
+    let strength = 0;
+    const reasons = [];
+    if (velFire)   { strength++; reasons.push(`vel ${result.velocity}%`); }
+    if (bodyFire)  { strength++; reasons.push(`body ${result.candleBody}%`); }
+    if (volFire)   { strength++; reasons.push(`vol ${result.volumeRatio}x`); }
+    if (accelFire) { strength++; reasons.push('accel'); }
+
+    if (strength < 2) return result;   // not enough evidence
+
+    result.signal   = isBearish ? 'BREAKDOWN' : 'BREAKOUT';
+    result.strength = strength;
+    result.canTrade = strength >= 2;
+    result.reason   = `🔥 Momentum ${result.signal} [${reasons.join(' | ')}]`;
+
+    return result;
+}
+
+module.exports = { processIndicators, initializeHistory, getCandleHistory, getSessionCandles, loadCandlesFromYahoo, getCandleSource, calcMomentumBreakdown };
