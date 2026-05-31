@@ -2342,48 +2342,82 @@ function testTG(btn) {
 }
 
 // ─── JOURNAL / TRADES ────────────────────────────────────
+// ─── TRADE JOURNAL ───────────────────────────────────────
+// Source of truth: server (/api/trades). localStorage is a fast-render cache only.
 let _trades = JSON.parse(localStorage.getItem('vn_trades') || '[]');
 let _events = JSON.parse(localStorage.getItem('vn_events') || '[]');
 
+// ── Internal helpers ─────────────────────────────────────
+async function _apiPost(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+// Normalize a server trade object to the local schema used by the renderer.
+function _normServerTrade(t) {
+  // Server stores time as "HH:MM"; reconstruct a full ISO string for today so
+  // date comparisons in getTradeSummaryLocal() continue to work.
+  let isoTime = t.time;
+  if (t.time && /^\d{2}:\d{2}$/.test(t.time)) {
+    const d = new Date();
+    const [h, m] = t.time.split(':').map(Number);
+    d.setHours(h, m, 0, 0);
+    isoTime = d.toISOString();
+  }
+  return {
+    id        : t.id,             // server integer ID — used for EXIT/DELETE calls
+    type      : t.type,
+    strike    : t.strike,
+    lots      : t.lots,
+    premium   : t.premium,
+    sl        : t.sl || 0,
+    time      : isoTime,
+    exit      : t.exitPremium ?? null,
+    pnl       : t.pnl ?? null,
+    notes     : t.notes || '',
+    status    : t.status || (t.exitPremium != null ? 'CLOSED' : 'OPEN'),
+    currentPnl: t.currentPnl ?? null,
+  };
+}
+
+// Pull latest trades from server → update _trades + localStorage cache.
+// Returns true on success, false if server is unreachable (caller falls back to cache).
+async function _syncFromServer() {
+  try {
+    const r = await fetch('/api/trades');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const { trades } = await r.json();
+    _trades = trades.map(_normServerTrade);
+    localStorage.setItem('vn_trades', JSON.stringify(_trades));
+    return true;
+  } catch(e) {
+    console.warn('Journal: server sync failed, using localStorage cache', e.message);
+    return false;
+  }
+}
+
+// ── Summary (computed from local _trades array) ──────────
 function getTradeSummaryLocal() {
   const today = new Date().toDateString();
   const todayTrades = _trades.filter(t => new Date(t.time).toDateString() === today);
-  const realized = todayTrades.filter(t => t.exit != null);
-  const open = todayTrades.filter(t => t.exit == null);
-  const pnl = realized.reduce((sum, t) => sum + (t.pnl || 0), 0);
-  const wins = realized.filter(t => (t.pnl || 0) > 0).length;
-  return { total: todayTrades.length, open: open.length, realized: realized.length, realizedPnl: pnl, winRate: realized.length > 0 ? Math.round((wins/realized.length)*100) : 0 };
+  const realized    = todayTrades.filter(t => t.exit != null);
+  const open        = todayTrades.filter(t => t.exit == null);
+  const pnl         = realized.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const wins        = realized.filter(t => (t.pnl || 0) > 0).length;
+  return {
+    total: todayTrades.length, open: open.length, realized: realized.length,
+    realizedPnl: pnl,
+    winRate: realized.length > 0 ? Math.round((wins / realized.length) * 100) : 0
+  };
 }
 
-function addTrade() {
-  const type = document.getElementById('t-type').value;
-  const strike = parseFloat(document.getElementById('t-strike').value);
-  const lots = parseInt(document.getElementById('t-lots').value) || 1;
-  const premium = parseFloat(document.getElementById('t-premium').value);
-  const sl = parseFloat(document.getElementById('t-sl').value);
-  if (!strike || !premium) { alert('Please enter strike and premium'); return; }
-  const trade = { id: Date.now(), type, strike, lots, premium, sl, time: new Date().toISOString(), exit: null, pnl: null };
-  _trades.push(trade);
-  localStorage.setItem('vn_trades', JSON.stringify(_trades));
-  loadJournal();
-  // Clear form
-  document.getElementById('t-strike').value = '';
-  document.getElementById('t-premium').value = '';
-  document.getElementById('t-sl').value = '';
-}
-
-function clearAllTrades() {
-  if (!confirm('Clear all trades?')) return;
-  _trades = [];
-  localStorage.setItem('vn_trades', JSON.stringify(_trades));
-  loadJournal();
-}
-
-function loadJournal() {
+// ── DOM renderer (pure sync — works from current _trades) ─
+function _renderJournal() {
   const summary = getTradeSummaryLocal();
   const j = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-  j('j-total', summary.total);
-  j('j-open', summary.open);
+  j('j-total',   summary.total);
+  j('j-open',    summary.open);
   j('j-winrate', summary.winRate + '%');
   j('j-pnl', (summary.realizedPnl >= 0 ? '₹+' : '₹') + summary.realizedPnl.toFixed(0));
   const pnlEl = document.getElementById('j-pnl');
@@ -2391,25 +2425,107 @@ function loadJournal() {
 
   const tbody = document.getElementById('trade-list-body');
   if (!tbody) return;
-  if (!_trades.length) { tbody.innerHTML = '<div style="text-align:center;padding:14px;font-size:11px;color:#7a9ab8;">No trades logged yet.</div>'; return; }
+  if (!_trades.length) {
+    tbody.innerHTML = '<div style="text-align:center;padding:14px;font-size:11px;color:#7a9ab8;">No trades logged yet.</div>';
+    return;
+  }
   tbody.innerHTML = _trades.slice().reverse().map(t => {
-    const d = new Date(t.time);
-    const timeStr = d.toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'});
-    const pnlStr = t.pnl != null ? (t.pnl >= 0 ? '+₹' : '₹') + t.pnl.toFixed(0) : 'OPEN';
-    const pnlColor = t.pnl == null ? 'var(--blue)' : t.pnl > 0 ? 'var(--green)' : 'var(--red)';
-    return `<div class="trade-row"><span style="color:${t.type==='CE'?'var(--green)':'var(--red)'};">${t.type}</span><span>${t.strike} @₹${t.premium}</span><span>${t.lots}L</span><span style="color:${pnlColor};">${pnlStr}</span><span style="font-size:9px;color:var(--dim);">${timeStr}</span><button onclick="exitTrade(${t.id})" style="font-size:9px;padding:2px 5px;background:rgba(255,187,0,0.1);border:1px solid var(--amber);color:var(--amber);border-radius:3px;cursor:pointer;">${t.exit?'✓':'EXIT'}</button></div>`;
+    const d       = new Date(t.time);
+    const timeStr = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    const pnlStr  = t.pnl != null ? (t.pnl >= 0 ? '+₹' : '₹') + t.pnl.toFixed(0) : (t.currentPnl != null ? (t.currentPnl >= 0 ? '~+₹' : '~₹') + t.currentPnl.toFixed(0) : 'OPEN');
+    const pnlColor = t.pnl == null ? (t.currentPnl != null ? (t.currentPnl >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--blue)') : t.pnl > 0 ? 'var(--green)' : 'var(--red)';
+    const exitBtn  = t.exit != null ? '<span style="font-size:9px;color:var(--dim)">✓ CLOSED</span>'
+                                    : '<button onclick="exitTrade(' + t.id + ')" style="font-size:9px;padding:2px 5px;background:rgba(255,187,0,0.1);border:1px solid var(--amber);color:var(--amber);border-radius:3px;cursor:pointer">EXIT</button>';
+    return '<div class="trade-row">'
+      + '<span style="color:' + (t.type === 'CE' ? 'var(--green)' : 'var(--red)') + ';">' + t.type + '</span>'
+      + '<span>' + t.strike + ' @₹' + t.premium + '</span>'
+      + '<span>' + t.lots + 'L</span>'
+      + '<span style="color:' + pnlColor + ';">' + pnlStr + '</span>'
+      + '<span style="font-size:9px;color:var(--dim);">' + timeStr + '</span>'
+      + exitBtn
+      + '</div>';
   }).join('');
 }
 
-function exitTrade(id) {
+// ── Public API ────────────────────────────────────────────
+
+// Called when Journal tab is opened: sync from server then render.
+async function loadJournal() {
+  _renderJournal();              // immediate render from cache (no flicker)
+  await _syncFromServer();       // fetch fresh data from server
+  _renderJournal();              // re-render with server data
+}
+
+// Add a new trade — server-first, optimistic local add so UI responds instantly.
+async function addTrade() {
+  const type    = document.getElementById('t-type').value;
+  const strike  = parseFloat(document.getElementById('t-strike').value);
+  const lots    = parseInt(document.getElementById('t-lots').value) || 1;
+  const premium = parseFloat(document.getElementById('t-premium').value);
+  const sl      = parseFloat(document.getElementById('t-sl').value) || 0;
+  if (!strike || !premium) { alert('Please enter strike and premium'); return; }
+
+  // Optimistic local add for instant feedback
+  const tempId   = Date.now();
+  const tempTrade = { id: tempId, type, strike, lots, premium, sl, time: new Date().toISOString(), exit: null, pnl: null, status: 'OPEN' };
+  _trades.push(tempTrade);
+  localStorage.setItem('vn_trades', JSON.stringify(_trades));
+  _renderJournal();
+
+  // Clear form immediately
+  document.getElementById('t-strike').value  = '';
+  document.getElementById('t-premium').value = '';
+  document.getElementById('t-sl').value      = '';
+
+  // Persist to server — replace temp trade with server trade on success
+  try {
+    const { trade } = await _apiPost('/api/trade/add', { type, strike, premium, lots, sl });
+    const idx = _trades.findIndex(t => t.id === tempId);
+    if (idx !== -1) _trades[idx] = _normServerTrade(trade);
+    localStorage.setItem('vn_trades', JSON.stringify(_trades));
+    _renderJournal();
+    console.log('📔 Trade saved to server:', trade.id);
+  } catch(e) {
+    console.warn('📔 Server save failed — trade kept in localStorage only:', e.message);
+  }
+}
+
+// Exit an open trade — update server, then sync.
+async function exitTrade(id) {
   const exitPrice = parseFloat(prompt('Enter exit premium (₹):'));
   if (isNaN(exitPrice)) return;
   const t = _trades.find(x => x.id === id);
   if (!t) return;
-  t.exit = exitPrice;
-  t.pnl = (exitPrice - t.premium) * t.lots * 65;
+
+  // Optimistic local update
+  t.exit   = exitPrice;
+  t.pnl    = parseFloat(((exitPrice - t.premium) * t.lots * 65).toFixed(0));
+  t.status = 'CLOSED';
   localStorage.setItem('vn_trades', JSON.stringify(_trades));
-  loadJournal();
+  _renderJournal();
+
+  // Persist exit to server
+  try {
+    await _apiPost('/api/trade/exit', { id: t.id, exitPremium: exitPrice });
+    console.log('📔 Exit saved to server for trade', t.id);
+  } catch(e) {
+    console.warn('📔 Exit server sync failed — exit kept in localStorage only:', e.message);
+  }
+}
+
+// Clear all trades — delete from server, then clear locally.
+async function clearAllTrades() {
+  if (!confirm('Clear all trades? This cannot be undone.')) return;
+
+  // Fire server deletes in parallel (best-effort)
+  const deletePromises = _trades.map(t =>
+    fetch('/api/trade/' + t.id, { method: 'DELETE' }).catch(() => {})
+  );
+  await Promise.allSettled(deletePromises);
+
+  _trades = [];
+  localStorage.setItem('vn_trades', JSON.stringify(_trades));
+  _renderJournal();
 }
 
 // ─── EVENTS ──────────────────────────────────────────────
