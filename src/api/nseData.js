@@ -813,8 +813,21 @@ function parsePCR(data, spotPrice) {
     return { pcr, atmPcr, atm, atmCEpremium, atmPEpremium, totalCEoi, totalPEoi, maxPain };
 }
 
+// ── Market hours guard ────────────────────────────────────────────────────────
+// Returns true if current IST time is within 9:10–15:35 (5-min buffer either side)
+function isMarketHours() {
+    const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istMin = ist.getHours() * 60 + ist.getMinutes();
+    return istMin >= 550 && istMin <= 935;   // 9:10 to 15:35
+}
+
 async function _fetchPCR(spotPrice) {
     if (!spotPrice || spotPrice <= 0) return;
+    // Skip PCR fetch entirely outside market hours — NSE returns 404/garbage pre/post market
+    if (!isMarketHours()) {
+        console.log('[PCR] Market closed — skipping PCR fetch');
+        return;
+    }
     try {
         const res = await nseGetWithRetry(OC_URL);
         if (res.status !== 200) {
@@ -1003,6 +1016,14 @@ function parseFIIDII(data) {
 }
 
 async function _fetchFIIDII() {
+    // FII/DII data is end-of-day — NSE only updates it after 18:00 IST.
+    // Outside 8:00–22:00 window skip to avoid pointless Railway CPU burn.
+    const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istMin = ist.getHours() * 60 + ist.getMinutes();
+    if (istMin < 480 || istMin > 1320) {   // outside 8:00–22:00
+        console.log('[FII/DII] Outside fetch window — skipping');
+        return;
+    }
     try {
         const res = await nseGetWithRetry(FIIDII_URL);
         if (res.status !== 200) {
@@ -1131,6 +1152,11 @@ function getPCRState() {
 function getFIIState() {
     const snap = { ..._fii };
     if (snap.fetchCount === 0) snap._fallback = true;
+    // Mark stale if last successful fetch was > 20 minutes ago
+    if (snap.fetchedAt) {
+        const ageMs = Date.now() - new Date(snap.fetchedAt).getTime();
+        if (ageMs > 20 * 60 * 1000) snap._stale = true;
+    }
     return snap;
 }
 function getOIBuildupState() { return { ..._oiBuildup }; }
@@ -1166,4 +1192,5 @@ module.exports = {
 
     // Utilities
     isExpiryDay,
+    isMarketHours,
 };

@@ -1254,9 +1254,65 @@ if('serviceWorker' in navigator){
     if(r.ok) navigator.serviceWorker.register('/sw.js').catch(()=>{});
   }).catch(()=>{});
 }
-let deferredPrompt=null;
-window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;document.getElementById('install-banner').classList.add('show');});
-function installPWA(){if(!deferredPrompt)return;deferredPrompt.prompt();deferredPrompt.userChoice.then(()=>{deferredPrompt=null;document.getElementById('install-banner').classList.remove('show');});}
+// ── PWA Install Prompt ────────────────────────────────────────────────────────
+let deferredPrompt = null;
+const _installBanner = () => document.getElementById('install-banner');
+const _installTxt    = () => document.querySelector('.install-txt');
+
+// Browser fires this when PWA install criteria are met (usually 2nd+ visit)
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredPrompt = e;
+  // Update text to native install CTA
+  if (_installTxt()) _installTxt().textContent = '📲 Install Vardaan Nifty AI as app!';
+  _installBanner()?.classList.add('show');
+});
+
+// Hide banner permanently once installed
+window.addEventListener('appinstalled', () => {
+  localStorage.setItem('vn_pwa_installed', '1');
+  _installBanner()?.classList.remove('show');
+  deferredPrompt = null;
+});
+
+// First-visit nudge — show banner even before browser fires beforeinstallprompt
+(function initInstallNudge() {
+  const alreadyInstalled = localStorage.getItem('vn_pwa_installed');
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+                       || window.navigator.standalone === true;
+  if (alreadyInstalled || isStandalone) return;
+
+  const firstVisit = !localStorage.getItem('vn_visited');
+  localStorage.setItem('vn_visited', '1');
+
+  if (firstVisit) {
+    // Show a soft guidance nudge immediately on first visit
+    if (_installTxt()) _installTxt().textContent = '📱 Tap ⋮ → "Add to Home Screen" for best experience!';
+    _installBanner()?.classList.add('show');
+    // Auto-hide after 8 seconds so it's not permanently blocking
+    setTimeout(() => {
+      if (!deferredPrompt) _installBanner()?.classList.remove('show');
+    }, 8000);
+  }
+})();
+
+function installPWA() {
+  if (deferredPrompt) {
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(() => {
+      deferredPrompt = null;
+      _installBanner()?.classList.remove('show');
+    });
+  } else {
+    // Fallback manual instruction for browsers that don't expose the prompt
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    if (isIOS) {
+      alert('To install on iOS:\nSafari → Share button (□↑) → "Add to Home Screen"');
+    } else {
+      alert('To install:\nChrome → ⋮ menu → "Add to Home Screen"\nEdge → … menu → "Add to phone"');
+    }
+  }
+}
 
 // TABS
 function switchTab(name,btn){

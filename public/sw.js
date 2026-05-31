@@ -1,13 +1,17 @@
-// VardaanNifty Service Worker v8 — network-first, no stale-shell blocking
-const CACHE = 'vardaannifty-v8';
+// VardaanNifty Service Worker v9 — network-first, icons pre-cached, no stale-shell blocking
+const CACHE = 'vardaannifty-v9';
 
 self.addEventListener('install', e => {
     self.skipWaiting();
-    // Only pre-cache the manifest + icons — NOT the HTML shell.
-    // Pre-caching index.html caused PWA to launch a stale version that
-    // couldn't reach /api/health and stayed stuck on the splash screen.
+    // Pre-cache manifest + icons (NOT the HTML shell — pre-caching index.html
+    // caused PWA to launch a stale version that couldn't reach /api/health).
     e.waitUntil(
-        caches.open(CACHE).then(c => c.addAll(['/manifest.json']))
+        caches.open(CACHE).then(c => c.addAll([
+            '/manifest.json',
+            '/icons/icon-192.png',
+            '/icons/icon-512.png',
+            '/icons/apple-touch-icon.png',
+        ]))
     );
 });
 

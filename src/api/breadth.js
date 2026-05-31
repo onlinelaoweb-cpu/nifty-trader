@@ -376,17 +376,17 @@ async function fetchAdvanceDecline() {
         const tier1 = await fetchBreadthFromAngel();
         if (tier1) return tier1;
 
-        // Tier 2: NSE equity-stockIndices (404 on Railway as of May 2026 — kept for future)
-        console.log('📊 Angel A/D unavailable — trying NSE stocks...');
-        const tier2 = await fetchBreadthFromStocks();
-        if (tier2) return tier2;
+        // Tier 2: NSE equity-stockIndices — 404 on Railway IPs as of May 2026.
+        // Skipped to avoid 20-second timeout delays; re-enable if NSE fixes routing.
+        // const tier2 = await fetchBreadthFromStocks();
+        // if (tier2) return tier2;
 
         // Tier 2.5: Yahoo Finance batch quote (Railway-compatible, 20 weighted stocks)
-        console.log('📊 NSE stocks unavailable — trying Yahoo Finance batch...');
+        console.log('📊 Angel A/D unavailable — trying Yahoo Finance batch...');
         const tier25 = await fetchBreadthFromYahoo();
         if (tier25) return tier25;
 
-        // Tier 3: Sector indices (always works from Railway)
+        // Tier 3: Sector indices (most reliable fallback from Railway)
         console.log('📊 Yahoo stocks unavailable — using sector indices for A/D');
         return await fetchBreadthFromIndices();
 
