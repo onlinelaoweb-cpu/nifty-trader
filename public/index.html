@@ -1413,8 +1413,28 @@ let _chartData = [];
 let _clCalendarReady = false; // becomes true once calendar API returns data
 
 // ─── POLL /api/signal ────────────────────────────────────
-// ── Splash dismiss — called from multiple paths so it's bulletproof ──────────
+
+// ── Splash state ─────────────────────────────────────────
+const _splashMinMs  = 2500;          // minimum visible time (ms)
+const _splashShownAt = Date.now();   // set at parse time — conservative (slightly early)
+let   _splashDone   = false;         // guard: run dismiss + render exactly once
+let   _splashTimer  = null;          // pending min-wait timer — cancelled on early dismiss
+let   _pendingState = null;          // data received before min-wait expires
+
 function dismissSplash() {
+  // Idempotent — safe to call from any number of paths
+  if (_splashDone) return;
+  _splashDone = true;
+
+  // Cancel any pending min-wait timer so it doesn't fire again
+  if (_splashTimer) { clearTimeout(_splashTimer); _splashTimer = null; }
+
+  // If data already arrived (min-wait was still counting), render it now
+  if (_pendingState) {
+    try { renderDashboard(_pendingState); } catch(e) { console.warn('renderDashboard:', e.message); }
+    _pendingState = null;
+  }
+
   const splash = document.getElementById('vn-splash');
   if (!splash) return;
   splash.classList.add('hide');
@@ -1425,27 +1445,44 @@ async function fetchSignal() {
   try {
     const r = await fetch('/api/signal');
     if (!r.ok) {
-      // Non-200 still means server is alive — dismiss splash anyway
-      dismissSplash();
+      // Server alive but error — still dismiss after min wait
+      if (!_splashDone) {
+        const wait = Math.max(0, _splashMinMs - (Date.now() - _splashShownAt));
+        _splashTimer = setTimeout(dismissSplash, wait);
+      }
       return;
     }
     const s = await r.json();
     _lastState = s;
-    // Dismiss splash BEFORE rendering — so a renderDashboard throw can never trap us
-    dismissSplash();
-    try { renderDashboard(s); } catch(re) { console.warn('renderDashboard error:', re.message); }
+
+    if (_splashDone) {
+      // Splash already gone (safety nets fired) — render immediately
+      try { renderDashboard(s); } catch(e) { console.warn('renderDashboard:', e.message); }
+      return;
+    }
+
+    const wait = Math.max(0, _splashMinMs - (Date.now() - _splashShownAt));
+    if (wait <= 0) {
+      // Min time already passed — dismiss + render right now
+      dismissSplash();
+      try { renderDashboard(s); } catch(e) { console.warn('renderDashboard:', e.message); }
+    } else {
+      // Still within min display window — store data and schedule dismiss
+      _pendingState = s;
+      _splashTimer = setTimeout(dismissSplash, wait);
+    }
   } catch(e) {
     console.warn('fetchSignal:', e.message);
-    // Network error — server may be starting up, splash stays until next poll
-    // Safety net below will force-dismiss after 6s regardless
+    // Network error — server cold-starting, keep splash, safety net handles it
   }
 }
 
-// Safety net 1 — force-dismiss after 6s even if every poll fails (server cold start)
-setTimeout(dismissSplash, 6000);
+// Safety net 1 — absolute maximum 9s, covers Railway cold-start + slow network
+setTimeout(dismissSplash, 9000);
 
-// Safety net 2 — dismiss on any user interaction so tap never gets eaten by splash
-['touchstart','click','keydown'].forEach(ev =>
+// Safety net 2 — any user tap/click immediately unblocks the app
+// (uses dismissSplash which also triggers pending renderDashboard if data is ready)
+['touchstart', 'click', 'keydown'].forEach(ev =>
   document.addEventListener(ev, dismissSplash, { once: true, passive: true })
 );
 
