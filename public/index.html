@@ -2267,7 +2267,7 @@ function updateFlowHistory(history) {
   if (!el || !history || !history.length) return;
   el.innerHTML = history.slice(-5).reverse().map(h => {
     const color = h.dominance?.includes('CALL') ? 'var(--blue)' : h.dominance?.includes('PUT') ? 'var(--red)' : 'var(--amber)';
-    return `<div style="margin-bottom:2px;color:${color};">${h.dominance || 'NEUTRAL'} CE:₹${h.ce || '--'} PE:₹${h.pe || '--'}</div>`;
+    return `<div style="margin-bottom:2px;color:${color};">${h.dominance || 'NEUTRAL'} CE:₹${h.ceChange || '--'} PE:₹${h.peChange || '--'}</div>`;
   }).join('');
 }
 
