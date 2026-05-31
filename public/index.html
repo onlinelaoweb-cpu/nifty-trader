@@ -2534,9 +2534,19 @@ function updateChecklistAuto(s) {
     setItem('cl-pcr', 'wait', 'Waiting for PCR…', 'var(--dim)');
   }
 
-  // 5. Bank Nifty Lead
+  // 5. Bank Nifty Lead — prefer the server-computed VWAP-cross lead signal over raw changePct
+  const bnLead = s.global?.bankNiftyLeadSignal;
   const bnData = s.global?.sectors?.bankNifty;
-  if (bnData && bnData.changePct != null) {
+  if (bnLead && bnLead.signal != null) {
+    const sig = bnLead.signal;                        // -1 | 0 | 1
+    const dist = bnLead.distancePct;
+    const distTxt = dist != null ? ' (' + (dist >= 0 ? '+' : '') + dist.toFixed(2) + '%)' : '';
+    setItem('cl-bn', sig > 0 ? 'pass' : sig < 0 ? 'fail' : 'wait',
+      'BN ' + bnLead.label + distTxt + ' · ' + bnLead.reason,
+      sig > 0 ? 'var(--green)' : sig < 0 ? 'var(--red)' : 'var(--amber)');
+    bulletScore.push(sig);
+  } else if (bnData && bnData.changePct != null) {
+    // Fallback: server didn't send leadSignal yet — use raw % change
     const chg = bnData.changePct;
     const isBull = chg > 0;
     setItem('cl-bn', isBull ? 'pass' : 'fail',
