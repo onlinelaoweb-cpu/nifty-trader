@@ -27,6 +27,19 @@
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:var(--bg0);color:var(--text);font-family:'Rajdhani',sans-serif;min-height:100vh;padding-bottom:80px;}
 body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.06) 2px,rgba(0,0,0,0.06) 4px);pointer-events:none;z-index:999;}
+/* ── Custom Splash Screen ── */
+#vn-splash{position:fixed;inset:0;background:#020508;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;transition:opacity 0.6s ease,visibility 0.6s ease;}
+#vn-splash.hide{opacity:0;visibility:hidden;pointer-events:none;}
+#vn-splash .splash-icon{width:90px;height:90px;filter:drop-shadow(0 0 18px rgba(0,255,136,0.7));animation:splashPulse 1.6s ease-in-out infinite;}
+#vn-splash .splash-brand{font-family:'Orbitron',monospace;font-size:16px;font-weight:900;letter-spacing:3px;color:#00ff88;margin-top:22px;text-shadow:0 0 20px rgba(0,255,136,0.7);animation:splashFadeIn 0.8s ease 0.3s both;}
+#vn-splash .splash-tagline{font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:2px;color:rgba(0,255,136,0.5);margin-top:8px;animation:splashFadeIn 0.8s ease 0.6s both;}
+#vn-splash .splash-dots{display:flex;gap:7px;margin-top:28px;animation:splashFadeIn 0.8s ease 0.9s both;}
+#vn-splash .splash-dot{width:6px;height:6px;border-radius:50%;background:#00ff88;animation:splashBounce 1.2s ease-in-out infinite;}
+#vn-splash .splash-dot:nth-child(2){animation-delay:0.2s;}
+#vn-splash .splash-dot:nth-child(3){animation-delay:0.4s;}
+@keyframes splashPulse{0%,100%{filter:drop-shadow(0 0 18px rgba(0,255,136,0.7))}50%{filter:drop-shadow(0 0 35px rgba(0,255,136,1));}}
+@keyframes splashFadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes splashBounce{0%,80%,100%{transform:scale(0.6);opacity:0.4}40%{transform:scale(1);opacity:1}}
 
 /* HEADER */
 .header{background:linear-gradient(180deg,#040c16 0%,var(--bg1) 100%);border-bottom:1px solid var(--border);padding:9px 14px;position:sticky;top:0;z-index:100;backdrop-filter:blur(10px);box-shadow:0 2px 20px rgba(0,0,0,0.4);}
@@ -514,6 +527,23 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 </style>
 </head>
 <body>
+
+<!-- ═══════════════════════════════════ -->
+<!-- SPLASH SCREEN                       -->
+<!-- ═══════════════════════════════════ -->
+<div id="vn-splash">
+  <!-- Same lightning bolt SVG as the app icon -->
+  <svg class="splash-icon" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <polygon points="60,5 25,55 50,55 40,95 75,45 50,45" fill="#00ff88"/>
+  </svg>
+  <div class="splash-brand">VARDAAN NIFTY AI</div>
+  <div class="splash-tagline">AI · OPTIONS · INTELLIGENCE</div>
+  <div class="splash-dots">
+    <div class="splash-dot"></div>
+    <div class="splash-dot"></div>
+    <div class="splash-dot"></div>
+  </div>
+</div>
 
 <!-- HEADER -->
 <div class="header">
@@ -1383,15 +1413,41 @@ let _chartData = [];
 let _clCalendarReady = false; // becomes true once calendar API returns data
 
 // ─── POLL /api/signal ────────────────────────────────────
+// ── Splash dismiss — called from multiple paths so it's bulletproof ──────────
+function dismissSplash() {
+  const splash = document.getElementById('vn-splash');
+  if (!splash) return;
+  splash.classList.add('hide');
+  setTimeout(() => { try { if (splash.parentNode) splash.parentNode.removeChild(splash); } catch(e){} }, 700);
+}
+
 async function fetchSignal() {
   try {
     const r = await fetch('/api/signal');
-    if (!r.ok) return;
+    if (!r.ok) {
+      // Non-200 still means server is alive — dismiss splash anyway
+      dismissSplash();
+      return;
+    }
     const s = await r.json();
     _lastState = s;
-    renderDashboard(s);
-  } catch(e) { console.warn('fetchSignal:', e.message); }
+    // Dismiss splash BEFORE rendering — so a renderDashboard throw can never trap us
+    dismissSplash();
+    try { renderDashboard(s); } catch(re) { console.warn('renderDashboard error:', re.message); }
+  } catch(e) {
+    console.warn('fetchSignal:', e.message);
+    // Network error — server may be starting up, splash stays until next poll
+    // Safety net below will force-dismiss after 6s regardless
+  }
 }
+
+// Safety net 1 — force-dismiss after 6s even if every poll fails (server cold start)
+setTimeout(dismissSplash, 6000);
+
+// Safety net 2 — dismiss on any user interaction so tap never gets eaten by splash
+['touchstart','click','keydown'].forEach(ev =>
+  document.addEventListener(ev, dismissSplash, { once: true, passive: true })
+);
 
 function startPolling() {
   fetchSignal();
