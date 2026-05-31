@@ -452,13 +452,13 @@ function combineSignals(indicators) {
         //    so we don't silently block signals during early session.
         adxTrend   : !adxTooWeak,
 
-        // 6. FIX 4: Price must not be within 30 pts of an S/R level.
-        //    Evaluated inside the gate block below; initialise to true here.
-        srClear    : true
+        // 6. S/R proximity gate — only evaluated when a directional signal exists.
+        //    null  = not evaluated (rawSignal was already WAIT, no entry to protect).
+        //    true  = evaluated and clear.
+        //    false = blocked (set inside the gate block below).
+        srClear    : rawSignal !== 'WAIT' ? true : null
     };
-    qualityGate.passed = qualityGate.mtfAligned && qualityGate.rsiClean
-                      && qualityGate.safeWindow  && qualityGate.vixSafe
-                      && qualityGate.adxTrend    && qualityGate.srClear;
+    // qualityGate.passed is computed AFTER the S/R block so srClear=false cannot produce stale passed=true
 
     // Persist gate state so the UI can show which checks are passing / failing
     marketState.qualityGate = qualityGate;
@@ -514,6 +514,12 @@ function combineSignals(indicators) {
             }
         }
     }
+
+    // Recompute passed HERE — srClear may have been flipped to false inside the gate block above.
+    qualityGate.passed = qualityGate.mtfAligned && qualityGate.rsiClean
+                      && qualityGate.safeWindow  && qualityGate.vixSafe
+                      && qualityGate.adxTrend    && (qualityGate.srClear !== false);
+    marketState.qualityGate = qualityGate;
 
     // ── ADX weak-trend confidence cap ────────────────────────────────────────
     // Signal passes gate (ADX 20–25) but trend is not fully confirmed.
@@ -1491,8 +1497,8 @@ app.get('/api/candles', (req,res) => res.json(getCandleHistory()));
 // Chart historical data — fetched server-side to avoid browser CORS restrictions
 app.get('/api/chart', async (req,res) => {
     const tf = req.query.tf || '5m';
-    const intervalMap = { '5m':'5m', '15m':'15m', '1h':'60m' };
-    const rangeMap    = { '5m':'5d', '15m':'5d', '1h':'1mo' };
+    const intervalMap = { '1m':'1m', '5m':'5m', '15m':'15m', '1h':'60m' };
+    const rangeMap    = { '1m':'1d', '5m':'5d', '15m':'5d', '1h':'1mo' };
     const interval = intervalMap[tf] || '5m';
     const range    = rangeMap[tf]    || '5d';
     try {

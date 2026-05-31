@@ -1664,7 +1664,7 @@ function renderDashboard(s) {
       document.getElementById('adx-dip').textContent = dip != null ? dip.toFixed(1) : '--';
       document.getElementById('adx-dim').textContent = dim != null ? dim.toFixed(1) : '--';
       const bar = document.getElementById('adx-bar');
-      const pct = Math.min((adx / 60) * 100, 100);
+      const pct = Math.min((adx / 40) * 100, 100);  // scale to 40 (EXPLOSIVE threshold) so ADX 25 shows at ~62% not ~41%
       bar.style.width = pct + '%';
       bar.style.background = adx < 20 ? 'var(--red)' : adx < 25 ? 'var(--amber)' : adx < 40 ? 'var(--green)' : 'var(--blue)';
       const label = adx < 20 ? 'CHOPPY' : adx < 25 ? 'WEAK TREND' : adx < 40 ? 'TRENDING' : 'EXPLOSIVE';
