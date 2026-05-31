@@ -524,6 +524,27 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 @keyframes suggestPulse{0%,100%{box-shadow:0 0 10px currentColor}50%{box-shadow:0 0 25px currentColor}}
 .suggest-card.bull.active{animation:suggestPulse 2.5s ease-in-out infinite;color:var(--green);}
 .suggest-card.bear.active{animation:suggestPulse 2.5s ease-in-out infinite;color:var(--red);}
+/* ── BTST / STBT Card ── */
+.btst-wrap{margin-top:10px;display:none;}
+.btst-wrap.visible{display:block;}
+.btst-card{border-radius:var(--card-radius);padding:12px 14px;border:2px solid;position:relative;overflow:hidden;}
+.btst-card.btst{background:linear-gradient(150deg,rgba(0,255,136,0.07),rgba(0,255,136,0.02));border-color:rgba(0,255,136,0.5);}
+.btst-card.stbt{background:linear-gradient(150deg,rgba(255,34,68,0.07),rgba(255,34,68,0.02));border-color:rgba(255,34,68,0.5);}
+.btst-card.none{background:rgba(255,187,0,0.03);border-color:rgba(255,187,0,0.3);}
+.btst-label{font-family:'Orbitron',monospace;font-size:9px;letter-spacing:2px;color:var(--purple);margin-bottom:6px;}
+.btst-title{font-family:'Orbitron',monospace;font-size:15px;font-weight:900;letter-spacing:2px;margin-bottom:8px;}
+.btst-title.btst{color:var(--green);}
+.btst-title.stbt{color:var(--red);}
+.btst-title.none{color:var(--amber);font-size:11px;}
+.btst-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:8px;}
+.btst-cell{background:rgba(255,255,255,0.03);border-radius:5px;padding:5px 7px;}
+.btst-cell-label{font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;}
+.btst-cell-val{font-size:11px;font-family:'Share Tech Mono',monospace;color:var(--text);}
+.btst-checks{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;}
+.btst-check{font-size:9px;padding:2px 7px;border-radius:10px;font-family:'Share Tech Mono',monospace;}
+.btst-check.pass{background:rgba(0,255,136,0.12);color:var(--green);border:1px solid rgba(0,255,136,0.3);}
+.btst-check.fail{background:rgba(255,34,68,0.12);color:var(--red);border:1px solid rgba(255,34,68,0.3);}
+.btst-footer{font-size:9px;color:var(--dim);font-family:'Share Tech Mono',monospace;border-top:1px solid rgba(255,255,255,0.06);padding-top:6px;line-height:1.6;}
 </style>
 </head>
 <body>
@@ -606,6 +627,17 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       </div>
       <div id="suggest-body">
         <div class="suggest-nogate">Quality gate not passed yet — waiting for all conditions to align...</div>
+      </div>
+    </div>
+
+    <!-- BTST / STBT Card — visible only in 3:00–3:20 PM window -->
+    <div class="btst-wrap" id="btst-wrap">
+      <div class="btst-card none" id="btst-card">
+        <div class="btst-label">🌙 BTST / STBT WATCH</div>
+        <div class="btst-title none" id="btst-title">Evaluating close conditions...</div>
+        <div class="btst-checks" id="btst-checks"></div>
+        <div class="btst-grid" id="btst-grid"></div>
+        <div class="btst-footer" id="btst-footer"></div>
       </div>
     </div>
   </div>
@@ -1831,6 +1863,8 @@ function renderDashboard(s) {
     if (domEl) { domEl.textContent = dom; domEl.style.color = c; }
     if (s.optionFlow.history) updateFlowHistory(s.optionFlow.history);
   }
+  // BTST / STBT card (visible only in 3:00–3:20 PM window)
+  renderBTST(s.btst || null);
 }
 
 // ─── BREADTH UI ──────────────────────────────────────────
@@ -2007,6 +2041,65 @@ async function fetchTradeSuggestion() {
   } catch (e) {
     if (body) body.innerHTML = `<div class="suggest-nogate">⚠️ Error fetching suggestion: ${e.message}</div>`;
   }
+}
+
+// ─── BTST / STBT RENDERER ────────────────────────────────
+function renderBTST(btst) {
+  const wrap  = document.getElementById('btst-wrap');
+  const card  = document.getElementById('btst-card');
+  const title = document.getElementById('btst-title');
+  const checks= document.getElementById('btst-checks');
+  const grid  = document.getElementById('btst-grid');
+  const footer= document.getElementById('btst-footer');
+  if (!wrap) return;
+
+  // Only show card in 3:00–3:20 PM window OR if btst data exists
+  if (!btst) { wrap.classList.remove('visible'); return; }
+
+  wrap.classList.add('visible');
+
+  if (btst.type === 'NONE') {
+    card.className = 'btst-card none';
+    title.className = 'btst-title none';
+    title.textContent = btst.reason || 'Conditions not met';
+    checks.innerHTML = '';
+    grid.innerHTML = '';
+    footer.innerHTML = '';
+    return;
+  }
+
+  const isBull = btst.type === 'BTST';
+  card.className  = `btst-card ${btst.type.toLowerCase()}`;
+  title.className = `btst-title ${btst.type.toLowerCase()}`;
+
+  if (btst.passed) {
+    title.textContent = `${isBull ? '🟢' : '🔴'} ${btst.type} — ${btst.signal} ${btst.strike ? '@ ' + btst.strike : ''}`;
+  } else {
+    title.textContent = `⚠️ ${btst.type} — ${btst.failCount} condition${btst.failCount>1?'s':''} not met`;
+  }
+
+  // Condition pills
+  if (btst.checks?.length) {
+    checks.innerHTML = btst.checks.map(c =>
+      `<span class="btst-check ${c.pass ? 'pass' : 'fail'}">${c.pass ? '✓' : '✗'} ${c.label}</span>`
+    ).join('');
+  }
+
+  // Data grid
+  grid.innerHTML = `
+    <div class="btst-cell"><div class="btst-cell-label">CONFIDENCE</div><div class="btst-cell-val">${btst.confidence}%</div></div>
+    <div class="btst-cell"><div class="btst-cell-label">VIX</div><div class="btst-cell-val">${btst.vix ?? '--'}</div></div>
+    <div class="btst-cell"><div class="btst-cell-label">PCR</div><div class="btst-cell-val">${btst.pcr ?? '--'}</div></div>
+    <div class="btst-cell"><div class="btst-cell-label">15M TF</div><div class="btst-cell-val">${btst.mtf15m}</div></div>
+    <div class="btst-cell"><div class="btst-cell-label">1H TF</div><div class="btst-cell-val">${btst.mtf1h}</div></div>
+    <div class="btst-cell"><div class="btst-cell-label">GLOBAL</div><div class="btst-cell-val">${btst.globalBias}</div></div>
+  `;
+
+  footer.innerHTML = `
+    ⏰ Window: ${btst.window}&nbsp;&nbsp;|&nbsp;&nbsp;
+    🎯 Exit: ${btst.exitTarget}<br>
+    ⚠️ ${btst.risk}
+  `;
 }
 
 // ─── PCR TREND ───────────────────────────────────────────

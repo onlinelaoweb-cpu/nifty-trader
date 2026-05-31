@@ -29,7 +29,7 @@ const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
     sendCloseSummary, sendExitAlert,
-    sendNishanebaazAlert, isConfigured
+    sendNishanebaazAlert, sendRawMessage, isConfigured
 }                                   = require('./src/api/telegram');
 
 const app    = express();
@@ -78,7 +78,8 @@ let marketState = {
     oiBuildup: { signal: 'NEUTRAL', strength: 0, label: 'OI Buildup — awaiting data', maxCEoiStrike: null, maxPEoiStrike: null, totalCEoiChange: null, totalPEoiChange: null },
     entryWindow: { status:'closed', label:'Market Closed', safe:false },
     qualityGate: { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, srClear:true, passed:false },
-    calendarEvents: []
+    calendarEvents: [],
+    btst: null,   // BTST/STBT signal — populated 3:00–3:20 PM, null otherwise
 };
 
 // ── Trade Journal ─────────────────────────────────────
@@ -92,6 +93,7 @@ let morningSummarySent=false, closeSummarySent=false, vixAlertSent=false;
 let nishanebaazAlertSent=false;  // one-shot: fired once at 14:00 per day
 let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:15
 let signalStreak = { signal: 'WAIT', count: 0 }; // consecutive same-signal counter
+let btstSentToday=false;     // one-shot: BTST/STBT Telegram alert per day
 
 function isMarketOpen() {
     const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
@@ -543,12 +545,166 @@ function combineSignals(indicators) {
     return { signal, confidence, reasons };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// BTST / STBT Detector
+// ─────────────────────────────────────────────────────────────────────────────
+// Runs in the 3:00–3:20 PM window. Evaluates whether today's close setup is
+// strong enough to carry overnight into tomorrow's open.
+//
+// BTST (Buy Today Sell Tomorrow) — long CALL overnight
+// STBT (Sell Today Buy Tomorrow) — long PUT overnight
+//
+// Rules (all must pass):
+//   1. Time: 3:00–3:20 PM IST only
+//   2. Current signal must be BUY CALL or BUY PUT (not WAIT)
+//   3. Confidence >= 62% (lower threshold than intraday — overnight has extra risk)
+//   4. MTF 15m + 1h both aligned in signal direction
+//   5. VIX < 18 (high VIX = gap risk)
+//   6. PCR supports direction (BTST: pcr >= 1.0 | STBT: pcr <= 1.0)
+//   7. Global cues not opposing (US futures direction)
+//   8. NOT expiry day (Tuesday) — options die at 3:30, can't carry
+//   9. Tomorrow is NOT expiry day — would be gap-down/gap-up risk into expiry
+// ═══════════════════════════════════════════════════════════════════════════════
+function evaluateBTST() {
+    const ist = getIST();
+    const h = ist.getHours(), m = ist.getMinutes();
+    const istMin = h * 60 + m;
+
+    // Only evaluate in 3:00–3:20 window
+    if (istMin < 900 || istMin > 920) {
+        // Outside window — clear any stale BTST signal
+        if (marketState.btst !== null) marketState.btst = null;
+        return;
+    }
+
+    const s = marketState;
+
+    // Rule 8: Not expiry day (Tuesday)
+    if (isExpiryDay()) {
+        marketState.btst = { type: 'NONE', reason: 'Expiry day — options expire today, cannot carry' };
+        return;
+    }
+
+    // Rule 9: Tomorrow not expiry day
+    const tomorrowDay = (ist.getDay() + 1) % 7;
+    if (tomorrowDay === 2) {  // 2 = Tuesday
+        marketState.btst = { type: 'NONE', reason: 'Tomorrow is expiry — gap risk into expiry too high' };
+        return;
+    }
+
+    // Rule 1+2: Valid directional signal
+    const signal = s.signal;
+    if (signal !== 'BUY CALL' && signal !== 'BUY PUT') {
+        marketState.btst = { type: 'NONE', reason: 'No clear directional signal at close' };
+        return;
+    }
+
+    const isBull = signal === 'BUY CALL';
+    const type   = isBull ? 'BTST' : 'STBT';
+
+    // Collect pass/fail conditions
+    const checks = [];
+    let fails = 0;
+
+    // Rule 3: Confidence
+    const confOk = s.confidence >= 62;
+    checks.push({ label: `Confidence ${s.confidence}%`, pass: confOk, detail: 'need ≥62%' });
+    if (!confOk) fails++;
+
+    // Rule 4: MTF 15m + 1h aligned
+    const tf15ok = isBull
+        ? s.mtf.tf15m?.signal === 'BULLISH'
+        : s.mtf.tf15m?.signal === 'BEARISH';
+    const tf1hok = isBull
+        ? s.mtf.tf1h?.signal === 'BULLISH'
+        : s.mtf.tf1h?.signal === 'BEARISH';
+    checks.push({ label: `15m TF ${s.mtf.tf15m?.signal||'--'}`, pass: tf15ok, detail: `need ${isBull?'BULLISH':'BEARISH'}` });
+    checks.push({ label: `1h TF ${s.mtf.tf1h?.signal||'--'}`,  pass: tf1hok, detail: `need ${isBull?'BULLISH':'BEARISH'}` });
+    if (!tf15ok) fails++;
+    if (!tf1hok) fails++;
+
+    // Rule 5: VIX < 18
+    const vixOk = !s.vix || s.vix < 18;
+    checks.push({ label: `VIX ${s.vix ?? '--'}`, pass: vixOk, detail: 'need <18' });
+    if (!vixOk) fails++;
+
+    // Rule 6: PCR direction
+    const pcrOk = s.pcr === null ? true : (isBull ? s.pcr >= 1.0 : s.pcr <= 1.0);
+    checks.push({ label: `PCR ${s.pcr ?? '--'}`, pass: pcrOk, detail: isBull ? 'need ≥1.0' : 'need ≤1.0' });
+    if (!pcrOk) fails++;
+
+    // Rule 7: Global cues not opposing
+    const globalOk = s.global.bias !== (isBull ? 'BEARISH' : 'BULLISH');
+    checks.push({ label: `Global ${s.global.bias}`, pass: globalOk, detail: 'must not oppose' });
+    if (!globalOk) fails++;
+
+    const passed = fails === 0;
+
+    // ATM strike for the suggestion
+    const atmStrike = s.nifty > 0 ? Math.round(s.nifty / 50) * 50 : null;
+    const suggestedStrike = atmStrike
+        ? (isBull ? atmStrike + 50 : atmStrike - 50)
+        : null;
+
+    marketState.btst = {
+        type,           // 'BTST' | 'STBT' | 'NONE'
+        passed,
+        signal,
+        confidence : s.confidence,
+        strike     : suggestedStrike,
+        atm        : atmStrike,
+        nifty      : s.nifty,
+        vix        : s.vix,
+        pcr        : s.pcr,
+        mtf15m     : s.mtf.tf15m?.signal || '--',
+        mtf1h      : s.mtf.tf1h?.signal  || '--',
+        globalBias : s.global.bias,
+        checks,
+        failCount  : fails,
+        window     : '3:00–3:20 PM',
+        exitTarget : 'Tomorrow 9:20–9:30 AM open',
+        risk       : 'Gap risk present — use max 25% normal position size',
+        generatedAt: new Date().toISOString(),
+    };
+
+    if (passed) {
+        console.log(`🌙 [BTST] ${type} signal generated — ${signal} | Strike: ${suggestedStrike} | Conf: ${s.confidence}%`);
+    } else {
+        console.log(`🌙 [BTST] Conditions not met (${fails} fail) — ${checks.filter(c=>!c.pass).map(c=>c.label).join(', ')}`);
+    }
+}
+
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return;
     const ist=getIST(), h=ist.getHours(), m=ist.getMinutes();
     if (h===9&&m>=16&&m<=20&&!morningSummarySent) { morningSummarySent=true; await sendMorningSummary(marketState); return; }
     if (h===14&&m===0&&!nishanebaazAlertSent) { nishanebaazAlertSent=true; await sendNishanebaazAlert(marketState); }
-    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;nishanebaazAlertSent=false;pcrClearedToday=false;},6*60*60*1000); return; }
+    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;nishanebaazAlertSent=false;pcrClearedToday=false;btstSentToday=false;},6*60*60*1000); return; }
+    // ── BTST/STBT Telegram alert — fires once in 3:00–3:20 window if signal passed ──
+    if (!btstSentToday && marketState.btst?.passed) {
+        btstSentToday = true;
+        const b = marketState.btst;
+        const emoji = b.type === 'BTST' ? '🟢' : '🔴';
+        const msg = [
+            `${emoji} *${b.type} SIGNAL DETECTED*`,
+            ``,
+            `📌 *${b.signal}* | Strike: *${b.strike}*`,
+            `💪 Confidence: ${b.confidence}%`,
+            `📊 PCR: ${b.pcr ?? '--'} | VIX: ${b.vix ?? '--'}`,
+            `📈 15m: ${b.mtf15m} | 1h: ${b.mtf1h}`,
+            `🌍 Global: ${b.globalBias}`,
+            ``,
+            `⏰ Window: ${b.window}`,
+            `🎯 Exit: ${b.exitTarget}`,
+            `⚠️ Risk: ${b.risk}`,
+            ``,
+            `_Informational only — verify manually before taking position_`
+        ].join('\n');
+        try {
+            await sendRawMessage(msg);
+            console.log(`🌙 [BTST] Telegram alert sent — ${b.type} ${b.signal} ${b.strike}`);
+        } catch(e) { console.error('[BTST] Telegram error:', e.message); }
+    }
     if (newSignal!==prevSignal&&newSignal!=='WAIT') {
         await sendSignalAlert(marketState,prevSignal);
         // ── Trigger AI suggestion on fresh signal (costs 1 API call here only) ──
@@ -581,6 +737,7 @@ async function updatePrice(price, change, changePct, source) {
     marketState.connected=true; marketState.source=source; marketState.dataPoints=indicators.priceCount;
     marketState.candleSource=getCandleSource();
     if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%)`);
+    evaluateBTST();
     await checkTelegramAlerts(signal);
     prevSignal=signal;
 }
