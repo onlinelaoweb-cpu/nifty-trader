@@ -96,6 +96,7 @@ let nishanebaazAlertSent=false;  // one-shot: fired once at 14:00 per day
 let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:15
 let signalStreak = { signal: 'WAIT', count: 0 }; // consecutive same-signal counter
 let btstSentToday=false;     // one-shot: BTST/STBT Telegram alert per day
+let telegramAlertInFlight=false; // race-condition guard — prevents duplicate sends when onTick fires concurrently
 
 function isMarketOpen() {
     const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
@@ -697,10 +698,16 @@ function evaluateBTST() {
 
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return;
+    // ── Race-condition guard: onTick fires synchronously on every websocket tick,
+    //    so multiple concurrent calls can pass a flag check before any one of them
+    //    sets the flag. This in-flight lock ensures only one alert send runs at a time.
+    if (telegramAlertInFlight) return;
+    telegramAlertInFlight = true;
+    try {
     const ist=getIST(), h=ist.getHours(), m=ist.getMinutes();
     if (h===9&&m>=16&&m<=20&&!morningSummarySent) { morningSummarySent=true; await sendMorningSummary(marketState); return; }
     if (h===14&&m===0&&!nishanebaazAlertSent) { nishanebaazAlertSent=true; await sendNishanebaazAlert(marketState); }
-    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;nishanebaazAlertSent=false;pcrClearedToday=false;btstSentToday=false;},6*60*60*1000); return; }
+    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;nishanebaazAlertSent=false;pcrClearedToday=false;btstSentToday=false;telegramAlertInFlight=false;},6*60*60*1000); return; }
     // ── BTST/STBT Telegram alert — fires once in 3:00–3:20 window if signal passed ──
     if (!btstSentToday && marketState.btst?.passed) {
         btstSentToday = true;
@@ -745,6 +752,9 @@ async function checkTelegramAlerts(newSignal) {
     prevMTFAligned=marketState.mtf.aligned;
     if (marketState.vix>20&&!vixAlertSent) { vixAlertSent=true; await sendVIXAlert(marketState.vix,marketState.vixNote); }
     if (marketState.vix<=20) vixAlertSent=false;
+    } finally {
+        telegramAlertInFlight = false;
+    }
 }
 
 async function updatePrice(price, change, changePct, source) {
@@ -763,11 +773,11 @@ async function updatePrice(price, change, changePct, source) {
     prevSignal=signal;
 }
 
-function onTick(tickData) {
+async function onTick(tickData) {
     const price=tickData.price; if(!price||price<=0) return;
     const prev=marketState.nifty||price, change=parseFloat((price-prev).toFixed(2));
     const chgPct=prev>0?parseFloat(((change/prev)*100).toFixed(2)):0;
-    updatePrice(price,change,chgPct,'websocket');
+    await updatePrice(price,change,chgPct,'websocket');
 }
 
 async function refreshMarketData() {
