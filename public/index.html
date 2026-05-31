@@ -281,7 +281,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .trade-list-card{background:linear-gradient(150deg,var(--bg2),#0c1a28);border:1px solid var(--border);border-radius:var(--card-radius);overflow:hidden;margin-bottom:10px;box-shadow:var(--card-shadow);}
 .trade-list-header{padding:10px 14px;background:var(--bg3);font-family:'Orbitron',monospace;font-size:10px;color:var(--blue);letter-spacing:2px;display:flex;justify-content:space-between;align-items:center;}
 .clear-trades-btn{background:transparent;border:1px solid var(--border);color:var(--dim);border-radius:5px;padding:3px 9px;font-size:10px;cursor:pointer;}
-.trade-item{padding:10px 14px;border-top:1px solid var(--border);}
+.trade-item{padding:10px 14px;border-top:1px solid var(--border);}.trade-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 14px;border-top:1px solid var(--border);font-size:11px;font-family:'Share Tech Mono',monospace;}
 .trade-item-row1{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}
 .trade-type-badge{padding:3px 9px;border-radius:6px;font-size:11px;font-weight:700;font-family:'Share Tech Mono',monospace;}
 .trade-type-badge.ce{background:rgba(0,170,255,0.15);color:var(--blue);border:1px solid rgba(0,170,255,0.4);}
@@ -1163,7 +1163,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div class="global-score-value" id="global-score-badge-val" style="color:var(--amber);">--/10 🟡</div>
     </div>
     <!-- USD/INR Weakness Alert -->
-    <div class="usdinr-alert" id="usdinr-alert">⚠️ <span>USD/INR &gt;95.5 — Rupee weakness detected! FII selling pressure likely.</span></div>
+    <div class="usdinr-alert" id="usdinr-alert">⚠️ <span>USD/INR &gt;97 — Rupee weakness detected! FII selling pressure likely.</span></div>
     <div class="global-bias-card neut" id="global-bias-card">
       <div class="global-bias-label">🌍 GLOBAL MARKET BIAS</div>
       <div class="global-bias-value" id="global-bias-val" style="color:var(--amber);">NEUTRAL</div>
@@ -1489,6 +1489,30 @@ setInterval(updateHeaderBadges, 1000);
 let _lastState = null;
 let _pollTimer = null;
 let _soundOn = false;
+let _prevSignal = null;   // tracks last rendered signal for sound change detection
+let _audioCtx = null;     // shared AudioContext — created lazily on first user gesture
+
+// Plays a short tone. type: "call" (ascending), "put" (descending), "warn" (flat)
+function playAlert(type) {
+  if (!_soundOn) return;
+  try {
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = _audioCtx;
+    const now = ctx.currentTime;
+    const tones = type === 'call' ? [440, 550, 660] : type === 'put' ? [660, 550, 440] : [440, 440];
+    tones.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + i * 0.12);
+      gain.gain.setValueAtTime(0.18, now + i * 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.12 + 0.11);
+      osc.start(now + i * 0.12);
+      osc.stop(now + i * 0.12 + 0.12);
+    });
+  } catch(e) { console.warn('playAlert:', e.message); }
+}
 let _chartTF = '1m';
 let _chartData = [];
 let _clCalendarReady = false; // becomes true once calendar API returns data
@@ -1598,6 +1622,13 @@ function renderDashboard(s) {
   card.className = 'signal-card ' + (sig === 'BUY CALL' ? 'buy-call' : sig === 'BUY PUT' ? 'buy-put' : 'wait');
   document.getElementById('conf-bar').style.width = conf + '%';
   document.getElementById('conf-text').textContent = 'CONFIDENCE: ' + conf + '%';
+  // Sound alert on signal change
+  if (_soundOn && _prevSignal !== null && sig !== _prevSignal) {
+    if      (sig === 'BUY CALL') playAlert('call');
+    else if (sig === 'BUY PUT')  playAlert('put');
+    else                         playAlert('warn');
+  }
+  _prevSignal = sig;
   const tick70 = document.getElementById('conf-tick70');
   if (tick70) tick70.style.color = conf >= 70 ? 'var(--green)' : '#4a6a8a';
 
@@ -2003,7 +2034,7 @@ function updateGlobalUI(g) {
 
   // USD/INR alert
   const usdEl = document.getElementById('usdinr-alert');
-  if (usdEl && g.currency?.usdinr) usdEl.style.display = g.currency.usdinr > 85 ? 'block' : 'none';
+  if (usdEl && g.currency?.usdinr) usdEl.classList.toggle('show', g.currency.usdinr > 97);  // 97 = stress level for 2026 (normal range 90-96)
 
   // Sectors
   const sectors = g.sectors || {};
@@ -2011,8 +2042,8 @@ function updateGlobalUI(g) {
     'banknifty': ['g-banknifty-p','g-banknifty-c'],
     'niftyit':   ['g-niftyit-p','g-niftyit-c'],
     'niftyauto': ['g-niftyauto-p','g-niftyauto-c'],
-    'niftymetal': ['g-niftymetal-p','g-niftymetal-c'],
-    'niftypharma': ['g-niftypharma-p','g-niftypharma-c']
+    'niftymetal': ['g-niftymetal-p','g-niftymetal-c']
+    // 'niftypharma' removed — server globalCues does not fetch it, no HTML elements exist
   };
   for (const [key, [pid, cid]] of Object.entries(pairs)) {
     const sec = sectors[key] || sectors[key.replace('nifty','')];
@@ -2961,6 +2992,12 @@ function toggleSound() {
   _soundOn = !_soundOn;
   const btn = document.getElementById('sound-btn');
   if (btn) btn.textContent = _soundOn ? '🔔' : '🔕';
+  if (_soundOn) {
+    // Initialise AudioContext on user gesture (browser autoplay policy)
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    else if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    playAlert('warn');  // confirmation beep
+  }
 }
 
 // ─── INIT ────────────────────────────────────────────────
