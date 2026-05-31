@@ -108,32 +108,53 @@ function toNSESymbol(symbol) {
 }
 
 // ── Bulk NSE allIndices cache ─────────────────────────────────────────────────
-let _allIndicesCache   = null;
-let _allIndicesAt      = 0;
-let _allIndicesFailed  = false;  // true after a timeout — retry sooner
-let _allIndicesFetch   = null;
+let _allIndicesCache        = null;
+let _allIndicesAt           = 0;
+let _allIndicesFailed       = false;  // true after a timeout — retry sooner
+let _allIndicesFetch        = null;
+let _allIndicesFailStreak   = 0;      // consecutive failure count
+const ALL_INDICES_BACKOFF_AFTER = 3;              // failures before long backoff
+const ALL_INDICES_BACKOFF_TTL   = 15 * 60 * 1000; // 15 min — stop hammering NSE when rate-limited
+const ALL_INDICES_RETRY_TTL     = 30_000;          // 30s retry after a single failure
+const ALL_INDICES_OK_TTL        = 240_000;         // 4 min cache on success
 
 async function fetchAllIndices() {
-    // On success: cache for 4 min. On failure: retry after 30s (not 4 min).
-    const ttl = _allIndicesFailed ? 30000 : 240000;
+    // After 3+ consecutive failures: back off for 15 min — Railway IP is rate-limited.
+    // Single failure: retry after 30s. Success: cache for 4 min.
+    let ttl;
+    if (_allIndicesFailStreak >= ALL_INDICES_BACKOFF_AFTER) {
+        ttl = ALL_INDICES_BACKOFF_TTL;
+    } else {
+        ttl = _allIndicesFailed ? ALL_INDICES_RETRY_TTL : ALL_INDICES_OK_TTL;
+    }
     if (Date.now() - _allIndicesAt < ttl) return _allIndicesCache || [];
     if (_allIndicesFetch) return _allIndicesFetch;
     _allIndicesFetch = (async () => {
         try {
             const data = await nseGet('/api/allIndices');
             if (data?.data) {
-                _allIndicesCache  = data.data;
-                _allIndicesAt     = Date.now();
-                _allIndicesFailed = false;
+                _allIndicesCache      = data.data;
+                _allIndicesAt         = Date.now();
+                _allIndicesFailed     = false;
+                _allIndicesFailStreak = 0;
                 console.log(`[NSE] allIndices loaded (${data.data.length} indices)`);
             } else {
-                _allIndicesAt     = Date.now();
-                _allIndicesFailed = true;
+                _allIndicesAt         = Date.now();
+                _allIndicesFailed     = true;
+                _allIndicesFailStreak++;
+                if (_allIndicesFailStreak >= ALL_INDICES_BACKOFF_AFTER) {
+                    console.warn(`[NSE] allIndices failed ${_allIndicesFailStreak}× in a row — backing off for 15 min (Railway rate-limit)`);
+                }
             }
         } catch (e) {
-            console.warn('[NSE] allIndices failed:', e.message);
-            _allIndicesAt     = Date.now();
-            _allIndicesFailed = true;
+            _allIndicesAt         = Date.now();
+            _allIndicesFailed     = true;
+            _allIndicesFailStreak++;
+            if (_allIndicesFailStreak >= ALL_INDICES_BACKOFF_AFTER) {
+                console.warn(`[NSE] allIndices failed ${_allIndicesFailStreak}× in a row — backing off for 15 min (Railway rate-limit): ${e.message}`);
+            } else {
+                console.warn('[NSE] allIndices failed:', e.message);
+            }
         } finally {
             _allIndicesFetch = null;
         }
