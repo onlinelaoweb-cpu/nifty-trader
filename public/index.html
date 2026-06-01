@@ -1443,6 +1443,13 @@ function switchTab(name,btn){
   document.getElementById('panel-'+name).classList.add('active');
   btn.classList.add('active');
   if(name==='chart'){refreshChart();}
+  if(name==='tools' && _lastState){
+    // Auto-fill live values so user doesn't have to type them
+    const niftyEl=document.getElementById('calc-nifty'); if(niftyEl && !niftyEl.value && _lastState.nifty>0) niftyEl.value=_lastState.nifty.toFixed(0);
+    const vixEl=document.getElementById('calc-vix'); if(vixEl && !vixEl.value && _lastState.vix) vixEl.value=_lastState.vix.toFixed(2);
+    const slVixEl=document.getElementById('sl-vix'); if(slVixEl && !slVixEl.value && _lastState.vix) slVixEl.value=_lastState.vix.toFixed(2);
+    autoATM();
+  }
   if(name==='journal'){loadJournal();loadEvents();}
   if(name==='breadth'||name==='global'){
     // Render immediately from cache — no loading flicker
@@ -1501,6 +1508,7 @@ let _lastState = null;
 let _pollTimer = null;
 let _soundOn = false;
 let _prevSignal = null;   // tracks last rendered signal for sound change detection
+let _prevSignalForSuggest = null; // tracks signal for auto-suggest refresh
 let _audioCtx = null;     // shared AudioContext — created lazily on first user gesture
 
 // Plays a short tone. type: "call" (ascending), "put" (descending), "warn" (flat)
@@ -1640,6 +1648,16 @@ function renderDashboard(s) {
     else                         playAlert('warn');
   }
   _prevSignal = sig;
+  // Confidence strength badge
+  const csEl = document.getElementById('conf-strength');
+  if (csEl && s.strength && sig !== 'WAIT') {
+    csEl.textContent = s.strength;
+    csEl.className = 'conf-strength ' + (sig === 'BUY CALL' ? 'bull' : 'bear');
+    csEl.style.display = 'inline-block';
+  } else if (csEl) { csEl.style.display = 'none'; }
+  // Auto-refresh AI suggestion when signal changes (new trade signal appeared)
+  if (_prevSignalForSuggest !== sig && sig !== 'WAIT') { _prevSignalForSuggest = sig; setTimeout(fetchTradeSuggestion, 500); }
+  _prevSignalForSuggest = sig;
   const tick70 = document.getElementById('conf-tick70');
   if (tick70) tick70.style.color = conf >= 70 ? 'var(--green)' : '#4a6a8a';
 
@@ -1943,7 +1961,7 @@ function renderDashboard(s) {
   // Breadth UI — always update so data is fresh when user switches to tab
   if (s.breadth) updateBreadthUI(s.breadth);
   // Global UI (if on global tab)
-  if (s.global && document.getElementById('panel-global').classList.contains('active')) {
+  if (s.global) {
     updateGlobalUI(s.global);
     updateSectorHeatmap(s.global.sectors);
   }
