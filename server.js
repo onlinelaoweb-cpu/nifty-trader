@@ -44,11 +44,12 @@ const LOT_SIZE = 65;   // Nifty 50 lot size (revised Jan 2026 by NSE: 75 → 65)
 
 // ── Market State ──────────────────────────────────────
 let marketState = {
-    nifty: 0, change: 0, changePct: 0,
+    nifty: 0, lastClose: 0, change: 0, changePct: 0, marketClosed: true,
     signal: 'WAIT', confidence: 0,
     rsi: null, ema9: null, ema21: null, vwap: null,
     pcr: null, atmPcr: null, pcrSignal: 'N/A', atmPcrSignal: 'N/A',
     pcrSource: 'manual', // 'auto' when NSE fetch succeeds
+    pcrUnavailable: false, // true when NSE has never returned option chain data
     vix: null, vixChange: null, vixSignal: 'N/A', vixNote: '', strikeRange: 'ATM ±200',
     mtf: {
         signal: 'WAIT', strength: 'WEAK', confidence: 0,
@@ -766,7 +767,7 @@ async function checkTelegramAlerts(newSignal) {
 async function updatePrice(price, change, changePct, source) {
     const indicators=processIndicators(price, marketState.global?.bankNiftyLeadSignal ?? null);
     const { signal, confidence, reasons }=combineSignals(indicators);
-    marketState.nifty=price; marketState.change=change; marketState.changePct=changePct;
+    marketState.nifty=price; marketState.lastClose=price; marketState.change=change; marketState.changePct=changePct; marketState.marketClosed=false;
     marketState.signal=signal; marketState.confidence=confidence;
     marketState.rsi=indicators.rsi; marketState.ema9=indicators.ema9;
     marketState.ema21=indicators.ema21; marketState.vwap=indicators.vwap;
@@ -787,13 +788,20 @@ async function onTick(tickData) {
 }
 
 async function refreshMarketData() {
-    // Clear stale price when market is closed so UI shows '--' not yesterday's close
-    if (!isMarketOpen() && marketState.nifty > 0) {
-        marketState.nifty     = 0;
-        marketState.change    = 0;
-        marketState.changePct = 0;
-        marketState.connected = false;
-        marketState.source    = 'none';
+    // When market is closed, preserve last known price as lastClose so the
+    // frontend can show "23,382 · CLOSED" instead of blank "--".
+    if (!isMarketOpen()) {
+        if (marketState.nifty > 0) {
+            marketState.lastClose = marketState.nifty;  // save before zeroing
+            marketState.nifty     = 0;
+            marketState.change    = 0;
+            marketState.changePct = 0;
+            marketState.connected = false;
+            marketState.source    = 'none';
+        }
+        marketState.marketClosed = true;
+    } else {
+        marketState.marketClosed = false;
     }
     const { niftyData, vixData }=await fetchMarketData();
     if (niftyData?.closes?.length>0&&!historyLoaded) { initializeHistory(niftyData.closes,niftyData.candles); historyLoaded=true; console.log(`History: ${niftyData.closes.length} candles`); }
@@ -871,7 +879,12 @@ async function refreshPCR() {
     try {
         // nseData.js scheduler fetches on its own interval — we just READ the state.
         const pcrState = getPCRState();
-        if (!pcrState || !pcrState.pcr) return;
+        if (!pcrState || !pcrState.pcr) {
+            // If NSE has never returned data, expose flag so UI can show "NSE Unavailable"
+            if (pcrState?._fallback) marketState.pcrUnavailable = true;
+            return;
+        }
+        marketState.pcrUnavailable = false;  // clear flag on success
 
         // Update PCR
         marketState.pcr        = pcrState.pcr;
