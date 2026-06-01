@@ -635,7 +635,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="conf-label" id="conf-text">CONFIDENCE: 0%</div>
         <span class="conf-strength" id="conf-strength" style="display:none"></span>
       </div>
-      <div class="conf-ticks"><span>0</span><span>25</span><span style="color:var(--amber)">50</span><span id="conf-tick70" style="color:#4a6a8a">65</span><span>100</span></div>
+      <div class="conf-ticks"><span>0</span><span>25</span><span style="color:var(--amber)">50</span><span id="conf-tick65" style="color:#4a6a8a">65</span><span>100</span></div>
       <div id="signal-streak" style="display:none;margin-top:5px;font-size:10px;font-family:'Orbitron',monospace;letter-spacing:1px;text-align:center;"></div>
     </div>
   </div>
@@ -1670,6 +1670,13 @@ function renderDashboard(s) {
   card.className = 'signal-card ' + (sig === 'BUY CALL' ? 'buy-call' : sig === 'BUY PUT' ? 'buy-put' : 'wait');
   document.getElementById('conf-bar').style.width = conf + '%';
   document.getElementById('conf-text').textContent = 'CONFIDENCE: ' + conf + '%';
+  // Conf-bar glow animation — applies when signal is strong conviction
+  const confBarEl = document.getElementById('conf-bar');
+  if (confBarEl) {
+    confBarEl.classList.remove('strong-bull', 'strong-bear');
+    if (sig === 'BUY CALL' && conf >= 75) confBarEl.classList.add('strong-bull');
+    else if (sig === 'BUY PUT' && conf >= 75) confBarEl.classList.add('strong-bear');
+  }
   // Sound alert on signal change
   if (_soundOn && _prevSignal !== null && sig !== _prevSignal) {
     if      (sig === 'BUY CALL') playAlert('call');
@@ -1679,7 +1686,7 @@ function renderDashboard(s) {
   _prevSignal = sig;
   // Confidence strength badge
   const csEl = document.getElementById('conf-strength');
-  if (csEl && s.strength && sig !== 'WAIT') {
+  if (csEl && s.strength && s.strength !== 'WEAK' && sig !== 'WAIT') {
     csEl.textContent = s.strength;
     csEl.className = 'conf-strength ' + (sig === 'BUY CALL' ? 'bull' : 'bear');
     csEl.style.display = 'inline-block';
@@ -1697,8 +1704,8 @@ function renderDashboard(s) {
   } else {
     _prevSignalForSuggest = sig;
   }
-  const tick70 = document.getElementById('conf-tick70');
-  if (tick70) tick70.style.color = conf >= 70 ? 'var(--green)' : '#4a6a8a';
+  const tick65 = document.getElementById('conf-tick65');
+  if (tick65) tick65.style.color = conf >= 65 ? 'var(--green)' : '#4a6a8a';
 
   // RSI
   if (s.rsi != null) {
@@ -1860,13 +1867,17 @@ function renderDashboard(s) {
   const ewEl = document.getElementById('entry-window-badge');
   if (ewEl && s.entryWindow) {
     const ew = s.entryWindow;
-    const ewColor = ew.status === 'trade' ? 'var(--green)' : ew.status === 'caution' ? 'var(--amber)' : 'var(--red)';
-    const ewBg    = ew.status === 'trade' ? 'rgba(0,255,136,0.08)' : ew.status === 'caution' ? 'rgba(255,187,0,0.08)' : 'rgba(255,34,68,0.08)';
-    ewEl.textContent  = ew.label;
-    ewEl.style.color  = ewColor;
-    ewEl.style.background = ewBg;
-    ewEl.style.borderColor = ewColor;
-    ewEl.style.display = 'inline-block';
+    if (ew.status === 'closed') {
+      ewEl.style.display = 'none';
+    } else {
+      const ewColor = ew.status === 'trade' ? 'var(--green)' : ew.status === 'caution' ? 'var(--amber)' : 'var(--red)';
+      const ewBg    = ew.status === 'trade' ? 'rgba(0,255,136,0.08)' : ew.status === 'caution' ? 'rgba(255,187,0,0.08)' : 'rgba(255,34,68,0.08)';
+      ewEl.textContent  = ew.label;
+      ewEl.style.color  = ewColor;
+      ewEl.style.background = ewBg;
+      ewEl.style.borderColor = ewColor;
+      ewEl.style.display = 'inline-block';
+    }
   }
 
   // Signal streak confirmation badge

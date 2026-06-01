@@ -769,6 +769,11 @@ async function updatePrice(price, change, changePct, source) {
     const { signal, confidence, reasons }=combineSignals(indicators);
     marketState.nifty=price; marketState.lastClose=price; marketState.change=change; marketState.changePct=changePct; marketState.marketClosed=false;
     marketState.signal=signal; marketState.confidence=confidence;
+    // Derive strength from confidence so the frontend badge is meaningful
+    marketState.strength = signal === 'WAIT' ? 'WEAK'
+                         : confidence >= 75   ? 'STRONG'
+                         : confidence >= 65   ? 'MODERATE'
+                         :                      'WEAK';
     marketState.rsi=indicators.rsi; marketState.ema9=indicators.ema9;
     marketState.ema21=indicators.ema21; marketState.vwap=indicators.vwap;
     marketState.reason=reasons; marketState.lastUpdated=new Date().toISOString();
