@@ -352,7 +352,7 @@ async function nseStockQuote(nseSym) {
 
 // ═════════════════════════════════════════════════════════════════════════════
 // INTRADAY CANDLES — KEY FIX
-// Tries 3 URL formats, 8s timeout each.
+// Tries 3 URL formats, 15s timeout each (Railway→NSE latency can spike).
 // On all failures: returns STALE CACHE (up to 30 min old) so RSI stays alive.
 // Previously: returned [] on failure → RSI = '--' → dashboard WAIT forever.
 // ═════════════════════════════════════════════════════════════════════════════
@@ -384,8 +384,8 @@ async function nseNiftyIntraday() {
         try {
             for (const url of INTRADAY_URLS) {
                 try {
-                    // 8 s timeout — fail fast so we don't hang the whole cycle
-                    const data = await nseGet(url, 8000);
+                    // 15 s timeout — NSE from Railway can be slow; was 8s causing timeouts
+                    const data = await nseGet(url, 15000);
                     const raw  = data?.grapthData || data?.graphData || [];
                     if (!raw.length) continue;
 
@@ -459,7 +459,7 @@ async function nseNiftyDaily(days = 10) {
             // ── Strategy 1: derive daily OHLC by grouping intraday chart data ──
             for (const url of INTRADAY_URLS) {
                 try {
-                    const data = await nseGet(url, 8000);
+                    const data = await nseGet(url, 15000);
                     const raw  = data?.grapthData || data?.graphData || [];
                     if (!raw.length) continue;
 
