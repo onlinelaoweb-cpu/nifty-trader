@@ -775,7 +775,10 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="em-card" id="em-card">
       <div class="em-title-row">
         <div class="em-title">⚡ EARLY MOMENTUM</div>
-        <div class="em-badge" id="em-badge" style="color:var(--amber);border-color:var(--amber);background:rgba(255,187,0,0.1);">— NEUTRAL</div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span id="em-fetch-count" style="font-size:9px;color:var(--dim);font-family:'Share Tech Mono',monospace;"></span>
+          <div class="em-badge" id="em-badge" style="color:var(--amber);border-color:var(--amber);background:rgba(255,187,0,0.1);">— NEUTRAL</div>
+        </div>
       </div>
       <!-- Score bar −9 to +9 with center axis -->
       <div class="em-score-wrap">
@@ -789,7 +792,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       </div>
       <!-- Signal description label -->
       <div class="em-desc" id="em-desc" style="color:#9ab8d0;">Waiting for first NSE option-chain cycle (~3 min after open)...</div>
-      <!-- 7-vote breakdown -->
+      <!-- 9-vote breakdown (votes 1-7 always possible; 8-9 conditional on OI buildup) -->
       <div class="em-votes" id="em-votes">
         <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">CHAIN OI Δ</span><span class="em-vote-reason" style="color:#4a6a8a;">Intraday CE vs PE change</span></div>
         <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">ATM CLUSTER OI</span><span class="em-vote-reason" style="color:#4a6a8a;">±100pt around ATM (5 strikes)</span></div>
@@ -797,7 +800,9 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">PE VELOCITY</span><span class="em-vote-reason" style="color:#4a6a8a;">ATM PE premium %/cycle (leads OI)</span></div>
         <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">CE BUY PRESSURE</span><span class="em-vote-reason" style="color:#4a6a8a;">Order-book buy% at ATM CE</span></div>
         <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">PE BUY PRESSURE</span><span class="em-vote-reason" style="color:#4a6a8a;">Order-book buy% at ATM PE</span></div>
-        <div class="em-vote-row" style="border-bottom:none;"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">IV SKEW</span><span class="em-vote-reason" style="color:#4a6a8a;">PE IV vs CE IV demand skew</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">IV SKEW</span><span class="em-vote-reason" style="color:#4a6a8a;">PE IV vs CE IV demand skew</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">STRIKE OI SHIFT</span><span class="em-vote-reason" style="color:#4a6a8a;">Call/put writing at single strike</span></div>
+        <div class="em-vote-row" style="border-bottom:none;"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">WALL ALIGNMENT</span><span class="em-vote-reason" style="color:#4a6a8a;">Top-3 CE vs PE buildup dominance</span></div>
       </div>
     </div>
 
@@ -1941,12 +1946,38 @@ function renderDashboard(s) {
   // Early momentum
   if (s.earlyMom) {
     const em = s.earlyMom;
+
+    // ── Card border / glow class ──────────────────────────────────────────────
+    const card = document.getElementById('em-card');
+    if (card) {
+      card.classList.remove('em-bull', 'em-bear', 'em-strong');
+      const isBull = em.signal === 'BULL' || em.signal === 'BULLISH';
+      const isBear = em.signal === 'BEAR' || em.signal === 'BEARISH';
+      if (isBull) card.classList.add('em-bull');
+      if (isBear) card.classList.add('em-bear');
+      if ((isBull || isBear) && em.strength >= 2) card.classList.add('em-strong');
+    }
+
+    // ── Badge — short signal word only (label goes to em-desc) ───────────────
     const badge = document.getElementById('em-badge');
     if (badge) {
-      badge.textContent = em.label || '— NEUTRAL';
-      badge.style.color = (em.signal === 'BULL' || em.signal === 'BULLISH') ? 'var(--green)' : (em.signal === 'BEAR' || em.signal === 'BEARISH') ? 'var(--red)' : 'var(--amber)';
-      badge.style.borderColor = (em.signal === 'BULL' || em.signal === 'BULLISH') ? 'var(--green)' : (em.signal === 'BEAR' || em.signal === 'BEARISH') ? 'var(--red)' : 'var(--amber)';
+      const sigText = em.signal === 'BULL' ? '▲ BULL' : em.signal === 'BEAR' ? '▼ BEAR' : '— NEUTRAL';
+      const sigColor = (em.signal === 'BULL' || em.signal === 'BULLISH') ? 'var(--green)'
+                     : (em.signal === 'BEAR' || em.signal === 'BEARISH') ? 'var(--red)' : 'var(--amber)';
+      badge.textContent = sigText;
+      badge.style.color = sigColor;
+      badge.style.borderColor = sigColor;
+      badge.style.background = (em.signal === 'BULL' || em.signal === 'BULLISH') ? 'rgba(0,255,136,0.08)'
+                              : (em.signal === 'BEAR' || em.signal === 'BEARISH') ? 'rgba(255,34,68,0.08)' : 'rgba(255,187,0,0.08)';
     }
+
+    // ── Fetch counter ─────────────────────────────────────────────────────────
+    const fetchCountEl = document.getElementById('em-fetch-count');
+    if (fetchCountEl && em.fetchCount > 0) {
+      fetchCountEl.textContent = '#' + em.fetchCount;
+    }
+
+    // ── Score bar (−9 to +9, centre axis) ────────────────────────────────────
     const scoreNum = document.getElementById('em-score-num');
     const scoreFill = document.getElementById('em-score-fill');
     if (scoreNum && em.score != null) {
@@ -1954,14 +1985,31 @@ function renderDashboard(s) {
       scoreNum.style.color = em.score > 0 ? 'var(--green)' : em.score < 0 ? 'var(--red)' : 'var(--amber)';
     }
     if (scoreFill && em.score != null) {
-      const pct = ((em.score + 9) / 18) * 100;
+      const pct = ((em.score + 9) / 18) * 100;  // 0–100% across track
       const half = 50;
-      if (em.score >= 0) { scoreFill.style.left = half + '%'; scoreFill.style.width = (pct - half) + '%'; scoreFill.style.background = 'var(--green)'; }
-      else { scoreFill.style.left = pct + '%'; scoreFill.style.width = (half - pct) + '%'; scoreFill.style.background = 'var(--red)'; }
+      if (em.score > 0) {
+        // Bull: fill rightward from centre
+        scoreFill.style.left = half + '%';
+        scoreFill.style.width = (pct - half) + '%';
+        scoreFill.style.background = 'var(--green)';
+      } else if (em.score < 0) {
+        // Bear: fill leftward from centre
+        scoreFill.style.left = pct + '%';
+        scoreFill.style.width = (half - pct) + '%';
+        scoreFill.style.background = 'var(--red)';
+      } else {
+        // Exactly zero: no fill, just the centre marker
+        scoreFill.style.left = half + '%';
+        scoreFill.style.width = '0%';
+        scoreFill.style.background = 'var(--amber)';
+      }
     }
+
+    // ── Description label ─────────────────────────────────────────────────────
     const descEl = document.getElementById('em-desc');
     if (descEl) descEl.textContent = em.label || '--';
-    // Votes — use structured vote objects {name, vote, reason}
+
+    // ── Vote breakdown ────────────────────────────────────────────────────────
     const votesEl = document.getElementById('em-votes');
     if (votesEl && em.votes && em.votes.length) {
       votesEl.innerHTML = em.votes.map((v, i) => {
