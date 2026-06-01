@@ -841,6 +841,7 @@ async function refreshMTF() {
             aligned       : preMarket ? false      : d.aligned,
             bullCount     : preMarket ? 0          : d.bullCount,
             bearCount     : preMarket ? 0          : d.bearCount,
+            validTFs      : preMarket ? 0          : d.validTFCount ?? 0, // ← fix: was missing, frontend checklist always showed 0/3
             tf5m          : d.tf5m,
             tf15m         : d.tf15m,
             tf1h          : d.tf1h,
@@ -1788,4 +1789,16 @@ server.listen(PORT, () => {
     server.headersTimeout   = 125000;
     // Start init AFTER server is already accepting connections
     initializeLiveData().catch(e => console.error('Init error:', e.message));
+});
+// ── Process-level error guards ────────────────────────────────────────────────
+// Without these, async errors that escape all try/catch blocks silently kill
+// the Node process on Railway, producing an unexplained container restart.
+// These handlers log the full stack so the cause is visible in Railway logs.
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('⚠️ Unhandled Rejection at:', promise, '— reason:', reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('💥 Uncaught Exception:', err.message, err.stack);
+    // Do NOT call process.exit() — Railway restarts anyway, and exiting here
+    // drops all in-flight requests. Let Node keep running unless it's truly fatal.
 });
