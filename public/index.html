@@ -336,7 +336,6 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .flow-input::placeholder{color:#4a6a8a;}.flow-input:focus{border-color:var(--blue);}
 .flow-result{background:var(--bg3);border-radius:8px;padding:7px;text-align:center;margin-top:5px;}
 .flow-dom{font-family:'Orbitron',monospace;font-size:13px;font-weight:700;letter-spacing:2px;}
-.flow-submit{width:100%;padding:6px;background:rgba(0,170,255,0.1);border:1px solid var(--blue);color:var(--blue);border-radius:6px;font-family:'Orbitron',monospace;font-size:10px;font-weight:700;letter-spacing:1px;cursor:pointer;margin-top:5px;}
 #flow-details{font-size:10px;color:#9ab8d0;margin-top:3px;}
 .pcr-trend-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;}
 .trend-title{font-family:'Orbitron',monospace;font-size:10px;color:var(--amber);letter-spacing:2px;margin-bottom:7px;}
@@ -2449,18 +2448,6 @@ function updateFlowHistory(history) {
 
 // ─── PCR SUBMIT ──────────────────────────────────────────
 // PCR is now fully auto-fetched from NSE option chain — no manual entry needed
-
-// ─── OPTION FLOW ─────────────────────────────────────────
-function submitOptionFlow() {
-  const ce = parseFloat(document.getElementById('flow-ce').value);
-  const pe = parseFloat(document.getElementById('flow-pe').value);
-  if (isNaN(ce) || isNaN(pe)) return;
-  const dom = ce > pe ? 'CALL DOMINANT' : pe > ce ? 'PUT DOMINANT' : 'NEUTRAL';
-  const ratio = ce > 0 ? (pe / ce).toFixed(2) : '--';
-  const c = dom.includes('CALL') ? 'var(--blue)' : dom.includes('PUT') ? 'var(--red)' : 'var(--amber)';
-  const domEl = document.getElementById('flow-dominance'); if (domEl) { domEl.textContent = dom; domEl.style.color = c; }
-  const detEl = document.getElementById('flow-details'); if (detEl) detEl.textContent = `CE/PE Ratio: ${ratio} | CE ₹${ce} | PE ₹${pe}`;
-}
 
 // ─── FII/DII auto display ────────────────────────────────
 function updateFIIDIIDisplay(fii, dii) {
