@@ -335,7 +335,7 @@ function buildResult(advances, declines, unchanged, bullWeight, bearWeight, stoc
         adRatio, breadthPct, weightedBull, breadthSignal,
         bullWeight: parseFloat(bullWeight.toFixed(1)),
         bearWeight: parseFloat(bearWeight.toFixed(1)),
-        stocks, updatedAt: new Date().toISOString()
+        stocks, source, updatedAt: new Date().toISOString()
     };
 }
 

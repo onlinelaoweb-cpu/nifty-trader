@@ -1967,17 +1967,26 @@ function updateBreadthUI(b) {
   const up = b.advances || 0, dn = b.declines || 0, unch = b.unchanged || 0;
   const total = up + dn + unch || 1;
   const bullPct = Math.round((up / total) * 100);
+  // FIX: use server-computed weightedBull (weighted by index weight), not raw advance count %
+  const wBull = b.weightedBull != null ? b.weightedBull : bullPct;
 
   const upEl = document.getElementById('ad-up'); if (upEl) upEl.textContent = up;
   const dnEl = document.getElementById('ad-dn'); if (dnEl) dnEl.textContent = dn;
   const unchEl = document.getElementById('ad-unch'); if (unchEl) unchEl.textContent = unch;
 
-  // Source badge
+  // FIX: b.source is top-level — was wrongly looking at b.stocks[0].source (doesn't exist)
+  // FIX: srcLabel was computed but then DISCARDED — srcBadge was always set to just the time
   const srcBadge = document.getElementById('breadth-source-badge');
-  if (srcBadge && b.updatedAt) {
-    const srcLabel = { 'angel-nifty50': '✅ LIVE · ANGEL ONE (50 stocks)', 'stocks': '✅ LIVE · NSE stocks', 'sectors': '⚡ LIVE · Sector indices' }[b.stocks?.[0]?.source] || (b.updatedAt ? '🔄 ' + new Date(b.updatedAt).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'}) : '');
+  if (srcBadge) {
+    const srcLabel = {
+      'angel-nifty50' : '✅ Angel One · 50 stocks',
+      'yahoo-stocks'  : '⚡ Yahoo · 20 stocks',
+      'stocks'        : '✅ NSE stocks',
+      'sectors'       : '🔄 Sector indices (fallback)',
+    }[b.source] || '🔄 Live';
     const time = b.updatedAt ? new Date(b.updatedAt).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'}) : '';
-    srcBadge.textContent = time ? `Updated ${time}` : '';
+    srcBadge.textContent = srcLabel + (time ? ' · ' + time : '');
+    srcBadge.style.color = b.source === 'sectors' ? 'var(--amber)' : 'var(--green)';
   }
 
   // Dial needle
@@ -1988,9 +1997,20 @@ function updateBreadthUI(b) {
   }
   const bullPctEl = document.getElementById('ad-bull-pct'); if (bullPctEl) bullPctEl.textContent = bullPct + '%';
   const bearPctEl = document.getElementById('ad-bear-pct'); if (bearPctEl) bearPctEl.textContent = (100 - bullPct) + '%';
-  const ratioEl = document.getElementById('ad-ratio'); if (ratioEl) ratioEl.textContent = 'A/D: ' + (dn > 0 ? (up / dn).toFixed(1) : '∞');
-  const ratioBig = document.getElementById('ad-ratio-big'); if (ratioBig) ratioBig.textContent = (dn > 0 ? (up / dn).toFixed(1) : '∞');
-  const bullWeight = document.getElementById('bull-weight'); if (bullWeight) bullWeight.textContent = bullPct + '%';
+
+  // FIX: A/D ratio was always amber — add dynamic green/red color
+  const adRatioVal = dn > 0 ? (up / dn).toFixed(1) : '\u221e';
+  const adColor = up > dn ? 'var(--green)' : up < dn ? 'var(--red)' : 'var(--amber)';
+  const ratioEl = document.getElementById('ad-ratio'); if (ratioEl) ratioEl.textContent = 'A/D: ' + adRatioVal;
+  const ratioBig = document.getElementById('ad-ratio-big');
+  if (ratioBig) { ratioBig.textContent = adRatioVal; ratioBig.style.color = adColor; }
+
+  // FIX: show weightedBull (not simple bullPct), dynamic color
+  const bullWeightEl = document.getElementById('bull-weight');
+  if (bullWeightEl) {
+    bullWeightEl.textContent = wBull + '%';
+    bullWeightEl.style.color = wBull >= 60 ? 'var(--green)' : wBull <= 40 ? 'var(--red)' : 'var(--amber)';
+  }
 
   const sig = b.breadthSignal || 'NEUTRAL';
   const sigEl = document.getElementById('ad-signal');
@@ -2001,15 +2021,16 @@ function updateBreadthUI(b) {
     sigEl.style.borderColor = sig === 'BULLISH' ? 'var(--green)' : sig === 'BEARISH' ? 'var(--red)' : 'var(--amber)';
   }
 
-  // Stock list — use changePct (% move) not change (absolute ₹ diff)
+  // Stock list — FIX: WT% column was showing arrow (▲/▼) not the actual weight value
   if (b.stocks && b.stocks.length) {
     const tbody = document.getElementById('stock-list-body');
     if (tbody) tbody.innerHTML = b.stocks.slice(0,20).map(s => {
       const chg = s.changePct != null ? s.changePct : (s.change || 0);
       const color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : '#9ab8d0';
       const label = s.name || s.symbol || '--';
-      const arrow = s.status === 'up' ? '▲' : s.status === 'down' ? '▼' : '→';
-      return `<div class="stock-row"><span style="color:${color};">${arrow}</span><span>${label}</span><span style="color:${color};text-align:right;">${chg >= 0 ? '+' : ''}${parseFloat(chg).toFixed(2)}%</span></div>`;
+      // FIX: show actual weight (e.g. "9.2") not a direction arrow
+      const wt = s.weight != null ? s.weight.toFixed(1) : '--';
+      return `<div class="stock-row"><span style="color:#9ab8d0;font-size:9px;">${wt}</span><span>${label}</span><span style="color:${color};text-align:right;">${chg >= 0 ? '+' : ''}${parseFloat(chg).toFixed(2)}%</span></div>`;
     }).join('');
   }
 }
@@ -2306,8 +2327,10 @@ function updatePCRTrend(history) {
     }
     // else plain "HH:MM" — use as-is
     const trend = h.pcr > 1.2 ? '🟢' : h.pcr < 0.8 ? '🔴' : '🟡';
+    // FIX: PCR value color was always amber — should be green/red/amber
+    const pcrColor = h.pcr > 1.2 ? 'var(--green)' : h.pcr < 0.8 ? 'var(--red)' : 'var(--amber)';
     const sig = h.signal || (h.pcr > 1.2 ? 'BULLISH' : h.pcr < 0.8 ? 'BEARISH' : 'NEUTRAL');
-    return `<div class="trend-row">${trend} <span style="color:#9ab8d0;">${timeStr}</span> <span style="color:var(--amber);">PCR: ${parseFloat(h.pcr).toFixed(2)}</span> <span style="color:var(--dim);font-size:9px;">${sig}</span></div>`;
+    return `<div class="trend-row">${trend} <span style="color:#9ab8d0;">${timeStr}</span> <span style="color:${pcrColor};">PCR: ${parseFloat(h.pcr).toFixed(2)}</span> <span style="color:var(--dim);font-size:9px;">${sig}</span></div>`;
   }).join('');
 }
 
@@ -2338,7 +2361,8 @@ function submitOptionFlow() {
 
 // ─── FII/DII auto display ────────────────────────────────
 function updateFIIDIIDisplay(fii, dii) {
-  const fmt = (v, pos) => v == null ? '--' : (pos ? '+' : '') + Math.abs(v).toFixed(0) + 'Cr';
+  // FIX: add thousand separators for large Cr values (was showing 12345Cr not 12,345Cr)
+  const fmtCr = v => v == null ? '--' : Math.abs(v).toLocaleString('en-IN', {maximumFractionDigits:0}) + 'Cr';
   const col = v => v == null ? '#9ab8d0' : v >= 0 ? 'var(--green)' : 'var(--red)';
 
   // FII buy/sell/net
@@ -2346,9 +2370,9 @@ function updateFIIDIIDisplay(fii, dii) {
   const fsv = document.getElementById('fii-sell-val');
   const fe  = document.getElementById('fii-net');
   if (fii) {
-    if (fbv) fbv.textContent = fii.buy  != null ? fii.buy.toFixed(0)  + 'Cr' : '--';
-    if (fsv) fsv.textContent = fii.sell != null ? fii.sell.toFixed(0) + 'Cr' : '--';
-    if (fe)  { fe.textContent = (fii.net >= 0 ? '▲ +' : '▼ ') + Math.abs(fii.net).toFixed(0) + 'Cr'; fe.style.color = col(fii.net); }
+    if (fbv) fbv.textContent = fmtCr(fii.buy);
+    if (fsv) fsv.textContent = fmtCr(fii.sell);
+    if (fe)  { fe.textContent = (fii.net >= 0 ? '\u25b2 +' : '\u25bc ') + fmtCr(fii.net); fe.style.color = col(fii.net); }
   }
 
   // DII buy/sell/net
@@ -2356,9 +2380,9 @@ function updateFIIDIIDisplay(fii, dii) {
   const dsv = document.getElementById('dii-sell-val');
   const de  = document.getElementById('dii-net');
   if (dii) {
-    if (dbv) dbv.textContent = dii.buy  != null ? dii.buy.toFixed(0)  + 'Cr' : '--';
-    if (dsv) dsv.textContent = dii.sell != null ? dii.sell.toFixed(0) + 'Cr' : '--';
-    if (de)  { de.textContent = (dii.net >= 0 ? '▲ +' : '▼ ') + Math.abs(dii.net).toFixed(0) + 'Cr'; de.style.color = col(dii.net); }
+    if (dbv) dbv.textContent = fmtCr(dii.buy);
+    if (dsv) dsv.textContent = fmtCr(dii.sell);
+    if (de)  { de.textContent = (dii.net >= 0 ? '\u25b2 +' : '\u25bc ') + fmtCr(dii.net); de.style.color = col(dii.net); }
   }
 
   // Combined institutional
@@ -2368,7 +2392,7 @@ function updateFIIDIIDisplay(fii, dii) {
     const combEl   = document.getElementById('fii-combined');
     const biasTag  = document.getElementById('fii-bias-tag');
     const combRow  = document.getElementById('fii-combined-row');
-    if (combEl)  { combEl.textContent = (combined >= 0 ? '+' : '') + combined.toFixed(0) + 'Cr'; combEl.style.color = col(combined); }
+    if (combEl)  { combEl.textContent = (combined >= 0 ? '+' : '-') + fmtCr(combined); combEl.style.color = col(combined); }
     if (biasTag) {
       const bias = combined > 500 ? 'BULLISH' : combined < -500 ? 'BEARISH' : 'NEUTRAL';
       const bc   = combined > 500 ? 'var(--green)' : combined < -500 ? 'var(--red)' : 'var(--amber)';
@@ -2376,6 +2400,13 @@ function updateFIIDIIDisplay(fii, dii) {
       biasTag.style.background = combined > 500 ? 'rgba(0,255,136,0.1)' : combined < -500 ? 'rgba(255,34,68,0.1)' : 'rgba(255,187,0,0.1)';
     }
     if (combRow) combRow.style.display = 'flex';
+  }
+
+  // FIX: update timestamp (was permanently stuck on "Auto-fetched from NSE")
+  const updEl = document.getElementById('fii-updated-at');
+  const updatedAt = fii?.updatedAt || dii?.updatedAt;
+  if (updEl && updatedAt) {
+    updEl.textContent = 'NSE \u00b7 ' + new Date(updatedAt).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'});
   }
 }
 
