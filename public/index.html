@@ -706,7 +706,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="checklist-header" onclick="toggleChecklist()">
       <div class="checklist-title">📋 PRE-MARKET CHECKLIST</div>
       <div style="display:flex;align-items:center;gap:8px;">
-        <div class="checklist-progress" id="cl-progress">0/10</div>
+        <div class="checklist-progress" id="cl-progress">0/12</div>
         <span id="cl-arrow" style="color:var(--amber);font-size:12px;transition:transform 0.3s;transform:rotate(0deg);">▼</span>
         <button class="cl-reset" onclick="event.stopPropagation();resetChecklist()">↺</button>
       </div>
@@ -723,6 +723,8 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div class="cl-item auto-wait" id="cl-em" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">⚡ Early Momentum Score <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-em-val" style="color:var(--dim);">Waiting for first cycle…</div></div></div>
       <div class="cl-item auto-wait" id="cl-events" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📅 High-Impact Events Today <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-events-val" style="color:var(--dim);">Checking calendar…</div></div></div>
       <!-- MANUAL items -->
+      <div class="cl-item auto-wait" id="cl-adx" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📈 ADX Trend Strength <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-adx-val" style="color:var(--dim);">Waiting for session candles…</div></div></div>
+      <div class="cl-item auto-wait" id="cl-mtf" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">⚡ MTF Alignment <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-mtf-val" style="color:var(--dim);">Waiting for MTF data…</div></div></div>
       <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🛡️ Max loss limit set for today <span class="cl-auto-tag manual">MANUAL</span></div><div class="cl-auto-val" style="color:var(--dim);">Tap to confirm ₹ limit decided</div></div></div>
       <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🎯 ATM strike confirmed <span class="cl-auto-tag manual">MANUAL</span></div><div class="cl-auto-val" style="color:var(--dim);">Tap to confirm strike selected</div></div></div>
       <!-- VERDICT -->
@@ -1717,20 +1719,28 @@ function renderDashboard(s) {
   }
 
   // ADX
-  if (s.adx) {
+  if (s.adx && s.adx.adx != null) {
     const adx = s.adx.adx; const dip = s.adx.diPlus; const dim = s.adx.diMinus;
-    if (adx != null) {
-      document.getElementById('adx-val').textContent = adx.toFixed(1);
-      document.getElementById('adx-dip').textContent = dip != null ? dip.toFixed(1) : '--';
-      document.getElementById('adx-dim').textContent = dim != null ? dim.toFixed(1) : '--';
-      const bar = document.getElementById('adx-bar');
-      const pct = Math.min((adx / 40) * 100, 100);  // scale to 40 (EXPLOSIVE threshold) so ADX 25 shows at ~62% not ~41%
-      bar.style.width = pct + '%';
-      bar.style.background = adx < 20 ? 'var(--red)' : adx < 25 ? 'var(--amber)' : adx < 40 ? 'var(--green)' : 'var(--blue)';
-      const label = adx < 20 ? 'CHOPPY' : adx < 25 ? 'WEAK TREND' : adx < 40 ? 'TRENDING' : 'EXPLOSIVE';
-      document.getElementById('adx-zone').textContent = label;
-      document.getElementById('adx-trend-label').textContent = adx >= 20 ? 'ADX GATE OPEN ✅' : 'ADX GATE CLOSED ⛔';
-    }
+    document.getElementById('adx-val').textContent = adx.toFixed(1);
+    document.getElementById('adx-dip').textContent = dip != null ? dip.toFixed(1) : '--';
+    document.getElementById('adx-dim').textContent = dim != null ? dim.toFixed(1) : '--';
+    const bar = document.getElementById('adx-bar');
+    const pct = Math.min((adx / 40) * 100, 100);
+    bar.style.width = pct + '%';
+    bar.style.background = adx < 20 ? 'var(--red)' : adx < 25 ? 'var(--amber)' : adx < 40 ? 'var(--green)' : 'var(--blue)';
+    const label = adx < 20 ? 'CHOPPY' : adx < 25 ? 'WEAK TREND' : adx < 40 ? 'TRENDING' : 'EXPLOSIVE';
+    document.getElementById('adx-zone').textContent = label;
+    document.getElementById('adx-trend-label').textContent = adx >= 20 ? 'ADX GATE OPEN ✅' : 'ADX GATE CLOSED ⛔';
+    document.getElementById('adx-card').style.borderLeft = adx >= 20 ? '2px solid var(--green)' : '2px solid var(--red)';
+  } else {
+    // Pre-market / closed — reset to waiting state
+    document.getElementById('adx-val').textContent = '--';
+    document.getElementById('adx-dip').textContent = '--';
+    document.getElementById('adx-dim').textContent = '--';
+    document.getElementById('adx-bar').style.width = '0%';
+    document.getElementById('adx-zone').textContent = '--';
+    document.getElementById('adx-trend-label').textContent = s.adx === null ? '⏳ Needs 60 session candles' : 'LOADING';
+    document.getElementById('adx-card').style.borderLeft = '2px solid var(--amber)';
   }
 
   // MTF
@@ -2325,7 +2335,7 @@ function renderMomentum(mom) {
       const voPct = mom.volumeRatio > 0 ? Math.min(mom.volumeRatio / 3 * 100, 100) : 0;
       volBar.style.width  = voPct + '%';
       volBar.style.background = 'var(--amber)';
-      volVal.textContent  = mom.volumeRatio > 0 ? mom.volumeRatio + 'x' : 'N/A';
+      volVal.textContent  = mom.volumeRatio > 0 ? mom.volumeRatio + 'x' : 'N/A·Yahoo';
     }
     dots.forEach(d => { if(d) d.className = 'mom-dot inactive'; });
     if (strengthLabel) strengthLabel.textContent = `Strength: ${mom?.strength || 0}/4`;
@@ -2357,7 +2367,7 @@ function renderMomentum(mom) {
   if (volBar) {
     const voPct = mom.volumeRatio > 0 ? Math.min(mom.volumeRatio / 3 * 100, 100) : 0;
     volBar.style.width = voPct + '%'; volBar.style.background = barCol;
-    volVal.textContent = mom.volumeRatio > 0 ? mom.volumeRatio + 'x' : 'N/A';
+    volVal.textContent = mom.volumeRatio > 0 ? mom.volumeRatio + 'x' : 'N/A·Yahoo';
   }
 
   // Strength dots
@@ -2854,13 +2864,46 @@ function updateChecklistAuto(s) {
     setItem('cl-events', 'wait', 'Checking economic calendar…', 'var(--dim)');
   }
 
+  // 9. ADX Trend Strength
+  if (s.adx && s.adx.adx != null) {
+    const adxVal = s.adx.adx;
+    const ok = adxVal >= 20;
+    const strong = adxVal >= 25;
+    const label = adxVal >= 40 ? 'EXPLOSIVE' : adxVal >= 25 ? 'TRENDING' : adxVal >= 20 ? 'WEAK TREND' : 'CHOPPY';
+    const diDir = s.adx.diPlus > s.adx.diMinus ? '▲ DI+ dominant' : '▼ DI- dominant';
+    setItem('cl-adx', strong ? 'pass' : ok ? 'wait' : 'fail',
+      `ADX ${adxVal.toFixed(1)} · ${label} · ${diDir}`,
+      strong ? 'var(--green)' : ok ? 'var(--amber)' : 'var(--red)');
+    bulletScore.push(strong ? 1 : adxVal < 20 ? -1 : 0);
+  } else {
+    setItem('cl-adx', 'wait',
+      s.adx === null ? '⏳ Active after 10:15 AM (60 session candles needed)' : 'Waiting for session data…',
+      'var(--dim)');
+  }
+
+  // 10. MTF Alignment
+  if (s.mtf && s.mtf.signal) {
+    const mtfSig = s.mtf.signal;
+    const aligned = s.mtf.aligned;
+    const validTFs = s.mtf.validTFs || 0;
+    const isBull = mtfSig === 'BUY CALL';
+    const isBear = mtfSig === 'BUY PUT';
+    const tfText = validTFs > 0 ? ` (${validTFs}/3 TFs)` : '';
+    setItem('cl-mtf', (isBull || isBear) ? (aligned ? 'pass' : 'wait') : 'wait',
+      mtfSig + tfText + (aligned ? ' — ALIGNED ✅' : ' — partial'),
+      isBull ? 'var(--green)' : isBear ? 'var(--red)' : 'var(--amber)');
+    bulletScore.push(isBull && aligned ? 1 : isBear && aligned ? -1 : 0);
+  } else {
+    setItem('cl-mtf', 'wait', 'Waiting for MTF data…', 'var(--dim)');
+  }
+
   // ── VERDICT ──────────────────────────────────────────
   const scored = bulletScore.filter(v => v !== undefined);
-  if (scored.length >= 4) {
+  if (scored.length >= 5) {  // need at least 5 of 10 scored to give verdict
     const bullVotes = scored.filter(v => v > 0).length;
     const bearVotes = scored.filter(v => v < 0).length;
     const total = scored.length;
-    const netScore = bullVotes - bearVotes; // range: -8 to +8
+    const netScore = bullVotes - bearVotes; // range: -10 to +10 now
     const pct = Math.round(((netScore + total) / (2 * total)) * 100);
 
     const verdEl = document.getElementById('cl-verdict');
@@ -2868,10 +2911,10 @@ function updateChecklistAuto(s) {
     const scoreEl = document.getElementById('cl-verd-score');
 
     let verdict, cls, color;
-    if (netScore >= 3) { verdict = '🟢 READY TO TRADE BULL'; cls = 'bull'; color = 'var(--green)'; }
-    else if (netScore <= -3) { verdict = '🔴 READY TO TRADE BEAR'; cls = 'bear'; color = 'var(--red)'; }
-    else if (netScore >= 1) { verdict = '🟡 CAUTIOUS BULL'; cls = 'bull'; color = 'var(--green)'; }
-    else if (netScore <= -1) { verdict = '🟡 CAUTIOUS BEAR'; cls = 'bear'; color = 'var(--red)'; }
+    if (netScore >= 4) { verdict = '🟢 READY TO TRADE BULL'; cls = 'bull'; color = 'var(--green)'; }
+    else if (netScore <= -4) { verdict = '🔴 READY TO TRADE BEAR'; cls = 'bear'; color = 'var(--red)'; }
+    else if (netScore >= 2) { verdict = '🟡 CAUTIOUS BULL'; cls = 'bull'; color = 'var(--green)'; }
+    else if (netScore <= -2) { verdict = '🟡 CAUTIOUS BEAR'; cls = 'bear'; color = 'var(--red)'; }
     else { verdict = '⚪ SIDEWAYS / WAIT'; cls = 'side'; color = 'var(--amber)'; }
 
     if (verdEl) { verdEl.className = 'cl-verdict ' + cls; }
