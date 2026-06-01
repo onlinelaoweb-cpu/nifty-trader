@@ -54,6 +54,9 @@ const PCR_INTERVAL_MS    =  3 * 60 * 1000;   // re-fetch PCR every 3 min
 const FIIDII_INTERVAL_MS = 15 * 60 * 1000;   // re-fetch FII/DII every 15 min
 const COOKIE_TTL_MS      = 15 * 60 * 1000;   // proactive cookie re-warm
 
+// FII/DII uses a longer timeout because Railway→NSE latency spikes more on this endpoint
+const FIIDII_TIMEOUT_MS  = 20_000;   // 20s dedicated timeout for FII/DII
+
 // NSE will 403 any request that doesn't look like a real browser.
 // Chrome 125+ UA + sec-fetch headers are required since late 2025 anti-scraping update.
 const HEADERS = {
@@ -1040,15 +1043,35 @@ function parseFIIDII(data) {
 
 async function _fetchFIIDII() {
     // FII/DII data is end-of-day — NSE only updates it after 18:00 IST.
-    // Outside 8:00–22:00 window skip to avoid pointless Railway CPU burn.
+    // Widen to 6:00–22:00 window (was 8:00–22:00) so pre-market boot gets yesterday's data.
     const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const istMin = ist.getHours() * 60 + ist.getMinutes();
-    if (istMin < 480 || istMin > 1320) {   // outside 8:00–22:00
+    if (istMin < 360 || istMin > 1320) {   // outside 6:00–22:00
         console.log('[FII/DII] Outside fetch window — skipping');
         return;
     }
     try {
-        const res = await nseGetWithRetry(FIIDII_URL);
+        // Use dedicated longer timeout for FII/DII
+        const cookie = await getCookie();
+        let res = await axios.get(FIIDII_URL, {
+            headers        : { ...HEADERS, Cookie: cookie },
+            timeout        : FIIDII_TIMEOUT_MS,
+            validateStatus : () => true,
+        });
+
+        // Retry once on 401/403 or timeout-style empty response
+        if (res.status === 401 || res.status === 403 || res.status >= 500) {
+            console.warn(`[FII/DII] Status ${res.status} — re-authenticating and retrying...`);
+            _cookie = null;
+            await refreshCookie();
+            const cookie2 = await getCookie();
+            res = await axios.get(FIIDII_URL, {
+                headers        : { ...HEADERS, Cookie: cookie2 },
+                timeout        : FIIDII_TIMEOUT_MS,
+                validateStatus : () => true,
+            });
+        }
+
         if (res.status !== 200) {
             _fii.lastError = `HTTP ${res.status}`;
             console.warn(`[FII] Unexpected status ${res.status}`);

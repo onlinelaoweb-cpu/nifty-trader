@@ -1437,21 +1437,29 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
 
 
 app.get('/api/trade-suggestion', async (req, res) => {
-    // This route NEVER triggers an AI call directly.
-    // AI is called only when a fresh signal fires in checkTelegramAlerts().
-    // Here we just return the latest cached data instantly — no API cost.
+    // Returns cached AI suggestion instantly. If gate just passed and no cached suggestion
+    // exists yet (e.g. fresh page load, server restart), triggers AI call inline ONCE.
     try {
         const pcrState   = getPCRState();
         const strikeData = marketState.qualityGate.passed && marketState.signal !== 'WAIT'
             ? pickStrikeAndPremium(marketState.signal, marketState.nifty, marketState.vix, pcrState)
             : null;
         const winRate = strikeData ? await getWinRateFromHistory(strikeData.type) : null;
+
+        // If gate is passed but no AI suggestion cached yet, trigger one now
+        let suggestion = lastAISuggestion;
+        if (!suggestion && marketState.qualityGate.passed && marketState.signal !== 'WAIT' && strikeData) {
+            try {
+                suggestion = await getAITradeSuggestion(marketState, strikeData, winRate);
+            } catch(e) { console.warn('Inline AI trigger:', e.message); }
+        }
+
         res.json({
             qualityGatePassed : marketState.qualityGate.passed,
             signal            : marketState.signal,
             confidence        : marketState.confidence,
             strikeData        : strikeData,
-            aiSuggestion      : lastAISuggestion,   // cached — only refreshes on new signal
+            aiSuggestion      : suggestion,
             winRate           : winRate,
             entryWindow       : marketState.entryWindow,
             nifty             : marketState.nifty

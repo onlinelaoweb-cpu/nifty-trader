@@ -1511,6 +1511,9 @@ let _pollTimer = null;
 let _soundOn = false;
 let _prevSignal = null;   // tracks last rendered signal for sound change detection
 let _prevSignalForSuggest = null; // tracks signal for auto-suggest refresh
+let _lastKnownNifty = 0;   // persists last live price across market-closed cycles
+let _lastKnownChange = 0;
+let _lastKnownChangePct = 0;
 let _audioCtx = null;     // shared AudioContext — created lazily on first user gesture
 
 // Plays a short tone. type: "call" (ascending), "put" (descending), "warn" (flat)
@@ -1623,11 +1626,21 @@ startPolling();
 function renderDashboard(s) {
   // Price
   if (s.nifty > 0) {
+    _lastKnownNifty = s.nifty;
+    _lastKnownChange = s.change;
+    _lastKnownChangePct = s.changePct;
     document.getElementById('price').textContent = s.nifty.toFixed(2);
     const chg = s.change, pct = s.changePct;
     const chgEl = document.getElementById('change');
     chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '  (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)';
     chgEl.className = 'price-change ' + (chg > 0 ? 'up' : chg < 0 ? 'down' : 'flat');
+  } else if (_lastKnownNifty > 0) {
+    // Market closed — show last known price with "CLOSED" tag so user knows it's stale
+    document.getElementById('price').textContent = _lastKnownNifty.toFixed(2);
+    const chgEl = document.getElementById('change');
+    const chg = _lastKnownChange || 0, pct = _lastKnownChangePct || 0;
+    chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '  (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)  · CLOSED';
+    chgEl.className = 'price-change flat';
   } else {
     document.getElementById('price').textContent = '--';
     document.getElementById('change').textContent = 'Market Closed';
@@ -1864,9 +1877,9 @@ function renderDashboard(s) {
 
   // SR Levels
   if (s.srLevels) {
-    const res = s.srLevels.nearestResistance;
-    const sup = s.srLevels.nearestSupport;
-    const cur = s.nifty;
+    const res = s.srLevels.nearRes;
+    const sup = s.srLevels.nearSup;
+    const cur = s.nifty > 0 ? s.nifty : _lastKnownNifty;  // use last known price when market closed
     if (res) {
       document.getElementById('near-res').textContent = res.price;
       document.getElementById('near-res-dist').textContent = cur > 0 ? Math.abs(cur - res.price).toFixed(0) + ' points away' : '-- points away';
@@ -1906,8 +1919,8 @@ function renderDashboard(s) {
     const badge = document.getElementById('em-badge');
     if (badge) {
       badge.textContent = em.label || '— NEUTRAL';
-      badge.style.color = em.signal === 'BULLISH' ? 'var(--green)' : em.signal === 'BEARISH' ? 'var(--red)' : 'var(--amber)';
-      badge.style.borderColor = em.signal === 'BULLISH' ? 'var(--green)' : em.signal === 'BEARISH' ? 'var(--red)' : 'var(--amber)';
+      badge.style.color = (em.signal === 'BULL' || em.signal === 'BULLISH') ? 'var(--green)' : (em.signal === 'BEAR' || em.signal === 'BEARISH') ? 'var(--red)' : 'var(--amber)';
+      badge.style.borderColor = (em.signal === 'BULL' || em.signal === 'BULLISH') ? 'var(--green)' : (em.signal === 'BEAR' || em.signal === 'BEARISH') ? 'var(--red)' : 'var(--amber)';
     }
     const scoreNum = document.getElementById('em-score-num');
     const scoreFill = document.getElementById('em-score-fill');
@@ -1951,8 +1964,8 @@ function renderDashboard(s) {
     const peDelta = document.getElementById('oi-pe-delta');
     if (callWall) callWall.textContent = oi.maxCEoiStrike || '--';
     if (putWall) putWall.textContent = oi.maxPEoiStrike || '--';
-    if (ceDelta && oi.totalCEoiChange != null) ceDelta.textContent = 'CE OI Δ ' + (oi.totalCEoiChange > 0 ? '+' : '') + oi.totalCEoiChange.toFixed(0);
-    if (peDelta && oi.totalPEoiChange != null) peDelta.textContent = 'PE OI Δ ' + (oi.totalPEoiChange > 0 ? '+' : '') + oi.totalPEoiChange.toFixed(0);
+    if (ceDelta && oi.totalCEoiChange != null) ceDelta.textContent = 'CE OI Δ ' + (oi.totalCEoiChange > 0 ? '+' : '') + Math.round(oi.totalCEoiChange);
+    if (peDelta && oi.totalPEoiChange != null) peDelta.textContent = 'PE OI Δ ' + (oi.totalPEoiChange > 0 ? '+' : '') + Math.round(oi.totalPEoiChange);
   }
 
   // Header P&L from trades
@@ -2848,7 +2861,14 @@ function updateChecklistAuto(s) {
   // 8. High-Impact Events (server initialises calendarEvents:[] so wait if empty + early poll)
   if (Array.isArray(s.calendarEvents) && (s.calendarEvents.length > 0 || _clCalendarReady)) {
     _clCalendarReady = true;
-    const highImpact = s.calendarEvents.filter(e => (e.impact||'').toLowerCase() === 'high');
+    // Only check TODAY's events — future events should not block trading
+    const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const todayStr = nowIST.getFullYear() + '-' +
+      String(nowIST.getMonth() + 1).padStart(2, '0') + '-' +
+      String(nowIST.getDate()).padStart(2, '0');
+    const highImpact = s.calendarEvents.filter(e =>
+      (e.impact||'').toLowerCase() === 'high' && (e.date||'').slice(0,10) === todayStr
+    );
     if (highImpact.length > 0) {
       setItem('cl-events', 'fail',
         highImpact.length + ' HIGH-IMPACT event(s) today — trade with caution ⚠️',
