@@ -255,7 +255,15 @@ function combineSignals(indicators) {
         else if (marketState.vixChange >  0.5) { bear++; reasons.push(`VIX rising (${marketState.vix}) ⚠️`); }
         if (marketState.vix > 20) reasons.push(`⚠️ VIX ${marketState.vix} ≥ 20 — ${marketState.vixNote}`);
     }
-    if (marketState.global.bias==='BULLISH') { bull+=2; reasons.push('Global cues bullish ✅'); }
+    // ── Global cues — but cap bull votes when BankNifty is strongly negative ──
+    // Global bias (10/10 BULLISH) reflects overnight US/Asia data — it lags intraday.
+    // On June 1-type days global was BULLISH while BN was -1.27% and Nifty grinding down.
+    // If BankNifty is down > 0.8% today, treat global BULLISH as neutral (0 votes)
+    // to prevent stale overnight optimism from diluting a real intraday bearish setup.
+    const bnChangePct = marketState.global.sectors?.bankNifty?.changePct ?? 0;
+    const globalLagging = bnChangePct < -0.8;  // BN down hard = global cue is stale
+    if (marketState.global.bias==='BULLISH' && !globalLagging) { bull+=2; reasons.push('Global cues bullish ✅'); }
+    else if (marketState.global.bias==='BULLISH' && globalLagging) { reasons.push(`Global BULLISH but BN ${bnChangePct.toFixed(2)}% — cue suppressed (intraday override)`); }
     else if (marketState.global.bias==='BEARISH') { bear+=2; reasons.push('Global cues bearish ⚠️'); }
     const bn = marketState.global.sectors?.bankNifty;
     if (bn?.changePct > 0.5) bull+=2; else if (bn?.changePct < -0.5) bear+=2;
@@ -498,10 +506,20 @@ function combineSignals(indicators) {
             // A WAIT here means "wait for a decisive break past the level, then re-enter."
             const srLvls = marketState.srLevels?.levels;
             if (srLvls?.length > 0 && marketState.nifty > 0) {
-                const bufferPts = marketState.maxPain?.expiryDay ? 75 : 50;  // raised from 30/50 → 50/75
-                const nearbyLevel = srLvls.find(lvl =>
-                    Math.abs(marketState.nifty - lvl.price) <= bufferPts
-                );
+                // On expiry day: buffer is SMALLER (40pt) not larger, because Max Pain
+                // is a gravity target — price moves TOWARD it, not stalls at it.
+                // The 75pt buffer was blocking the entire session when Max Pain sat in
+                // the day's trading range (e.g. June 1 — Max Pain = 23560, all-day range
+                // 23500–23650 → never got a signal despite 86% bear vote).
+                // On expiry day: also skip Max Pain levels from the proximity check —
+                // the vote tally already handles them via the max pain gravity vote.
+                const bufferPts = marketState.maxPain?.expiryDay ? 40 : 50;
+                const nearbyLevel = srLvls.find(lvl => {
+                    // On expiry day, exclude Max Pain from S/R gate — it's not a wall,
+                    // it's a magnet. The max pain vote in combineSignals() handles this.
+                    if (marketState.maxPain?.expiryDay && lvl.type === 'MP') return false;
+                    return Math.abs(marketState.nifty - lvl.price) <= bufferPts;
+                });
                 if (nearbyLevel) {
                     const dist = Math.abs(marketState.nifty - nearbyLevel.price).toFixed(0);
                     signal     = 'WAIT';
