@@ -53,13 +53,26 @@ function initializeHistory(closes, candles) {
     candleHistory = candles ? [...candles] : [];
     initialized   = true;
 
-    // Seed sessionCandles with only today's candles (last 390 = full session of 1m bars)
-    // This gives VWAP a warm start on app launch during market hours
+    // Seed sessionCandles with TODAY-ONLY candles (no overnight gaps).
+    // Previously used candleHistory.slice(-390) which included prior-day candles —
+    // those overnight price gaps caused Wilder's ADX smoothing to produce values
+    // like 376 (mathematically valid but out-of-range 0-100), which correctly
+    // triggered the ADX guard and silenced ADX for the entire session.
+    // Fix: filter by IST date so only intraday candles (9:15+ today) are seeded.
     const todayStr = getISTDateStr();
     if (sessionDate !== todayStr) {
-        sessionCandles = candleHistory.slice(-390);
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+        const todayCandles = candleHistory.filter(c => {
+            // candles may carry a 'time' (ms epoch) or 'ts' field
+            const epoch = c.time || c.ts;
+            if (!epoch) return false;
+            const d = new Date(epoch + IST_OFFSET_MS).toISOString().slice(0, 10);
+            return d === todayStr;
+        });
+        // Fall back to slice if no timestamps present (legacy seed without timestamps)
+        sessionCandles = todayCandles.length > 0 ? todayCandles : [];
         sessionDate    = todayStr;
-        console.log(`📅 VWAP seeded with ${sessionCandles.length} candles for today`);
+        console.log(`📅 VWAP seeded with ${sessionCandles.length} candles for today (today-only filter)`);
     }
 
     console.log(`✅ Indicators initialized: ${priceHistory.length} prices loaded`);
@@ -374,8 +387,16 @@ async function loadCandlesFromYahoo() {
                 if (newCandles.length > candleHistory.length) {
                     const closes = newCandles.map(c => c.close);
                     initializeHistory(closes, newCandles);
-                    // Also seed sessionCandles with today's candles for accurate VWAP
-                    sessionCandles = [...newCandles.slice(-390)];
+                    // Also seed sessionCandles with today-only candles (no overnight gaps → clean ADX)
+                    const todayForSeed  = getISTDateStr();
+                    const IST_OFF       = 5.5 * 60 * 60 * 1000;
+                    const todaySeedCdls = newCandles.filter(c => {
+                        const epoch = c.time || c.ts;
+                        if (!epoch) return false;
+                        return new Date(epoch + IST_OFF).toISOString().slice(0, 10) === todayForSeed;
+                    });
+                    sessionCandles = todaySeedCdls.length > 0 ? todaySeedCdls : [];
+                    sessionDate    = todayForSeed;
                     candleSource = attempt.label;
                     const resNote = attempt.label === 'yahoo_5m'
                         ? ' ⚠️ 5m resolution — RSI/volume less precise' : '';

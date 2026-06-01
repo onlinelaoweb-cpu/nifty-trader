@@ -14,11 +14,15 @@ async function getPrevDayOHLC() {
         const indices = await fetchAllIndices();
         const row = indices.find(r => r.index === 'NIFTY 50' || r.indexSymbol === 'NIFTY 50');
         if (!row) return null;
+        // FIX: use daily high/low (row.high / row.low) FIRST.
+        // The old code used yearHigh/yearLow as the primary source which caused
+        // pivot points to be calculated off the 52-week range instead of
+        // yesterday's range — producing wildly incorrect R1/R2/S1/S2 levels.
         return {
-            high : parseFloat(row.yearHigh  || row.high  || row.last),
-            low  : parseFloat(row.yearLow   || row.low   || row.last),
+            high : parseFloat(row.high  || row.yearHigh  || row.last),
+            low  : parseFloat(row.low   || row.yearLow   || row.last),
             close: parseFloat(row.previousClose || row.last),
-            open : parseFloat(row.open      || row.last),
+            open : parseFloat(row.open  || row.last),
         };
     } catch (e) { return null; }
 }
