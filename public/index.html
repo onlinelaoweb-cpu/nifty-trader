@@ -1075,16 +1075,24 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     </div>
 
     <div class="flow-card">
-      <div class="flow-title">⚡ OPTION BUYER/SELLER ACTIVITY</div>
-      <div class="flow-inputs">
-        <div class="flow-field"><label>ATM CE PREMIUM (₹)</label><input class="flow-input" id="flow-ce" type="number" step="0.5" placeholder="65.50"/></div>
-        <div class="flow-field"><label>ATM PE PREMIUM (₹)</label><input class="flow-input" id="flow-pe" type="number" step="0.5" placeholder="58.25"/></div>
+      <div class="flow-title">⚡ OPTION BUYER/SELLER ACTIVITY <span style="font-size:8px;color:var(--dim);letter-spacing:1px;font-weight:400;">AUTO · 3 MIN</span></div>
+      <!-- Live ATM Premium display — auto-fed from NSE option chain every 3 min -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:8px;">
+        <div style="background:var(--bg3);border-radius:8px;padding:8px;text-align:center;border:1px solid rgba(0,170,255,0.2);">
+          <div style="font-size:9px;color:var(--blue);letter-spacing:2px;margin-bottom:4px;">ATM CE ₹</div>
+          <div id="flow-ce-live" style="font-family:'Orbitron',monospace;font-size:16px;font-weight:700;color:var(--blue);">--</div>
+          <div id="flow-ce-chg" style="font-size:9px;color:#9ab8d0;margin-top:2px;">-- %</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:8px;padding:8px;text-align:center;border:1px solid rgba(255,34,68,0.2);">
+          <div style="font-size:9px;color:var(--red);letter-spacing:2px;margin-bottom:4px;">ATM PE ₹</div>
+          <div id="flow-pe-live" style="font-family:'Orbitron',monospace;font-size:16px;font-weight:700;color:var(--red);">--</div>
+          <div id="flow-pe-chg" style="font-size:9px;color:#9ab8d0;margin-top:2px;">-- %</div>
+        </div>
       </div>
-      <button class="flow-submit" onclick="submitOptionFlow()">⚡ UPDATE FLOW</button>
       <div class="flow-result">
         <div style="font-size:9px;color:#9ab8d0;letter-spacing:2px;margin-bottom:4px;">DOMINANCE</div>
         <div class="flow-dom" id="flow-dominance" style="color:var(--amber);">NEUTRAL</div>
-        <div id="flow-details">Enter ATM CE/PE premium above</div>
+        <div id="flow-details" style="font-size:10px;color:#9ab8d0;margin-top:3px;">Waiting for NSE data...</div>
       </div>
       <div style="margin-top:8px;">
         <div style="font-size:9px;color:#9ab8d0;letter-spacing:2px;margin-bottom:5px;">FLOW HISTORY</div>
@@ -1441,7 +1449,7 @@ function switchTab(name,btn){
     if(_lastState){
       if(_lastState.breadth)updateBreadthUI(_lastState.breadth);
       if(_lastState.global){updateGlobalUI(_lastState.global);updateSectorHeatmap(_lastState.global.sectors);}
-      if(_lastState.optionFlow){const dom=_lastState.optionFlow.dominance||'NEUTRAL';const c=dom.includes('CALL')?'var(--blue)':dom.includes('PUT')?'var(--red)':'var(--amber)';document.getElementById('flow-dominance').textContent=dom;document.getElementById('flow-dominance').style.color=c;if(_lastState.optionFlow.history)updateFlowHistory(_lastState.optionFlow.history);}
+      if(_lastState.optionFlow){updateState(_lastState);}
       if(_lastState.pcrHistory)updatePCRTrend(_lastState.pcrHistory);
       if(_lastState.fii||_lastState.dii) updateFIIDIIDisplay(_lastState.fii,_lastState.dii);
     } else {
@@ -1947,12 +1955,40 @@ function renderDashboard(s) {
   if (s.fii || s.dii) updateFIIDIIDisplay(s.fii, s.dii);
   // Auto-checklist evaluation (runs on every state update)
   updateChecklistAuto(s);
-  // Option flow
+  // Option flow — auto display (no manual input needed)
   if (s.optionFlow) {
     const dom = s.optionFlow.dominance || 'NEUTRAL';
     const c = dom.includes('CALL') ? 'var(--blue)' : dom.includes('PUT') ? 'var(--red)' : 'var(--amber)';
     const domEl = document.getElementById('flow-dominance');
     if (domEl) { domEl.textContent = dom; domEl.style.color = c; }
+    // Live CE premium
+    const ceLiveEl = document.getElementById('flow-ce-live');
+    const ceChgEl  = document.getElementById('flow-ce-chg');
+    if (ceLiveEl && s.optionFlow.atmCEpremium) {
+      ceLiveEl.textContent = '₹' + s.optionFlow.atmCEpremium;
+      if (ceChgEl) {
+        const chg = s.optionFlow.ceChange || 0;
+        ceChgEl.textContent = (chg >= 0 ? '▲ +' : '▼ ') + chg + '%';
+        ceChgEl.style.color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : '#9ab8d0';
+      }
+    }
+    // Live PE premium
+    const peLiveEl = document.getElementById('flow-pe-live');
+    const peChgEl  = document.getElementById('flow-pe-chg');
+    if (peLiveEl && s.optionFlow.atmPEpremium) {
+      peLiveEl.textContent = '₹' + s.optionFlow.atmPEpremium;
+      if (peChgEl) {
+        const chg = s.optionFlow.peChange || 0;
+        peChgEl.textContent = (chg >= 0 ? '▲ +' : '▼ ') + chg + '%';
+        peChgEl.style.color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : '#9ab8d0';
+      }
+    }
+    // Details line
+    const detEl = document.getElementById('flow-details');
+    if (detEl && s.optionFlow.atmCEpremium && s.optionFlow.atmPEpremium) {
+      const ratio = (s.optionFlow.atmCEpremium / s.optionFlow.atmPEpremium).toFixed(2);
+      detEl.textContent = `CE/PE Ratio: ${ratio} | CE ₹${s.optionFlow.atmCEpremium} | PE ₹${s.optionFlow.atmPEpremium}`;
+    }
     if (s.optionFlow.history) updateFlowHistory(s.optionFlow.history);
   }
   // BTST / STBT card (visible only in 3:00–3:20 PM window)
