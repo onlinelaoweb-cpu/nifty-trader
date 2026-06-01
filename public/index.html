@@ -1160,7 +1160,10 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="global-score-label">GLOBAL SCORE</div>
         <div class="global-score-bar" style="width:120px;margin-top:4px;"><div class="global-score-fill" id="global-score-fill" style="width:50%;background:#ffbb00;"></div></div>
       </div>
-      <div class="global-score-value" id="global-score-badge-val" style="color:var(--amber);">--/10 🟡</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div class="global-score-value" id="global-score-badge-val" style="color:var(--amber);">--/10 🟡</div>
+        <button onclick="fetchGlobalManual()" title="Refresh global data" style="background:rgba(0,255,136,0.08);border:1px solid rgba(0,255,136,0.3);color:var(--green);border-radius:5px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:Rajdhani,sans-serif;letter-spacing:1px;" id="global-refresh-btn">↺</button>
+      </div>
     </div>
     <!-- USD/INR Weakness Alert -->
     <div class="usdinr-alert" id="usdinr-alert">⚠️ <span>USD/INR &gt;97 — Rupee weakness detected! FII selling pressure likely.</span></div>
@@ -1606,7 +1609,7 @@ function renderDashboard(s) {
     const chg = s.change, pct = s.changePct;
     const chgEl = document.getElementById('change');
     chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '  (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)';
-    chgEl.className = 'price-change ' + (chg > 0 ? 'up' : chg < 0 ? 'dn' : 'flat');
+    chgEl.className = 'price-change ' + (chg > 0 ? 'up' : chg < 0 ? 'down' : 'flat');
   } else {
     document.getElementById('price').textContent = '--';
     document.getElementById('change').textContent = 'Market Closed';
@@ -2012,6 +2015,21 @@ function updateBreadthUI(b) {
 }
 
 // ─── GLOBAL UI ───────────────────────────────────────────
+// ── helper: set a gitem price+change pair ──────────────────────────────────
+function _setGitem(pid, cid, dataObj, priceDecimals) {
+  if (!dataObj) return;
+  const pEl = document.getElementById(pid);
+  const cEl = document.getElementById(cid);
+  // FIX: use changePct (%) not change (absolute price delta)
+  const pct = dataObj.changePct != null ? dataObj.changePct : dataObj.change;
+  if (pEl && dataObj.price != null) pEl.textContent = dataObj.price.toLocaleString('en-IN', { minimumFractionDigits: priceDecimals, maximumFractionDigits: priceDecimals });
+  if (cEl && pct != null) {
+    cEl.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+    // FIX: was 'dn' — CSS class is .gitem-chg.down so negative was never red
+    cEl.className = 'gitem-chg ' + (pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat');
+  }
+}
+
 function updateGlobalUI(g) {
   if (!g) return;
   const bias = g.bias || 'NEUTRAL';
@@ -2021,7 +2039,12 @@ function updateGlobalUI(g) {
   if (biasVal) { biasVal.textContent = bias; biasVal.style.color = bias === 'BULLISH' ? 'var(--green)' : bias === 'BEARISH' ? 'var(--red)' : 'var(--amber)'; }
 
   const updEl = document.getElementById('global-updated');
-  if (updEl && g.updatedAt) updEl.textContent = new Date(g.updatedAt).toLocaleTimeString('en-IN');
+  if (updEl && g.updatedAt) {
+    const t = new Date(g.updatedAt).toLocaleTimeString('en-IN');
+    const secsSince = Math.round((Date.now() - new Date(g.updatedAt).getTime()) / 1000);
+    const freshTag = secsSince < 30 ? ' 🟢' : secsSince < 300 ? ' 🟡' : ' 🔴';
+    updEl.textContent = t + freshTag + (secsSince < 60 ? '' : ` (${Math.round(secsSince/60)}m ago)`);
+  }
 
   const reasons = document.getElementById('global-reasons');
   if (reasons && g.reasons) reasons.innerHTML = g.reasons.map(r => `<div class="reason-row">${r}</div>`).join('');
@@ -2032,52 +2055,43 @@ function updateGlobalUI(g) {
   if (scoreFill) { scoreFill.style.width = score + '%'; scoreFill.style.background = score > 60 ? 'var(--green)' : score < 40 ? 'var(--red)' : '#ffbb00'; }
   if (scoreBadge) scoreBadge.textContent = Math.round(score / 10) + '/10 ' + (score > 60 ? '🟢' : score < 40 ? '🔴' : '🟡');
 
-  // USD/INR alert
+  // USD/INR alert — FIX: g.currency.usdinr is an OBJECT {price,changePct,...} not a number
+  const usdData = g.currency?.usdinr;
   const usdEl = document.getElementById('usdinr-alert');
-  if (usdEl && g.currency?.usdinr) usdEl.classList.toggle('show', g.currency.usdinr > 97);  // 97 = stress level for 2026 (normal range 90-96)
+  if (usdEl && usdData?.price != null) usdEl.classList.toggle('show', usdData.price > 87);
 
-  // Sectors
+  // Sectors — FIX: server sends camelCase keys (bankNifty, niftyIT…), not lowercase
   const sectors = g.sectors || {};
-  const pairs = {
-    'banknifty': ['g-banknifty-p','g-banknifty-c'],
-    'niftyit':   ['g-niftyit-p','g-niftyit-c'],
-    'niftyauto': ['g-niftyauto-p','g-niftyauto-c'],
-    'niftymetal': ['g-niftymetal-p','g-niftymetal-c']
-    // 'niftypharma' removed — server globalCues does not fetch it, no HTML elements exist
+  const sectorPairs = {
+    'bankNifty':  ['g-banknifty-p', 'g-banknifty-c'],
+    'niftyIT':    ['g-niftyit-p',   'g-niftyit-c'  ],
+    'niftyAuto':  ['g-niftyauto-p', 'g-niftyauto-c'],
+    'niftyMetal': ['g-niftymetal-p','g-niftymetal-c'],
   };
-  for (const [key, [pid, cid]] of Object.entries(pairs)) {
-    const sec = sectors[key] || sectors[key.replace('nifty','')];
-    if (!sec) continue;
-    const pEl = document.getElementById(pid); const cEl = document.getElementById(cid);
-    if (pEl && sec.price != null) pEl.textContent = sec.price.toFixed(2);
-    if (cEl && sec.change != null) {
-      cEl.textContent = (sec.change >= 0 ? '+' : '') + sec.change.toFixed(2) + '%';
-      cEl.className = 'gitem-chg ' + (sec.change > 0 ? 'up' : sec.change < 0 ? 'dn' : 'flat');
-    }
+  for (const [key, [pid, cid]] of Object.entries(sectorPairs)) {
+    _setGitem(pid, cid, sectors[key], 2);
   }
 
   // Global indices
-  const indexMap = { 'us': ['dow','sp500','nasdaq'], 'asia': ['giftNifty','nikkei','hangseng','shanghai'], 'europe': ['dax','ftse'] };
+  const indexMap = {
+    'us':     ['dow','sp500','nasdaq'],
+    'asia':   ['giftNifty','nikkei','hangseng','shanghai'],
+    'europe': ['dax','ftse']
+  };
   for (const [region, keys] of Object.entries(indexMap)) {
     const regionData = g[region] || {};
-    keys.forEach(k => {
-      const d = regionData[k];
-      const pEl = document.getElementById('g-' + k + '-p');
-      const cEl = document.getElementById('g-' + k + '-c');
-      if (!d) return;
-      if (pEl && d.price != null) pEl.textContent = d.price.toLocaleString();
-      if (cEl && d.change != null) {
-        cEl.textContent = (d.change >= 0 ? '+' : '') + d.change.toFixed(2) + '%';
-        cEl.className = 'gitem-chg ' + (d.change > 0 ? 'up' : d.change < 0 ? 'dn' : 'flat');
-      }
-    });
+    keys.forEach(k => _setGitem('g-'+k+'-p', 'g-'+k+'-c', regionData[k], k==='giftNifty'?2:0));
   }
 
   // Commodities
   const comm = g.commodities || {};
-  if (comm.gold) { const el = document.getElementById('g-gold-p'); if(el) el.textContent = comm.gold.price?.toFixed(0)||'--'; const ce = document.getElementById('g-gold-c'); if(ce) { ce.textContent=(comm.gold.change>=0?'+':'')+comm.gold.change?.toFixed(2)+'%'; ce.className='gitem-chg '+(comm.gold.change>0?'up':comm.gold.change<0?'dn':'flat'); } }
-  if (comm.crude) { const el = document.getElementById('g-crude-p'); if(el) el.textContent = comm.crude.price?.toFixed(1)||'--'; const ce = document.getElementById('g-crude-c'); if(ce) { ce.textContent=(comm.crude.change>=0?'+':'')+comm.crude.change?.toFixed(2)+'%'; ce.className='gitem-chg '+(comm.crude.change>0?'up':comm.crude.change<0?'dn':'flat'); } }
-  if (g.currency?.usdinr) { const el = document.getElementById('g-usdinr-p'); if(el) el.textContent = g.currency.usdinr.toFixed(2); }
+  _setGitem('g-gold-p',  'g-gold-c',  comm.gold,  0);
+  _setGitem('g-crude-p', 'g-crude-c', comm.crude, 1);
+
+  // Currency — FIX: was doing g.currency.usdinr.toFixed(2) on an object → TypeError
+  const curr = g.currency || {};
+  _setGitem('g-usdinr-p', 'g-usdinr-c', curr.usdinr, 2);
+  _setGitem('g-dxy-p',    'g-dxy-c',    curr.dxy,    2);
 }
 
 function updateSectorHeatmap(sectors) {
@@ -2091,7 +2105,8 @@ function updateSectorHeatmap(sectors) {
   ];
   heatmap.innerHTML = keys.map(([k, lbl]) => {
     const s = sectors[k] || sectors[k.toLowerCase()] || {};
-    const chg = s.change;
+    // FIX: use changePct (%) — change is absolute price delta, not a percentage
+    const chg = s.changePct != null ? s.changePct : s.change;
     const color = chg == null ? '#4a6a8a' : chg > 1 ? 'var(--green)' : chg > 0 ? '#88cc88' : chg < -1 ? 'var(--red)' : '#cc8888';
     const bg = chg == null ? 'var(--bg3)' : chg > 0 ? 'rgba(0,255,136,0.07)' : 'rgba(255,34,68,0.07)';
     const border = chg == null ? 'var(--border)' : chg > 0 ? 'rgba(0,255,136,0.3)' : 'rgba(255,34,68,0.3)';
@@ -3063,6 +3078,31 @@ async function fetchAndRenderCalendar() {
 // Fetch calendar on load and refresh every 30 minutes
 fetchAndRenderCalendar();
 setInterval(fetchAndRenderCalendar, 30 * 60 * 1000);
+
+// ─── GLOBAL TAB: manual refresh + dedicated auto-fetch every 5m ──────────
+async function fetchGlobalManual() {
+  const btn = document.getElementById('global-refresh-btn');
+  const updEl = document.getElementById('global-updated');
+  if (btn) { btn.textContent = '…'; btn.disabled = true; }
+  if (updEl) updEl.textContent = 'Refreshing…';
+  try {
+    const r = await fetch('/api/global');
+    if (r.ok) {
+      const g = await r.json();
+      if (_lastState) _lastState.global = g;
+      updateGlobalUI(g);
+      if (_lastState?.global?.sectors) updateSectorHeatmap(_lastState.global.sectors);
+    }
+  } catch(e) {
+    if (updEl) updEl.textContent = 'Error — retry';
+  } finally {
+    if (btn) { btn.textContent = '↺'; btn.disabled = false; }
+  }
+}
+// Auto-refresh global data every 5 min when on global tab
+setInterval(() => {
+  if (document.getElementById('panel-global')?.classList.contains('active')) fetchGlobalManual();
+}, 5 * 60 * 1000);
 
 </script>
 </body>
