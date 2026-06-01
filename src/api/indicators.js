@@ -53,26 +53,31 @@ function initializeHistory(closes, candles) {
     candleHistory = candles ? [...candles] : [];
     initialized   = true;
 
-    // Seed sessionCandles with TODAY-ONLY candles (no overnight gaps).
-    // Previously used candleHistory.slice(-390) which included prior-day candles —
-    // those overnight price gaps caused Wilder's ADX smoothing to produce values
-    // like 376 (mathematically valid but out-of-range 0-100), which correctly
-    // triggered the ADX guard and silenced ADX for the entire session.
-    // Fix: filter by IST date so only intraday candles (9:15+ today) are seeded.
+    // Seed sessionCandles with TODAY market-hours-only candles (no overnight gaps).
+    // Two-layer filter:
+    //   Layer 1 — IST date must match today (excludes prior-day candles)
+    //   Layer 2 — IST time must be >= 9:15 AM (minute >= 555)
+    //             Yahoo Finance 1d range sometimes includes a pre-session bar at
+    //             09:00-09:14 IST. That single bar sits on the same IST date so
+    //             a date-only filter lets it through. The price gap between that
+    //             pre-market print and the 09:15 open is treated as an overnight
+    //             gap by Wilder's ADX smoothing, producing ADX ~350+ which is
+    //             correctly rejected but silences ADX for the entire session.
     const todayStr = getISTDateStr();
     if (sessionDate !== todayStr) {
         const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
         const todayCandles = candleHistory.filter(c => {
-            // candles may carry a 'time' (ms epoch) or 'ts' field
             const epoch = c.time || c.ts;
             if (!epoch) return false;
-            const d = new Date(epoch + IST_OFFSET_MS).toISOString().slice(0, 10);
-            return d === todayStr;
+            const istDate  = new Date(epoch + IST_OFFSET_MS);
+            const dateStr  = istDate.toISOString().slice(0, 10);
+            if (dateStr !== todayStr) return false;          // Layer 1: date guard
+            const istMinute = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
+            return istMinute >= 555;                         // Layer 2: >= 9:15 AM IST
         });
-        // Fall back to slice if no timestamps present (legacy seed without timestamps)
         sessionCandles = todayCandles.length > 0 ? todayCandles : [];
         sessionDate    = todayStr;
-        console.log(`📅 VWAP seeded with ${sessionCandles.length} candles for today (today-only filter)`);
+        console.log(`📅 VWAP seeded with ${sessionCandles.length} candles for today (market-hours filter)`);
     }
 
     console.log(`✅ Indicators initialized: ${priceHistory.length} prices loaded`);
@@ -387,13 +392,20 @@ async function loadCandlesFromYahoo() {
                 if (newCandles.length > candleHistory.length) {
                     const closes = newCandles.map(c => c.close);
                     initializeHistory(closes, newCandles);
-                    // Also seed sessionCandles with today-only candles (no overnight gaps → clean ADX)
+                    // Seed sessionCandles: today + market-hours-only (>= 9:15 IST).
+                    // Two-layer filter — same logic as initializeHistory():
+                    //   Layer 1: IST date === today
+                    //   Layer 2: IST minute >= 555 (9:15 AM) — excludes pre-market Yahoo bars
                     const todayForSeed  = getISTDateStr();
                     const IST_OFF       = 5.5 * 60 * 60 * 1000;
                     const todaySeedCdls = newCandles.filter(c => {
                         const epoch = c.time || c.ts;
                         if (!epoch) return false;
-                        return new Date(epoch + IST_OFF).toISOString().slice(0, 10) === todayForSeed;
+                        const istDate   = new Date(epoch + IST_OFF);
+                        const dateStr   = istDate.toISOString().slice(0, 10);
+                        if (dateStr !== todayForSeed) return false;    // Layer 1
+                        const istMinute = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
+                        return istMinute >= 555;                       // Layer 2: >= 9:15 AM
                     });
                     sessionCandles = todaySeedCdls.length > 0 ? todaySeedCdls : [];
                     sessionDate    = todayForSeed;
