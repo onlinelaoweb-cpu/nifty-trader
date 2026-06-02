@@ -17,6 +17,7 @@
   --bg0:#010407;--bg1:#060d14;--bg2:#0a1520;--bg3:#0f1f30;
   --border:#1a3a5a;--green:#00ff88;--red:#ff2244;
   --amber:#ffbb00;--blue:#00aaff;--purple:#aa88ff;
+  --accent:#aa88ff;
   --dim:#7a9ab8;--text:#c8e0f4;--bright:#ffffff;
   --card-shadow:0 4px 24px rgba(0,0,0,0.5);
   --card-radius:12px;
@@ -25,7 +26,7 @@
   --glow-amber:0 0 20px rgba(255,187,0,0.2);
 }
 *{box-sizing:border-box;margin:0;padding:0;}
-body{background:var(--bg0);color:var(--text);font-family:'Rajdhani',sans-serif;min-height:100vh;padding-bottom:80px;}
+body{background:var(--bg0);color:var(--text);font-family:'Rajdhani',sans-serif;min-height:100vh;padding-bottom:calc(80px + env(safe-area-inset-bottom, 0px));}
 body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.06) 2px,rgba(0,0,0,0.06) 4px);pointer-events:none;z-index:999;}
 /* ── Custom Splash Screen ── */
 #vn-splash{position:fixed;inset:0;background:#020508;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;transition:opacity 0.6s ease,visibility 0.6s ease;}
@@ -63,7 +64,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .hbadge.pnl-zero{color:var(--dim);border-color:var(--border);background:transparent;}
 
 /* TABS */
-.bottom-tabs{position:fixed;bottom:0;left:0;right:0;background:rgba(6,13,20,0.96);border-top:1px solid rgba(26,58,90,0.8);display:flex;z-index:200;backdrop-filter:blur(12px);padding:4px 4px 6px;}
+.bottom-tabs{position:fixed;bottom:0;left:0;right:0;background:rgba(6,13,20,0.96);border-top:1px solid rgba(26,58,90,0.8);display:flex;z-index:200;backdrop-filter:blur(12px);padding:4px 4px calc(6px + env(safe-area-inset-bottom, 0px));}
 .btab{flex:1;padding:5px 2px 3px;text-align:center;cursor:pointer;font-size:9px;letter-spacing:0.8px;color:#5a7a8a;border:none;background:transparent;font-family:'Rajdhani',sans-serif;font-weight:700;border-radius:10px;transition:all 0.25s;position:relative;}
 .btab .bi{font-size:18px;display:block;margin-bottom:2px;transition:all 0.25s;}
 .btab.active{color:var(--green);background:rgba(0,255,136,0.07);box-shadow:0 0 16px rgba(0,255,136,0.08);}
@@ -85,7 +86,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .signal-card.buy-call{background:linear-gradient(150deg,rgba(0,255,136,0.06) 0%,rgba(0,255,136,0.02) 100%);border-color:var(--green);box-shadow:0 4px 30px rgba(0,255,136,0.15);}
 .signal-card.buy-put{background:linear-gradient(150deg,rgba(255,34,68,0.06) 0%,rgba(255,34,68,0.02) 100%);border-color:var(--red);box-shadow:0 4px 30px rgba(255,34,68,0.15);}
 .signal-card.wait{background:linear-gradient(150deg,rgba(255,187,0,0.05) 0%,rgba(255,187,0,0.01) 100%);border-color:rgba(255,187,0,0.5);box-shadow:0 4px 24px rgba(255,187,0,0.1);}
-.signal-badge{font-family:'Orbitron',monospace;font-size:26px;font-weight:900;letter-spacing:4px;animation:sigPulse 2s infinite;margin-bottom:6px;}
+.signal-badge{font-family:'Orbitron',monospace;font-size:clamp(18px,5.5vw,26px);font-weight:900;letter-spacing:4px;animation:sigPulse 2s infinite;margin-bottom:6px;}
 @keyframes sigPulse{0%,100%{text-shadow:0 0 20px currentColor}50%{text-shadow:0 0 60px currentColor}}
 @keyframes confGlowGreen{0%,100%{box-shadow:0 0 8px rgba(0,255,136,0.7),0 0 18px rgba(0,255,136,0.4)}50%{box-shadow:0 0 16px rgba(0,255,136,1),0 0 35px rgba(0,255,136,0.6)}}
 @keyframes confGlowRed{0%,100%{box-shadow:0 0 8px rgba(255,34,68,0.7),0 0 18px rgba(255,34,68,0.4)}50%{box-shadow:0 0 16px rgba(255,34,68,1),0 0 35px rgba(255,34,68,0.6)}}
@@ -670,7 +671,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     </div>
   </div>
 
-  <div class="strike-banner">
+    <div class="strike-banner">
     <div><div class="strike-left">🎯 STRIKE ZONE</div><div class="strike-val" id="strike-range">ATM ±200</div></div>
     <div class="status-pill"><div class="dot-off" id="status-dot"></div><span id="status-txt">WAITING</span></div>
   </div>
@@ -822,7 +823,8 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
   </div>
 
   <div class="sec-label">1-MIN INDICATORS</div>
-    <div class="ind-card" id="rsi-card">
+  <div class="ind-grid">
+    <div class="ind-card" id="rsi-card" style="grid-column:1/-1;">
       <div class="ind-label"><span>RSI (9)</span><span id="rsi-zone" style="font-size:8px;">--</span></div>
       <div class="rsi-dial-wrap">
         <svg class="rsi-dial-svg" width="130" height="72" viewBox="0 0 130 72">
@@ -852,7 +854,8 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     </div>
     <div class="ind-card" id="vwap-card"><div class="ind-label"><span>VWAP</span><span id="vwap-pos" style="font-size:8px;">--</span></div><div class="ind-val" id="vwap-val" style="font-size:15px;">--</div><div class="ind-sub" id="vwap-sub">Fair value</div></div>
     <div class="ind-card" id="ema-card"><div class="ind-label"><span>EMA CROSS</span><span id="ema-trend" style="font-size:8px;">--</span></div><div style="display:flex;gap:5px;align-items:baseline;margin-top:2px;"><div><div style="font-size:8px;color:var(--dim);">EMA9</div><div class="ind-val" id="ema9-val" style="font-size:14px;">--</div></div><div style="color:var(--dim);font-size:11px;align-self:center;">/</div><div><div style="font-size:8px;color:var(--dim);">EMA21</div><div class="ind-val" id="ema21-val" style="font-size:14px;">--</div></div></div></div>
-    <div class="ind-card" style="border-left:2px solid var(--amber)"><div class="ind-label"><span>VIX STATUS</span></div><div class="ind-val" id="vix-note-val" style="font-size:12px;color:var(--amber);">--</div><div class="ind-sub" id="vix-note-sub">--</div></div>
+    <div class="ind-card" style="border-left:2px solid var(--amber);grid-column:1/-1;"><div class="ind-label"><span>VIX STATUS</span></div><div class="ind-val" id="vix-note-val" style="font-size:12px;color:var(--amber);">--</div><div class="ind-sub" id="vix-note-sub">--</div></div>
+  </div>
 
   <!-- ADX TREND STRENGTH — full width row -->
   <div style="padding:0 12px;margin-bottom:7px;">
@@ -1113,7 +1116,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="pcr-trend-card">
       <div class="trend-title">📈 PCR TREND TODAY</div>
       <div class="trend-list" id="pcr-trend-list">
-        <div style="font-size:10px;color:#9ab8d0;text-align:center;padding:8px;">Enter PCR on Dashboard tab</div>
+        <div style="font-size:10px;color:#9ab8d0;text-align:center;padding:8px;">Waiting for NSE option-chain data...</div>
       </div>
     </div>
 
@@ -1499,6 +1502,14 @@ function updateHeaderBadges(){
   if(secs<open){badge.className='hbadge market-pre';badge.textContent='⏰ '+fmt(open-secs);}
   else if(secs<=cls){badge.className='hbadge market-open';badge.textContent='🟢 '+fmt(cls-secs);}
   else{badge.className='hbadge market-closed';badge.textContent='🔴 CLOSED';}
+  // Sync status dot on strike banner
+  const statusDot=document.getElementById('status-dot');
+  const statusTxt=document.getElementById('status-txt');
+  if(statusDot&&statusTxt){
+    const isOpen=secs>=open&&secs<=cls;
+    statusDot.className=isOpen?'dot-live':'dot-off';
+    if(!isOpen)statusTxt.textContent=secs<open?'PRE-MARKET':'CLOSED';
+  }
   const day=ist.getDay();
   const daysToExp=day<=2?(2-day):(2+7-day);
   const expBadge=document.getElementById('expiry-badge');
@@ -1627,8 +1638,12 @@ function startPolling() {
   fetchSignal();
   if (_pollTimer) clearInterval(_pollTimer);
   _pollTimer = setInterval(fetchSignal, 3000);
-  // Poll AI suggestion every 2 min so card refreshes independently of signal changes
-  setInterval(() => { if (document.getElementById('suggest-body')) fetchTradeSuggestion(); }, 2 * 60 * 1000);
+  // Poll AI suggestion every 2 min — but only if signal is non-WAIT (gate passed)
+  setInterval(() => {
+    if (document.getElementById('suggest-body') && _lastState && _lastState.signal && _lastState.signal !== 'WAIT') {
+      fetchTradeSuggestion();
+    }
+  }, 2 * 60 * 1000);
 }
 startPolling();
 
@@ -1803,9 +1818,6 @@ function renderDashboard(s) {
       }
     }
     ['5m','15m','1h'].forEach(tf => {
-      const key = 'tf' + tf.replace('m','m').replace('1h','1h');
-      const data = mtf['tf' + tf.replace('m','').replace('h','')] || mtf['tf'+tf] || {};
-      // Map the keys correctly
       const tfData = tf === '5m' ? mtf.tf5m : tf === '15m' ? mtf.tf15m : mtf.tf1h;
       if (!tfData) return;
       const sigEl = document.getElementById('mtf-' + tf + '-sig');
@@ -3279,8 +3291,10 @@ function calcCalCountdown(timeStr) {
   const [h, m] = timeStr.split(':').map(Number);
   const now = new Date();
   const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const eventMs = new Date(ist).setHours(h, m, 0, 0);
-  const diff = eventMs - ist.getTime();
+  // Set target time on the IST date object directly (avoids local-timezone shift)
+  const target = new Date(ist);
+  target.setHours(h, m, 0, 0);
+  const diff = target.getTime() - ist.getTime();
   if (diff < 0) return 'passed';
   const hh = Math.floor(diff / 3600000);
   const mm = Math.floor((diff % 3600000) / 60000);
