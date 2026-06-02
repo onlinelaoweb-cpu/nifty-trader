@@ -803,8 +803,30 @@ async function updatePrice(price, change, changePct, source) {
     prevSignal=signal;
 }
 
+// ── WebSocket tick watchdog ───────────────────────────────────────────────────
+// Angel One WS sometimes goes silent (no ticks, no close event) during market
+// hours — Railway sees it as "connected" but price freezes. Watchdog detects
+// this: if no tick arrives for 3 min during market hours, reset source to
+// 'yahoo' so refreshMarketData() starts updating price via Yahoo fallback.
+let _lastTickAt = 0;
+let _wsWatchdog  = null;
+
+function startTickWatchdog() {
+    if (_wsWatchdog) clearInterval(_wsWatchdog);
+    _wsWatchdog = setInterval(() => {
+        if (!isMarketOpen()) return;
+        const silentMs = Date.now() - _lastTickAt;
+        if (_lastTickAt > 0 && silentMs > 3 * 60 * 1000 && marketState.source === 'websocket') {
+            console.warn(`⚠️ [WS Watchdog] No tick for ${Math.round(silentMs/1000)}s — switching to Yahoo fallback`);
+            marketState.source    = 'yahoo';
+            marketState.connected = false;
+        }
+    }, 30 * 1000); // check every 30s
+}
+
 async function onTick(tickData) {
     const price=tickData.price; if(!price||price<=0) return;
+    _lastTickAt = Date.now();  // ← update watchdog timestamp on every tick
     const prev=marketState.nifty||price, change=parseFloat((price-prev).toFixed(2));
     const chgPct=prev>0?parseFloat(((change/prev)*100).toFixed(2)):0;
     await updatePrice(price,change,chgPct,'websocket');
@@ -830,6 +852,8 @@ async function refreshMarketData() {
     if (niftyData?.closes?.length>0&&!historyLoaded) { initializeHistory(niftyData.closes,niftyData.candles); historyLoaded=true; console.log(`History: ${niftyData.closes.length} candles`); }
     if (vixData) { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.strikeRange; }
     if (niftyData?.price>0 && isMarketOpen()) {
+        // Always update via Yahoo if WS is not actively ticking (source != websocket,
+        // or watchdog has already reset source to yahoo due to silent freeze).
         if (marketState.source!=='websocket') await updatePrice(niftyData.price,niftyData.change,niftyData.changePct,'yahoo');
         else { marketState.change=niftyData.change; marketState.changePct=niftyData.changePct; }
     }
@@ -1704,6 +1728,7 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshSR,        10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,        3*60*1000), 150*1000);
     setTimeout(() => setInterval(fetchCalendarEvents, 60*60*1000), 180*1000); // refresh calendar hourly
+    startTickWatchdog(); // ← watchdog: detects silent WS freeze, falls back to Yahoo
     console.log('Polling intervals started (x1)');
 }
 
