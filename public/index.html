@@ -1263,7 +1263,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     </div>
     <div class="chart-box" style="position:relative;">
       <canvas id="chart-canvas"></canvas>
-      <div id="chart-loading" style="display:none;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#060d14;font-size:11px;color:var(--blue);letter-spacing:1px;">⏳ LOADING…</div>
+      <div id="chart-loading" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:#060d14;font-size:11px;color:var(--blue);letter-spacing:1px;">⏳ LOADING…</div>
       <div id="chart-empty" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:#060d14;font-size:11px;color:var(--dim);letter-spacing:1px;">📭 NO DATA FOR THIS TIMEFRAME</div>
     </div>
     <div style="text-align:right;font-size:9px;color:var(--dim);margin-top:3px;" id="chart-updated"></div>
@@ -2697,7 +2697,7 @@ function _renderJournal() {
     const slStr = t.sl ? '<span style="font-size:9px;color:var(--dim)">SL:' + t.sl + '</span>' : '';
     const exitBtn  = isClosed
       ? '<span style="font-size:9px;color:var(--dim)">✓ CLOSED</span>'
-      : '<button data-exit-id="' + t.id + '" style="font-size:9px;padding:2px 5px;background:rgba(255,187,0,0.1);border:1px solid var(--amber);color:var(--amber);border-radius:3px;cursor:pointer">EXIT</button>';
+      : '<span style="display:flex;align-items:center;gap:3px;" id="exit-wrap-' + t.id + '"><button data-exit-id="' + t.id + '" data-premium="' + t.premium + '" style="font-size:9px;padding:2px 5px;background:rgba(255,187,0,0.1);border:1px solid var(--amber);color:var(--amber);border-radius:3px;cursor:pointer">EXIT</button></span>';
     return '<div class="trade-row">'
       + '<span style="color:' + (t.type === 'CE' ? 'var(--green)' : 'var(--red)') + ';">' + t.type + '</span>'
       + '<span>' + t.strike + ' @₹' + t.premium + '</span>'
@@ -2752,10 +2752,27 @@ async function addTrade() {
   }
 }
 
-// Exit an open trade — update server, then sync.
-async function exitTrade(id) {
-  const exitPrice = parseFloat(prompt('Enter exit premium (₹):'));
-  if (isNaN(exitPrice)) return;
+// Exit an open trade — inline input, no prompt().
+function exitTrade(id, defaultPremium) {
+  const wrap = document.getElementById('exit-wrap-' + id);
+  if (!wrap) return;
+  // Already showing inline input? Don't double-render
+  if (wrap.querySelector('input')) return;
+  const defVal = defaultPremium != null ? defaultPremium : '';
+  wrap.innerHTML =
+    '<input id="exit-input-' + id + '" type="number" step="0.05" placeholder="exit ₹" value="' + defVal + '" ' +
+    'style="width:62px;font-size:10px;padding:2px 4px;background:#0a1a2a;border:1px solid var(--amber);color:var(--amber);border-radius:3px;" />' +
+    '<button onclick="confirmExit(' + id + ')" style="font-size:9px;padding:2px 5px;background:rgba(255,187,0,0.15);border:1px solid var(--amber);color:var(--amber);border-radius:3px;cursor:pointer;">✓</button>' +
+    '<button onclick="_renderJournal()" style="font-size:9px;padding:2px 4px;background:rgba(255,255,255,0.04);border:1px solid var(--dim);color:var(--dim);border-radius:3px;cursor:pointer;">✕</button>';
+  const inp = document.getElementById('exit-input-' + id);
+  if (inp) { inp.focus(); inp.select(); }
+}
+
+async function confirmExit(id) {
+  const inp = document.getElementById('exit-input-' + id);
+  if (!inp) return;
+  const exitPrice = parseFloat(inp.value);
+  if (isNaN(exitPrice) || exitPrice <= 0) { inp.style.borderColor='var(--red)'; return; }
   const t = _trades.find(x => x.id === id);
   if (!t) return;
 
@@ -3343,7 +3360,7 @@ fetchSignal();
 // Event delegation for EXIT buttons (uses data-exit-id instead of inline onclick)
 document.addEventListener('click', function(e) {
   const btn = e.target.closest('[data-exit-id]');
-  if (btn) exitTrade(Number(btn.dataset.exitId));
+  if (btn) exitTrade(Number(btn.dataset.exitId), parseFloat(btn.dataset.premium) || null);
 });
 
 // ─── ECONOMIC CALENDAR ───────────────────────────────────
