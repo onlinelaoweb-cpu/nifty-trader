@@ -98,6 +98,7 @@ let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:
 let signalStreak = { signal: 'WAIT', count: 0 }; // consecutive same-signal counter
 let btstSentToday=false;     // one-shot: BTST/STBT Telegram alert per day
 let telegramAlertInFlight=false; // race-condition guard — prevents duplicate sends when onTick fires concurrently
+let ema920AlertSentToday=false;  // one-shot: 9:20 AM EMA-VWAP setup alert per day
 
 function isMarketOpen() {
     const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
@@ -721,6 +722,130 @@ function evaluateBTST() {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// 9:20 AM EMA-VWAP SETUP ALERT — "Vardaan Opening Setup"
+// ═══════════════════════════════════════════════════════════════════════════════
+// Strategy: After 9:15 first candle closes, check EMA9 + EMA21 vs VWAP.
+//   Both below VWAP → PUT setup (bearish bias confirmed)
+//   Both above VWAP → CALL setup (bullish bias confirmed)
+//   Mixed            → NO TRADE (indecisive — stay out)
+//
+// Why 9:20 AM?
+//   9:15 candle is noise — institutional orders still settling.
+//   9:20 first 5-min candle has closed — real direction established.
+//   Premium is still cheap before big players show their hand.
+//
+// Rules enforced:
+//   1. Fires ONCE per day only (ema920AlertSentToday flag)
+//   2. Window: 9:20–9:30 AM only (10 min window, after that skip)
+//   3. Requires NIFTY price > 0 (live data must be available)
+//   4. EMA9 AND EMA21 must BOTH be on same side of VWAP (no mixed signals)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function check920Setup() {
+    if (!isConfigured()) return;
+    if (ema920AlertSentToday) return;  // already fired today
+
+    const ist  = getIST();
+    const h    = ist.getHours();
+    const m    = ist.getMinutes();
+    const mins = h * 60 + m;
+
+    // Window: 9:20 AM (560) to 9:30 AM (570) IST only
+    if (mins < 560 || mins > 570) return;
+
+    const { nifty, ema9, ema21, vwap } = marketState;
+
+    // Need all 4 values live
+    if (!nifty || nifty <= 0) return;
+    if (!ema9 || !ema21 || !vwap) return;
+
+    // ATM strike (nearest 50)
+    const atmStrike = Math.round(nifty / 50) * 50;
+    const vwapFmt   = vwap.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const ema9Fmt   = ema9.toFixed(2);
+    const ema21Fmt  = ema21.toFixed(2);
+    const niftyFmt  = nifty.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+    // PCR context if available
+    const pcrLine = marketState.pcr
+        ? `PCR: ${marketState.pcr} (${marketState.pcrSignal})`
+        : 'PCR: Fetching...';
+
+    // VIX context
+    const vixLine = marketState.vix
+        ? `VIX: ${marketState.vix} — ${marketState.vixSignal}`
+        : 'VIX: --';
+
+    // ── CALL SETUP: Both EMAs above VWAP ─────────────────────────────────────
+    if (ema9 > vwap && ema21 > vwap) {
+        ema920AlertSentToday = true;
+        const callStrike = atmStrike;  // ATM call
+        const msg =
+`🟢 <b>VARDAAN 9:20 SETUP — CALL BUY</b>
+
+📈 EMA9 (${ema9Fmt}) + EMA21 (${ema21Fmt})
+✅ Both ABOVE VWAP (${vwapFmt}) — Bullish bias confirmed
+
+🎯 <b>Action: BUY ${callStrike} CE (ATM)</b>
+💰 Target: +25–30% premium gain
+🛑 Stop Loss: −20% premium loss
+⏰ Exit by: 11:00 AM if no movement
+
+📊 NIFTY: ${niftyFmt}
+${pcrLine}
+${vixLine}
+
+⚠️ 1 TRADE ONLY — Do NOT overtrade after this`;
+
+        await sendRawMessage(msg);
+        console.log(`📱 [9:20 Setup] CALL SETUP fired — ${callStrike} CE | EMA9:${ema9Fmt} EMA21:${ema21Fmt} VWAP:${vwapFmt}`);
+        return;
+    }
+
+    // ── PUT SETUP: Both EMAs below VWAP ──────────────────────────────────────
+    if (ema9 < vwap && ema21 < vwap) {
+        ema920AlertSentToday = true;
+        const putStrike = atmStrike;  // ATM put
+        const msg =
+`🔴 <b>VARDAAN 9:20 SETUP — PUT BUY</b>
+
+📉 EMA9 (${ema9Fmt}) + EMA21 (${ema21Fmt})
+✅ Both BELOW VWAP (${vwapFmt}) — Bearish bias confirmed
+
+🎯 <b>Action: BUY ${putStrike} PE (ATM)</b>
+💰 Target: +25–30% premium gain
+🛑 Stop Loss: −20% premium loss
+⏰ Exit by: 11:00 AM if no movement
+
+📊 NIFTY: ${niftyFmt}
+${pcrLine}
+${vixLine}
+
+⚠️ 1 TRADE ONLY — Do NOT overtrade after this`;
+
+        await sendRawMessage(msg);
+        console.log(`📱 [9:20 Setup] PUT SETUP fired — ${putStrike} PE | EMA9:${ema9Fmt} EMA21:${ema21Fmt} VWAP:${vwapFmt}`);
+        return;
+    }
+
+    // ── MIXED / NO SETUP: EMAs on opposite sides of VWAP ─────────────────────
+    // Only send NO TRADE alert once (mark flag so we don't spam)
+    ema920AlertSentToday = true;
+    const msg =
+`⚪ <b>VARDAAN 9:20 SETUP — NO TRADE</b>
+
+⚠️ EMA9 (${ema9Fmt}) and EMA21 (${ema21Fmt}) are on OPPOSITE sides of VWAP (${vwapFmt})
+📊 Market is indecisive — signals mixed
+
+❌ <b>Skip today's opening trade</b>
+💡 Wait for cleaner setup later or sit out
+
+NIFTY: ${niftyFmt} | ${vixLine}`;
+
+    await sendRawMessage(msg);
+    console.log(`📱 [9:20 Setup] NO TRADE — EMA9:${ema9Fmt} EMA21:${ema21Fmt} VWAP:${vwapFmt} (mixed)`);
+}
+
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return;
     // ── Race-condition guard: onTick fires synchronously on every websocket tick,
@@ -732,7 +857,7 @@ async function checkTelegramAlerts(newSignal) {
     const ist=getIST(), h=ist.getHours(), m=ist.getMinutes();
     if (h===9&&m>=16&&m<=20&&!morningSummarySent) { morningSummarySent=true; await sendMorningSummary(marketState); return; }
     if (h===14&&m===0&&!nishanebaazAlertSent) { nishanebaazAlertSent=true; await sendNishanebaazAlert(marketState); }
-    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;nishanebaazAlertSent=false;pcrClearedToday=false;btstSentToday=false;telegramAlertInFlight=false;},6*60*60*1000); return; }
+    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;nishanebaazAlertSent=false;pcrClearedToday=false;btstSentToday=false;telegramAlertInFlight=false;ema920AlertSentToday=false;},6*60*60*1000); return; }
     // ── BTST/STBT Telegram alert — fires once in 3:00–3:20 window if signal passed ──
     if (!btstSentToday && marketState.btst?.passed) {
         btstSentToday = true;
@@ -1728,6 +1853,7 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshSR,        10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,        3*60*1000), 150*1000);
     setTimeout(() => setInterval(fetchCalendarEvents, 60*60*1000), 180*1000); // refresh calendar hourly
+    setTimeout(() => setInterval(check920Setup,     30*1000), 0);  // check every 30s — fires once at 9:20 AM
     startTickWatchdog(); // ← watchdog: detects silent WS freeze, falls back to Yahoo
     console.log('Polling intervals started (x1)');
 }
