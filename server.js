@@ -1691,22 +1691,57 @@ app.get('/api/candles', (req,res) => res.json(getCandleHistory()));
 // Chart historical data — fetched server-side to avoid browser CORS restrictions
 app.get('/api/chart', async (req,res) => {
     const tf = req.query.tf || '5m';
-    const intervalMap = { '1m':'1m', '5m':'5m', '15m':'15m', '1h':'60m' };
-    const rangeMap    = { '1m':'1d', '5m':'5d', '15m':'5d', '1h':'1mo' };
-    const interval = intervalMap[tf] || '5m';
-    const range    = rangeMap[tf]    || '5d';
+    // All intraday TFs are built from the same 1m intraday source then aggregated
+    const tfMinutes = { '1m': 1, '5m': 5, '15m': 15, '1h': 60 };
+    const minutes = tfMinutes[tf] || 5;
     try {
-        const { fetchYahooChart } = require('./src/api/yahooFetch');  // Stooq-backed
-        const result = await fetchYahooChart('%5ENSEI', { interval, range, includePrePost: false });
+        const { fetchYahooChart } = require('./src/api/yahooFetch');
+        // Always fetch 1m intraday bars (shared cache — no extra network cost)
+        const result = await fetchYahooChart('%5ENSEI', { interval: '1m', range: '1d', includePrePost: false });
         const q = result?.indicators?.quote?.[0];
         if (!q) return res.json([]);
         const { open, high, low, close, volume } = q;
-        const candles = [];
+        const timestamps = result.timestamp || [];
+
+        // Build raw 1m candles with timestamps
+        const raw = [];
         for (let i = 0; i < close.length; i++) {
             if (close[i] != null && high[i] != null && low[i] != null) {
-                candles.push({ open: open[i] || close[i], high: high[i], low: low[i], close: close[i], volume: volume[i] || 1 });
+                raw.push({
+                    ts    : (timestamps[i] || 0) * 1000,
+                    open  : open[i] || close[i],
+                    high  : high[i],
+                    low   : low[i],
+                    close : close[i],
+                    volume: volume[i] || 1,
+                });
             }
         }
+
+        if (minutes === 1 || raw.length === 0) {
+            // 1m — return as-is, strip timestamps for client
+            return res.json(raw.map(c => ({ open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume })));
+        }
+
+        // Aggregate into N-minute candles by bucketing on IST time
+        // Bucket key = floor(minuteOfDay / N) so 5m buckets are 09:15,09:20,…
+        const buckets = new Map();
+        const MS = minutes * 60 * 1000;
+        for (const c of raw) {
+            // Align to N-minute boundary from epoch (good enough for same-day grouping)
+            const key = Math.floor(c.ts / MS) * MS;
+            if (!buckets.has(key)) {
+                buckets.set(key, { open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume });
+            } else {
+                const b = buckets.get(key);
+                b.high   = Math.max(b.high, c.high);
+                b.low    = Math.min(b.low,  c.low);
+                b.close  = c.close;      // last close in bucket
+                b.volume += c.volume;
+            }
+        }
+
+        const candles = Array.from(buckets.values());
         res.json(candles);
     } catch (err) {
         console.error('Chart API error:', err.message);

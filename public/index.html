@@ -3123,7 +3123,8 @@ function renderCandlestickChart(canvas, candles, vwapVal) {
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  const n = Math.min(candles.length, 60);
+  const tfLimits = { '1m': 75, '5m': 60, '15m': 40, '1h': 30 };
+  const n = Math.min(candles.length, tfLimits[_chartTF] || 60);
   const slice = candles.slice(-n);
   const highs = slice.map(c => c.high), lows = slice.map(c => c.low);
   // If VWAP is provided, include it in the price range so it's always visible
