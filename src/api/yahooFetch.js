@@ -7,6 +7,14 @@
  *  • daily candles: same stale-cache pattern + NSE historical API fallback
  *  • nifty50 stocks: unchanged (pre-open fallback already working)
  *  • global symbols: still return null gracefully (handled by scoring system)
+ *
+ * FIX v3 (2026-06-03):
+ *  • nseNiftyIntraday: reduced per-URL timeout 15s→8s (3 URLs × 8s = 24s max
+ *    before Yahoo fallback, vs 45s before)
+ *  • nseNiftyIntraday: added Yahoo Finance query1.finance.yahoo.com/v8/finance/chart
+ *    as final fallback when ALL NSE URLs timeout (Railway IP ban / off-hours)
+ *    — eliminates "[NSE] intraday: all URLs failed, no usable cache" error
+ *    — Chart tab and RSI stay live even when NSE blocks Railway IP
  */
 
 'use strict';
@@ -388,8 +396,8 @@ async function nseNiftyIntraday() {
         try {
             for (const url of INTRADAY_URLS) {
                 try {
-                    // 15 s timeout — NSE from Railway can be slow; was 8s causing timeouts
-                    const data = await nseGet(url, 15000);
+                    // 8s timeout per URL — fail fast so Yahoo fallback kicks in sooner
+                    const data = await nseGet(url, 8000);
                     const raw  = data?.grapthData || data?.graphData || [];
                     if (!raw.length) continue;
 
@@ -420,14 +428,51 @@ async function nseNiftyIntraday() {
                 }
             }
 
-            // ── ALL URLs failed ──────────────────────────────────────────────
+            // ── ALL NSE URLs failed — try Yahoo Finance 1m as fallback ─────────
+            console.warn('[NSE] intraday: all NSE URLs failed — trying Yahoo Finance 1m fallback...');
+            try {
+                const yhRes = await axios.get('https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI', {
+                    params  : { interval: '1m', range: '1d', includePrePost: false },
+                    headers : {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+                        'Accept'    : 'application/json',
+                    },
+                    timeout : 12000,
+                    validateStatus: s => s < 500,
+                });
+                const result = yhRes.data?.chart?.result?.[0];
+                const timestamps = result?.timestamp;
+                const quote      = result?.indicators?.quote?.[0];
+                if (Array.isArray(timestamps) && timestamps.length > 5 && quote?.close) {
+                    const bars = [];
+                    for (let i = 0; i < timestamps.length; i++) {
+                        const c = quote.close[i];
+                        if (c == null) continue;
+                        const o = quote.open[i]   || c;
+                        const h = quote.high[i]   || c;
+                        const l = quote.low[i]    || c;
+                        const v = quote.volume[i] || 1;
+                        bars.push({ ts: timestamps[i] * 1000, open: o, high: h, low: l, close: parseFloat(c.toFixed(2)), volume: v });
+                    }
+                    if (bars.length > 5) {
+                        console.log(`[NSE] intraday Yahoo fallback ✅ — ${bars.length} bars`);
+                        _intradayCache   = bars;
+                        _intradayCacheAt = Date.now();
+                        return _intradayCache;
+                    }
+                }
+            } catch (yhErr) {
+                console.warn('[NSE] intraday Yahoo fallback failed:', yhErr.message);
+            }
+
+            // ── Stale cache still usable ─────────────────────────────────────
             if (_intradayCache.length > 0 && age < INTRADAY_STALE_TTL) {
                 // Return stale cache — RSI keeps working with yesterday's bars
                 console.warn(`[NSE] intraday: all URLs failed — returning stale cache (${Math.round(age / 60000)}m old)`);
                 return _intradayCache;
             }
 
-            // Cache too old or empty — return empty (RSI will show --)
+            // Everything failed — return empty (RSI will show --)
             console.warn('[NSE] intraday: all URLs failed, no usable cache');
             return [];
         } finally {
