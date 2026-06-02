@@ -471,4 +471,306 @@ async function nseNiftyDaily(days = 10) {
                     for (const [ts, close] of raw) {
                         if (!close) continue;
                         const date = new Date(ts).toISOString().slice(0, 10);
-                        if (!byDate[date
+                        if (!byDate[date]) {
+                            byDate[date] = { open: close, high: close, low: close, close, date };
+                        } else {
+                            byDate[date].high  = Math.max(byDate[date].high, close);
+                            byDate[date].low   = Math.min(byDate[date].low, close);
+                            byDate[date].close = close;
+                        }
+                    }
+                    const rows = Object.values(byDate)
+                        .sort((a, b) => a.date.localeCompare(b.date))
+                        .slice(-days);
+
+                    if (rows.length > 0) {
+                        console.log(`[NSE] daily candles: ${rows.length} days (from ${url})`);
+                        _dailyCache   = rows;
+                        _dailyCacheAt = Date.now();
+                        return _dailyCache;
+                    }
+                } catch (e) {
+                    console.warn(`[NSE] daily candles failed (${url}): ${e.message}`);
+                }
+            }
+
+            // ── Strategy 2: NSE historical indices API ─────────────────────────
+            try {
+                const today = new Date();
+                const from  = new Date(today);
+                from.setDate(from.getDate() - 45); // fetch 45 days, slice to `days`
+                const fmt = d =>
+                    `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`;
+                const histUrl = `/api/historical/indicesHistory?indexType=NIFTY%2050&from=${fmt(from)}&to=${fmt(today)}`;
+                const data    = await nseGet(histUrl, 12000);
+
+                // Response shape varies — handle both known formats
+                const rows =
+                    data?.data?.indexCloseOnlineRecords ||
+                    data?.data?.indexTurnoverRecords    ||
+                    (Array.isArray(data?.data) ? data.data : null);
+
+                if (Array.isArray(rows) && rows.length > 0) {
+                    const hist = rows
+                        .filter(r => r.EOD_CLOSE_INDEX_VAL || r.CLOSE)
+                        .map(r => ({
+                            date : (r.EOD_TIMESTAMP || r.TIMESTAMP || r.DATE || '').slice(0, 10),
+                            open : parseFloat(r.EOD_OPEN_INDEX_VAL  || r.OPEN  || r.EOD_CLOSE_INDEX_VAL || r.CLOSE),
+                            high : parseFloat(r.EOD_HIGH_INDEX_VAL  || r.HIGH  || r.EOD_CLOSE_INDEX_VAL || r.CLOSE),
+                            low  : parseFloat(r.EOD_LOW_INDEX_VAL   || r.LOW   || r.EOD_CLOSE_INDEX_VAL || r.CLOSE),
+                            close: parseFloat(r.EOD_CLOSE_INDEX_VAL || r.CLOSE),
+                        }))
+                        .filter(r => r.date && r.close > 0)
+                        .sort((a, b) => a.date.localeCompare(b.date))
+                        .slice(-days);
+
+                    if (hist.length > 0) {
+                        console.log(`[NSE] daily from historical API: ${hist.length} days`);
+                        _dailyCache   = hist;
+                        _dailyCacheAt = Date.now();
+                        return _dailyCache;
+                    }
+                }
+            } catch (e) {
+                console.warn('[NSE] historical API failed:', e.message);
+            }
+
+            // ── All strategies failed — return stale cache if usable ───────────
+            if (_dailyCache.length > 0 && age < DAILY_STALE_TTL) {
+                console.warn(`[NSE] daily: all sources failed — returning stale cache (${Math.round(age / 60000)}m old)`);
+                return _dailyCache;
+            }
+
+            console.warn('[NSE] daily: all sources failed, no usable cache');
+            return [];
+        } finally {
+            _dailyFetch = null;
+        }
+    })();
+    return _dailyFetch;
+}
+
+// ── fetchYahooMeta (drop-in) ──────────────────────────────────────────────────
+async function fetchYahooMeta(symbol, params = {}) {
+    try {
+        const decoded   = decodeURIComponent(symbol);
+        const indexName = NSE_INDEX_MAP[decoded] || NSE_INDEX_MAP[symbol];
+        const nseSym    = toNSESymbol(decoded);
+
+        // Global symbols (world indices, forex, commodities) — fetch directly from Yahoo Finance
+        if (isGlobal(symbol)) {
+            const q = await yahooDirectQuote(encodeURIComponent(decoded));
+            if (!q) return null;
+            return {
+                regularMarketPrice  : q.price,
+                previousClose       : q.prevClose,
+                chartPreviousClose  : q.prevClose,
+                regularMarketOpen   : q.open   || q.price,
+                regularMarketHigh   : q.high   || q.price,
+                regularMarketLow    : q.low    || q.price,
+                regularMarketVolume : q.volume || 0,
+            };
+        }
+
+        let quote = null;
+        if (indexName)     quote = await nseIndexQuote(indexName);
+        else if (nseSym)   quote = await nseStockQuote(nseSym);
+
+        if (!quote) return null;
+        const prevClose = quote.prevClose || quote.price;
+        return {
+            regularMarketPrice  : quote.price,
+            previousClose       : prevClose,
+            chartPreviousClose  : prevClose,
+            regularMarketOpen   : quote.open   || quote.price,
+            regularMarketHigh   : quote.high   || quote.price,
+            regularMarketLow    : quote.low    || quote.price,
+            regularMarketVolume : quote.volume || 0,
+        };
+    } catch (e) {
+        console.warn(`[fetchYahooMeta] ${symbol}:`, e.message);
+        return null;
+    }
+}
+
+// ── fetchYahooChart (drop-in) ─────────────────────────────────────────────────
+async function fetchYahooChart(symbol, params = { interval: '1d', range: '1d' }) {
+    try {
+        const decoded    = decodeURIComponent(symbol);
+        const interval   = params.interval || '1d';
+        const isIntraday = interval.endsWith('m') || interval === '1h' || interval === '60m';
+        const days       = params.range === '10d' ? 10 : params.range === '1mo' ? 22 : 5;
+        const isNifty    =
+            decoded === '^NSEI' ||
+            decoded === '%5ENSEI' ||
+            symbol  === '%5ENSEI' ||
+            NSE_INDEX_MAP[decoded] === 'NIFTY 50';
+
+        if (!isNifty) {
+            // Non-Nifty chart: single-point stub from meta
+            const meta = await fetchYahooMeta(symbol, params);
+            if (!meta) return null;
+            const ts = Math.floor(Date.now() / 1000);
+            return {
+                meta,
+                timestamp : [ts],
+                indicators: { quote: [{ open: [meta.regularMarketOpen], high: [meta.regularMarketHigh], low: [meta.regularMarketLow], close: [meta.regularMarketPrice], volume: [0] }] },
+            };
+        }
+
+        let timestamps = [], opens = [], highs = [], lows = [], closes = [], volumes = [];
+
+        if (isIntraday) {
+            const bars = await nseNiftyIntraday();
+            if (!bars.length) return null;
+            for (const b of bars) {
+                timestamps.push(Math.floor(b.ts / 1000));
+                opens.push(b.open); highs.push(b.high); lows.push(b.low);
+                closes.push(b.close); volumes.push(b.volume);
+            }
+        } else {
+            const hist = await nseNiftyDaily(days);
+            if (!hist.length) return null;
+            for (const row of hist) {
+                const ts = Math.floor(new Date(row.date + 'T09:15:00+05:30').getTime() / 1000);
+                timestamps.push(ts);
+                opens.push(row.open); highs.push(row.high); lows.push(row.low);
+                closes.push(row.close); volumes.push(row.volume || 1);
+            }
+        }
+
+        const lastClose = closes[closes.length - 1];
+        const prevClose = closes.length >= 2 ? closes[closes.length - 2] : lastClose;
+
+        return {
+            meta      : { regularMarketPrice: lastClose, previousClose: prevClose, chartPreviousClose: prevClose },
+            timestamp : timestamps,
+            indicators: { quote: [{ open: opens, high: highs, low: lows, close: closes, volume: volumes }] },
+        };
+    } catch (e) {
+        console.warn(`[fetchYahooChart] ${symbol}:`, e.message);
+        return null;
+    }
+}
+
+// ── Legacy shim ───────────────────────────────────────────────────────────────
+async function yahooGet(path, params = {}, timeoutMs = 20000) {
+    const match  = path.match(/chart\/([^?]+)/);
+    const symbol = match ? decodeURIComponent(match[1]) : path;
+    const chart  = await fetchYahooChart(symbol, params);
+    if (!chart) throw new Error(`No data for ${symbol}`);
+    return { chart: { result: [chart], error: null } };
+}
+
+// ── Yahoo Finance batch quote for Nifty 50 weighted stocks ───────────────────
+// Used as Tier 2.5 breadth fallback when NSE equity-stockIndices is 404 on Railway.
+// Fetches up to 50 .NS symbols in ONE request — fast and Railway-compatible.
+const NIFTY50_YAHOO_SYMBOLS = [
+    'RELIANCE.NS','HDFCBANK.NS','ICICIBANK.NS','INFY.NS','TCS.NS',
+    'KOTAKBANK.NS','LT.NS','SBIN.NS','AXISBANK.NS','BHARTIARTL.NS',
+    'ITC.NS','WIPRO.NS','HCLTECH.NS','MARUTI.NS','BAJFINANCE.NS',
+    'TITAN.NS','ASIANPAINT.NS','NTPC.NS','POWERGRID.NS','NESTLEIND.NS',
+];
+
+// ── Yahoo Finance batch quote — no-auth approach ─────────────────────────────
+// Railway blocks Yahoo auth endpoints (consent.yahoo.com, query2, etc.)
+// Solution: use Yahoo's /v7/finance/spark endpoint — no crumb/cookie needed,
+// returns price + prevClose for multiple symbols in one call.
+
+let _yahooStocksCache   = null;
+let _yahooStocksCacheAt = 0;
+
+async function fetchNifty50FromYahoo() {
+    const istNow   = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istMin   = istNow.getHours() * 60 + istNow.getMinutes();
+    const inMarket = istMin >= 555 && istMin <= 930;
+    const cacheTTL = inMarket ? 60_000 : 300_000;
+
+    if (_yahooStocksCache && Date.now() - _yahooStocksCacheAt < cacheTTL) return _yahooStocksCache;
+
+    const symbols = NIFTY50_YAHOO_SYMBOLS.join(',');
+    const HEADERS = {
+        'User-Agent'     : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'Accept'         : 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer'        : 'https://finance.yahoo.com/',
+        'Origin'         : 'https://finance.yahoo.com',
+    };
+
+    // Attempt 1: spark endpoint — no auth required, returns price history + meta
+    try {
+        const url = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${symbols}&range=1d&interval=1d&indicators=close&includeTimestamps=false`;
+        const res = await axios.get(url, { timeout: 10000, headers: HEADERS });
+        const spark = res.data?.spark?.result;
+        if (Array.isArray(spark) && spark.length >= 5) {
+            const rows = spark.map(s => {
+                const symbol    = (s.symbol || '').replace('.NS', '');
+                const meta      = s.response?.[0]?.meta || {};
+                const price     = parseFloat((meta.regularMarketPrice       || 0).toFixed(2));
+                const prevClose = parseFloat((meta.chartPreviousClose       || meta.previousClose || price).toFixed(2));
+                return { symbol, lastPrice: price, previousClose: prevClose };
+            }).filter(r => r.lastPrice > 0);
+
+            if (rows.length >= 5) {
+                _yahooStocksCache   = rows;
+                _yahooStocksCacheAt = Date.now();
+                console.log(`[Yahoo] Nifty50 spark: ${rows.length} stocks loaded ✅`);
+                return rows;
+            }
+        }
+    } catch (e) {
+        console.warn(`[Yahoo] spark failed: ${e.response?.status || e.message}`);
+    }
+
+    // Attempt 2: v8/finance/quote with formatted=false (sometimes works without crumb)
+    try {
+        const url = `https://query2.finance.yahoo.com/v8/finance/quote?symbols=${symbols}&fields=regularMarketPrice,regularMarketPreviousClose&formatted=false&region=IN&lang=en-IN`;
+        const res = await axios.get(url, { timeout: 10000, headers: HEADERS });
+        const quotes = res.data?.quoteResponse?.result;
+        if (Array.isArray(quotes) && quotes.length >= 5) {
+            const rows = quotes.map(q => ({
+                symbol      : (q.symbol || '').replace('.NS', ''),
+                lastPrice   : parseFloat((q.regularMarketPrice         || 0).toFixed(2)),
+                previousClose: parseFloat((q.regularMarketPreviousClose || 0).toFixed(2)),
+            })).filter(r => r.lastPrice > 0);
+
+            if (rows.length >= 5) {
+                _yahooStocksCache   = rows;
+                _yahooStocksCacheAt = Date.now();
+                console.log(`[Yahoo] Nifty50 v8 quote: ${rows.length} stocks loaded ✅`);
+                return rows;
+            }
+        }
+    } catch (e) {
+        console.warn(`[Yahoo] v8 quote failed: ${e.response?.status || e.message}`);
+    }
+
+    // Attempt 3: v7/finance/quote with query2 host
+    try {
+        const url = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${symbols}&fields=regularMarketPrice,regularMarketPreviousClose`;
+        const res = await axios.get(url, { timeout: 10000, headers: HEADERS });
+        const quotes = res.data?.quoteResponse?.result;
+        if (Array.isArray(quotes) && quotes.length >= 5) {
+            const rows = quotes.map(q => ({
+                symbol      : (q.symbol || '').replace('.NS', ''),
+                lastPrice   : parseFloat((q.regularMarketPrice         || 0).toFixed(2)),
+                previousClose: parseFloat((q.regularMarketPreviousClose || 0).toFixed(2)),
+            })).filter(r => r.lastPrice > 0);
+
+            if (rows.length >= 5) {
+                _yahooStocksCache   = rows;
+                _yahooStocksCacheAt = Date.now();
+                console.log(`[Yahoo] Nifty50 v7 query2: ${rows.length} stocks loaded ✅`);
+                return rows;
+            }
+        }
+    } catch (e) {
+        console.warn(`[Yahoo] v7 query2 failed: ${e.response?.status || e.message}`);
+    }
+
+    console.warn('[Yahoo] All Nifty50 batch attempts failed — sector fallback will be used');
+    return null;
+}
+
+module.exports = { yahooGet, fetchYahooMeta, fetchYahooChart, fetchNifty50Stocks, fetchAllIndices, fetchNifty50FromYahoo };
