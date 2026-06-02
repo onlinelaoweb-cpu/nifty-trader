@@ -299,8 +299,8 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .del-btn{padding:5px 9px;background:rgba(255,34,68,0.1);border:1px solid rgba(255,34,68,0.3);color:var(--red);border-radius:5px;font-size:12px;cursor:pointer;}
 
 /* Events calendar */
-.events-card{background:linear-gradient(150deg,var(--bg2),#0c1a28);border:1px solid var(--border);border-radius:var(--card-radius);padding:12px;margin-bottom:10px;box-shadow:var(--card-shadow);}
-.events-title{font-family:'Orbitron',monospace;font-size:10px;color:var(--amber);letter-spacing:2px;margin-bottom:10px;}
+
+
 .event-add-row{display:flex;gap:6px;margin-bottom:10px;}
 .event-time-input{width:72px;background:var(--bg3);border:1px solid var(--border);color:#fff;padding:6px 6px;border-radius:6px;font-family:'Share Tech Mono',monospace;font-size:12px;outline:none;text-align:center;}
 .event-title-input{flex:1;background:var(--bg3);border:1px solid var(--border);color:#fff;padding:6px 8px;border-radius:6px;font-family:'Rajdhani',sans-serif;font-size:13px;outline:none;}
@@ -1001,22 +1001,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     </div>
 
     <!-- Events Calendar -->
-    <div class="events-card">
-      <div class="events-title">📅 TODAY'S EVENTS</div>
-      <div class="event-add-row">
-        <input class="event-time-input" id="ev-time" placeholder="10:00"/>
-        <input class="event-title-input" id="ev-title" placeholder="Event name (e.g. RBI Policy)"/>
-        <select class="event-impact-select" id="ev-impact">
-          <option value="high">🔴 HIGH</option>
-          <option value="medium" selected>🟡 MED</option>
-          <option value="low">🟢 LOW</option>
-        </select>
-        <button class="event-add-btn" onclick="addEvent()">+</button>
-      </div>
-      <div id="events-list">
-        <div style="text-align:center;padding:10px;font-size:11px;color:#7a9ab8;">No events added</div>
-      </div>
-    </div>
+
 
   </div>
 </div>
@@ -1480,7 +1465,7 @@ function switchTab(name,btn){
     const slVixEl=document.getElementById('sl-vix'); if(slVixEl && !slVixEl.value && _lastState.vix) slVixEl.value=_lastState.vix.toFixed(2);
     autoATM();
   }
-  if(name==='journal'){loadJournal();loadEvents();}
+  if(name==='journal'){loadJournal();}
   if(name==='breadth'||name==='global'){
     // Render immediately from cache — no loading flicker
     if(_lastState){
@@ -2600,7 +2585,7 @@ function testTG(btn) {
 // ─── TRADE JOURNAL ───────────────────────────────────────
 // Source of truth: server (/api/trades). localStorage is a fast-render cache only.
 let _trades = JSON.parse(localStorage.getItem('vn_trades') || '[]');
-let _events = JSON.parse(localStorage.getItem('vn_events') || '[]');
+
 
 // ── Internal helpers ─────────────────────────────────────
 async function _apiPost(url, body) {
@@ -2817,29 +2802,7 @@ async function clearAllTrades() {
 }
 
 // ─── EVENTS ──────────────────────────────────────────────
-function addEvent() {
-  const time = document.getElementById('ev-time').value;
-  const title = document.getElementById('ev-title').value;
-  const impact = document.getElementById('ev-impact').value;
-  if (!title) return;
-  _events.push({ id: Date.now(), time, title, impact });
-  localStorage.setItem('vn_events', JSON.stringify(_events));
-  loadEvents();
-  document.getElementById('ev-time').value = '';
-  document.getElementById('ev-title').value = '';
-}
 
-function loadEvents() {
-  const el = document.getElementById('events-list');
-  if (!el) return;
-  if (!_events.length) { el.innerHTML = '<div style="text-align:center;padding:10px;font-size:11px;color:#7a9ab8;">No events added</div>'; return; }
-  el.innerHTML = _events.map(e => {
-    const dot = e.impact === 'high' ? '🔴' : e.impact === 'medium' ? '🟡' : '🟢';
-    return `<div class="event-row">${dot} <b>${e.time||'--'}</b> — ${e.title} <button onclick="removeEvent(${e.id})" style="float:right;background:none;border:none;color:var(--red);cursor:pointer;font-size:10px;">✕</button></div>`;
-  }).join('');
-}
-
-function removeEvent(id) { _events = _events.filter(e => e.id !== id); localStorage.setItem('vn_events', JSON.stringify(_events)); loadEvents(); }
 
 // ─── CHECKLIST ───────────────────────────────────────────
 function toggleChecklist() {
@@ -3354,7 +3317,6 @@ function toggleSound() {
 
 // ─── INIT ────────────────────────────────────────────────
 loadJournal();
-loadEvents();
 fetchSignal();
 
 // Event delegation for EXIT buttons (uses data-exit-id instead of inline onclick)
