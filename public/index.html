@@ -841,7 +841,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
           <!-- Tick at 70 -->
           <line x1="92.6" y1="27" x2="102" y2="14" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
           <!-- Needle group — rotate around center (65,65) -->
-          <g id="rsi-needle-g" class="rsi-needle" style="transform:rotate(-90deg);transform-origin:65px 65px;">
+          <g id="rsi-needle-g" class="rsi-needle" transform="rotate(-90, 65, 65)">
             <line x1="65" y1="65" x2="65" y2="14" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
             <circle cx="65" cy="65" r="5" fill="white" opacity="0.9"/>
             <circle cx="65" cy="65" r="2.5" fill="#020508"/>
@@ -1014,9 +1014,18 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="ad-hero">
       <div class="ad-title">📊 ADVANCE / DECLINE — TOP 20 NIFTY</div>
       <div class="ad-numbers">
-        <div><div style="font-size:9px;color:var(--green);letter-spacing:2px;">ADVANCES</div><div class="ad-up" id="ad-up">--</div></div>
-        <div class="ad-sep">vs</div>
-        <div><div style="font-size:9px;color:var(--red);letter-spacing:2px;">DECLINES</div><div class="ad-dn" id="ad-dn">--</div></div>
+        <div><div style="font-size:9px;color:var(--green);letter-spacing:2px;">ADV</div><div class="ad-up" id="ad-up">--</div></div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
+          <div class="ad-sep">vs</div>
+          <div id="ad-unch-small" style="font-size:9px;color:#9ab8d0;letter-spacing:1px;">-- UNCH</div>
+        </div>
+        <div><div style="font-size:9px;color:var(--red);letter-spacing:2px;">DEC</div><div class="ad-dn" id="ad-dn">--</div></div>
+      </div>
+      <!-- Stacked breadth bar -->
+      <div style="height:6px;border-radius:3px;overflow:hidden;display:flex;margin:4px 0 6px;gap:1px;">
+        <div id="ad-bar-adv" style="background:var(--green);height:100%;width:50%;transition:width 0.8s;"></div>
+        <div id="ad-bar-unc" style="background:#4a6a8a;height:100%;width:0%;transition:width 0.8s;"></div>
+        <div id="ad-bar-dec" style="background:var(--red);height:100%;width:50%;transition:width 0.8s;"></div>
       </div>
       <div class="ad-dial-wrap">
         <svg class="ad-dial-svg" width="130" height="72" viewBox="0 0 130 72">
@@ -1036,7 +1045,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
           <text x="16" y="62" font-size="7" fill="rgba(255,34,68,0.7)" font-family="monospace">BEAR</text>
           <text x="96" y="62" font-size="7" fill="rgba(0,255,136,0.7)" font-family="monospace">BULL</text>
           <!-- Needle -->
-          <g id="ad-needle-g" class="ad-needle" style="transform:rotate(0deg);transform-origin:65px 65px;">
+          <g id="ad-needle-g" class="ad-needle" transform="rotate(-90, 65, 65)">
             <line x1="65" y1="65" x2="65" y2="14" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
             <circle cx="65" cy="65" r="5" fill="white" opacity="0.9"/>
             <circle cx="65" cy="65" r="2.5" fill="#020508"/>
@@ -1743,7 +1752,7 @@ function renderDashboard(s) {
     const needle = document.getElementById('rsi-needle-g');
     if (needle) {
       const angle = ((s.rsi / 100) * 180) - 90;
-      needle.style.transform = `rotate(${angle}deg)`;
+      needle.setAttribute('transform', `rotate(${angle}, 65, 65)`);
     }
     const zone = s.rsi < 30 ? 'OVERSOLD' : s.rsi > 70 ? 'OVERBOUGHT' : 'NEUTRAL';
     const zoneEl = document.getElementById('rsi-dial-zone');
@@ -2148,6 +2157,15 @@ function updateBreadthUI(b) {
   const upEl = document.getElementById('ad-up'); if (upEl) upEl.textContent = up;
   const dnEl = document.getElementById('ad-dn'); if (dnEl) dnEl.textContent = dn;
   const unchEl = document.getElementById('ad-unch'); if (unchEl) unchEl.textContent = unch;
+  const unchSmall = document.getElementById('ad-unch-small'); if (unchSmall) unchSmall.textContent = unch + ' UNCH';
+
+  // Stacked breadth bar
+  const advPct = Math.round((up / total) * 100);
+  const uncPct = Math.round((unch / total) * 100);
+  const decPct = 100 - advPct - uncPct;
+  const barAdv = document.getElementById('ad-bar-adv'); if (barAdv) barAdv.style.width = advPct + '%';
+  const barUnc = document.getElementById('ad-bar-unc'); if (barUnc) barUnc.style.width = uncPct + '%';
+  const barDec = document.getElementById('ad-bar-dec'); if (barDec) barDec.style.width = decPct + '%';
 
   // FIX: b.source is top-level — was wrongly looking at b.stocks[0].source (doesn't exist)
   // FIX: srcLabel was computed but then DISCARDED — srcBadge was always set to just the time
@@ -2167,8 +2185,8 @@ function updateBreadthUI(b) {
   // Dial needle
   const needle = document.getElementById('ad-needle-g');
   if (needle) {
-    const angle = (bullPct / 100) * 180 - 90;
-    needle.style.transform = `rotate(${angle}deg)`;
+    const angle = (wBull / 100) * 180 - 90;
+    needle.setAttribute('transform', `rotate(${angle}, 65, 65)`);
   }
   const bullPctEl = document.getElementById('ad-bull-pct'); if (bullPctEl) bullPctEl.textContent = bullPct + '%';
   const bearPctEl = document.getElementById('ad-bear-pct'); if (bearPctEl) bearPctEl.textContent = (100 - bullPct) + '%';
