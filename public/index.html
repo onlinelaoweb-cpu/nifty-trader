@@ -986,7 +986,14 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="trade-list-card">
       <div class="trade-list-header">
         <span>TRADE LOG</span>
-        <button class="clear-trades-btn" onclick="clearAllTrades()">Clear All</button>
+        <span id="clear-confirm-wrap" style="display:flex;align-items:center;gap:4px;">
+          <button class="clear-trades-btn" id="clear-trades-btn" onclick="showClearConfirm()">Clear All</button>
+          <span id="clear-confirm-inline" style="display:none;align-items:center;gap:4px;">
+            <span style="font-size:9px;color:var(--amber);">Sure?</span>
+            <button onclick="clearAllTrades()" style="font-size:9px;padding:2px 6px;background:rgba(255,50,50,0.15);border:1px solid var(--red);color:var(--red);border-radius:3px;cursor:pointer;">YES</button>
+            <button onclick="hideClearConfirm()" style="font-size:9px;padding:2px 6px;background:rgba(255,255,255,0.05);border:1px solid var(--dim);color:var(--dim);border-radius:3px;cursor:pointer;">NO</button>
+          </span>
+        </span>
       </div>
       <div id="trade-list-body">
         <div style="text-align:center;padding:14px;font-size:11px;color:#7a9ab8;">No trades logged yet. Add your first trade above.</div>
@@ -1254,7 +1261,12 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <button class="chart-btn" onclick="setChartTF('15m',this)">15m</button>
       <button class="chart-btn" onclick="setChartTF('1h',this)">1h</button>
     </div>
-    <div class="chart-box"><canvas id="chart-canvas"></canvas></div>
+    <div class="chart-box" style="position:relative;">
+      <canvas id="chart-canvas"></canvas>
+      <div id="chart-loading" style="display:none;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#060d14;font-size:11px;color:var(--blue);letter-spacing:1px;">⏳ LOADING…</div>
+      <div id="chart-empty" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:#060d14;font-size:11px;color:var(--dim);letter-spacing:1px;">📭 NO DATA FOR THIS TIMEFRAME</div>
+    </div>
+    <div style="text-align:right;font-size:9px;color:var(--dim);margin-top:3px;" id="chart-updated"></div>
     <div class="chart-legend">
       <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div><span>Bull</span></div>
       <div class="legend-item"><div class="legend-dot" style="background:var(--red)"></div><span>Bear</span></div>
@@ -1455,7 +1467,12 @@ function switchTab(name,btn){
   document.querySelectorAll('.btab').forEach(b=>b.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
   btn.classList.add('active');
-  if(name==='chart'){refreshChart();}
+  if(name==='chart'){
+    refreshChart();
+    _startChartAutoRefresh();
+  } else {
+    _stopChartAutoRefresh();
+  }
   if(name==='tools' && _lastState){
     // Auto-fill live values so user doesn't have to type them
     const niftyEl=document.getElementById('calc-nifty'); if(niftyEl && !niftyEl.value && _lastState.nifty>0) niftyEl.value=_lastState.nifty.toFixed(0);
@@ -2670,14 +2687,21 @@ function _renderJournal() {
   tbody.innerHTML = _trades.slice().reverse().map(t => {
     const d       = new Date(t.time);
     const timeStr = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-    const pnlStr  = t.pnl != null ? (t.pnl >= 0 ? '+₹' : '₹') + t.pnl.toFixed(0) : (t.currentPnl != null ? (t.currentPnl >= 0 ? '~+₹' : '~₹') + t.currentPnl.toFixed(0) : 'OPEN');
-    const pnlColor = t.pnl == null ? (t.currentPnl != null ? (t.currentPnl >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--blue)') : t.pnl > 0 ? 'var(--green)' : 'var(--red)';
-    const exitBtn  = t.exit != null ? '<span style="font-size:9px;color:var(--dim)">✓ CLOSED</span>'
-                                    : '<button onclick="exitTrade(' + t.id + ')" style="font-size:9px;padding:2px 5px;background:rgba(255,187,0,0.1);border:1px solid var(--amber);color:var(--amber);border-radius:3px;cursor:pointer">EXIT</button>';
+    const isClosed = t.exit != null;
+    const pnlStr  = isClosed
+      ? (t.pnl >= 0 ? '+₹' : '₹') + t.pnl.toFixed(0)
+      : (t.currentPnl != null ? (t.currentPnl >= 0 ? '~+₹' : '~₹') + t.currentPnl.toFixed(0) : 'OPEN');
+    const pnlColor = isClosed
+      ? (t.pnl > 0 ? 'var(--green)' : t.pnl < 0 ? 'var(--red)' : 'var(--dim)')
+      : (t.currentPnl != null ? (t.currentPnl >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--blue)');
+    const slStr = t.sl ? '<span style="font-size:9px;color:var(--dim)">SL:' + t.sl + '</span>' : '';
+    const exitBtn  = isClosed
+      ? '<span style="font-size:9px;color:var(--dim)">✓ CLOSED</span>'
+      : '<button data-exit-id="' + t.id + '" style="font-size:9px;padding:2px 5px;background:rgba(255,187,0,0.1);border:1px solid var(--amber);color:var(--amber);border-radius:3px;cursor:pointer">EXIT</button>';
     return '<div class="trade-row">'
       + '<span style="color:' + (t.type === 'CE' ? 'var(--green)' : 'var(--red)') + ';">' + t.type + '</span>'
       + '<span>' + t.strike + ' @₹' + t.premium + '</span>'
-      + '<span>' + t.lots + 'L</span>'
+      + '<span>' + t.lots + 'L ' + slStr + '</span>'
       + '<span style="color:' + pnlColor + ';">' + pnlStr + '</span>'
       + '<span style="font-size:9px;color:var(--dim);">' + timeStr + '</span>'
       + exitBtn
@@ -2751,9 +2775,18 @@ async function exitTrade(id) {
   }
 }
 
+function showClearConfirm() {
+  document.getElementById('clear-trades-btn').style.display = 'none';
+  document.getElementById('clear-confirm-inline').style.display = 'flex';
+}
+function hideClearConfirm() {
+  document.getElementById('clear-trades-btn').style.display = '';
+  document.getElementById('clear-confirm-inline').style.display = 'none';
+}
+
 // Clear all trades — delete from server, then clear locally.
 async function clearAllTrades() {
-  if (!confirm('Clear all trades? This cannot be undone.')) return;
+  hideClearConfirm();
 
   // Fire server deletes in parallel (best-effort)
   const deletePromises = _trades.map(t =>
@@ -3053,13 +3086,38 @@ function setChartTF(tf, btn) {
   refreshChart();
 }
 
+let _chartAutoRefreshTimer = null;
+
+function _startChartAutoRefresh() {
+  _stopChartAutoRefresh();
+  _chartAutoRefreshTimer = setInterval(() => {
+    const chartPanel = document.getElementById('panel-chart');
+    if (chartPanel && chartPanel.classList.contains('active')) refreshChart();
+  }, 3 * 60 * 1000); // every 3 min
+}
+function _stopChartAutoRefresh() {
+  if (_chartAutoRefreshTimer) { clearInterval(_chartAutoRefreshTimer); _chartAutoRefreshTimer = null; }
+}
+
 async function refreshChart() {
   const canvas = document.getElementById('chart-canvas');
   if (!canvas) return;
+  const loadEl  = document.getElementById('chart-loading');
+  const emptyEl = document.getElementById('chart-empty');
+  const updEl   = document.getElementById('chart-updated');
+  // Show loading overlay
+  if (loadEl)  { loadEl.style.display  = 'flex'; }
+  if (emptyEl) { emptyEl.style.display = 'none'; }
+  canvas.style.opacity = '0.3';
   try {
     const r = await fetch('/api/chart?tf=' + _chartTF);
     const candles = await r.json();
-    if (!candles || !candles.length) return;
+    if (loadEl) loadEl.style.display = 'none';
+    canvas.style.opacity = '1';
+    if (!candles || !candles.length) {
+      if (emptyEl) emptyEl.style.display = 'flex';
+      return;
+    }
     // Update OHLC summary
     const last = candles[candles.length-1];
     const setVal = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v!=null?v:'--'; };
@@ -3068,11 +3126,19 @@ async function refreshChart() {
     setVal('chart-high', Math.max(...candles.slice(-20).map(c=>c.high)).toFixed(2));
     setVal('chart-low', Math.min(...candles.slice(-20).map(c=>c.low)).toFixed(2));
     setVal('chart-nifty-label', last.close?.toFixed(2));
-    renderCandlestickChart(canvas, candles);
-  } catch (e) { console.warn('Chart error:', e.message); }
+    // Attach VWAP from _lastState if available
+    const vwapVal = (_lastState && _lastState.vwap != null) ? _lastState.vwap : null;
+    renderCandlestickChart(canvas, candles, vwapVal);
+    if (updEl) updEl.textContent = 'Updated: ' + new Date().toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  } catch (e) {
+    if (loadEl) loadEl.style.display = 'none';
+    canvas.style.opacity = '1';
+    if (emptyEl) { emptyEl.style.display = 'flex'; emptyEl.textContent = '⚠️ CHART LOAD FAILED'; }
+    console.warn('Chart error:', e.message);
+  }
 }
 
-function renderCandlestickChart(canvas, candles) {
+function renderCandlestickChart(canvas, candles, vwapVal) {
   const W = canvas.parentElement.clientWidth || 360, H = 220;
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
@@ -3080,7 +3146,10 @@ function renderCandlestickChart(canvas, candles) {
   const n = Math.min(candles.length, 60);
   const slice = candles.slice(-n);
   const highs = slice.map(c => c.high), lows = slice.map(c => c.low);
-  const minP = Math.min(...lows), maxP = Math.max(...highs);
+  // If VWAP is provided, include it in the price range so it's always visible
+  const allPrices = [...highs, ...lows];
+  if (vwapVal != null) allPrices.push(vwapVal);
+  const minP = Math.min(...allPrices), maxP = Math.max(...allPrices);
   const range = maxP - minP || 1;
   const pad = 8, bw = Math.max(2, Math.floor((W - pad*2) / n) - 1);
   const toY = p => H - pad - ((p - minP) / range) * (H - pad*2);
@@ -3108,6 +3177,25 @@ function renderCandlestickChart(canvas, candles) {
     ctx.beginPath(); ctx.moveTo(x+bw/2, highY); ctx.lineTo(x+bw/2, lowY); ctx.stroke();
     ctx.fillStyle = color; ctx.fillRect(x, bodyTop, bw, bodyH);
   });
+
+  // VWAP line
+  if (vwapVal != null) {
+    const vy = toY(vwapVal);
+    ctx.save();
+    ctx.strokeStyle = '#3399ff';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 3]);
+    ctx.beginPath();
+    ctx.moveTo(pad, vy);
+    ctx.lineTo(W - 40, vy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#3399ff';
+    ctx.font = '8px monospace';
+    ctx.fillText('V ' + vwapVal.toFixed(0), W - 36, vy + 3);
+    ctx.restore();
+  }
+
   canvas.style.display = 'block';
 }
 
@@ -3251,6 +3339,12 @@ function toggleSound() {
 loadJournal();
 loadEvents();
 fetchSignal();
+
+// Event delegation for EXIT buttons (uses data-exit-id instead of inline onclick)
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('[data-exit-id]');
+  if (btn) exitTrade(Number(btn.dataset.exitId));
+});
 
 // ─── ECONOMIC CALENDAR ───────────────────────────────────
 function renderCalendarEvents(events) {
