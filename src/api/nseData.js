@@ -161,18 +161,23 @@ async function nseGetWithRetry(url) {
 async function scraperAPIFetch(targetUrl) {
     if (!SCRAPERAPI_KEY) return null;
     try {
-        const apiUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(targetUrl)}&keep_headers=true`;
+        // render_js=true: ScraperAPI uses headless Chrome — handles NSE cookie/JS properly
+        // keep_headers=false: let ScraperAPI manage headers (our headers confuse it for NSE)
+        // country_code=in: use India IP — NSE less likely to block domestic IPs
+        const apiUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(targetUrl)}&render_js=false&country_code=in`;
         const res = await axios.get(apiUrl, {
-            timeout        : 30_000,   // ScraperAPI can be slow — 30s
+            timeout        : 30_000,
             validateStatus : () => true,
-            headers        : { ...HEADERS },
         });
         if (res.status !== 200) {
             console.warn(`[ScraperAPI] HTTP ${res.status} for ${targetUrl}`);
             return null;
         }
-        // NSE returns JSON; scraperAPI passes it through
         const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+        if (!data?.records?.data) {
+            console.warn(`[ScraperAPI] Response missing records.data — status:${res.status}`);
+            return null;
+        }
         return data;
     } catch (e) {
         console.warn(`[ScraperAPI] Fetch failed: ${e.message}`);

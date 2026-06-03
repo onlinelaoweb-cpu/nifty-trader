@@ -743,28 +743,100 @@ function evaluateBTST() {
 // ═══════════════════════════════════════════════════════════════════════════════
 async function check920Setup() {
     if (!isConfigured()) return;
-    if (ema920AlertSentToday) return;  // already fired today
+    if (ema920AlertSentToday) return;
 
     const ist  = getIST();
-    const h    = ist.getHours();
-    const m    = ist.getMinutes();
-    const mins = h * 60 + m;
-
-    // Window: 9:20 AM (560) to 9:30 AM (570) IST only
-    if (mins < 560 || mins > 570) return;
+    const mins = ist.getHours() * 60 + ist.getMinutes();
+    if (mins < 560 || mins > 570) return;  // 9:20–9:30 AM only
 
     const { nifty, ema9, ema21, vwap } = marketState;
+    if (!nifty || nifty <= 0 || !ema9 || !ema21 || !vwap) return;
 
-    // Need all 4 values live
-    if (!nifty || nifty <= 0) return;
-    if (!ema9 || !ema21 || !vwap) return;
-
-    // ATM strike (nearest 50)
     const atmStrike = Math.round(nifty / 50) * 50;
     const vwapFmt   = vwap.toLocaleString('en-IN', { maximumFractionDigits: 2 });
     const ema9Fmt   = ema9.toFixed(2);
     const ema21Fmt  = ema21.toFixed(2);
     const niftyFmt  = nifty.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const pcrLine   = marketState.pcr ? `PCR: ${marketState.pcr} (${marketState.pcrSignal})` : 'PCR: Fetching...';
+    const vixLine   = marketState.vix ? `VIX: ${marketState.vix} — ${marketState.vixSignal}` : 'VIX: --';
+
+    // PRIMARY signal: PRICE vs VWAP (freshest — resets daily at 9:15)
+    // CONFIRMATION: EMA9 + EMA21 both on same side
+    // All 3 must agree → clean setup. Any mismatch → NO TRADE.
+    // (Old version used only EMA vs VWAP — wrong because EMA carries multi-day history)
+    const priceAbove = nifty > vwap;
+    const ema9Above  = ema9  > vwap;
+    const ema21Above = ema21 > vwap;
+
+    // ── CALL SETUP ────────────────────────────────────────────────────────────
+    if (priceAbove && ema9Above && ema21Above) {
+        ema920AlertSentToday = true;
+        await sendRawMessage(
+`🟢 <b>VARDAAN 9:20 SETUP — CALL BUY</b>
+
+✅ Price (${niftyFmt}) ABOVE VWAP (${vwapFmt})
+✅ EMA9 (${ema9Fmt}) ABOVE VWAP
+✅ EMA21 (${ema21Fmt}) ABOVE VWAP
+📈 All 3 bullish — strong setup confirmed
+
+🎯 <b>Action: BUY ${atmStrike} CE (ATM)</b>
+💰 Target: +25–30% premium gain
+🛑 Stop Loss: −20% premium loss
+⏰ Time Stop: Exit by 11:00 AM
+
+${pcrLine} | ${vixLine}
+
+⚠️ <b>1 TRADE ONLY TODAY — No revenge trading</b>`);
+        console.log(`📱 [9:20] CALL SETUP | Price:${niftyFmt} EMA9:${ema9Fmt} EMA21:${ema21Fmt} > VWAP:${vwapFmt}`);
+        return;
+    }
+
+    // ── PUT SETUP ─────────────────────────────────────────────────────────────
+    if (!priceAbove && !ema9Above && !ema21Above) {
+        ema920AlertSentToday = true;
+        await sendRawMessage(
+`🔴 <b>VARDAAN 9:20 SETUP — PUT BUY</b>
+
+✅ Price (${niftyFmt}) BELOW VWAP (${vwapFmt})
+✅ EMA9 (${ema9Fmt}) BELOW VWAP
+✅ EMA21 (${ema21Fmt}) BELOW VWAP
+📉 All 3 bearish — strong setup confirmed
+
+🎯 <b>Action: BUY ${atmStrike} PE (ATM)</b>
+💰 Target: +25–30% premium gain
+🛑 Stop Loss: −20% premium loss
+⏰ Time Stop: Exit by 11:00 AM
+
+${pcrLine} | ${vixLine}
+
+⚠️ <b>1 TRADE ONLY TODAY — No revenge trading</b>`);
+        console.log(`📱 [9:20] PUT SETUP | Price:${niftyFmt} EMA9:${ema9Fmt} EMA21:${ema21Fmt} < VWAP:${vwapFmt}`);
+        return;
+    }
+
+    // ── NO TRADE: Mixed signals ───────────────────────────────────────────────
+    ema920AlertSentToday = true;
+    const pricePos = priceAbove ? 'ABOVE' : 'BELOW';
+    const ema9pos  = ema9Above  ? 'above' : 'below';
+    const ema21pos = ema21Above ? 'above' : 'below';
+    await sendRawMessage(
+`⚪ <b>VARDAAN 9:20 SETUP — NO TRADE</b>
+
+⚠️ Mixed signals — market indecisive at open
+Price (${niftyFmt}) is ${pricePos} VWAP (${vwapFmt})
+EMA9 (${ema9Fmt}) is ${ema9pos} VWAP
+EMA21 (${ema21Fmt}) is ${ema21pos} VWAP
+
+❌ <b>Not all 3 aligned — skip opening trade today</b>
+💡 Wait for 10:30 AM cleaner setup or sit out
+
+${vixLine}`);
+    console.log(`📱 [9:20] NO TRADE | Price:${priceAbove?'↑':'↓'} EMA9:${ema9Above?'↑':'↓'} EMA21:${ema21Above?'↑':'↓'} vs VWAP:${vwapFmt}`);
+}
+
+async function checkTelegramAlerts(newSignal) {
+    if (!isConfigured()||!isMarketOpen()) return;
+
 
     // PCR context if available
     const pcrLine = marketState.pcr
@@ -926,6 +998,26 @@ async function updatePrice(price, change, changePct, source) {
     evaluateBTST();
     await checkTelegramAlerts(signal);
     prevSignal=signal;
+}
+
+// ── 1-min Yahoo price poller — fixes price freeze on Yahoo fallback ──────────
+// refreshMarketData() runs every 3 min — too slow for frontend display.
+// This poller fetches ONLY spot price every 60s so frontend sees fresh values.
+// Skips automatically when Angel One WS is actively ticking.
+async function pollYahooPrice() {
+    if (!isMarketOpen()) return;
+    if (marketState.source === 'websocket' && (Date.now() - _lastTickAt) < 90_000) return;
+    try {
+        const data = await fetchMarketData();
+        if (data?.niftyData?.price > 0) {
+            const p = data.niftyData.price;
+            marketState.nifty       = p;
+            marketState.change      = data.niftyData.change    ?? marketState.change;
+            marketState.changePct   = data.niftyData.changePct ?? marketState.changePct;
+            marketState.lastUpdated = new Date().toISOString();
+            console.log(`[Yahoo 1m] NIFTY: ${p}`);
+        }
+    } catch(e) { /* silent — non-critical */ }
 }
 
 // ── WebSocket tick watchdog ───────────────────────────────────────────────────
@@ -1882,6 +1974,7 @@ function startPollingIntervals() {
     // Stagger intervals by 30s each so they never all fire at the same time.
     // This prevents NSE from seeing a burst of 6 requests every 3 minutes.
     setTimeout(() => setInterval(refreshMarketData, 3*60*1000), 0);
+    setTimeout(() => setInterval(pollYahooPrice,    60*1000),   15*1000); // 1-min price fix
     setTimeout(() => setInterval(refreshMTF,        5*60*1000), 30*1000);
     setTimeout(() => setInterval(refreshGlobal,     5*60*1000), 60*1000);
     setTimeout(() => setInterval(refreshBreadth,    2*60*1000), 90*1000);   // 2 min — breadth is fast-changing
