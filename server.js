@@ -1041,12 +1041,45 @@ function startTickWatchdog() {
     }, 30 * 1000); // check every 30s
 }
 
+let _lastIndicatorRun = 0;  // throttle: only recalculate indicators once per second
+
 async function onTick(tickData) {
     const price=tickData.price; if(!price||price<=0) return;
-    _lastTickAt = Date.now();  // ← update watchdog timestamp on every tick
+
+    // ── Sanity check: reject ticks that are >5% away from last known price ────
+    // Prevents wrong-offset prices (sequence numbers misread as LTP) from
+    // corrupting ADX/VWAP/EMA calculations. If last price is unknown, accept.
+    const lastKnown = marketState.nifty;
+    if (lastKnown > 0) {
+        const pctMove = Math.abs((price - lastKnown) / lastKnown) * 100;
+        if (pctMove > 5) {
+            console.warn(`[WS] Tick rejected: ${price} is ${pctMove.toFixed(1)}% from last known ${lastKnown} — possible wrong packet offset`);
+            return;
+        }
+    }
+
+    _lastTickAt = Date.now();  // update watchdog timestamp on every tick
+
+    // ── Throttle: update price display on every tick, but only run full ───────
+    // indicator calculation (ADX/EMA/RSI/VWAP) once per second to avoid spam
+    const now = Date.now();
+    const runIndicators = (now - _lastIndicatorRun) >= 1000;
+    if (runIndicators) _lastIndicatorRun = now;
+
     const prev=marketState.nifty||price, change=parseFloat((price-prev).toFixed(2));
     const chgPct=prev>0?parseFloat(((change/prev)*100).toFixed(2)):0;
-    await updatePrice(price,change,chgPct,'websocket');
+
+    if (runIndicators) {
+        await updatePrice(price,change,chgPct,'websocket');
+    } else {
+        // Just update price display without full indicator recalc
+        marketState.nifty       = price;
+        marketState.change      = change;
+        marketState.changePct   = chgPct;
+        marketState.lastUpdated = new Date().toISOString();
+        marketState.connected   = true;
+        marketState.source      = 'websocket';
+    }
 }
 
 async function refreshMarketData() {

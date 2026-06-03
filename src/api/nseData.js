@@ -155,19 +155,31 @@ async function nseGetWithRetry(url) {
 }
 
 // ── ScraperAPI fetch — bypasses NSE IP rate-limit ────────────────────────────
-// ScraperAPI handles cookies + residential IP rotation automatically.
-// Returns parsed JSON data directly (not an axios response object).
-// Returns null on failure so caller can fall back to direct NSE.
+// Strategy: render_js=false (NSE option-chain is a JSON API, not an HTML page —
+// headless Chrome on a JSON endpoint returns HTML-wrapped JSON that fails parse).
+// We pass the NSE session cookie we already have + country_code=in (India IP) +
+// custom_headers=true so ScraperAPI forwards our browser headers to NSE.
+// This satisfies NSE's two checks:
+//   ① India IP      → country_code=in
+//   ② Valid session → Cookie from our own refreshCookie() call
+// Returns parsed JSON data directly. Returns null on failure.
 async function scraperAPIFetch(targetUrl) {
     if (!SCRAPERAPI_KEY) return null;
     try {
-        // render_js=true: ScraperAPI uses headless Chrome — handles NSE JS-based cookie challenge
-        // country_code=in: use India IP — NSE rate-limits US/EU IPs from Railway
-        // keep_headers is NOT passed — let ScraperAPI manage headers automatically
-        const apiUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(targetUrl)}&render_js=true&country_code=in`;
+        // Ensure we have a fresh NSE cookie — ScraperAPI will forward it to NSE
+        const cookie = await getCookie();
+
+        // render_js=false  — JSON API, no JS cookie challenge to execute
+        // country_code=in  — India residential IP bypasses Railway US-IP block
+        // custom_headers=true — ScraperAPI forwards our headers (incl. Cookie) to target
+        const apiUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(targetUrl)}&render_js=false&country_code=in&custom_headers=true`;
         const res = await axios.get(apiUrl, {
             timeout        : 30_000,
             validateStatus : () => true,
+            headers        : {
+                ...HEADERS,
+                ...(cookie ? { 'Cookie': cookie } : {}),
+            },
         });
         if (res.status !== 200) {
             console.warn(`[ScraperAPI] HTTP ${res.status} for ${targetUrl}`);
@@ -175,7 +187,7 @@ async function scraperAPIFetch(targetUrl) {
         }
         const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
         if (!data?.records?.data) {
-            console.warn(`[ScraperAPI] Response missing records.data — status:${res.status}`);
+            console.warn(`[ScraperAPI] Response missing records.data — status:${res.status}, type:${typeof res.data}`);
             return null;
         }
         return data;
