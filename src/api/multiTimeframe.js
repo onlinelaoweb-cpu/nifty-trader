@@ -273,7 +273,25 @@ function calcIndicators(candles, tfLabel) {
     }
 
     // ADX(14) — min 30 candles (2 × period + buffer), used for NEUTRAL override only
-    const adxData  = calculateADX(sessionC.length >= 30 ? sessionC : candles);
+    // ROOT CAUSE FIX: todaySessionCandles() fallback used candles.slice(-80) which contains
+    // multi-day Yahoo data with overnight price gaps → Wilder's smoothing produces ADX > 100 → null.
+    // Fix: use today-only candles (IST date filter + >=9:15 AM) with NO fallback to multi-day.
+    // If today has < 30 bars (before ~9:45 AM), ADX returns null naturally — correct behavior.
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const todayISTStr   = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
+    const todayOnlyCandles = candles.filter(c => {
+        const ts = c.ts || c.time;
+        if (!ts) return false;
+        const istDate    = new Date(ts + IST_OFFSET_MS);
+        const dateStr    = istDate.toISOString().slice(0, 10);
+        if (dateStr !== todayISTStr) return false;
+        const istMinutes = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
+        return istMinutes >= 555; // >= 9:15 AM IST only
+    });
+    // Use today-only if enough bars; otherwise let ADX be null (market just opened).
+    // NEVER fall back to sessionC or multi-day candles — overnight gaps make ADX > 100.
+    const adxCandles = todayOnlyCandles.length >= 30 ? todayOnlyCandles : null;
+    const adxData  = adxCandles ? calculateADX(adxCandles) : null;
     const adxVal   = adxData?.adx ?? null;
     // ADX < 20 = choppy, override signal to NEUTRAL even if bull/bear votes pass
     const adxValid = adxVal === null || adxVal >= 20;

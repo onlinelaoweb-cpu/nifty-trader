@@ -414,17 +414,17 @@ function combineSignals(indicators) {
     // Wilder's smoothing to produce ADX > 100 (invalid). sessionCandles has no gaps.
     const sessionCandlesForADX = getSessionCandles();
 
-    // FIX 3: Only engage ADX gate when we have 60+ session candles.
+    // FIX 3: Only engage ADX gate when we have 30+ session candles.
     // Before ~10:00 AM the Wilder warm-up window (30 bars) hasn't settled,
     // producing noisy ADX readings that either block valid setups or—worse—
-    // falsely confirm trend on a gap-open bar. 60 bars ≈ 60 minutes of 1m
-    // data, which reliably puts us past 10:15 IST before ADX gates anything.
-    const adxData = sessionCandlesForADX.length >= 60
+    // falsely confirm trend on a gap-open bar. 30 bars ≈ 30 minutes of 1m
+    // data, which reliably puts us past 9:45 IST before ADX gates anything.
+    const adxData = sessionCandlesForADX.length >= 30
         ? calculateADX(sessionCandlesForADX)
         : null;
-    if (sessionCandlesForADX.length < 60) {
-        const remaining = 60 - sessionCandlesForADX.length;
-        reasons.push(`⏳ ADX gate inactive — need ${remaining} more candles (before ~10:00 AM)`);
+    if (sessionCandlesForADX.length < 30) {
+        const remaining = 30 - sessionCandlesForADX.length;
+        reasons.push(`⏳ ADX gate inactive — need ${remaining} more candles (before ~9:45 AM)`);
     }
     marketState.adx = adxData;   // expose to frontend via /api/signal
 
@@ -1011,10 +1011,9 @@ async function pollYahooPrice() {
         const data = await fetchMarketData();
         if (data?.niftyData?.price > 0) {
             const p = data.niftyData.price;
-            marketState.nifty       = p;
-            marketState.change      = data.niftyData.change    ?? marketState.change;
-            marketState.changePct   = data.niftyData.changePct ?? marketState.changePct;
-            marketState.lastUpdated = new Date().toISOString();
+            // Call updatePrice (not just marketState update) so addTick() fires,
+            // sessionCandles grow, and ADX/confidence get fresh data every minute.
+            await updatePrice(p, data.niftyData.change ?? marketState.change, data.niftyData.changePct ?? marketState.changePct, 'yahoo');
             console.log(`[Yahoo 1m] NIFTY: ${p}`);
         }
     } catch(e) { /* silent — non-critical */ }

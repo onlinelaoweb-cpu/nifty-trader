@@ -155,31 +155,25 @@ async function nseGetWithRetry(url) {
 }
 
 // ── ScraperAPI fetch — bypasses NSE IP rate-limit ────────────────────────────
-// Strategy: render_js=false (NSE option-chain is a JSON API, not an HTML page —
-// headless Chrome on a JSON endpoint returns HTML-wrapped JSON that fails parse).
-// We pass the NSE session cookie we already have + country_code=in (India IP) +
-// custom_headers=true so ScraperAPI forwards our browser headers to NSE.
-// This satisfies NSE's two checks:
-//   ① India IP      → country_code=in
-//   ② Valid session → Cookie from our own refreshCookie() call
+// ROOT CAUSE FIX (2026-06): The previous approach forwarded a cookie obtained
+// from Railway's US-West IP to ScraperAPI's Indian residential IP. NSE validates
+// sessions per-IP so the forwarded cookie was invalid → HTTP 404 every time.
+//
+// New strategy: Let ScraperAPI use a clean Indian IP with NO cookie forwarding.
+//   • NO custom_headers=true  → ScraperAPI uses its own browser UA, not ours
+//   • NO Cookie forwarding    → avoids IP-mismatch cookie rejection from NSE
+//   • country_code=in         → Indian residential IP satisfies NSE geo-restriction
+//   • render_js=false         → NSE option-chain is a JSON API, not an HTML page
 // Returns parsed JSON data directly. Returns null on failure.
 async function scraperAPIFetch(targetUrl) {
     if (!SCRAPERAPI_KEY) return null;
     try {
-        // Ensure we have a fresh NSE cookie — ScraperAPI will forward it to NSE
-        const cookie = await getCookie();
-
-        // render_js=false  — JSON API, no JS cookie challenge to execute
-        // country_code=in  — India residential IP bypasses Railway US-IP block
-        // custom_headers=true — ScraperAPI forwards our headers (incl. Cookie) to target
-        const apiUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(targetUrl)}&render_js=false&country_code=in&custom_headers=true`;
+        // Clean Indian IP request — no forwarded headers, no cookie from Railway
+        // ScraperAPI's residential Indian IP should satisfy NSE's geo check directly
+        const apiUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(targetUrl)}&render_js=false&country_code=in`;
         const res = await axios.get(apiUrl, {
             timeout        : 30_000,
             validateStatus : () => true,
-            headers        : {
-                ...HEADERS,
-                ...(cookie ? { 'Cookie': cookie } : {}),
-            },
         });
         if (res.status !== 200) {
             console.warn(`[ScraperAPI] HTTP ${res.status} for ${targetUrl}`);
@@ -190,6 +184,7 @@ async function scraperAPIFetch(targetUrl) {
             console.warn(`[ScraperAPI] Response missing records.data — status:${res.status}, type:${typeof res.data}`);
             return null;
         }
+        console.log('[ScraperAPI] ✅ Option chain fetched successfully');
         return data;
     } catch (e) {
         console.warn(`[ScraperAPI] Fetch failed: ${e.message}`);
