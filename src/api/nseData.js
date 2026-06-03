@@ -161,10 +161,10 @@ async function nseGetWithRetry(url) {
 async function scraperAPIFetch(targetUrl) {
     if (!SCRAPERAPI_KEY) return null;
     try {
-        // render_js=true: ScraperAPI uses headless Chrome — handles NSE cookie/JS properly
-        // keep_headers=false: let ScraperAPI manage headers (our headers confuse it for NSE)
-        // country_code=in: use India IP — NSE less likely to block domestic IPs
-        const apiUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(targetUrl)}&render_js=false&country_code=in`;
+        // render_js=true: ScraperAPI uses headless Chrome — handles NSE JS-based cookie challenge
+        // country_code=in: use India IP — NSE rate-limits US/EU IPs from Railway
+        // keep_headers is NOT passed — let ScraperAPI manage headers automatically
+        const apiUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(targetUrl)}&render_js=true&country_code=in`;
         const res = await axios.get(apiUrl, {
             timeout        : 30_000,
             validateStatus : () => true,

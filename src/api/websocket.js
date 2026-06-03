@@ -15,6 +15,37 @@ async function reconnectWebSocket(onTick, delayMs = 5000) {
     }
 }
 
+// ── Parse Angel One SmartAPI binary tick (mode 1 LTP) ────────────────────────
+// Angel One sends LTP packets in one of two sizes:
+//   • 40-byte compact:  mode(1)+exchange(1)+token(25)+ltp_paise_LE32(4)+vol(4)+ts_LE32(4)+extra(1)
+//   • 51-byte extended: same header + seq_BE64(8) + ts_BE64(8) + ltp_BE64(8)
+// Returns price in rupees, or null if not parseable.
+function parseLtpPacket(buf) {
+    // Try 40-byte compact format first (most common for mode 1)
+    if (buf.length >= 31) {
+        // offset 27: LTP in paise, uint32 little-endian
+        const ltpPaise = buf.readUInt32LE(27);
+        const price    = ltpPaise / 100;
+        if (price > 10000 && price < 50000) return price;
+    }
+
+    // Try 51-byte extended format (big-endian int64)
+    if (buf.length >= 51) {
+        const ltpPaise = buf.readBigInt64BE(43);
+        const price    = Number(ltpPaise) / 100;
+        if (price > 10000 && price < 50000) return price;
+    }
+
+    // Fallback: brute-force scan all 4-byte LE windows for NIFTY-range value
+    for (let off = 27; off <= buf.length - 4; off++) {
+        const val   = buf.readUInt32LE(off);
+        const price = val / 100;
+        if (price > 18000 && price < 32000) return price; // tighter NIFTY range
+    }
+
+    return null;
+}
+
 function startWebSocket(authData, onTick) {
     try {
         console.log('Starting WebSocket...');
@@ -46,7 +77,7 @@ function startWebSocket(authData, onTick) {
                 correlationID: 'vardaannifty',
                 action       : 1,
                 params       : {
-                    mode     : 1,        // ← mode 1 = LTP only (simplest)
+                    mode     : 1,        // LTP only
                     tokenList: [{
                         exchangeType: 1,
                         tokens      : ['26000'] // NIFTY 50
@@ -67,66 +98,39 @@ function startWebSocket(authData, onTick) {
                     ? rawData
                     : Buffer.from(rawData);
 
-                // First message: log hex for debugging
-                if (tickCount === 0) {
-                    console.log('First WS message hex:', buf.toString('hex').substring(0, 80));
-                    console.log('First WS message length:', buf.length);
-                }
                 tickCount++;
 
                 // Try JSON first (acknowledgment messages)
                 const str = buf.toString('utf8');
-                if (str.startsWith('{')) {
+                if (str.startsWith('{') || str.startsWith('[')) {
                     const json = JSON.parse(str);
-                    console.log('WS JSON msg:', json);
+                    console.log('WS JSON msg:', JSON.stringify(json));
                     return;
                 }
 
-                // Binary LTP parsing (mode 1)
-                // Angel One LTP binary format:
-                // Byte 0    : subscription type (1 byte)
-                // Byte 1    : exchange type (1 byte)
-                // Bytes 2-26: token string (25 bytes)
-                // Bytes 27-34: sequence number (int64)
-                // Bytes 35-42: exchange timestamp (int64)
-                // Bytes 43-50: LTP in paise (int64 big-endian)
-
-                if (buf.length >= 51) {
-                    const ltpPaise = buf.readBigInt64BE(43);
-                    const price    = Number(ltpPaise) / 100;
-
-                    // Sanity check: NIFTY should be between 10000 and 50000
-                    if (price > 10000 && price < 50000) {
-                        if (tickCount <= 5 || tickCount % 50 === 0) {
-                            console.log(`NIFTY WS tick: ${price}`);
-                        }
-                        if (typeof onTick === 'function') {
-                            onTick({ price, source: 'websocket' });
-                        }
-                        return;
-                    }
+                // Log every packet header for first 10 ticks to help debug format
+                if (tickCount <= 10) {
+                    console.log(`WS tick #${tickCount}: len=${buf.length} hex=${buf.toString('hex').substring(0, 60)}`);
                 }
 
-                // If offset 43 didn't work, try other offsets
-                const offsets = [35, 39, 43, 47, 51];
-                for (const off of offsets) {
-                    if (buf.length >= off + 8) {
-                        try {
-                            const ltpPaise = buf.readBigInt64BE(off);
-                            const price    = Number(ltpPaise) / 100;
-                            if (price > 10000 && price < 50000) {
-                                console.log(`NIFTY WS (offset ${off}): ${price}`);
-                                if (typeof onTick === 'function') {
-                                    onTick({ price, source: 'websocket' });
-                                }
-                                return;
-                            }
-                        } catch(e) {}
+                // Parse binary LTP packet
+                const price = parseLtpPacket(buf);
+                if (price !== null) {
+                    if (tickCount <= 10 || tickCount % 50 === 0) {
+                        console.log(`NIFTY WS tick #${tickCount}: ${price}`);
+                    }
+                    if (typeof onTick === 'function') {
+                        onTick({ price, source: 'websocket' });
+                    }
+                } else {
+                    // Only log parse failures for first 10 ticks
+                    if (tickCount <= 10) {
+                        console.warn(`WS tick #${tickCount}: could not parse price from ${buf.length}-byte packet`);
                     }
                 }
 
             } catch (e) {
-                // ignore
+                if (tickCount <= 10) console.error('WS parse error:', e.message);
             }
         });
 
