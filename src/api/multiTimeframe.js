@@ -174,15 +174,21 @@ async function fetchCandlesFromYahoo(intervalKey) {
 function calculateADX(candles, period = 14) {
     if (!candles || candles.length < period * 2 + 2) return null;
     try {
-        const valid = candles.filter(c =>
-            c.high != null && c.low != null && c.close != null && c.high > c.low
-        );
+        // ROOT CAUSE FIX: keep ALL candles (don't filter flat ones).
+        // Flat bar filter creates time gaps → huge TR between non-consecutive bars → ADX > 100.
+        const valid = candles.filter(c => c.close != null);
         if (valid.length < period * 2 + 2) return null;
         const tr = [], dmp = [], dmm = [];
         for (let i = 1; i < valid.length; i++) {
-            const h = valid[i].high, l = valid[i].low, pc = valid[i-1].close;
-            const ph = valid[i-1].high, pl = valid[i-1].low;
-            tr .push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+            const c  = valid[i],   pc = valid[i-1];
+            const h  = c.high  ?? c.close;
+            const l  = c.low   ?? c.close;
+            const ph = pc.high ?? pc.close;
+            const pl = pc.low  ?? pc.close;
+            const trVal = (h === l)
+                ? Math.abs(c.close - pc.close)
+                : Math.max(h - l, Math.abs(h - pc.close), Math.abs(l - pc.close));
+            tr.push(trVal);
             const up = h - ph, dn = pl - l;
             dmp.push(up > dn && up > 0 ? up : 0);
             dmm.push(dn > up && dn > 0 ? dn : 0);
@@ -201,7 +207,14 @@ function calculateADX(candles, period = 14) {
         const dx     = dip.map((v, i) => { const s = v + dim[i]; return s > 0 ? (Math.abs(v - dim[i]) / s) * 100 : 0; });
         const adxArr = wilderSmooth(dx);
         const adxVal = parseFloat(adxArr[adxArr.length - 1].toFixed(2));
-        if (adxVal > 100 || adxVal < 0) return null;
+        if (adxVal > 100 || adxVal < 0) {
+            const now = Date.now();
+            if (!calculateADX._lastWarn || now - calculateADX._lastWarn > 300_000) {
+                console.warn(`⚠️ MTF ADX out of range (${adxVal}) — opening-bar gap, will resolve after warmup`);
+                calculateADX._lastWarn = now;
+            }
+            return null;
+        }
         return {
             adx    : adxVal,
             diPlus : parseFloat(Math.min(100, dip[dip.length - 1]).toFixed(2)),
@@ -273,25 +286,7 @@ function calcIndicators(candles, tfLabel) {
     }
 
     // ADX(14) — min 30 candles (2 × period + buffer), used for NEUTRAL override only
-    // ROOT CAUSE FIX: todaySessionCandles() fallback used candles.slice(-80) which contains
-    // multi-day Yahoo data with overnight price gaps → Wilder's smoothing produces ADX > 100 → null.
-    // Fix: use today-only candles (IST date filter + >=9:15 AM) with NO fallback to multi-day.
-    // If today has < 30 bars (before ~9:45 AM), ADX returns null naturally — correct behavior.
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const todayISTStr   = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
-    const todayOnlyCandles = candles.filter(c => {
-        const ts = c.ts || c.time;
-        if (!ts) return false;
-        const istDate    = new Date(ts + IST_OFFSET_MS);
-        const dateStr    = istDate.toISOString().slice(0, 10);
-        if (dateStr !== todayISTStr) return false;
-        const istMinutes = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
-        return istMinutes >= 555; // >= 9:15 AM IST only
-    });
-    // Use today-only if enough bars; otherwise let ADX be null (market just opened).
-    // NEVER fall back to sessionC or multi-day candles — overnight gaps make ADX > 100.
-    const adxCandles = todayOnlyCandles.length >= 30 ? todayOnlyCandles : null;
-    const adxData  = adxCandles ? calculateADX(adxCandles) : null;
+    const adxData  = calculateADX(sessionC.length >= 30 ? sessionC : candles);
     const adxVal   = adxData?.adx ?? null;
     // ADX < 20 = choppy, override signal to NEUTRAL even if bull/bear votes pass
     const adxValid = adxVal === null || adxVal >= 20;

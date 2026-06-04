@@ -46,7 +46,16 @@ const axios = require('axios');
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const BASE_URL   = 'https://www.nseindia.com';
-const OC_URL     = `${BASE_URL}/api/option-chain-indices?symbol=NIFTY`;
+// NSE option-chain URL — try multiple endpoints (NSE changes these periodically)
+// Primary:   /api/option-chain-indices  (was working until mid-2026, now 404)
+// Alternate: /api/option-chain-equities (sometimes works when indices returns 404)
+// Mirror:    nsearchives subdomain (archive/delayed but better than nothing)
+const OC_URLS = [
+    `${BASE_URL}/api/option-chain-indices?symbol=NIFTY`,
+    `${BASE_URL}/api/option-chain-equities?symbol=NIFTY`,
+    `https://nsearchives.nseindia.com/content/fo/nifty_oc.json`,
+];
+const OC_URL = OC_URLS[0];  // kept for backward compat
 const FIIDII_URL = `${BASE_URL}/api/fiidiiTradeReact`;
 const TIMEOUT_MS = 12_000;   // 12s — enough for slow NSE responses from Railway; retry handles timeouts
 
@@ -155,68 +164,64 @@ async function nseGetWithRetry(url) {
 }
 
 // ── ScraperAPI fetch — bypasses NSE IP rate-limit ────────────────────────────
-// ROOT CAUSE FIX (2026-06): The previous approach forwarded a cookie obtained
-// from Railway's US-West IP to ScraperAPI's Indian residential IP. NSE validates
-// sessions per-IP so the forwarded cookie was invalid → HTTP 404 every time.
-//
-// New strategy: Let ScraperAPI use a clean Indian IP with NO cookie forwarding.
-//   • NO custom_headers=true  → ScraperAPI uses its own browser UA, not ours
-//   • NO Cookie forwarding    → avoids IP-mismatch cookie rejection from NSE
-//   • country_code=in         → Indian residential IP satisfies NSE geo-restriction
-//   • render_js=false         → NSE option-chain is a JSON API, not an HTML page
+// Strategy: render_js=false (NSE option-chain is a JSON API, not an HTML page —
+// headless Chrome on a JSON endpoint returns HTML-wrapped JSON that fails parse).
+// We pass the NSE session cookie we already have + country_code=in (India IP) +
+// custom_headers=true so ScraperAPI forwards our browser headers to NSE.
+// This satisfies NSE's two checks:
+//   ① India IP      → country_code=in
+//   ② Valid session → Cookie from our own refreshCookie() call
 // Returns parsed JSON data directly. Returns null on failure.
 async function scraperAPIFetch(targetUrl) {
     if (!SCRAPERAPI_KEY) return null;
+    try {
+        // Ensure we have a fresh NSE cookie — ScraperAPI will forward it to NSE
+        const cookie = await getCookie();
 
-    // Strategy 1: render_js=true with sticky session — handles NSE JS challenge
-    // NSE now validates sessions via JS fingerprinting; render_js=false → 404.
-    // session_number=1 gives a persistent browser session (cookie re-use across calls).
-    // wait_for_selector ensures the JSON is fully loaded before ScraperAPI returns.
-    const tryFetch = async (renderJs, sessionNum) => {
-        try {
-            let apiUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(targetUrl)}&country_code=in&render_js=${renderJs}`;
-            if (sessionNum !== null) apiUrl += `&session_number=${sessionNum}`;
-            const res = await axios.get(apiUrl, {
-                timeout        : 45_000,   // render_js needs more time (headless Chrome)
-                validateStatus : () => true,
-            });
-            if (res.status !== 200) {
-                console.warn(`[ScraperAPI] HTTP ${res.status} render_js=${renderJs}`);
-                return null;
+        // render_js=false  — JSON API, no JS cookie challenge to execute
+        // country_code=in  — India residential IP bypasses Railway US-IP block
+        // custom_headers=true — ScraperAPI forwards our headers (incl. Cookie) to target
+        // FIX: Use session_based=true so ScraperAPI maintains NSE session cookie across calls
+        // Also try alternate NSE endpoint if primary returns 404
+        const buildScraperUrl = (target, useSessions) =>
+            `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(target)}&render_js=false&country_code=in&custom_headers=true${useSessions ? '&session_number=1' : ''}`;
+
+        let res = null;
+        // Attempt 1: with session_based (India IP + persistent NSE session)
+        res = await axios.get(buildScraperUrl(targetUrl, true), {
+            timeout        : 35_000,
+            validateStatus : () => true,
+            headers        : { ...HEADERS, ...(cookie ? { 'Cookie': cookie } : {}) },
+        });
+        // Attempt 2: if 404, try the alternate NSE OC URL
+        if (res.status === 404) {
+            const altUrl = targetUrl.replace(
+                '/api/option-chain-indices?symbol=NIFTY',
+                '/api/option-chain-equities?symbol=NIFTY'
+            );
+            if (altUrl !== targetUrl) {
+                console.log('[ScraperAPI] 404 on primary URL — trying alternate OC endpoint');
+                res = await axios.get(buildScraperUrl(altUrl, true), {
+                    timeout        : 35_000,
+                    validateStatus : () => true,
+                    headers        : { ...HEADERS, ...(cookie ? { 'Cookie': cookie } : {}) },
+                });
             }
-            // NSE returns JSON; ScraperAPI with render_js may wrap it in HTML body text
-            let data = res.data;
-            if (typeof data === 'string') {
-                // Strip any HTML wrapper that render_js might add
-                const jsonMatch = data.match(/\{[\s\S]*"records"[\s\S]*\}/);
-                if (jsonMatch) {
-                    try { data = JSON.parse(jsonMatch[0]); } catch { return null; }
-                } else {
-                    try { data = JSON.parse(data); } catch { return null; }
-                }
-            }
-            if (!data?.records?.data) {
-                console.warn(`[ScraperAPI] records.data missing render_js=${renderJs}`);
-                return null;
-            }
-            console.log(`[ScraperAPI] ✅ Option chain OK render_js=${renderJs}`);
-            return data;
-        } catch (e) {
-            console.warn(`[ScraperAPI] Fetch error render_js=${renderJs}: ${e.message}`);
+        }
+        if (!res || res.status !== 200) {
+            console.warn(`[ScraperAPI] HTTP ${res?.status ?? 'no-response'} for ${targetUrl}`);
             return null;
         }
-    };
-
-    // Attempt 1: render_js=true with sticky session (best for NSE JS challenge)
-    let result = await tryFetch('true', 1);
-    if (result) return result;
-
-    // Attempt 2: render_js=false (faster, works if NSE relaxes JS check momentarily)
-    result = await tryFetch('false', null);
-    if (result) return result;
-
-    console.warn('[ScraperAPI] Both render strategies failed');
-    return null;
+        const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+        if (!data?.records?.data) {
+            console.warn(`[ScraperAPI] Response missing records.data — status:${res.status}, type:${typeof res.data}, body:${JSON.stringify(res.data)?.slice(0,120)}`);
+            return null;
+        }
+        return data;
+    } catch (e) {
+        console.warn(`[ScraperAPI] Fetch failed: ${e.message}`);
+        return null;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -919,42 +924,50 @@ async function _fetchPCR(spotPrice) {
     try {
         let pcrData = null;
 
-        // ── Path A: ScraperAPI (bypasses Railway IP rate-limit) ───────────────
+        // ── Path A: ScraperAPI with URL rotation ─────────────────────────────
+        // Try all OC_URLS via ScraperAPI (session_based=true maintains NSE cookie)
         if (SCRAPERAPI_KEY) {
             console.log('[PCR] Trying ScraperAPI...');
-            pcrData = await scraperAPIFetch(OC_URL);
-            if (pcrData?.records?.data) {
-                console.log('[PCR] ScraperAPI ✅');
-            } else {
-                console.warn('[PCR] ScraperAPI returned no data — falling back to direct NSE');
+            for (const ocUrl of OC_URLS) {
+                pcrData = await scraperAPIFetch(ocUrl);
+                if (pcrData?.records?.data) {
+                    console.log(`[PCR] ScraperAPI ✅ (${ocUrl.includes('equities') ? 'equities' : ocUrl.includes('archives') ? 'archive' : 'primary'})`);
+                    break;
+                }
+                console.warn(`[PCR] ScraperAPI 404 on ${ocUrl.split('/').pop()} — trying next URL...`);
+            }
+            if (!pcrData?.records?.data) {
+                console.warn('[PCR] ScraperAPI exhausted all URLs — falling back to direct NSE');
                 pcrData = null;
             }
         }
 
-        // ── Path B: Direct NSE (with cookie, may timeout on Railway) ─────────
+        // ── Path B: Direct NSE with URL rotation ─────────────────────────────
         if (!pcrData) {
-            // Force-refresh NSE cookie before every option-chain request.
-            // A stale/missing cookie is the #1 cause of 8s timeouts from Railway IPs.
             try { await refreshCookie(); } catch (e) {
                 console.warn('[PCR] Cookie refresh failed — proceeding anyway:', e.message);
             }
 
-            let res = await nseGetWithRetry(OC_URL);
-
-            // On timeout/network error, wait 3s and retry ONCE with a fresh cookie.
-            if (!res || res.status !== 200) {
-                console.warn(`[PCR] Direct NSE first attempt status ${res?.status ?? 'no-response'} — waiting 3s for retry...`);
-                await new Promise(r => setTimeout(r, 3000));
-                _cookie = null;
-                await refreshCookie().catch(() => {});
-                res = await nseGetWithRetry(OC_URL);
+            for (const ocUrl of OC_URLS) {
+                let res = await nseGetWithRetry(ocUrl);
+                if (!res || res.status !== 200) {
+                    console.warn(`[PCR] Direct NSE ${res?.status ?? 'no-response'} on ${ocUrl.split('/').pop()} — waiting 3s...`);
+                    await new Promise(r => setTimeout(r, 3000));
+                    _cookie = null;
+                    await refreshCookie().catch(() => {});
+                    res = await nseGetWithRetry(ocUrl);
+                }
+                if (res?.status === 200 && res.data?.records?.data) {
+                    pcrData = res.data;
+                    console.log(`[PCR] Direct NSE ✅ (${ocUrl.split('/').pop()})`);
+                    break;
+                }
+                console.warn(`[PCR] Direct NSE failed ${ocUrl.split('/').pop()}: ${res?.status ?? 'no-response'}`);
             }
 
-            if (res?.status === 200 && res.data?.records?.data) {
-                pcrData = res.data;
-            } else {
-                _pcr.lastError = `HTTP ${res?.status ?? 'timeout'} — both ScraperAPI and direct NSE failed`;
-                console.error(`[PCR] Both paths failed. Direct NSE status: ${res?.status ?? 'no-response'}`);
+            if (!pcrData) {
+                _pcr.lastError = 'All PCR URLs failed (NSE 404) — using last cached value';
+                console.error('[PCR] All paths failed for all URLs. NSE option chain endpoint may have changed.');
                 return;  // keep last good _pcr values
             }
         }
@@ -1150,6 +1163,30 @@ async function _fetchFIIDII() {
         return;
     }
     try {
+        // -- Path A: ScraperAPI (bypasses Railway IP block) --
+        if (SCRAPERAPI_KEY) {
+            try {
+                const scCookie = await getCookie();
+                const scUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(FIIDII_URL)}&render_js=false&country_code=in&session_number=1&custom_headers=true`;
+                const scRes = await axios.get(scUrl, {
+                    timeout: 30_000, validateStatus: () => true,
+                    headers: { ...HEADERS, ...(scCookie ? { 'Cookie': scCookie } : {}) },
+                });
+                if (scRes.status === 200 && scRes.data) {
+                    const parsed = parseFIIDII(scRes.data);
+                    if (parsed) {
+                        Object.assign(_fii, parsed, { fetchedAt: new Date(), lastError: null, fetchCount: _fii.fetchCount + 1 });
+                        const fmt = v => v === null ? 'N/A' : `Rs.${v >= 0 ? '+' : ''}${v.toFixed(0)}Cr`;
+                        console.log(`[FII/DII] ScraperAPI OK | FII: ${fmt(parsed.fiiNet)} DII: ${fmt(parsed.diiNet)}`);
+                        return;
+                    }
+                }
+            } catch (se) {
+                console.warn('[FII/DII] ScraperAPI error:', se.message, '- trying direct NSE');
+            }
+        }
+
+        // -- Path B: Direct NSE (bypasses Railway IP block) --
         // Use dedicated longer timeout for FII/DII
         const cookie = await getCookie();
         let res = await axios.get(FIIDII_URL, {

@@ -144,16 +144,30 @@ function pcrScore(v) {
 function calculateADX(candles, period = 14) {
     if (!candles || candles.length < period * 2 + 2) return null;
     try {
-        // Filter out flat candles (high == low) — zero True Range causes DI explosion
-        const valid = candles.filter(c =>
-            c.high != null && c.low != null && c.close != null && c.high > c.low
-        );
+        // ROOT CAUSE FIX: Do NOT filter flat candles (high==low).
+        // Filtering creates time gaps between surviving bars — a bar 15min after
+        // the previous one has a huge True Range (|close gap| = 50-200pts for Nifty)
+        // which makes Wilder's smoothing produce ADX > 100 indefinitely.
+        //
+        // Instead: keep ALL candles. For flat bars (high==low or null OHLC),
+        // use close-based True Range = |close[i] - close[i-1]|.
+        // This preserves time-continuity and gives correct small TR for flat bars.
+        const valid = candles.filter(c => c.close != null);
         if (valid.length < period * 2 + 2) return null;
         const tr = [], dmp = [], dmm = [];
         for (let i = 1; i < valid.length; i++) {
-            const h = valid[i].high,   l = valid[i].low,   pc = valid[i - 1].close;
-            const ph = valid[i - 1].high, pl = valid[i - 1].low;
-            tr .push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+            const c  = valid[i],   pc = valid[i - 1];
+            const h  = c.high  ?? c.close;
+            const l  = c.low   ?? c.close;
+            const ph = pc.high ?? pc.close;
+            const pl = pc.low  ?? pc.close;
+            const pclose = pc.close;
+            // True Range: use full Wilder formula when OHLC is real,
+            // fall back to |close - prevClose| for flat/index-only bars
+            const trVal = (h === l)
+                ? Math.abs(c.close - pclose)           // flat bar: close-only TR
+                : Math.max(h - l, Math.abs(h - pclose), Math.abs(l - pclose));
+            tr.push(trVal);
             const up = h - ph, dn = pl - l;
             dmp.push(up > dn && up > 0 ? up : 0);
             dmm.push(dn > up && dn > 0 ? dn : 0);
@@ -176,7 +190,12 @@ function calculateADX(candles, period = 14) {
         const adxVal = parseFloat(adxArr[n].toFixed(2));
         // ADX is mathematically bounded 0–100; anything above means data quality issue
         if (adxVal > 100 || adxVal < 0) {
-            console.warn(`⚠️ ADX out of range (${adxVal}) — overnight gap in data, skipping`);
+            // Throttle this warning to once per 5 min to avoid log spam
+            const now = Date.now();
+            if (!calculateADX._lastWarn || now - calculateADX._lastWarn > 300_000) {
+                console.warn(`⚠️ ADX out of range (${adxVal}) — opening-bar gap in data, suppressing until fixed`);
+                calculateADX._lastWarn = now;
+            }
             return null;
         }
         return {
@@ -414,17 +433,17 @@ function combineSignals(indicators) {
     // Wilder's smoothing to produce ADX > 100 (invalid). sessionCandles has no gaps.
     const sessionCandlesForADX = getSessionCandles();
 
-    // FIX 3: Only engage ADX gate when we have 30+ session candles.
+    // FIX 3: Only engage ADX gate when we have 60+ session candles.
     // Before ~10:00 AM the Wilder warm-up window (30 bars) hasn't settled,
     // producing noisy ADX readings that either block valid setups or—worse—
-    // falsely confirm trend on a gap-open bar. 30 bars ≈ 30 minutes of 1m
-    // data, which reliably puts us past 9:45 IST before ADX gates anything.
-    const adxData = sessionCandlesForADX.length >= 30
+    // falsely confirm trend on a gap-open bar. 60 bars ≈ 60 minutes of 1m
+    // data, which reliably puts us past 10:15 IST before ADX gates anything.
+    const adxData = sessionCandlesForADX.length >= 60
         ? calculateADX(sessionCandlesForADX)
         : null;
-    if (sessionCandlesForADX.length < 30) {
-        const remaining = 30 - sessionCandlesForADX.length;
-        reasons.push(`⏳ ADX gate inactive — need ${remaining} more candles (before ~9:45 AM)`);
+    if (sessionCandlesForADX.length < 60) {
+        const remaining = 60 - sessionCandlesForADX.length;
+        reasons.push(`⏳ ADX gate inactive — need ${remaining} more candles (before ~10:00 AM)`);
     }
     marketState.adx = adxData;   // expose to frontend via /api/signal
 
@@ -442,13 +461,27 @@ function combineSignals(indicators) {
         // 1. All three timeframes must agree (with ADX ≥ 20 per TF)
         mtfAligned : marketState.mtf.aligned,
 
-        // 2. RSI must not already be stretched in the direction of entry.
-        //    For a CALL entry: RSI < 70 (not deeply overbought).
-        //    For a PUT  entry: RSI > 30 (not deeply oversold).
-        //    Tighter than before: chasing a 65+ RSI on calls often ends in reversal.
-        rsiClean   : rawSignal === 'WAIT' || rsi === null
-                     || (rawSignal === 'BUY CALL' && rsi < 68)
-                     || (rawSignal === 'BUY PUT'  && rsi > 32),
+        // 2. RSI multi-timeframe filter:
+        //    CALL entry: 15m RSI > 55 AND 5m RSI > 55 (trend + entry alignment)
+        //    PUT  entry: 15m RSI < 45 AND 5m RSI < 45
+        //    Also: 1m RSI must not be stretched (< 70 for calls, > 30 for puts)
+        //    If MTF RSI is null (data not yet loaded), fall back to 1m RSI check only.
+        rsiClean   : (() => {
+            if (rawSignal === 'WAIT') return true;
+            const rsi5m  = marketState.mtf?.tf5m?.rsi  ?? null;
+            const rsi15m = marketState.mtf?.tf15m?.rsi ?? null;
+            if (rawSignal === 'BUY CALL') {
+                const mtfOk = (rsi15m === null || rsi15m > 55) && (rsi5m === null || rsi5m > 55);
+                const notOverbought = rsi === null || rsi < 70;
+                return mtfOk && notOverbought;
+            }
+            if (rawSignal === 'BUY PUT') {
+                const mtfOk = (rsi15m === null || rsi15m < 45) && (rsi5m === null || rsi5m < 45);
+                const notOversold = rsi === null || rsi > 30;
+                return mtfOk && notOversold;
+            }
+            return true;
+        })(),
 
         // 3. Safe time window — already enforced at the top of this function.
         safeWindow : true,
@@ -493,8 +526,13 @@ function combineSignals(indicators) {
             reasons.push(`⛔ MTF not aligned (${marketState.mtf.bullCount}/3 bull, ${marketState.mtf.bearCount}/3 bear) — wait for all-3 agreement`);
         } else if (!qualityGate.rsiClean) {
             signal = 'WAIT'; confidence = 0;
-            const extreme = rawSignal === 'BUY CALL' ? `overbought (${rsi})` : `oversold (${rsi})`;
-            reasons.push(`⛔ RSI already ${extreme} — entry is chasing, skip`);
+            const rsi5m  = marketState.mtf?.tf5m?.rsi  ?? null;
+            const rsi15m = marketState.mtf?.tf15m?.rsi ?? null;
+            if (rawSignal === 'BUY CALL') {
+                reasons.push(`⛔ RSI not aligned for CALL — 15m:${rsi15m??'--'} 5m:${rsi5m??'--'} 1m:${rsi??'--'} (need 15m>55, 5m>55, 1m<70)`);
+            } else {
+                reasons.push(`⛔ RSI not aligned for PUT — 15m:${rsi15m??'--'} 5m:${rsi5m??'--'} 1m:${rsi??'--'} (need 15m<45, 5m<45, 1m>30)`);
+            }
         } else if (!qualityGate.vixSafe) {
             signal = 'WAIT'; confidence = 0;
             reasons.push(`⛔ VIX ${marketState.vix} ≥ 20 — option premium too expensive for buyer, skip`);
@@ -1011,9 +1049,10 @@ async function pollYahooPrice() {
         const data = await fetchMarketData();
         if (data?.niftyData?.price > 0) {
             const p = data.niftyData.price;
-            // Call updatePrice (not just marketState update) so addTick() fires,
-            // sessionCandles grow, and ADX/confidence get fresh data every minute.
-            await updatePrice(p, data.niftyData.change ?? marketState.change, data.niftyData.changePct ?? marketState.changePct, 'yahoo');
+            marketState.nifty       = p;
+            marketState.change      = data.niftyData.change    ?? marketState.change;
+            marketState.changePct   = data.niftyData.changePct ?? marketState.changePct;
+            marketState.lastUpdated = new Date().toISOString();
             console.log(`[Yahoo 1m] NIFTY: ${p}`);
         }
     } catch(e) { /* silent — non-critical */ }
@@ -1700,7 +1739,7 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
 {"action":"BUY CE or BUY PE or WAIT","strike":24300,"entry":85,"sl":64,"target":128,"reasoning":"Two sentences max explaining why.","confidence":"HIGH or MEDIUM or LOW"}`;
 
         const res = await axios.post('https://api.anthropic.com/v1/messages', {
-            model: 'claude-sonnet-4-20250514',
+            model: 'claude-sonnet-4-5',
             max_tokens: 300,
             messages: [{ role: 'user', content: prompt }]
         }, {
