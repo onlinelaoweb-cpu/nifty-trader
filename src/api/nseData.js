@@ -167,29 +167,56 @@ async function nseGetWithRetry(url) {
 // Returns parsed JSON data directly. Returns null on failure.
 async function scraperAPIFetch(targetUrl) {
     if (!SCRAPERAPI_KEY) return null;
-    try {
-        // Clean Indian IP request — no forwarded headers, no cookie from Railway
-        // ScraperAPI's residential Indian IP should satisfy NSE's geo check directly
-        const apiUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(targetUrl)}&render_js=false&country_code=in`;
-        const res = await axios.get(apiUrl, {
-            timeout        : 30_000,
-            validateStatus : () => true,
-        });
-        if (res.status !== 200) {
-            console.warn(`[ScraperAPI] HTTP ${res.status} for ${targetUrl}`);
+
+    // Strategy 1: render_js=true with sticky session — handles NSE JS challenge
+    // NSE now validates sessions via JS fingerprinting; render_js=false → 404.
+    // session_number=1 gives a persistent browser session (cookie re-use across calls).
+    // wait_for_selector ensures the JSON is fully loaded before ScraperAPI returns.
+    const tryFetch = async (renderJs, sessionNum) => {
+        try {
+            let apiUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(targetUrl)}&country_code=in&render_js=${renderJs}`;
+            if (sessionNum !== null) apiUrl += `&session_number=${sessionNum}`;
+            const res = await axios.get(apiUrl, {
+                timeout        : 45_000,   // render_js needs more time (headless Chrome)
+                validateStatus : () => true,
+            });
+            if (res.status !== 200) {
+                console.warn(`[ScraperAPI] HTTP ${res.status} render_js=${renderJs}`);
+                return null;
+            }
+            // NSE returns JSON; ScraperAPI with render_js may wrap it in HTML body text
+            let data = res.data;
+            if (typeof data === 'string') {
+                // Strip any HTML wrapper that render_js might add
+                const jsonMatch = data.match(/\{[\s\S]*"records"[\s\S]*\}/);
+                if (jsonMatch) {
+                    try { data = JSON.parse(jsonMatch[0]); } catch { return null; }
+                } else {
+                    try { data = JSON.parse(data); } catch { return null; }
+                }
+            }
+            if (!data?.records?.data) {
+                console.warn(`[ScraperAPI] records.data missing render_js=${renderJs}`);
+                return null;
+            }
+            console.log(`[ScraperAPI] ✅ Option chain OK render_js=${renderJs}`);
+            return data;
+        } catch (e) {
+            console.warn(`[ScraperAPI] Fetch error render_js=${renderJs}: ${e.message}`);
             return null;
         }
-        const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-        if (!data?.records?.data) {
-            console.warn(`[ScraperAPI] Response missing records.data — status:${res.status}, type:${typeof res.data}`);
-            return null;
-        }
-        console.log('[ScraperAPI] ✅ Option chain fetched successfully');
-        return data;
-    } catch (e) {
-        console.warn(`[ScraperAPI] Fetch failed: ${e.message}`);
-        return null;
-    }
+    };
+
+    // Attempt 1: render_js=true with sticky session (best for NSE JS challenge)
+    let result = await tryFetch('true', 1);
+    if (result) return result;
+
+    // Attempt 2: render_js=false (faster, works if NSE relaxes JS check momentarily)
+    result = await tryFetch('false', null);
+    if (result) return result;
+
+    console.warn('[ScraperAPI] Both render strategies failed');
+    return null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
