@@ -26,6 +26,7 @@ const {
     interpretEarlyMomentum, interpretOIBuildup,
     isExpiryDay,
     injectAngelSession: injectAngelSessionNSE,   // nseData Angel session for PCR
+    triggerInitialPCR,                            // fire first PCR after Angel login
 } = require('./src/api/nseData');
 const {
     sendSignalAlert, sendMTFAlert,
@@ -2076,6 +2077,10 @@ async function tryAngelLogin() {
             jwtToken : auth.jwtToken,
             apiKey   : process.env.ANGEL_API_KEY,
         });
+        // Fire initial PCR fetch NOW — Angel session is ready so the Angel Market
+        // Data path will work. Without this, first PCR fires 3 min after startup
+        // (the scheduler interval), which is too late if container restarts.
+        triggerInitialPCR(getSpotPrice());
         startWebSocket(auth, onTick);
         _angelLoggedIn = true;
         // On retry logins (after init is complete), immediately refresh breadth

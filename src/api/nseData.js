@@ -48,6 +48,12 @@ function injectAngelSession({ jwtToken, apiKey }) {
     console.log('[nseData] Angel session injected — PCR via Angel API enabled');
 }
 
+// Called from server.js after Angel login — fires initial PCR with session ready
+function triggerInitialPCR(spotPrice) {
+    if (!spotPrice || spotPrice <= 0) return;
+    _fetchPCR(spotPrice).catch(e => console.error('[NSE] Initial PCR fetch error:', e.message));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Config
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -66,7 +72,7 @@ const OC_URL = OC_URLS[0];  // kept for backward compat
 const FIIDII_URL = `${BASE_URL}/api/fiidiiTradeReact`;
 const TIMEOUT_MS = 12_000;   // 12s — enough for slow NSE responses from Railway; retry handles timeouts
 
-const PCR_INTERVAL_MS    =  6 * 60 * 1000;   // re-fetch PCR every 6 min (ScraperAPI free tier: ~1375 calls/month)
+const PCR_INTERVAL_MS    =  3 * 60 * 1000;   // re-fetch PCR every 3 min
 const FIIDII_INTERVAL_MS = 15 * 60 * 1000;   // re-fetch FII/DII every 15 min
 const COOKIE_TTL_MS      = 15 * 60 * 1000;   // proactive cookie re-warm
 
@@ -1010,12 +1016,16 @@ async function fetchPCRFromAngel(spotPrice) {
         const today = new Date();
         const expiries = [...new Set(niftyOptions.map(s => s.expiry))].sort();
         const nearestExpiry = expiries.find(e => {
-            // ScripMaster expiry format: "26JUN2025"
+            // ScripMaster expiry format: "07JUL2026" = DDMMMYYYY
             const parts = e.match(/(\d{2})(\w{3})(\d{4})/);
             if (!parts) return false;
             const months = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
-            const expDate = new Date(parseInt(parts[3]), months[parts[2]], parseInt(parts[1]));
-            return expDate >= today;
+            const mIdx = months[parts[2].toUpperCase()];
+            if (mIdx === undefined) return false;
+            const expDate = new Date(parseInt(parts[3]), mIdx, parseInt(parts[1]));
+            // Use start of today (midnight) for comparison so today's expiry is included
+            const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            return expDate >= todayStart;
         });
         if (!nearestExpiry) {
             console.warn('[PCR-Angel] No valid upcoming expiry found');
@@ -1034,7 +1044,7 @@ async function fetchPCRFromAngel(spotPrice) {
             for (const optType of ['CE', 'PE']) {
                 const s = niftyOptions.find(x =>
                     x.expiry === nearestExpiry &&
-                    Math.abs(parseFloat(x.strike) - strike) < 1 &&
+                    Math.abs(parseFloat(x.strike) / 100 - strike) < 1 &&
                     x.symbol.endsWith(optType)
                 );
                 if (s) {
@@ -1517,8 +1527,9 @@ function startNSEScheduler(getSpotPrice) {
     // their null/default values until the fetch resolves; getPCRState() and
     // getFIIState() expose _fallback:true in the meantime so the frontend can
     // show "Live data unavailable, market may be closed" instead of spinning.
-    const spot = getSpotPrice();
-    _fetchPCR(spot).catch(e => console.error('[NSE] Initial PCR fetch error:', e.message));
+    // NOTE: Initial _fetchPCR is NOT fired here — it fires from server.js after
+    // Angel login completes (so _angelSession is ready for the Angel Market Data path).
+    // See: triggerInitialPCR() exported below.
     _fetchFIIDII().catch(e => console.error('[NSE] Initial FII fetch error:', e.message));
 
     // Recurring PCR fetch (needs live spot price each cycle)
@@ -1621,6 +1632,7 @@ module.exports = {
     // Lifecycle
     startNSEScheduler,
     injectAngelSession,   // call after Angel login to enable PCR via Angel Market Data
+    triggerInitialPCR,    // call after Angel login to fire first PCR fetch (session ready)
 
     // Snapshots (for /debug routes)
     getPCRState,

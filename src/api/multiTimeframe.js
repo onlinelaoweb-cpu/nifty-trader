@@ -290,7 +290,13 @@ function calcIndicators(candles, tfLabel) {
     }
 
     // ADX(14) — min 30 candles (2 × period + buffer), used for NEUTRAL override only
-    const adxData  = calculateADX(sessionC.length >= 30 ? sessionC : candles);
+    // For 5m TF: Yahoo gives today-only bars (< 100 total), so `candles` IS the session.
+    // For 15m/1h TF: Yahoo gives multi-day bars (100+), so we need sessionC to avoid gaps.
+    // Rule: if candles looks like single-session data (< 100 bars), use it directly for ADX.
+    const adxSource = sessionC.length >= 30 ? sessionC
+                    : candles.length < 100   ? candles      // today-only (5m Yahoo)
+                    : candles.slice(-80);                    // last 80 of multi-day (strip oldest gaps)
+    const adxData  = calculateADX(adxSource);
     const adxVal   = adxData?.adx ?? null;
     // ADX < 20 = choppy, override signal to NEUTRAL even if bull/bear votes pass
     const adxValid = adxVal === null || adxVal >= 20;
