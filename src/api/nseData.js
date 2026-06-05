@@ -211,6 +211,13 @@ async function scraperAPIFetch(targetUrl) {
                     continue;
                 }
                 const raw = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+                // NSE has two formats:
+                // Indices format: {records:{data:[...]}, filtered:{...}}
+                // Equities format: {data:[...], metadata:{...}}
+                // Normalize equities format → indices format
+                if (raw?.data && Array.isArray(raw.data) && !raw?.records) {
+                    raw.records = { data: raw.data, expiryDates: raw.metadata?.expiryDates || [] };
+                }
                 if (raw?.records?.data) return raw;
                 console.warn(`[ScraperAPI] Response missing records.data — status:200, body:${JSON.stringify(raw)?.slice(0,80)}`);
             } catch (e) {
@@ -951,10 +958,17 @@ async function _fetchPCR(spotPrice) {
                     await refreshCookie().catch(() => {});
                     res = await nseGetWithRetry(ocUrl);
                 }
-                if (res?.status === 200 && res.data?.records?.data) {
-                    pcrData = res.data;
-                    console.log(`[PCR] Direct NSE ✅ (${ocUrl.split('/').pop()})`);
-                    break;
+                if (res?.status === 200 && res.data) {
+                    let d = res.data;
+                    // Normalize equities format {data:[]} → indices format {records:{data:[]}}
+                    if (d?.data && Array.isArray(d.data) && !d?.records) {
+                        d.records = { data: d.data, expiryDates: d.metadata?.expiryDates || [] };
+                    }
+                    if (d?.records?.data) {
+                        pcrData = d;
+                        console.log(`[PCR] Direct NSE ✅ (${ocUrl.split('/').pop()})`);
+                        break;
+                    }
                 }
                 console.warn(`[PCR] Direct NSE failed ${ocUrl.split('/').pop()}: ${res?.status ?? 'no-response'}`);
             }
