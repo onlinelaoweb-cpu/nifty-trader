@@ -41,6 +41,13 @@
 'use strict';
 const axios = require('axios');
 
+// ── Angel One session ─────────────────────────────────────────────────────────
+let _angelSession = null;
+function injectAngelSession({ jwtToken, apiKey }) {
+    _angelSession = { jwtToken, apiKey };
+    console.log('[nseData] Angel session injected — PCR via Angel API enabled');
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Config
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -948,6 +955,191 @@ function isMarketHours() {
     return istMin >= 550 && istMin <= 935;   // 9:10 to 15:35
 }
 
+
+// ── Angel One Market Data PCR ─────────────────────────────────────────────────
+// Uses Angel SmartAPI to fetch option OI for ATM ±7 strikes → compute PCR.
+// Requires Angel session (injected via injectAngelSession).
+// The ScripMaster JSON lists all NFO tokens — we download it once per day.
+let _scripMasterCache = null;
+let _scripMasterDate  = null;
+
+async function getScripMaster() {
+    const today = new Date().toISOString().slice(0, 10);
+    if (_scripMasterCache && _scripMasterDate === today) return _scripMasterCache;
+    try {
+        const res = await axios.get(
+            'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json',
+            { timeout: 20_000, responseType: 'json' }
+        );
+        _scripMasterCache = res.data;
+        _scripMasterDate  = today;
+        console.log(`[ScripMaster] Loaded ${res.data.length} instruments`);
+        return res.data;
+    } catch (e) {
+        console.warn('[ScripMaster] Fetch failed:', e.message);
+        return _scripMasterCache;  // use stale if available
+    }
+}
+
+async function fetchPCRFromAngel(spotPrice) {
+    if (!_angelSession?.jwtToken) return null;
+    if (!spotPrice || spotPrice <= 0) return null;
+
+    // Market hours check
+    const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istMin = istNow.getHours() * 60 + istNow.getMinutes();
+    if (istMin < 555 || istMin > 930) return null;
+
+    try {
+        const scrips = await getScripMaster();
+        if (!scrips || !Array.isArray(scrips)) return null;
+
+        // Find nearest weekly expiry (look for OPTIDX NFO NIFTY entries)
+        const niftyOptions = scrips.filter(s =>
+            s.exch_seg === 'NFO' &&
+            s.instrumenttype === 'OPTIDX' &&
+            s.name === 'NIFTY' &&
+            s.expiry
+        );
+        if (niftyOptions.length === 0) {
+            console.warn('[PCR-Angel] No NIFTY option tokens in ScripMaster');
+            return null;
+        }
+
+        // Get nearest expiry date
+        const today = new Date();
+        const expiries = [...new Set(niftyOptions.map(s => s.expiry))].sort();
+        const nearestExpiry = expiries.find(e => {
+            // ScripMaster expiry format: "26JUN2025"
+            const parts = e.match(/(\d{2})(\w{3})(\d{4})/);
+            if (!parts) return false;
+            const months = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
+            const expDate = new Date(parseInt(parts[3]), months[parts[2]], parseInt(parts[1]));
+            return expDate >= today;
+        });
+        if (!nearestExpiry) {
+            console.warn('[PCR-Angel] No valid upcoming expiry found');
+            return null;
+        }
+
+        // ATM strike (Nifty rounds to nearest 50)
+        const atmStrike = Math.round(spotPrice / 50) * 50;
+        const strikesToFetch = [];
+        for (let i = -7; i <= 7; i++) strikesToFetch.push(atmStrike + i * 50);
+
+        // Find tokens for these strikes on the nearest expiry
+        const tokens = [];
+        const strikeMap = {};  // token → { strike, optionType }
+        for (const strike of strikesToFetch) {
+            for (const optType of ['CE', 'PE']) {
+                const s = niftyOptions.find(x =>
+                    x.expiry === nearestExpiry &&
+                    Math.abs(parseFloat(x.strike) - strike) < 1 &&
+                    x.symbol.endsWith(optType)
+                );
+                if (s) {
+                    tokens.push(s.token);
+                    strikeMap[s.token] = { strike, optionType: optType };
+                }
+            }
+        }
+
+        if (tokens.length < 10) {
+            console.warn(`[PCR-Angel] Too few tokens found (${tokens.length}) for expiry ${nearestExpiry}`);
+            return null;
+        }
+
+        // Fetch market data for these tokens
+        const res = await axios.post(
+            'https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/getMarketData',
+            { mode: 'FULL', exchangeTokens: { NFO: tokens } },
+            {
+                headers: {
+                    'Content-Type'     : 'application/json',
+                    'Accept'           : 'application/json',
+                    'Authorization'    : `Bearer ${_angelSession.jwtToken}`,
+                    'X-UserType'       : 'USER',
+                    'X-SourceID'       : 'WEB',
+                    'X-ClientLocalIP'  : '127.0.0.1',
+                    'X-ClientPublicIP' : '127.0.0.1',
+                    'X-MACAddress'     : '00:00:00:00:00:00',
+                    'X-PrivateKey'     : _angelSession.apiKey || '',
+                },
+                timeout: 10_000,
+            }
+        );
+
+        if (typeof res.data === 'string' && res.data.includes('<html')) return null;
+        const apiStatus = res.data?.status === true || res.data?.status === 'true';
+        if (!apiStatus) {
+            console.warn('[PCR-Angel] API error:', res.data?.message || res.data?.errorcode);
+            return null;
+        }
+
+        const fetched = Array.isArray(res.data?.data?.fetched) ? res.data.data.fetched
+                      : Array.isArray(res.data?.data) ? res.data.data : null;
+        if (!fetched || fetched.length === 0) {
+            console.warn('[PCR-Angel] Empty fetched array');
+            return null;
+        }
+
+        // Build a synthetic option chain compatible with parsePCR()
+        // fetched items have: symbolToken, openInterest, netChange, tradeVolume, lastPrice, etc.
+        let totalCeOI = 0, totalPeOI = 0, ceWall = 0, ceWallStrike = 0, peWall = 0, peWallStrike = 0;
+        const records = [];
+        const strikeRows = {};
+
+        for (const item of fetched) {
+            const info = strikeMap[item.symbolToken];
+            if (!info) continue;
+            const oi = parseInt(item.openInterest || 0);
+            const ltp = parseFloat(item.lastPrice || 0);
+            const { strike, optionType } = info;
+            if (!strikeRows[strike]) strikeRows[strike] = { strikePrice: strike };
+            if (optionType === 'CE') {
+                strikeRows[strike].CE = { openInterest: oi, lastPrice: ltp, changeinOpenInterest: parseInt(item.netChange || 0) };
+                totalCeOI += oi;
+                if (oi > ceWall) { ceWall = oi; ceWallStrike = strike; }
+            } else {
+                strikeRows[strike].PE = { openInterest: oi, lastPrice: ltp, changeinOpenInterest: parseInt(item.netChange || 0) };
+                totalPeOI += oi;
+                if (oi > peWall) { peWall = oi; peWallStrike = strike; }
+            }
+        }
+
+        if (totalCeOI === 0 || totalPeOI === 0) {
+            console.warn('[PCR-Angel] Zero OI — market closed or data unavailable');
+            return null;
+        }
+
+        const pcr = parseFloat((totalPeOI / totalCeOI).toFixed(3));
+        const recordsArr = Object.values(strikeRows);
+
+        // ATM PCR (±100 range around ATM)
+        const atmRange = recordsArr.filter(r => Math.abs(r.strikePrice - atmStrike) <= 100);
+        const atmCeOI = atmRange.reduce((s, r) => s + (r.CE?.openInterest || 0), 0);
+        const atmPeOI = atmRange.reduce((s, r) => s + (r.PE?.openInterest || 0), 0);
+        const atmPcr = atmCeOI > 0 ? parseFloat((atmPeOI / atmCeOI).toFixed(3)) : null;
+
+        console.log(`[PCR-Angel] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike}(${ceWall}) | PE Wall:${peWallStrike}(${peWall}) | Expiry:${nearestExpiry}`);
+
+        // Return in the format expected by parsePCR consumers
+        return {
+            pcr,
+            atmPcr,
+            atm          : atmStrike,
+            ceWall       : { strike: ceWallStrike, oi: ceWall },
+            peWall       : { strike: peWallStrike, oi: peWall },
+            maxPain      : calcMaxPain(recordsArr),
+            records      : recordsArr,
+            source       : 'angel',
+        };
+    } catch (e) {
+        console.warn('[PCR-Angel] Error:', e.message);
+        return null;
+    }
+}
+
 async function _fetchPCR(spotPrice) {
     if (!spotPrice || spotPrice <= 0) return;
     // Skip PCR fetch entirely outside market hours — NSE returns 404/garbage pre/post market
@@ -958,6 +1150,45 @@ async function _fetchPCR(spotPrice) {
 
     try {
         let pcrData = null;
+
+        // ── Path 0: Angel One SmartAPI — preferred (no IP block, uses existing session) ──
+        // Angel API works from Railway US IPs; no ScraperAPI credit usage.
+        if (_angelSession?.jwtToken) {
+            console.log('[PCR] Trying Angel Market Data...');
+            const angelResult = await fetchPCRFromAngel(spotPrice);
+            if (angelResult) {
+                // Commit directly — Angel result is already parsed
+                Object.assign(_pcr, {
+                    pcr       : angelResult.pcr,
+                    atmPcr    : angelResult.atmPcr,
+                    atm       : angelResult.atm,
+                    ceWall    : angelResult.ceWall,
+                    peWall    : angelResult.peWall,
+                    maxPain   : angelResult.maxPain,
+                    expiryDay : isExpiryDay(),
+                    fetchedAt : new Date(),
+                    lastError : null,
+                    fetchCount: _pcr.fetchCount + 1,
+                });
+                // Run OI buildup from Angel records too
+                try {
+                    const oib = calcOIBuildup(angelResult.records?.map(r => ({
+                        strikePrice: r.strikePrice,
+                        CE: r.CE || {},
+                        PE: r.PE || {},
+                    })) || [], angelResult.pcr);
+                    if (oib) _oiBuildup = oib;
+                    const emom = calcEarlyMomentum(angelResult.records?.map(r => ({
+                        strikePrice: r.strikePrice,
+                        CE: r.CE || {},
+                        PE: r.PE || {},
+                    })) || [], spotPrice);
+                    if (emom) _earlyMom = emom;
+                } catch (_) {}
+                return;  // success — skip ScraperAPI + direct NSE
+            }
+            console.warn('[PCR] Angel path failed — trying ScraperAPI');
+        }
 
         // ── Path A: ScraperAPI with session warming + URL rotation ──────────
         if (SCRAPERAPI_KEY) {
@@ -1389,6 +1620,7 @@ function getCurrentDIINet() { return _fii.diiNet; }
 module.exports = {
     // Lifecycle
     startNSEScheduler,
+    injectAngelSession,   // call after Angel login to enable PCR via Angel Market Data
 
     // Snapshots (for /debug routes)
     getPCRState,

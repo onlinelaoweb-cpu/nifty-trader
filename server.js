@@ -25,6 +25,7 @@ const {
     getCurrentFIINet, getCurrentDIINet,
     interpretEarlyMomentum, interpretOIBuildup,
     isExpiryDay,
+    injectAngelSession: injectAngelSessionNSE,   // nseData Angel session for PCR
 } = require('./src/api/nseData');
 const {
     sendSignalAlert, sendMTFAlert,
@@ -2068,6 +2069,10 @@ async function tryAngelLogin() {
     if (auth) {
         console.log('Angel Login Success');
         injectAngelSession({
+            jwtToken : auth.jwtToken,
+            apiKey   : process.env.ANGEL_API_KEY,
+        });
+        injectAngelSessionNSE({
             jwtToken : auth.jwtToken,
             apiKey   : process.env.ANGEL_API_KEY,
         });
