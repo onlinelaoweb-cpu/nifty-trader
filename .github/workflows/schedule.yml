@@ -3,20 +3,15 @@ name: Vardaan Scheduler — Sleep & Wake
 on:
   schedule:
     # All times in UTC (IST = UTC + 5:30)
-
-    # ── NIFTY APP ──────────────────────────────────────────
-    # Wake:  Mon-Fri 9:00 AM IST  = 3:30 AM UTC
+    # NIFTY: Wake Mon-Fri 9:00 AM IST = 3:30 AM UTC
     - cron: '30 3 * * 1-5'
-    # Sleep: Mon-Fri 3:30 PM IST  = 10:00 AM UTC
+    # NIFTY: Sleep Mon-Fri 3:30 PM IST = 10:00 AM UTC
     - cron: '0 10 * * 1-5'
-
-    # ── BITCOIN APP ────────────────────────────────────────
-    # Wake:  Daily 7:00 PM IST    = 1:30 PM UTC
+    # BITCOIN: Wake Daily 7:00 PM IST = 1:30 PM UTC
     - cron: '30 13 * * *'
-    # Sleep: Daily 11:00 PM IST   = 5:30 PM UTC
+    # BITCOIN: Sleep Daily 11:00 PM IST = 5:30 PM UTC
     - cron: '30 17 * * *'
 
-  # Manual trigger from GitHub Actions tab
   workflow_dispatch:
     inputs:
       action:
@@ -34,66 +29,78 @@ jobs:
     name: '☀️ Nifty WAKE (9:00 AM IST)'
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'nifty-wake' ||
-      github.event_name == 'schedule' && startsWith(github.event.schedule, '30 3')
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'nifty-wake') ||
+      (github.event_name == 'schedule' && github.event.schedule == '30 3 * * 1-5')
     steps:
-      - name: Resume Nifty Service
+      - name: Wake Nifty Service (numReplicas = 1)
         run: |
           echo "🟢 Waking up Vardaan Nifty AI..."
-          curl -s -X POST \
+          RESPONSE=$(curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{"query":"mutation { serviceInstanceRedeploy(environmentId: \"production\", serviceId: \"${{ secrets.NIFTY_SERVICE_ID }}\") }"}' \
-            https://backboard.railway.app/graphql/v2
-          echo "✅ Nifty service resumed!"
+            -d '{
+              "query": "mutation { serviceInstanceUpdate(serviceId: \"${{ secrets.NIFTY_SERVICE_ID }}\", environmentId: \"${{ secrets.NIFTY_ENVIRONMENT_ID }}\", input: { numReplicas: 1 }) }"
+            }' \
+            https://backboard.railway.app/graphql/v2)
+          echo "Response: $RESPONSE"
+          echo "✅ Nifty AWAKE!"
 
   nifty-sleep:
     name: '🌙 Nifty SLEEP (3:30 PM IST)'
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'nifty-sleep' ||
-      github.event_name == 'schedule' && startsWith(github.event.schedule, '0 10')
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'nifty-sleep') ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 10 * * 1-5')
     steps:
-      - name: Suspend Nifty Service
+      - name: Sleep Nifty Service (numReplicas = 0)
         run: |
           echo "🔴 Putting Vardaan Nifty AI to sleep..."
-          curl -s -X POST \
+          RESPONSE=$(curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{"query":"mutation { serviceInstanceSuspend(environmentId: \"production\", serviceId: \"${{ secrets.NIFTY_SERVICE_ID }}\") }"}' \
-            https://backboard.railway.app/graphql/v2
-          echo "✅ Nifty service suspended!"
+            -d '{
+              "query": "mutation { serviceInstanceUpdate(serviceId: \"${{ secrets.NIFTY_SERVICE_ID }}\", environmentId: \"${{ secrets.NIFTY_ENVIRONMENT_ID }}\", input: { numReplicas: 0 }) }"
+            }' \
+            https://backboard.railway.app/graphql/v2)
+          echo "Response: $RESPONSE"
+          echo "✅ Nifty SLEEPING!"
 
   bitcoin-wake:
     name: '🟠 Bitcoin WAKE (7:00 PM IST)'
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'bitcoin-wake' ||
-      github.event_name == 'schedule' && startsWith(github.event.schedule, '30 13')
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'bitcoin-wake') ||
+      (github.event_name == 'schedule' && github.event.schedule == '30 13 * * *')
     steps:
-      - name: Resume Bitcoin Service
+      - name: Wake Bitcoin Service (numReplicas = 1)
         run: |
           echo "🟢 Waking up Vardaan Bitcoin AI..."
-          curl -s -X POST \
+          RESPONSE=$(curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{"query":"mutation { serviceInstanceRedeploy(environmentId: \"production\", serviceId: \"${{ secrets.BITCOIN_SERVICE_ID }}\") }"}' \
-            https://backboard.railway.app/graphql/v2
-          echo "✅ Bitcoin service resumed!"
+            -d '{
+              "query": "mutation { serviceInstanceUpdate(serviceId: \"${{ secrets.BITCOIN_SERVICE_ID }}\", environmentId: \"${{ secrets.BITCOIN_ENVIRONMENT_ID }}\", input: { numReplicas: 1 }) }"
+            }' \
+            https://backboard.railway.app/graphql/v2)
+          echo "Response: $RESPONSE"
+          echo "✅ Bitcoin AWAKE!"
 
   bitcoin-sleep:
     name: '🌙 Bitcoin SLEEP (11:00 PM IST)'
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'bitcoin-sleep' ||
-      github.event_name == 'schedule' && startsWith(github.event.schedule, '30 17')
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'bitcoin-sleep') ||
+      (github.event_name == 'schedule' && github.event.schedule == '30 17 * * *')
     steps:
-      - name: Suspend Bitcoin Service
+      - name: Sleep Bitcoin Service (numReplicas = 0)
         run: |
           echo "🔴 Putting Vardaan Bitcoin AI to sleep..."
-          curl -s -X POST \
+          RESPONSE=$(curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{"query":"mutation { serviceInstanceSuspend(environmentId: \"production\", serviceId: \"${{ secrets.BITCOIN_SERVICE_ID }}\") }"}' \
-            https://backboard.railway.app/graphql/v2
-          echo "✅ Bitcoin service suspended!"
+            -d '{
+              "query": "mutation { serviceInstanceUpdate(serviceId: \"${{ secrets.BITCOIN_SERVICE_ID }}\", environmentId: \"${{ secrets.BITCOIN_ENVIRONMENT_ID }}\", input: { numReplicas: 0 }) }"
+            }' \
+            https://backboard.railway.app/graphql/v2)
+          echo "Response: $RESPONSE"
+          echo "✅ Bitcoin SLEEPING!"
