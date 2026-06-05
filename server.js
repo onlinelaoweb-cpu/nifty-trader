@@ -2080,7 +2080,7 @@ async function tryAngelLogin() {
         // Fire initial PCR fetch NOW — Angel session is ready so the Angel Market
         // Data path will work. Without this, first PCR fires 3 min after startup
         // (the scheduler interval), which is too late if container restarts.
-        triggerInitialPCR(getSpotPrice());
+        triggerInitialPCR(marketState.nifty || 0);
         startWebSocket(auth, onTick);
         _angelLoggedIn = true;
         // On retry logins (after init is complete), immediately refresh breadth
