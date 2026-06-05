@@ -189,14 +189,18 @@ function calculateADX(candles, period = 14) {
                 ? Math.abs(c.close - pc.close)
                 : Math.max(h - l, Math.abs(h - pc.close), Math.abs(l - pc.close));
             tr.push(trVal);
-            const up = h - ph, dn = pl - l;
+            // flat bar: DM+ = DM- = 0 — prevents DI > 100% when DM > TR
+            const up = (h === l) ? 0 : (h - ph);
+            const dn = (h === l) ? 0 : (pl - l);
             dmp.push(up > dn && up > 0 ? up : 0);
             dmm.push(dn > up && dn > 0 ? dn : 0);
         }
         function wilderSmooth(arr) {
-            let s = arr.slice(0, period).reduce((a, b) => a + b, 0);
+            // FIXED: Wilder initial = AVERAGE of first `period` values (not sum)
+            // Using sum caused ADX initial value to be 14x too large → ADX > 100 permanently
+            let s = arr.slice(0, period).reduce((a, b) => a + b, 0) / period;
             const out = [s];
-            for (let i = period; i < arr.length; i++) { s = s - s / period + arr[i]; out.push(s); }
+            for (let i = period; i < arr.length; i++) { s = (s * (period - 1) + arr[i]) / period; out.push(s); }
             return out;
         }
         const atr    = wilderSmooth(tr);

@@ -168,15 +168,20 @@ function calculateADX(candles, period = 14) {
                 ? Math.abs(c.close - pclose)           // flat bar: close-only TR
                 : Math.max(h - l, Math.abs(h - pclose), Math.abs(l - pclose));
             tr.push(trVal);
-            const up = h - ph, dn = pl - l;
+            // flat bar: DM+ = DM- = 0 (no directional movement possible)
+            // Without this, DM can EXCEED TR → DI > 100% → ADX explodes to 300+
+            const up = (h === l) ? 0 : (h - ph);
+            const dn = (h === l) ? 0 : (pl - l);
             dmp.push(up > dn && up > 0 ? up : 0);
             dmm.push(dn > up && dn > 0 ? dn : 0);
         }
         // Wilder's running smooth: seed = sum of first `period` bars, then iterate
         function wilderSmooth(arr) {
-            let s = arr.slice(0, period).reduce((a, b) => a + b, 0);
+            // FIXED: Wilder initial = AVERAGE of first `period` values (not sum)
+            // Using sum caused ADX initial value to be 14x too large → ADX > 100 permanently
+            let s = arr.slice(0, period).reduce((a, b) => a + b, 0) / period;
             const out = [s];
-            for (let i = period; i < arr.length; i++) { s = s - s / period + arr[i]; out.push(s); }
+            for (let i = period; i < arr.length; i++) { s = (s * (period - 1) + arr[i]) / period; out.push(s); }
             return out;
         }
         const atr  = wilderSmooth(tr);

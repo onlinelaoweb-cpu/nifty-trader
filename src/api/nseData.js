@@ -172,52 +172,52 @@ async function nseGetWithRetry(url) {
 //   ① India IP      → country_code=in
 //   ② Valid session → Cookie from our own refreshCookie() call
 // Returns parsed JSON data directly. Returns null on failure.
+// Track last ScraperAPI session warm timestamp
+let _scraperSessionWarmedAt = 0;
+
 async function scraperAPIFetch(targetUrl) {
     if (!SCRAPERAPI_KEY) return null;
     try {
-        // Ensure we have a fresh NSE cookie — ScraperAPI will forward it to NSE
-        const cookie = await getCookie();
+        // NSE requires a 2-step session:
+        // Step 1: Visit /option-chain HTML page to set the NSE session cookie
+        // Step 2: Call the JSON API with that warmed session
+        // We use session_number=1 so ScraperAPI reuses the same India IP session.
+        // Warm once every 8 minutes (NSE session TTL ~10 min).
+        const buildUrl = (target) =>
+            `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(target)}&render_js=false&country_code=in&session_number=1`;
 
-        // render_js=false  — JSON API, no JS cookie challenge to execute
-        // country_code=in  — India residential IP bypasses Railway US-IP block
-        // custom_headers=true — ScraperAPI forwards our headers (incl. Cookie) to target
-        // FIX: Use session_based=true so ScraperAPI maintains NSE session cookie across calls
-        // Also try alternate NSE endpoint if primary returns 404
-        const buildScraperUrl = (target, useSessions) =>
-            `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(target)}&render_js=false&country_code=in&custom_headers=true${useSessions ? '&session_number=1' : ''}`;
-
-        let res = null;
-        // Attempt 1: with session_based (India IP + persistent NSE session)
-        res = await axios.get(buildScraperUrl(targetUrl, true), {
-            timeout        : 35_000,
-            validateStatus : () => true,
-            headers        : { ...HEADERS, ...(cookie ? { 'Cookie': cookie } : {}) },
-        });
-        // Attempt 2: if 404, try the alternate NSE OC URL
-        if (res.status === 404) {
-            const altUrl = targetUrl.replace(
-                '/api/option-chain-indices?symbol=NIFTY',
-                '/api/option-chain-equities?symbol=NIFTY'
-            );
-            if (altUrl !== targetUrl) {
-                console.log('[ScraperAPI] 404 on primary URL — trying alternate OC endpoint');
-                res = await axios.get(buildScraperUrl(altUrl, true), {
-                    timeout        : 35_000,
-                    validateStatus : () => true,
-                    headers        : { ...HEADERS, ...(cookie ? { 'Cookie': cookie } : {}) },
+        const nowMs = Date.now();
+        if (nowMs - _scraperSessionWarmedAt > 8 * 60 * 1000) {
+            // Warm the ScraperAPI session by visiting NSE option-chain page
+            try {
+                await axios.get(buildUrl('https://www.nseindia.com/option-chain'), {
+                    timeout: 15_000, validateStatus: () => true,
                 });
+                _scraperSessionWarmedAt = nowMs;
+                console.log('[ScraperAPI] Session warmed via /option-chain page');
+            } catch (we) {
+                console.warn('[ScraperAPI] Session warm failed:', we.message);
             }
         }
-        if (!res || res.status !== 200) {
-            console.warn(`[ScraperAPI] HTTP ${res?.status ?? 'no-response'} for ${targetUrl}`);
-            return null;
+
+        // Now call the actual JSON API endpoints in order
+        for (const ocUrl of OC_URLS) {
+            try {
+                const res = await axios.get(buildUrl(ocUrl), {
+                    timeout: 35_000, validateStatus: () => true,
+                });
+                if (res.status !== 200) {
+                    console.warn(`[ScraperAPI] HTTP ${res.status} for ${ocUrl.split('/').pop()}`);
+                    continue;
+                }
+                const raw = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+                if (raw?.records?.data) return raw;
+                console.warn(`[ScraperAPI] Response missing records.data — status:200, body:${JSON.stringify(raw)?.slice(0,80)}`);
+            } catch (e) {
+                console.warn(`[ScraperAPI] Error on ${ocUrl.split('/').pop()}: ${e.message}`);
+            }
         }
-        const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-        if (!data?.records?.data) {
-            console.warn(`[ScraperAPI] Response missing records.data — status:${res.status}, type:${typeof res.data}, body:${JSON.stringify(res.data)?.slice(0,120)}`);
-            return null;
-        }
-        return data;
+        return null;
     } catch (e) {
         console.warn(`[ScraperAPI] Fetch failed: ${e.message}`);
         return null;
@@ -924,19 +924,13 @@ async function _fetchPCR(spotPrice) {
     try {
         let pcrData = null;
 
-        // ── Path A: ScraperAPI with URL rotation ─────────────────────────────
-        // Try all OC_URLS via ScraperAPI (session_based=true maintains NSE cookie)
+        // ── Path A: ScraperAPI with session warming + URL rotation ──────────
         if (SCRAPERAPI_KEY) {
             console.log('[PCR] Trying ScraperAPI...');
-            for (const ocUrl of OC_URLS) {
-                pcrData = await scraperAPIFetch(ocUrl);
-                if (pcrData?.records?.data) {
-                    console.log(`[PCR] ScraperAPI ✅ (${ocUrl.includes('equities') ? 'equities' : ocUrl.includes('archives') ? 'archive' : 'primary'})`);
-                    break;
-                }
-                console.warn(`[PCR] ScraperAPI 404 on ${ocUrl.split('/').pop()} — trying next URL...`);
-            }
-            if (!pcrData?.records?.data) {
+            pcrData = await scraperAPIFetch(OC_URLS[0]);  // internally tries all OC_URLS
+            if (pcrData?.records?.data) {
+                console.log('[PCR] ScraperAPI ✅');
+            } else {
                 console.warn('[PCR] ScraperAPI exhausted all URLs — falling back to direct NSE');
                 pcrData = null;
             }
