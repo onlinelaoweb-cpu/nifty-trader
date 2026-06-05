@@ -172,54 +172,82 @@ async function nseGetWithRetry(url) {
 //   ① India IP      → country_code=in
 //   ② Valid session → Cookie from our own refreshCookie() call
 // Returns parsed JSON data directly. Returns null on failure.
-// Track last ScraperAPI session warm timestamp
+// Track last ScraperAPI session warm timestamp + captured cookies
 let _scraperSessionWarmedAt = 0;
+let _scraperNseCookie = null;   // NSE cookies captured from the warm step
 
 async function scraperAPIFetch(targetUrl) {
     if (!SCRAPERAPI_KEY) return null;
     try {
         // NSE requires a 2-step session:
-        // Step 1: Visit /option-chain HTML page to set the NSE session cookie
-        // Step 2: Call the JSON API with that warmed session
-        // We use session_number=1 so ScraperAPI reuses the same India IP session.
-        // Warm once every 8 minutes (NSE session TTL ~10 min).
-        const buildUrl = (target) =>
-            `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(target)}&render_js=false&country_code=in&session_number=1`;
+        // Step 1: Visit /option-chain HTML page via ScraperAPI → capture NSE Set-Cookie headers
+        // Step 2: Call JSON API via ScraperAPI, forwarding those cookies via custom_headers=true
+        //
+        // KEY FIX: session_number=1 alone does NOT share cookies between ScraperAPI requests.
+        // We must explicitly extract the NSE cookies from step 1 and inject them into step 2
+        // using ScraperAPI's custom_headers parameter. This is what was missing.
+
+        // Build ScraperAPI URL — custom_headers=true allows us to send extra headers to the target
+        const buildUrl = (target, extraCookie) => {
+            let url = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(target)}&render_js=false&country_code=in&session_number=1&custom_headers=true`;
+            return url;
+        };
+
+        // Axios config that injects the NSE cookie as a forwarded header
+        const axiosConfig = (cookie) => ({
+            timeout: 35_000,
+            validateStatus: () => true,
+            // ScraperAPI forwards any headers we send directly to the target when custom_headers=true
+            headers: {
+                ...HEADERS,
+                ...(cookie ? { 'Cookie': cookie } : {}),
+            },
+        });
 
         const nowMs = Date.now();
+        // Re-warm every 8 minutes (NSE session TTL ~10 min)
         if (nowMs - _scraperSessionWarmedAt > 8 * 60 * 1000) {
-            // Warm the ScraperAPI session by visiting NSE option-chain page
             try {
-                await axios.get(buildUrl('https://www.nseindia.com/option-chain'), {
-                    timeout: 15_000, validateStatus: () => true,
-                });
+                const warmRes = await axios.get(
+                    buildUrl('https://www.nseindia.com/option-chain'),
+                    { ...axiosConfig(null), headers: { ...HEADERS, Accept: 'text/html,application/xhtml+xml,*/*' } }
+                );
+                // Capture the NSE session cookies returned by ScraperAPI
+                const setCookie = warmRes.headers['set-cookie'];
+                if (setCookie && setCookie.length) {
+                    _scraperNseCookie = setCookie.map(c => c.split(';')[0]).join('; ');
+                }
+                // Also use our own refreshed cookie as fallback
+                if (!_scraperNseCookie && _cookie) {
+                    _scraperNseCookie = _cookie;
+                }
                 _scraperSessionWarmedAt = nowMs;
                 console.log('[ScraperAPI] Session warmed via /option-chain page');
             } catch (we) {
                 console.warn('[ScraperAPI] Session warm failed:', we.message);
+                // Use direct NSE cookie as fallback if warm failed
+                if (_cookie) _scraperNseCookie = _cookie;
             }
         }
 
-        // Now call the actual JSON API endpoints in order
+        // Now call the actual JSON API endpoints in order, injecting cookies
         for (const ocUrl of OC_URLS) {
             try {
-                const res = await axios.get(buildUrl(ocUrl), {
-                    timeout: 35_000, validateStatus: () => true,
-                });
+                const res = await axios.get(buildUrl(ocUrl), axiosConfig(_scraperNseCookie || _cookie));
                 if (res.status !== 200) {
                     console.warn(`[ScraperAPI] HTTP ${res.status} for ${ocUrl.split('/').pop()}`);
                     continue;
                 }
                 const raw = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-                // NSE has two formats:
+                // NSE has two response formats:
                 // Indices format: {records:{data:[...]}, filtered:{...}}
                 // Equities format: {data:[...], metadata:{...}}
-                // Normalize equities format → indices format
+                // Normalize equities → indices format
                 if (raw?.data && Array.isArray(raw.data) && !raw?.records) {
                     raw.records = { data: raw.data, expiryDates: raw.metadata?.expiryDates || [] };
                 }
                 if (raw?.records?.data) return raw;
-                console.warn(`[ScraperAPI] Response missing records.data — status:200, body:${JSON.stringify(raw)?.slice(0,80)}`);
+                console.warn(`[ScraperAPI] Response missing records.data — status:200, body:${JSON.stringify(raw)?.slice(0,120)}`);
             } catch (e) {
                 console.warn(`[ScraperAPI] Error on ${ocUrl.split('/').pop()}: ${e.message}`);
             }

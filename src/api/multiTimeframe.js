@@ -361,6 +361,20 @@ async function analyzeMultiTimeframe() {
     // for 15m and 1h during the first 90 min of the session.
     const fetchPromises = [];
 
+    // 5m Yahoo fallback — without this, 5m stays INSUFFICIENT for the entire
+    // session if startup happens after ~9:50 AM with < 22 bars in memory.
+    // Yahoo 5m gives today's bars directly so ADX and RSI compute from first cycle.
+    if (c5m.length < MIN_BARS['5m']) {
+        fetchPromises.push(
+            fetchCandlesFromYahoo('5m').then(yc => {
+                if (yc.length > c5m.length) {
+                    console.log(`📊 MTF 5m: resampled ${c5m.length} bars < ${MIN_BARS['5m']} min → Yahoo gave ${yc.length} bars ✅`);
+                    c5m = yc;
+                }
+            })
+        );
+    }
+
     if (c15m.length < MIN_BARS['15m']) {
         fetchPromises.push(
             fetchCandlesFromYahoo('15m').then(yc => {
