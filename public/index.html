@@ -822,7 +822,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     </div>
   </div>
 
-  <div class="sec-label">1-MIN INDICATORS</div>
+  <div class="sec-label">INDICATORS</div>
   <div class="ind-grid">
     <div class="ind-card" id="rsi-card" style="grid-column:1/-1;">
       <div class="ind-label"><span>RSI (9)</span><span id="rsi-zone" style="font-size:8px;">--</span></div>
@@ -851,9 +851,31 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="rsi-dial-zone neut" id="rsi-dial-zone">NEUTRAL</div>
         <div id="candle-source-badge" style="font-size:9px;color:var(--dim);text-align:center;margin-top:3px;letter-spacing:0.5px;"></div>
       </div>
+      <!-- Multi-TF RSI comparison row -->
+      <div style="display:flex;justify-content:space-around;margin-top:8px;padding-top:7px;border-top:1px solid var(--border);">
+        <div style="text-align:center;">
+          <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">1 MIN</div>
+          <div style="font-family:'Orbitron',monospace;font-size:13px;font-weight:700;" id="rsi-1m-compare">--</div>
+          <div style="font-size:8px;margin-top:1px;" id="rsi-1m-zone">--</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">5 MIN</div>
+          <div style="font-family:'Orbitron',monospace;font-size:13px;font-weight:700;" id="rsi-5m-compare">--</div>
+          <div style="font-size:8px;margin-top:1px;" id="rsi-5m-zone">--</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">15 MIN</div>
+          <div style="font-family:'Orbitron',monospace;font-size:13px;font-weight:700;" id="rsi-15m-compare">--</div>
+          <div style="font-size:8px;margin-top:1px;" id="rsi-15m-zone">--</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">SIGNAL</div>
+          <div style="font-family:'Orbitron',monospace;font-size:9px;font-weight:700;margin-top:4px;" id="rsi-multi-signal">--</div>
+        </div>
+      </div>
     </div>
-    <div class="ind-card" id="vwap-card"><div class="ind-label"><span>VWAP</span><span id="vwap-pos" style="font-size:8px;">--</span></div><div class="ind-val" id="vwap-val" style="font-size:15px;">--</div><div class="ind-sub" id="vwap-sub">Fair value</div></div>
-    <div class="ind-card" id="ema-card"><div class="ind-label"><span>EMA CROSS</span><span id="ema-trend" style="font-size:8px;">--</span></div><div style="display:flex;gap:5px;align-items:baseline;margin-top:2px;"><div><div style="font-size:8px;color:var(--dim);">EMA9</div><div class="ind-val" id="ema9-val" style="font-size:14px;">--</div></div><div style="color:var(--dim);font-size:11px;align-self:center;">/</div><div><div style="font-size:8px;color:var(--dim);">EMA21</div><div class="ind-val" id="ema21-val" style="font-size:14px;">--</div></div></div></div>
+    <div class="ind-card" id="vwap-card"><div class="ind-label"><span>VWAP <span style="font-size:8px;color:var(--dim);">(intraday)</span></span><span id="vwap-pos" style="font-size:8px;">--</span></div><div class="ind-val" id="vwap-val" style="font-size:15px;">--</div><div class="ind-sub" id="vwap-sub">Fair value</div></div>
+    <div class="ind-card" id="ema-card"><div class="ind-label"><span>EMA CROSS <span style="font-size:8px;color:var(--dim);">(1m)</span></span><span id="ema-trend" style="font-size:8px;">--</span></div><div style="display:flex;gap:5px;align-items:baseline;margin-top:2px;"><div><div style="font-size:8px;color:var(--dim);">EMA9</div><div class="ind-val" id="ema9-val" style="font-size:14px;">--</div></div><div style="color:var(--dim);font-size:11px;align-self:center;">/</div><div><div style="font-size:8px;color:var(--dim);">EMA21</div><div class="ind-val" id="ema21-val" style="font-size:14px;">--</div></div></div></div>
     <div class="ind-card" style="border-left:2px solid var(--amber);grid-column:1/-1;"><div class="ind-label"><span>VIX STATUS</span></div><div class="ind-val" id="vix-note-val" style="font-size:12px;color:var(--amber);">--</div><div class="ind-sub" id="vix-note-sub">--</div></div>
   </div>
 
@@ -1760,6 +1782,28 @@ function renderDashboard(s) {
     const rsiZone = document.getElementById('rsi-zone');
     if (rsiZone) rsiZone.textContent = zone;
     document.getElementById('rsi-val').style.color = s.rsi < 30 ? 'var(--blue)' : s.rsi > 70 ? 'var(--red)' : 'var(--green)';
+
+    // ── Multi-TF RSI comparison row (1m / 5m / 15m) ──────────────────────────
+    const rsiZoneLabel = (v) => v == null ? '--' : v < 30 ? 'OVERSOLD' : v > 70 ? 'OVERBOUGHT' : v > 55 ? 'BULLISH' : v < 45 ? 'BEARISH' : 'NEUTRAL';
+    const rsiZoneColor = (v) => v == null ? 'var(--dim)' : v < 30 ? 'var(--blue)' : v > 70 ? 'var(--red)' : v > 55 ? 'var(--green)' : v < 45 ? 'var(--red)' : 'var(--amber)';
+    const rsi1mV  = s.rsi;
+    const rsi5mV  = s.mtf?.tf5m?.rsi  ?? null;
+    const rsi15mV = s.mtf?.tf15m?.rsi ?? null;
+    [['1m', rsi1mV], ['5m', rsi5mV], ['15m', rsi15mV]].forEach(([tf, val]) => {
+      const vEl = document.getElementById('rsi-' + tf + '-compare');
+      const zEl = document.getElementById('rsi-' + tf + '-zone');
+      if (vEl) { vEl.textContent = val != null ? val.toFixed(1) : '--'; vEl.style.color = rsiZoneColor(val); }
+      if (zEl) { zEl.textContent = rsiZoneLabel(val); zEl.style.color = rsiZoneColor(val); }
+    });
+    const sigEl = document.getElementById('rsi-multi-signal');
+    if (sigEl) {
+      if (rsi5mV != null && rsi15mV != null) {
+        const bull = rsi5mV > 55 && rsi15mV > 55;
+        const bear = rsi5mV < 45 && rsi15mV < 45;
+        sigEl.textContent = bull ? '✅ BULL' : bear ? '🔴 BEAR' : '⚠️ MIX';
+        sigEl.style.color = bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--amber)';
+      } else { sigEl.textContent = '--'; sigEl.style.color = 'var(--dim)'; }
+    }
   }
 
   // VWAP
