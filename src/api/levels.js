@@ -5,8 +5,38 @@
 // Falls back to NSE allIndices for prev-day OHLC if memory has < 2 days.
 // This avoids the NSE daily chart endpoint that times out from Railway.
 
-const { fetchAllIndices } = require('./yahooFetch');
+const { fetchAllIndices, fetchYahooChart } = require('./yahooFetch');
 const { getCandleHistory } = require('./indicators');
+
+// Cache weekly OHLC — refresh once per day
+let _weeklyCache = null;
+let _weeklyCacheAt = 0;
+
+async function getWeeklyOHLC() {
+    // Refresh once every 60 min
+    if (_weeklyCache && Date.now() - _weeklyCacheAt < 60 * 60 * 1000) {
+        return _weeklyCache;
+    }
+    try {
+        // Get last 5 trading days daily candles
+        const { nseNiftyDaily } = require('./yahooFetch');
+        const days = await nseNiftyDaily(7);
+        if (days && days.length >= 3) {
+            _weeklyCache = {
+                high  : Math.max(...days.map(d => d.high)),
+                low   : Math.min(...days.map(d => d.low)),
+                open  : days[0].open,
+                close : days[days.length - 1].close,
+            };
+            _weeklyCacheAt = Date.now();
+            console.log(`[SR] Weekly OHLC: H=${_weeklyCache.high} L=${_weeklyCache.low} (${days.length} days)`);
+            return _weeklyCache;
+        }
+    } catch (e) {
+        console.warn('[SR] Weekly OHLC fetch failed:', e.message);
+    }
+    return null;
+}
 
 // Get prev-day OHLC from allIndices (confirmed working from Railway)
 async function getPrevDayOHLC() {
@@ -75,11 +105,15 @@ async function calculateSRLevels(currentPrice, maxPainData = null) {
         const s2 = parseFloat((pp - pdH + pdL).toFixed(0));
         const s3 = parseFloat((pdL - 2 * (pdH - pp)).toFixed(0));
 
-        // Week high/low from memory
-        const allHighs  = memCandles.length > 0 ? memCandles.map(c => c.high)  : [pdH];
-        const allLows   = memCandles.length > 0 ? memCandles.map(c => c.low)   : [pdL];
-        const wHigh = parseFloat(Math.max(...allHighs).toFixed(0));
-        const wLow  = parseFloat(Math.min(...allLows).toFixed(0));
+        // Week high/low — use proper 5-day daily data (not 1m memory candles)
+        // 1m candles only have 2-3 days, so weekly high/low was inaccurate before
+        const weeklyOHLC = await getWeeklyOHLC();
+        const wHigh = weeklyOHLC
+            ? parseFloat(weeklyOHLC.high.toFixed(0))
+            : parseFloat(Math.max(...(memCandles.length > 0 ? memCandles.map(c => c.high) : [pdH])).toFixed(0));
+        const wLow  = weeklyOHLC
+            ? parseFloat(weeklyOHLC.low.toFixed(0))
+            : parseFloat(Math.min(...(memCandles.length > 0 ? memCandles.map(c => c.low) : [pdL])).toFixed(0));
 
         const levels = [
             { price: r3,    type: 'R3',  label: 'Pivot R3',      strength: 1 },
