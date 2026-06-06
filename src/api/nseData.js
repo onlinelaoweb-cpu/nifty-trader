@@ -957,6 +957,8 @@ function parsePCR(data, spotPrice) {
 // Returns true if current IST time is within 9:10–15:35 (5-min buffer either side)
 function isMarketHours() {
     const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const day = ist.getDay(); // 0=Sun, 6=Sat
+    if (day === 0 || day === 6) return false;  // weekend — NSE closed
     const istMin = ist.getHours() * 60 + ist.getMinutes();
     return istMin >= 550 && istMin <= 935;   // 9:10 to 15:35
 }

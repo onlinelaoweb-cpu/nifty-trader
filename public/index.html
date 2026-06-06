@@ -874,8 +874,55 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         </div>
       </div>
     </div>
-    <div class="ind-card" id="vwap-card"><div class="ind-label"><span>VWAP <span style="font-size:8px;color:var(--dim);">(intraday)</span></span><span id="vwap-pos" style="font-size:8px;">--</span></div><div class="ind-val" id="vwap-val" style="font-size:15px;">--</div><div class="ind-sub" id="vwap-sub">Fair value</div></div>
-    <div class="ind-card" id="ema-card"><div class="ind-label"><span>EMA CROSS <span style="font-size:8px;color:var(--dim);">(1m)</span></span><span id="ema-trend" style="font-size:8px;">--</span></div><div style="display:flex;gap:5px;align-items:baseline;margin-top:2px;"><div><div style="font-size:8px;color:var(--dim);">EMA9</div><div class="ind-val" id="ema9-val" style="font-size:14px;">--</div></div><div style="color:var(--dim);font-size:11px;align-self:center;">/</div><div><div style="font-size:8px;color:var(--dim);">EMA21</div><div class="ind-val" id="ema21-val" style="font-size:14px;">--</div></div></div></div>
+    <div class="ind-card" id="vwap-card">
+  <div class="ind-label"><span>VWAP</span><span id="vwap-pos" style="font-size:8px;">--</span></div>
+  <div class="ind-val" id="vwap-val" style="font-size:15px;">--</div>
+  <div class="ind-sub" id="vwap-sub">Fair value</div>
+  <div style="display:flex;justify-content:space-around;margin-top:8px;padding-top:7px;border-top:1px solid var(--border);">
+    <div style="text-align:center;">
+      <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">1 MIN</div>
+      <div style="font-family:'Orbitron',monospace;font-size:12px;font-weight:700;" id="vwap-1m-pos">--</div>
+    </div>
+    <div style="text-align:center;">
+      <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">5 MIN</div>
+      <div style="font-family:'Orbitron',monospace;font-size:12px;font-weight:700;" id="vwap-5m-pos">--</div>
+    </div>
+    <div style="text-align:center;">
+      <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">15 MIN</div>
+      <div style="font-family:'Orbitron',monospace;font-size:12px;font-weight:700;" id="vwap-15m-pos">--</div>
+    </div>
+    <div style="text-align:center;">
+      <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">SIGNAL</div>
+      <div style="font-family:'Orbitron',monospace;font-size:9px;font-weight:700;margin-top:4px;" id="vwap-multi-signal">--</div>
+    </div>
+  </div>
+</div>
+    <div class="ind-card" id="ema-card">
+  <div class="ind-label"><span>EMA CROSS</span><span id="ema-trend" style="font-size:8px;">--</span></div>
+  <div style="display:flex;gap:5px;align-items:baseline;margin-top:2px;">
+    <div><div style="font-size:8px;color:var(--dim);">EMA9</div><div class="ind-val" id="ema9-val" style="font-size:14px;">--</div></div>
+    <div style="color:var(--dim);font-size:11px;align-self:center;">/</div>
+    <div><div style="font-size:8px;color:var(--dim);">EMA21</div><div class="ind-val" id="ema21-val" style="font-size:14px;">--</div></div>
+  </div>
+  <div style="display:flex;justify-content:space-around;margin-top:8px;padding-top:7px;border-top:1px solid var(--border);">
+    <div style="text-align:center;">
+      <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">1 MIN</div>
+      <div style="font-family:'Orbitron',monospace;font-size:12px;font-weight:700;" id="ema-1m-cross">--</div>
+    </div>
+    <div style="text-align:center;">
+      <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">5 MIN</div>
+      <div style="font-family:'Orbitron',monospace;font-size:12px;font-weight:700;" id="ema-5m-cross">--</div>
+    </div>
+    <div style="text-align:center;">
+      <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">15 MIN</div>
+      <div style="font-family:'Orbitron',monospace;font-size:12px;font-weight:700;" id="ema-15m-cross">--</div>
+    </div>
+    <div style="text-align:center;">
+      <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">SIGNAL</div>
+      <div style="font-family:'Orbitron',monospace;font-size:9px;font-weight:700;margin-top:4px;" id="ema-multi-signal">--</div>
+    </div>
+  </div>
+</div>
     <div class="ind-card" style="border-left:2px solid var(--amber);grid-column:1/-1;"><div class="ind-label"><span>VIX STATUS</span></div><div class="ind-val" id="vix-note-val" style="font-size:12px;color:var(--amber);">--</div><div class="ind-sub" id="vix-note-sub">--</div></div>
   </div>
 
@@ -1815,6 +1862,27 @@ function renderDashboard(s) {
       document.getElementById('vwap-sub').textContent = s.nifty > s.vwap ? 'Bullish bias' : 'Bearish bias';
     }
   }
+  // VWAP multi-TF
+  {
+    const vwapAbove = (vwap, price) => vwap != null && price > 0 ? price > vwap : null;
+    const vwapLabel = (a) => a == null ? '--' : a ? '↑ ABOVE' : '↓ BELOW';
+    const vwapColor = (a) => a == null ? 'var(--dim)' : a ? 'var(--green)' : 'var(--red)';
+    const v1m  = vwapAbove(s.vwap,             s.nifty);
+    const v5m  = vwapAbove(s.mtf?.tf5m?.vwap,  s.nifty);
+    const v15m = vwapAbove(s.mtf?.tf15m?.vwap, s.nifty);
+    [['1m', v1m], ['5m', v5m], ['15m', v15m]].forEach(([tf, a]) => {
+      const el = document.getElementById('vwap-' + tf + '-pos');
+      if (el) { el.textContent = vwapLabel(a); el.style.color = vwapColor(a); }
+    });
+    const vsig = document.getElementById('vwap-multi-signal');
+    if (vsig) {
+      if (v5m != null && v15m != null) {
+        const bull = v5m && v15m, bear = !v5m && !v15m;
+        vsig.textContent = bull ? '✅ BULL' : bear ? '🔴 BEAR' : '⚠️ MIX';
+        vsig.style.color = bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--amber)';
+      } else { vsig.textContent = '--'; vsig.style.color = 'var(--dim)'; }
+    }
+  }
 
   // EMA
   if (s.ema9 != null) {
@@ -1822,6 +1890,29 @@ function renderDashboard(s) {
     document.getElementById('ema21-val').textContent = s.ema21.toFixed(1);
     const crossTrend = s.ema9 > s.ema21 ? '↑ BULL' : '↓ BEAR';
     document.getElementById('ema-trend').textContent = crossTrend;
+  }
+  // EMA multi-TF
+  {
+    const emaLabel = (e9, e21) => e9 == null || e21 == null ? '--' : e9 > e21 ? '↑ BULL' : '↓ BEAR';
+    const emaColor = (e9, e21) => e9 == null || e21 == null ? 'var(--dim)' : e9 > e21 ? 'var(--green)' : 'var(--red)';
+    [
+      ['1m',  s.ema9,            s.ema21],
+      ['5m',  s.mtf?.tf5m?.ema9, s.mtf?.tf5m?.ema21],
+      ['15m', s.mtf?.tf15m?.ema9,s.mtf?.tf15m?.ema21],
+    ].forEach(([tf, e9, e21]) => {
+      const el = document.getElementById('ema-' + tf + '-cross');
+      if (el) { el.textContent = emaLabel(e9, e21); el.style.color = emaColor(e9, e21); }
+    });
+    const esig = document.getElementById('ema-multi-signal');
+    if (esig) {
+      const e5n = s.mtf?.tf5m?.ema9, e5x = s.mtf?.tf5m?.ema21;
+      const e15n = s.mtf?.tf15m?.ema9, e15x = s.mtf?.tf15m?.ema21;
+      if (e5n != null && e5x != null && e15n != null && e15x != null) {
+        const bull = e5n > e5x && e15n > e15x, bear = e5n < e5x && e15n < e15x;
+        esig.textContent = bull ? '✅ BULL' : bear ? '🔴 BEAR' : '⚠️ MIX';
+        esig.style.color = bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--amber)';
+      } else { esig.textContent = '--'; esig.style.color = 'var(--dim)'; }
+    }
   }
 
   // VIX
