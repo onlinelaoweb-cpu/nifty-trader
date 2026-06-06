@@ -119,6 +119,17 @@ function isSafeEntryWindow() {
     return              { status:'closed',   label:'Market Closed',               safe:false, reason:'Market closed' };
 }
 
+// Returns true if today is a weekday AND time is within NSE market window (9:00-15:35 IST)
+// Used to skip heavy processing (PCR, MTF, breadth, SR) on weekends and outside market hours
+// The app stays online but conserves Railway CPU/memory — fits within 500 hrs/month hobby plan
+function isNSEMarketDay() {
+    const ist = getIST();
+    const day = ist.getDay();          // 0=Sun, 1=Mon ... 5=Fri, 6=Sat
+    const m   = ist.getHours()*60 + ist.getMinutes();
+    if (day === 0 || day === 6) return false;   // Weekend — skip everything
+    return m >= 540 && m <= 935;                // 9:00 AM to 15:35 IST only
+}
+
 // PCR label — displayed on UI (thresholds tuned for real Nifty option chain behaviour)
 function pcrLabel(v) {
     if (!v) return 'N/A';
@@ -1050,6 +1061,8 @@ async function updatePrice(price, change, changePct, source) {
 // This poller fetches ONLY spot price every 60s so frontend sees fresh values.
 // Skips automatically when Angel One WS is actively ticking.
 async function pollYahooPrice() {
+    // On weekends/outside hours: still poll price (keeps app responsive)
+    // but all heavy processing is skipped via isNSEMarketDay() guards above
     if (!isMarketOpen()) return;
     if (marketState.source === 'websocket' && (Date.now() - _lastTickAt) < 90_000) return;
     try {
@@ -1128,6 +1141,10 @@ async function onTick(tickData) {
 }
 
 async function refreshMarketData() {
+    if (!isNSEMarketDay()) {
+        console.log('[Scheduler] Outside market hours — skipping refreshMarketData');
+        return;
+    }
     // When market is closed, preserve last known price as lastClose so the
     // frontend can show "23,382 · CLOSED" instead of blank "--".
     if (!isMarketOpen()) {
@@ -1155,6 +1172,7 @@ async function refreshMarketData() {
 }
 
 async function refreshMTF() {
+    if (!isNSEMarketDay()) return;
     try {
         // ── Re-seed candles from Yahoo if NSE is blocked ──────────────────────
         // getSessionCandles() returns [] when NSE intraday is blocked (Railway IP ban).
@@ -1192,18 +1210,20 @@ async function refreshMTF() {
         };
     } catch(e) { console.error('MTF:', e.message); }
 }
-async function refreshGlobal() { try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); } }
+async function refreshGlobal() { if (!isNSEMarketDay()) return; try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); } }
 let _breadthInFlight = false;
 async function refreshBreadth() {
+    if (!isNSEMarketDay()) return;
     if (_breadthInFlight) return; // prevent duplicate A/D fetches (e.g. post-login call overlapping staggered init)
     _breadthInFlight = true;
     try { const d=await fetchAdvanceDecline(); if(d) marketState.breadth=d; }
     catch(e) { console.error('Breadth:',e.message); }
     finally { _breadthInFlight = false; }
 }
-async function refreshSR() { try { if(marketState.nifty>0) { const sr=await calculateSRLevels(marketState.nifty, marketState.maxPain?.strike ? marketState.maxPain : null); if(sr) marketState.srLevels=sr; } } catch(e) { console.error('SR:',e.message); } }
+async function refreshSR() { if (!isNSEMarketDay()) return; try { if(marketState.nifty>0) { const sr=await calculateSRLevels(marketState.nifty, marketState.maxPain?.strike ? marketState.maxPain : null); if(sr) marketState.srLevels=sr; } } catch(e) { console.error('SR:',e.message); } }
 
 async function refreshPCR() {
+    if (!isNSEMarketDay()) return;
     if (!isMarketOpen() || marketState.nifty <= 0) return;
 
     // ── One-shot stale-data wipe ───────────────────────
