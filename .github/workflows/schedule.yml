@@ -41,7 +41,7 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"query\": \"mutation { serviceInstanceRedeploy(serviceId: \\\"${{ secrets.NIFTY_SERVICE_ID }}\\\", environmentId: \\\"${{ secrets.NIFTY_ENVIRONMENT_ID }}\\\") }\"}" \
-            https://backboard.railway.app/graphql/v2)
+            https://backboard.railway.com/graphql/v2)
           echo "Response: $RESPONSE"
           if echo "$RESPONSE" | grep -q "error"; then
             echo "❌ Wake failed!"
@@ -67,8 +67,8 @@ jobs:
           DEPLOY_RESPONSE=$(curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"query\": \"query { deployments(input: { serviceId: \\\"${{ secrets.NIFTY_SERVICE_ID }}\\\", environmentId: \\\"${{ secrets.NIFTY_ENVIRONMENT_ID }}\\\" }, first: 1) { edges { node { id status } } } }\"}" \
-            https://backboard.railway.app/graphql/v2)
+            -d "{\"query\": \"query { deployments(input: { serviceId: \\\"${{ secrets.NIFTY_SERVICE_ID }}\\\", environmentId: \\\"${{ secrets.NIFTY_ENVIRONMENT_ID }}\\\" }, first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { edges { node { id status } } } }\"}" \
+            https://backboard.railway.com/graphql/v2)
 
           echo "Deployments: $DEPLOY_RESPONSE"
 
@@ -92,7 +92,7 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"query\": \"mutation { deploymentStop(id: \\\"$DEPLOYMENT_ID\\\") }\"}" \
-            https://backboard.railway.app/graphql/v2)
+            https://backboard.railway.com/graphql/v2)
 
           echo "Stop response: $STOP_RESPONSE"
           echo "✅ Nifty is SLEEPING!"
@@ -114,7 +114,7 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"query\": \"mutation { serviceInstanceRedeploy(serviceId: \\\"${{ secrets.BITCOIN_SERVICE_ID }}\\\", environmentId: \\\"${{ secrets.BITCOIN_ENVIRONMENT_ID }}\\\") }\"}" \
-            https://backboard.railway.app/graphql/v2)
+            https://backboard.railway.com/graphql/v2)
           echo "Response: $RESPONSE"
           echo "✅ Bitcoin is AWAKE!"
 
@@ -135,8 +135,8 @@ jobs:
           DEPLOY_RESPONSE=$(curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"query\": \"query { deployments(input: { serviceId: \\\"${{ secrets.BITCOIN_SERVICE_ID }}\\\", environmentId: \\\"${{ secrets.BITCOIN_ENVIRONMENT_ID }}\\\" }, first: 1) { edges { node { id status } } } }\"}" \
-            https://backboard.railway.app/graphql/v2)
+            -d "{\"query\": \"query { deployments(input: { serviceId: \\\"${{ secrets.BITCOIN_SERVICE_ID }}\\\", environmentId: \\\"${{ secrets.BITCOIN_ENVIRONMENT_ID }}\\\" }, first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { edges { node { id status } } } }\"}" \
+            https://backboard.railway.com/graphql/v2)
 
           DEPLOYMENT_ID=$(echo $DEPLOY_RESPONSE | python3 -c "
           import json,sys
@@ -155,7 +155,7 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"query\": \"mutation { deploymentStop(id: \\\"$DEPLOYMENT_ID\\\") }\"}" \
-            https://backboard.railway.app/graphql/v2)
+            https://backboard.railway.com/graphql/v2)
 
           echo "Stop response: $STOP_RESPONSE"
           echo "✅ Bitcoin is SLEEPING!"
