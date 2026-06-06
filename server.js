@@ -85,6 +85,7 @@ let marketState = {
     calendarEvents: [],
     btst: null,
     momentum: { signal: 'NONE', strength: 0, velocity: 0, volumeRatio: 0, candleBody: 0, reason: '', canTrade: false },
+    smartMoney: { bias: 'NEUTRAL', score: 0, label: 'Smart Money — awaiting data', components: [] },
 };
 
 // ── Trade Journal ─────────────────────────────────────
@@ -248,6 +249,122 @@ function updateOptionFlow(atmCE, atmPE) {
     marketState.optionFlow = { atmCEpremium:atmCE||prev.atmCEpremium, atmPEpremium:atmPE||prev.atmPEpremium, ceChange, peChange, dominance, history };
 }
 
+// ── Smart Money Bias Aggregator ───────────────────────────────────────────────
+// Combines 4 institutional signals into a single directional read:
+//   1. OI Buildup (Fresh Long / Fresh Short / Short Covering / Long Unwinding)
+//   2. FII + DII Net Flow (institutional cash positioning)
+//   3. PCR Extreme Levels (option writers' institutional intent)
+//   4. ATM CE vs PE premium ratio (real-money directional bet at current price)
+//
+// Score range: −8 to +8.  >2 = BULLISH, <−2 = BEARISH, else NEUTRAL.
+// Returns: { bias, score, label, components[] }
+function computeSmartMoneyBias() {
+    let score = 0;
+    const components = [];
+
+    // ── 1. OI Buildup: price × OI direction ──────────────────────────────────
+    // Fresh Long (Price↑ OI↑) = smart money buying = +2
+    // Short Covering (Price↑ OI↓) = shorts covering, weak rally = +1
+    // Fresh Short (Price↓ OI↑) = smart money selling = −2
+    // Long Unwinding (Price↓ OI↓) = bulls exiting = −1
+    // interpretOIBuildup() returns signal:'BULL'|'BEAR'|'NEUTRAL' + strength:0|1|2
+    // strength 2 = strong confirmation (PCR confirms), strength 1 = moderate
+    const oi = marketState.oiBuildup;
+    if (oi && oi.signal && oi.signal !== 'NEUTRAL') {
+        const sig = oi.signal.toUpperCase();  // 'BULL' or 'BEAR'
+        const str = oi.strength || 1;         // 1 or 2
+        const pts = sig === 'BULL' ? str : -str;
+        const shortLabel = oi.label
+            ? oi.label.replace('OI Buildup — ', '').split(' — ')[0]  // trim prefix
+            : (sig === 'BULL' ? 'Bullish OI 🐂' : 'Bearish OI 🐻');
+        score += pts;
+        components.push({ label: 'OI Buildup', value: shortLabel, pts, bull: sig === 'BULL' });
+    } else {
+        components.push({ label: 'OI Buildup', value: 'Awaiting data', pts: 0, bull: null });
+    }
+
+    // ── 2. FII + DII combined net flow ───────────────────────────────────────
+    // FII net: strong institutional signal, weight 2 (±2 for >500Cr, ±1 otherwise)
+    // DII net: supporting signal, weight 1
+    const fii = marketState.fii;
+    const dii = marketState.dii;
+    // BUG2 FIX: use typeof check — net can be 0 (falsy) or non-numeric
+    const fiiNet = (fii && typeof fii.net === 'number') ? fii.net : null;
+    const diiNet = (dii && typeof dii.net === 'number') ? dii.net : null;
+    if (fiiNet !== null) {
+        const w = Math.abs(fiiNet) > 500 ? 2 : 1;
+        if (fiiNet > 0) {
+            score += w;
+            components.push({ label: 'FII Flow', value: `Net Buy ₹${fiiNet.toFixed(0)}Cr`, pts: +w, bull: true });
+        } else if (fiiNet < 0) {
+            score -= w;
+            components.push({ label: 'FII Flow', value: `Net Sell ₹${Math.abs(fiiNet).toFixed(0)}Cr`, pts: -w, bull: false });
+        } else {
+            components.push({ label: 'FII Flow', value: 'Net Flat ₹0Cr', pts: 0, bull: null });
+        }
+    } else {
+        components.push({ label: 'FII Flow', value: 'Awaiting data', pts: 0, bull: null });
+    }
+    if (diiNet !== null) {
+        if (diiNet > 0) {
+            score += 1;
+            components.push({ label: 'DII Flow', value: `Net Buy ₹${diiNet.toFixed(0)}Cr`, pts: +1, bull: true });
+        } else if (diiNet < 0) {
+            score -= 1;
+            components.push({ label: 'DII Flow', value: `Net Sell ₹${Math.abs(diiNet).toFixed(0)}Cr`, pts: -1, bull: false });
+        } else {
+            components.push({ label: 'DII Flow', value: 'Net Flat ₹0Cr', pts: 0, bull: null });
+        }
+    } else {
+        components.push({ label: 'DII Flow', value: 'Awaiting data', pts: 0, bull: null });
+    }
+
+    // ── 3. PCR Extreme Levels — institutional option writer intent ────────────
+    // PCR > 1.3  = institutions writing puts heavily = bullish intent  (+2)
+    // PCR 1.1-1.3 = mild bullish                                       (+1)
+    // PCR 0.7-0.9 = mild bearish                                       (−1)
+    // PCR < 0.7  = institutions writing calls heavily = bearish intent  (−2)
+    const pcr = marketState.pcr;
+    if (pcr !== null && pcr > 0) {
+        if      (pcr > 1.3)             { score += 2; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Put Writing 🐂`, pts: +2, bull: true }); }
+        else if (pcr >= 1.1)            { score += 1; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Mildly Bullish`, pts: +1, bull: true }); }
+        else if (pcr >= 0.9)            {             components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Neutral zone`, pts: 0, bull: null }); }
+        else if (pcr >= 0.7)            { score -= 1; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Mildly Bearish`, pts: -1, bull: false }); }
+        else                            { score -= 2; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Call Writing 🐻`, pts: -2, bull: false }); }
+    } else {
+        components.push({ label: 'PCR Level', value: 'Awaiting data', pts: 0, bull: null });
+    }
+
+    // ── 4. ATM CE vs PE premium ratio — real-money directional bet ───────────
+    // CE/PE ratio > 1.25 = call buyers more aggressive = bullish (+1)
+    // CE/PE ratio < 0.80 = put buyers more aggressive = bearish  (−1)
+    const optFlow = marketState.optionFlow;
+    if (optFlow && optFlow.atmCEpremium && optFlow.atmPEpremium && optFlow.atmCEpremium > 0 && optFlow.atmPEpremium > 0) {
+        const ratio = optFlow.atmCEpremium / optFlow.atmPEpremium;
+        if (ratio > 1.25) {
+            score += 1;
+            components.push({ label: 'ATM Flow', value: `CE/PE=${ratio.toFixed(2)} — Call buyers dominant`, pts: +1, bull: true });
+        } else if (ratio < 0.80) {
+            score -= 1;
+            components.push({ label: 'ATM Flow', value: `CE/PE=${ratio.toFixed(2)} — Put buyers dominant`, pts: -1, bull: false });
+        } else {
+            components.push({ label: 'ATM Flow', value: `CE/PE=${ratio.toFixed(2)} — Balanced`, pts: 0, bull: null });
+        }
+    } else {
+        components.push({ label: 'ATM Flow', value: 'Awaiting premium data', pts: 0, bull: null });
+    }
+
+    // ── Derive final bias ─────────────────────────────────────────────────────
+    let bias, label;
+    if      (score >= 4) { bias = 'STRONGLY_BULLISH'; label = '📈 Strongly Bullish — Institutions buying'; }
+    else if (score >= 2) { bias = 'BULLISH';           label = '📈 Bullish — Smart money positioned long'; }
+    else if (score <= -4){ bias = 'STRONGLY_BEARISH';  label = '📉 Strongly Bearish — Institutions selling'; }
+    else if (score <= -2){ bias = 'BEARISH';           label = '📉 Bearish — Smart money positioned short'; }
+    else                 { bias = 'NEUTRAL';            label = '⚖️ Neutral — No clear institutional bias'; }
+
+    return { bias, score, label, components, updatedAt: new Date().toISOString() };
+}
+
 // ── Signal Generator ──────────────────────────────────
 function combineSignals(indicators) {
     // ── Gate 1: safe time window (IST) ────────────────
@@ -393,15 +510,15 @@ function combineSignals(indicators) {
     // If CE premium is rising faster than PE, option buyers are positioning CALL.
     // If PE premium is rising faster than CE, option buyers are positioning PUT.
     // This is a 1-point vote using live optionFlow data already on state.
-    const of = marketState.optionFlow;
-    if (of?.atmCEpremium && of?.atmPEpremium && of.atmCEpremium > 0 && of.atmPEpremium > 0) {
-        const premRatio = of.atmCEpremium / of.atmPEpremium;
+    const optFlow = marketState.optionFlow;
+    if (optFlow?.atmCEpremium && optFlow?.atmPEpremium && optFlow.atmCEpremium > 0 && optFlow.atmPEpremium > 0) {
+        const premRatio = optFlow.atmCEpremium / optFlow.atmPEpremium;
         if (premRatio > 1.25) {
             bull += 1;
-            reasons.push(`💰 CE premium ₹${of.atmCEpremium} >> PE ₹${of.atmPEpremium} — call buyers active ✅`);
+            reasons.push(`💰 CE premium ₹${optFlow.atmCEpremium} >> PE ₹${optFlow.atmPEpremium} — call buyers active ✅`);
         } else if (premRatio < 0.8) {
             bear += 1;
-            reasons.push(`💰 PE premium ₹${of.atmPEpremium} >> CE ₹${of.atmCEpremium} — put buyers active ⚠️`);
+            reasons.push(`💰 PE premium ₹${optFlow.atmPEpremium} >> CE ₹${optFlow.atmCEpremium} — put buyers active ⚠️`);
         }
     }
 
@@ -1050,6 +1167,8 @@ async function updatePrice(price, change, changePct, source) {
     marketState.reason=reasons; marketState.lastUpdated=new Date().toISOString();
     marketState.connected=true; marketState.source=source; marketState.dataPoints=indicators.priceCount;
     marketState.candleSource=getCandleSource();
+    // ── Smart Money Bias ──────────────────────────────────────────────────────
+    marketState.smartMoney = computeSmartMoneyBias();
     if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%)`);
     evaluateBTST();
     await checkTelegramAlerts(signal);
@@ -1340,6 +1459,8 @@ async function refreshPCR() {
         if (fiiState.diiNet !== null) {
             marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet };
         }
+        // BUG3 FIX: Refresh Smart Money Bias whenever OI/FII data updates (not only on price ticks)
+        marketState.smartMoney = computeSmartMoneyBias();
 
     } catch(e) {
         console.error('refreshPCR:', e.message);

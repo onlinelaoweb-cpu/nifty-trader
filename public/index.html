@@ -573,6 +573,34 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .mom-dot{width:10px;height:10px;border-radius:50%;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);transition:all 0.3s;}
 .mom-dot.active-break{background:var(--red);border-color:var(--red);box-shadow:0 0 6px rgba(255,34,68,0.6);}
 .mom-dot.active-out{background:var(--green);border-color:var(--green);box-shadow:0 0 6px rgba(0,255,136,0.6);}
+/* ═══ SMART MONEY BIAS ═══ */
+.sm-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--card-radius);padding:13px 14px;transition:border-color 0.5s,box-shadow 0.5s;}
+.sm-card.bull{border-color:rgba(0,255,136,0.5);box-shadow:0 0 22px rgba(0,255,136,0.09);}
+.sm-card.str-bull{border-color:rgba(0,255,136,0.8);box-shadow:0 0 30px rgba(0,255,136,0.15);}
+.sm-card.bear{border-color:rgba(255,34,68,0.5);box-shadow:0 0 22px rgba(255,34,68,0.09);}
+.sm-card.str-bear{border-color:rgba(255,34,68,0.8);box-shadow:0 0 30px rgba(255,34,68,0.15);}
+.sm-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.sm-title{font-family:'Orbitron',monospace;font-size:9px;letter-spacing:2px;color:var(--purple);}
+.sm-bias-badge{font-family:'Orbitron',monospace;font-size:10px;font-weight:700;padding:3px 12px;border-radius:99px;letter-spacing:1px;border:1px solid;}
+.sm-bias-badge.bull{background:rgba(0,255,136,0.12);color:var(--green);border-color:rgba(0,255,136,0.4);}
+.sm-bias-badge.str-bull{background:rgba(0,255,136,0.2);color:var(--green);border-color:var(--green);box-shadow:0 0 10px rgba(0,255,136,0.3);}
+.sm-bias-badge.bear{background:rgba(255,34,68,0.12);color:var(--red);border-color:rgba(255,34,68,0.4);}
+.sm-bias-badge.str-bear{background:rgba(255,34,68,0.2);color:var(--red);border-color:var(--red);box-shadow:0 0 10px rgba(255,34,68,0.3);}
+.sm-bias-badge.neut{background:rgba(255,187,0,0.08);color:var(--amber);border-color:rgba(255,187,0,0.3);}
+.sm-score-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+.sm-score-track{flex:1;height:6px;background:rgba(255,255,255,0.07);border-radius:3px;overflow:hidden;position:relative;}
+.sm-score-center{position:absolute;left:50%;top:0;width:1px;height:100%;background:rgba(255,255,255,0.2);}
+.sm-score-fill{height:100%;position:absolute;top:0;border-radius:3px;transition:width 0.7s ease,left 0.7s ease,background 0.4s;}
+.sm-score-val{font-family:'Share Tech Mono',monospace;font-size:12px;font-weight:700;width:30px;text-align:right;}
+.sm-components{display:flex;flex-direction:column;gap:5px;}
+.sm-comp-row{display:flex;align-items:center;gap:8px;padding:4px 7px;border-radius:6px;background:rgba(255,255,255,0.025);}
+.sm-comp-icon{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;flex-shrink:0;}
+.sm-comp-icon.bull{background:rgba(0,255,136,0.15);}
+.sm-comp-icon.bear{background:rgba(255,34,68,0.15);}
+.sm-comp-icon.neut{background:rgba(255,187,0,0.1);}
+.sm-comp-label{font-size:9px;color:var(--dim);letter-spacing:1px;width:56px;flex-shrink:0;font-family:'Share Tech Mono',monospace;}
+.sm-comp-value{font-size:10px;color:var(--text);flex:1;font-family:'Share Tech Mono',monospace;}
+.sm-comp-pts{font-family:'Orbitron',monospace;font-size:9px;font-weight:700;}
 .mom-strength-label{font-size:9px;color:var(--dim);font-family:'Share Tech Mono',monospace;margin-left:4px;}
 </style>
 </head>
@@ -981,6 +1009,34 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <span class="mom-dot inactive" id="mom-dot-3"></span>
         <span class="mom-dot inactive" id="mom-dot-4"></span>
         <span class="mom-strength-label" id="mom-strength-label">Strength: 0/4</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ SMART MONEY BIAS CARD ═══ -->
+  <div style="padding:0 12px;margin-bottom:7px;">
+    <div class="sec-label">🏦 SMART MONEY BIAS</div>
+    <div class="sm-card" id="sm-card">
+      <div class="sm-header">
+        <div class="sm-title">🏛️ INSTITUTIONAL BIAS</div>
+        <div class="sm-bias-badge neut" id="sm-bias-badge">NEUTRAL</div>
+      </div>
+      <div class="sm-score-row">
+        <span style="font-size:9px;color:var(--red);font-family:'Share Tech Mono',monospace;">BEAR</span>
+        <div class="sm-score-track">
+          <div class="sm-score-center"></div>
+          <div class="sm-score-fill" id="sm-score-fill" style="width:0%;left:50%;background:var(--amber);"></div>
+        </div>
+        <span style="font-size:9px;color:var(--green);font-family:'Share Tech Mono',monospace;">BULL</span>
+        <div class="sm-score-val" id="sm-score-val" style="color:var(--amber);">0</div>
+      </div>
+      <div id="sm-label" style="font-size:10px;color:var(--text);font-family:'Share Tech Mono',monospace;margin-bottom:9px;text-align:center;letter-spacing:0.5px;">⚖️ Neutral — No clear institutional bias</div>
+      <div class="sm-components" id="sm-components">
+        <div class="sm-comp-row"><div class="sm-comp-icon neut">🔄</div><span class="sm-comp-label">OI BUILD</span><span class="sm-comp-value">Awaiting data</span><span class="sm-comp-pts" style="color:var(--dim);">--</span></div>
+        <div class="sm-comp-row"><div class="sm-comp-icon neut">🏦</div><span class="sm-comp-label">FII FLOW</span><span class="sm-comp-value">Awaiting data</span><span class="sm-comp-pts" style="color:var(--dim);">--</span></div>
+        <div class="sm-comp-row"><div class="sm-comp-icon neut">🏠</div><span class="sm-comp-label">DII FLOW</span><span class="sm-comp-value">Awaiting data</span><span class="sm-comp-pts" style="color:var(--dim);">--</span></div>
+        <div class="sm-comp-row"><div class="sm-comp-icon neut">📊</div><span class="sm-comp-label">PCR LVL</span><span class="sm-comp-value">Awaiting data</span><span class="sm-comp-pts" style="color:var(--dim);">--</span></div>
+        <div class="sm-comp-row"><div class="sm-comp-icon neut">💰</div><span class="sm-comp-label">ATM FLOW</span><span class="sm-comp-value">Awaiting data</span><span class="sm-comp-pts" style="color:var(--dim);">--</span></div>
       </div>
     </div>
   </div>
@@ -2278,6 +2334,8 @@ function renderDashboard(s) {
   renderBTST(s.btst || null);
   // Momentum Breakdown card
   renderMomentum(s.momentum || null);
+  // Smart Money Bias
+  if (s.smartMoney) renderSmartMoney(s.smartMoney);
 }
 
 // ─── BREADTH UI ──────────────────────────────────────────
@@ -2558,6 +2616,76 @@ function renderBTST(btst) {
 }
 
 // ─── MOMENTUM BREAKDOWN RENDERER ─────────────────────────────────────────────
+// ── Smart Money Bias renderer ────────────────────────────────────────────────
+function renderSmartMoney(sm) {
+  if (!sm) return;
+  const card   = document.getElementById('sm-card');
+  const badge  = document.getElementById('sm-bias-badge');
+  const fill   = document.getElementById('sm-score-fill');
+  const scoreEl= document.getElementById('sm-score-val');
+  const labelEl= document.getElementById('sm-label');
+  const compEl = document.getElementById('sm-components');
+  if (!card) return;
+
+  const bias  = sm.bias || 'NEUTRAL';
+  const score = sm.score || 0;
+
+  // Card border + badge class
+  card.className = 'sm-card';
+  badge.className = 'sm-bias-badge';
+  const isBull = bias.includes('BULLISH');
+  const isBear = bias.includes('BEARISH');
+  const isStrong = bias.startsWith('STRONGLY');
+  if (isBull)      { card.classList.add(isStrong ? 'str-bull' : 'bull'); badge.classList.add(isStrong ? 'str-bull' : 'bull'); }
+  else if (isBear) { card.classList.add(isStrong ? 'str-bear' : 'bear'); badge.classList.add(isStrong ? 'str-bear' : 'bear'); }
+  else             { badge.classList.add('neut'); }
+
+  // Badge text
+  const biasLabels = {
+    'STRONGLY_BULLISH': '📈 STRONG BULL',
+    'BULLISH':          '📈 BULLISH',
+    'NEUTRAL':          '⚖️ NEUTRAL',
+    'BEARISH':          '📉 BEARISH',
+    'STRONGLY_BEARISH': '📉 STRONG BEAR'
+  };
+  badge.textContent = biasLabels[bias] || bias;
+
+  // Score bar — center=50%, score range ±8, so each point = 6.25% of half
+  const maxScore = 8;
+  const pct = Math.min(Math.abs(score) / maxScore, 1) * 50; // 0–50% of bar
+  const scoreColor = isBull ? 'var(--green)' : isBear ? 'var(--red)' : 'var(--amber)';
+  if (score >= 0) {
+    fill.style.left = '50%';
+    fill.style.width = pct + '%';
+  } else {
+    fill.style.left = (50 - pct) + '%';
+    fill.style.width = pct + '%';
+  }
+  fill.style.background = scoreColor;
+  scoreEl.textContent = (score > 0 ? '+' : '') + score;
+  scoreEl.style.color = scoreColor;
+
+  // Label
+  if (labelEl) labelEl.textContent = sm.label || '';
+
+  // Components
+  if (compEl && sm.components && sm.components.length) {
+    const icons = ['🔄','🏦','🏠','📊','💰'];
+    const labels = ['OI BUILD','FII FLOW','DII FLOW','PCR LVL','ATM FLOW'];
+    compEl.innerHTML = sm.components.map((c, i) => {
+      const iC = c.bull === true ? 'bull' : c.bull === false ? 'bear' : 'neut';
+      const ptColor = c.pts > 0 ? 'var(--green)' : c.pts < 0 ? 'var(--red)' : 'var(--dim)';
+      const ptText  = c.pts > 0 ? '+' + c.pts : c.pts < 0 ? String(c.pts) : '--';
+      return '<div class="sm-comp-row">'
+        + '<div class="sm-comp-icon ' + iC + '">' + (icons[i] || '•') + '</div>'
+        + '<span class="sm-comp-label">' + (labels[i] || c.label) + '</span>'
+        + '<span class="sm-comp-value">' + (c.value || '--') + '</span>'
+        + '<span class="sm-comp-pts" style="color:' + ptColor + '">' + ptText + '</span>'
+        + '</div>';
+    }).join('');
+  }
+}
+
 function renderMomentum(mom) {
   const card   = document.getElementById('mom-card');
   const badge  = document.getElementById('mom-badge');
