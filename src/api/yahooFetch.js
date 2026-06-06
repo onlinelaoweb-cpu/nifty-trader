@@ -818,4 +818,4 @@ async function fetchNifty50FromYahoo() {
     return null;
 }
 
-module.exports = { yahooGet, fetchYahooMeta, fetchYahooChart, fetchNifty50Stocks, fetchAllIndices, fetchNifty50FromYahoo };
+module.exports = { yahooGet, fetchYahooMeta, fetchYahooChart, fetchNifty50Stocks, fetchAllIndices, fetchNifty50FromYahoo, nseNiftyDaily };
