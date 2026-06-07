@@ -76,7 +76,8 @@ async function fetchGlobalCues() {
         dow, nasdaq, sp500, nikkei, hangseng, shanghai, dax, ftse,
         usdinr, dxy, crude, brent, gold, silver,
         banknifty, niftyIT, niftyAuto, niftyMetal,
-        giftNifty, bnVWAPLead
+        giftNifty, bnVWAPLead,
+        niftyPharma, niftyFMCG, niftyRealty, niftyMedia, niftyEnergy, niftyInfra, niftyPSUBank,
     ] = await Promise.all([
         fetchQuote('^DJI'), fetchQuote('^IXIC'), fetchQuote('^GSPC'),
         fetchQuote('^N225'), fetchQuote('^HSI'), fetchQuote('000001.SS'),
@@ -86,6 +87,10 @@ async function fetchGlobalCues() {
         fetchQuote('^NSEBANK'), fetchQuote('^CNXIT'), fetchQuote('^CNXAUTO'), fetchQuote('^CNXMETAL'),
         fetchQuote('%5ENSEI'),   // GIFT Nifty — use Nifty spot as pre-market proxy (no reliable futures symbol on Yahoo)
         bankNiftyVWAPLead(),
+        // Extended sectors for heatmap (fetched in parallel, no extra latency)
+        fetchQuote('^CNXPHARMA'), fetchQuote('^CNXFMCG'), fetchQuote('^CNXREALTY'),
+        fetchQuote('^CNXMEDIA'),  fetchQuote('^CNXENERGY'),fetchQuote('^CNXINFRA'),
+        fetchQuote('^CNXPSUBANK'),
     ]);
 
     const mk = (d, name, rev) => d ? { ...d, name, score: score(d.changePct, rev) } : null;
@@ -95,7 +100,14 @@ async function fetchGlobalCues() {
         europe     : { dax: mk(dax,'DAX'), ftse: mk(ftse,'FTSE') },
         currency   : { usdinr: mk(usdinr,'USD/INR',true), dxy: mk(dxy,'DXY',true) },
         commodities: { crude: mk(crude,'Crude WTI',true), brent: mk(brent,'Brent',true), gold: mk(gold,'Gold',true), silver: mk(silver,'Silver') },
-        sectors    : { bankNifty: mk(banknifty,'Bank Nifty'), niftyIT: mk(niftyIT,'Nifty IT'), niftyAuto: mk(niftyAuto,'Nifty Auto'), niftyMetal: mk(niftyMetal,'Nifty Metal') },
+        sectors    : {
+            bankNifty : mk(banknifty,'Bank Nifty'),  niftyIT  : mk(niftyIT,  'Nifty IT'),
+            niftyAuto : mk(niftyAuto,'Nifty Auto'),  niftyMetal: mk(niftyMetal,'Nifty Metal'),
+            niftyPharma : mk(niftyPharma, 'Nifty Pharma'),  niftyFMCG   : mk(niftyFMCG,   'Nifty FMCG'),
+            niftyRealty : mk(niftyRealty, 'Nifty Realty'),  niftyMedia  : mk(niftyMedia,  'Nifty Media'),
+            niftyEnergy : mk(niftyEnergy, 'Nifty Energy'),  niftyInfra  : mk(niftyInfra,  'Nifty Infra'),
+            niftyPSUBank: mk(niftyPSUBank,'PSU Bank'),
+        },
         bankNiftyLeadSignal: bnVWAPLead,
     };
 
