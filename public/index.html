@@ -2567,11 +2567,22 @@ function renderDashboard(s) {
   }
 
   // Status dot + entry window label
+  // During market hours, show LIVE as long as we have a price (WS→Yahoo fallback
+  // switching should NOT flash WAITING — that's an internal source switch, not an outage).
+  // Only show WAITING if genuinely no price data at all.
   const dot = document.getElementById('status-dot');
   const statusTxt = document.getElementById('status-txt');
   if (dot && statusTxt) {
-    dot.className = s.connected ? 'dot-live' : 'dot-off';
-    statusTxt.textContent = s.connected ? 'LIVE' : 'WAITING';
+    const hasPrice = (s.nifty > 0) || (s.lastClose > 0);
+    const marketHours = (() => {
+      const ist = new Date(new Date().toLocaleString('en-US', {timeZone:'Asia/Kolkata'}));
+      const secs = ist.getHours()*3600 + ist.getMinutes()*60 + ist.getSeconds();
+      return secs >= 9*3600+15*60 && secs <= 15*3600+30*60;
+    })();
+    const isLive = marketHours && hasPrice;
+    dot.className = isLive ? 'dot-live' : 'dot-off';
+    statusTxt.textContent = isLive ? 'LIVE' : (marketHours ? 'WAITING' : statusTxt.textContent);
+    // when closed, ticker (updateHeaderBadges) owns the text — don't overwrite here
   }
 
   // Entry window badge
@@ -2617,11 +2628,12 @@ function renderDashboard(s) {
   // Footer
   const footDot = document.getElementById('foot-dot');
   const footTxt = document.getElementById('footer-txt');
-  if (footDot) footDot.className = s.connected ? 'dot-live' : 'dot-off';
+  if (footDot) footDot.className = (s.connected || s.nifty > 0) ? 'dot-live' : 'dot-off';
   if (footTxt) {
     if (s.lastUpdated) {
       const d = new Date(s.lastUpdated);
-      footTxt.textContent = 'Last update: ' + d.toLocaleTimeString('en-IN') + ' | Source: ' + (s.source || '--');
+      const srcLabel = s.source === 'websocket' ? 'WS ✓' : s.source === 'yahoo' ? 'Yahoo' : (s.source || '--');
+      footTxt.textContent = 'Last update: ' + d.toLocaleTimeString('en-IN') + ' | Source: ' + srcLabel;
     } else {
       footTxt.textContent = s.connected ? 'Connected' : 'Waiting for data...';
     }
