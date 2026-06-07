@@ -249,6 +249,17 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .sig-bull{color:var(--green);}.sig-bear{color:var(--red);}.sig-neut{color:var(--amber);}
 .install-banner{margin:6px 12px;background:rgba(0,170,255,0.08);border:1px solid var(--blue);border-radius:8px;padding:6px 12px;display:none;align-items:center;justify-content:space-between;}
 .install-banner.show{display:flex;}
+/* ── Market Closed Banner ─────────────────────────────────────────────────── */
+.mkt-closed-banner{display:none;margin:6px 12px 2px;background:rgba(255,187,0,0.06);border:1px solid rgba(255,187,0,0.3);border-radius:8px;padding:8px 12px;align-items:center;justify-content:space-between;gap:8px;}
+.mkt-closed-banner.show{display:flex;}
+.mkt-closed-banner.weekend{background:rgba(170,136,255,0.06);border-color:rgba(170,136,255,0.3);}
+.mcb-left{display:flex;align-items:center;gap:8px;}
+.mcb-icon{font-size:16px;line-height:1;}
+.mcb-text{display:flex;flex-direction:column;gap:1px;}
+.mcb-title{font-family:'Orbitron',monospace;font-size:9px;font-weight:700;letter-spacing:1px;color:var(--amber);}
+.mcb-sub{font-family:'Share Tech Mono',monospace;font-size:10px;color:#9ab8d0;}
+.mcb-countdown{font-family:'Share Tech Mono',monospace;font-size:13px;font-weight:700;color:var(--amber);letter-spacing:1px;white-space:nowrap;}
+.mkt-closed-banner.weekend .mcb-title,.mkt-closed-banner.weekend .mcb-countdown{color:var(--purple);}
 .install-txt{font-size:11px;color:var(--blue);}
 .install-btn{background:var(--blue);color:#000;border:none;padding:3px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;}
 
@@ -643,6 +654,18 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 <div class="install-banner" id="install-banner">
   <div class="install-txt">📱 Install Vardaan Nifty AI as app!</div>
   <button class="install-btn" onclick="installPWA()">INSTALL</button>
+</div>
+
+<!-- ── Market Closed / Weekend Banner ── -->
+<div class="mkt-closed-banner" id="mkt-closed-banner">
+  <div class="mcb-left">
+    <div class="mcb-icon" id="mcb-icon">🔴</div>
+    <div class="mcb-text">
+      <div class="mcb-title" id="mcb-title">MARKET CLOSED</div>
+      <div class="mcb-sub" id="mcb-sub">Next session: Mon 09:15 AM</div>
+    </div>
+  </div>
+  <div class="mcb-countdown" id="mcb-countdown">--:--:--</div>
 </div>
 
 <!-- ═══════════════════════════════════ -->
@@ -1668,6 +1691,92 @@ function updateHeaderBadges(){
 }
 updateHeaderBadges();
 setInterval(updateHeaderBadges, 1000);
+
+// ── Market Closed Banner ─────────────────────────────────────────────────────
+function updateMarketClosedBanner() {
+  const banner   = document.getElementById('mkt-closed-banner');
+  const iconEl   = document.getElementById('mcb-icon');
+  const titleEl  = document.getElementById('mcb-title');
+  const subEl    = document.getElementById('mcb-sub');
+  const cntEl    = document.getElementById('mcb-countdown');
+  if (!banner) return;
+
+  const now  = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const day  = now.getDay(); // 0=Sun, 6=Sat
+  const h    = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
+  const secs = h * 3600 + m * 60 + s;
+  const OPEN = 9 * 3600 + 15 * 60;   // 09:15
+  const CLOSE= 15 * 3600 + 30 * 60;  // 15:30
+
+  const isWeekday  = day >= 1 && day <= 5;
+  const isMarketOpen = isWeekday && secs >= OPEN && secs <= CLOSE;
+
+  if (isMarketOpen) { banner.classList.remove('show', 'weekend'); return; }
+
+  banner.classList.add('show');
+
+  // Calculate seconds until next market open
+  function secsUntilOpen() {
+    let d = new Date(now);
+    // If today is weekday and before open → same day
+    if (isWeekday && secs < OPEN) return OPEN - secs;
+    // Otherwise find next Mon–Fri
+    let add = 1;
+    while (add <= 7) {
+      const nd = (day + add) % 7;
+      if (nd >= 1 && nd <= 5) break; // Mon–Fri
+      add++;
+    }
+    return add * 86400 - secs + OPEN;
+  }
+
+  function fmtHMS(sec) {
+    const hh = Math.floor(sec / 3600);
+    const mm = Math.floor((sec % 3600) / 60);
+    const ss = sec % 60;
+    return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+  }
+
+  function nextSessionLabel() {
+    let d = new Date(now);
+    if (isWeekday && secs < OPEN) return 'Today 09:15 AM';
+    let add = 1;
+    while (add <= 7) {
+      const nd = (day + add) % 7;
+      if (nd >= 1 && nd <= 5) break;
+      add++;
+    }
+    d.setDate(d.getDate() + add);
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    return `${days[d.getDay()]} 09:15 AM`;
+  }
+
+  const isWeekend = (day === 0 || day === 6);
+  const isPostMkt = isWeekday && secs > CLOSE;
+  const isPreMkt  = isWeekday && secs < OPEN;
+
+  if (isWeekend) {
+    banner.classList.add('weekend');
+    iconEl.textContent  = '📅';
+    titleEl.textContent = day === 0 ? 'SUNDAY — MARKET CLOSED' : 'SATURDAY — MARKET CLOSED';
+    subEl.textContent   = `Next session: ${nextSessionLabel()} · Data frozen`;
+  } else if (isPostMkt) {
+    banner.classList.remove('weekend');
+    iconEl.textContent  = '🔴';
+    titleEl.textContent = 'MARKET CLOSED · POST SESSION';
+    subEl.textContent   = `Next session: ${nextSessionLabel()} · Showing last data`;
+  } else if (isPreMkt) {
+    banner.classList.remove('weekend');
+    iconEl.textContent  = '⏰';
+    titleEl.textContent = 'PRE-MARKET · OPENS SOON';
+    subEl.textContent   = `Opens: Today 09:15 AM`;
+  }
+
+  cntEl.textContent = fmtHMS(secsUntilOpen());
+}
+updateMarketClosedBanner();
+setInterval(updateMarketClosedBanner, 1000);
+
 // ─── STATE ───────────────────────────────────────────────
 let _lastState = null;
 let _pollTimer = null;
