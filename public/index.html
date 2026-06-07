@@ -86,7 +86,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .signal-card.buy-call{background:linear-gradient(150deg,rgba(0,255,136,0.06) 0%,rgba(0,255,136,0.02) 100%);border-color:var(--green);box-shadow:0 4px 30px rgba(0,255,136,0.15);}
 .signal-card.buy-put{background:linear-gradient(150deg,rgba(255,34,68,0.06) 0%,rgba(255,34,68,0.02) 100%);border-color:var(--red);box-shadow:0 4px 30px rgba(255,34,68,0.15);}
 .signal-card.wait{background:linear-gradient(150deg,rgba(255,187,0,0.05) 0%,rgba(255,187,0,0.01) 100%);border-color:rgba(255,187,0,0.5);box-shadow:0 4px 24px rgba(255,187,0,0.1);}
-.signal-badge{font-family:'Orbitron',monospace;font-size:clamp(18px,5.5vw,26px);font-weight:900;letter-spacing:4px;animation:sigPulse 2s infinite;margin-bottom:6px;}
+.signal-badge{font-family:'Rajdhani',sans-serif;font-size:clamp(20px,6vw,28px);font-weight:700;letter-spacing:4px;animation:sigPulse 2s infinite;margin-bottom:6px;}
 @keyframes sigPulse{0%,100%{text-shadow:0 0 20px currentColor}50%{text-shadow:0 0 60px currentColor}}
 @keyframes confGlowGreen{0%,100%{box-shadow:0 0 8px rgba(0,255,136,0.7),0 0 18px rgba(0,255,136,0.4)}50%{box-shadow:0 0 16px rgba(0,255,136,1),0 0 35px rgba(0,255,136,0.6)}}
 @keyframes confGlowRed{0%,100%{box-shadow:0 0 8px rgba(255,34,68,0.7),0 0 18px rgba(255,34,68,0.4)}50%{box-shadow:0 0 16px rgba(255,34,68,1),0 0 35px rgba(255,34,68,0.6)}}
@@ -597,6 +597,11 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .suggest-rationale{font-size:11px;color:#9ab8d0;line-height:1.6;padding:7px 0 3px;border-top:1px solid var(--border);font-style:italic;}
 .suggest-conf{display:inline-block;margin-top:7px;padding:3px 10px;border-radius:99px;font-size:10px;font-weight:700;font-family:'Share Tech Mono',monospace;letter-spacing:1px;background:rgba(155,100,255,0.12);border:1px solid rgba(155,100,255,0.35);color:var(--purple);}
 .suggest-footer{display:flex;align-items:center;justify-content:space-between;margin-top:7px;font-size:10px;color:var(--dim);font-family:'Share Tech Mono',monospace;}
+.suggest-countdown{font-size:9px;color:var(--dim);font-family:'Share Tech Mono',monospace;transition:color 0.3s;}
+.suggest-countdown.stale{color:var(--amber);animation:stalePulse 1.5s ease-in-out infinite;}
+@keyframes stalePulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
+.pv-card-alert{border-color:var(--amber) !important;animation:cardAlertPulse 2s ease-in-out infinite;}
+@keyframes cardAlertPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,187,0,0);}50%{box-shadow:0 0 8px 2px rgba(255,187,0,0.35);}}
 .suggest-winrate{padding:3px 9px;border-radius:99px;font-size:10px;font-weight:700;}
 .suggest-nogate{text-align:center;font-size:12px;color:var(--dim);padding:12px 0;}
 @keyframes suggestPulse{0%,100%{box-shadow:0 0 10px currentColor}50%{box-shadow:0 0 25px currentColor}}
@@ -762,7 +767,10 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="suggest-card wait" id="suggest-card">
       <div class="suggest-header">
         <div class="suggest-title">⚡ SUGGESTED TRADE</div>
-        <button class="suggest-refresh" onclick="fetchTradeSuggestion()">↺ REFRESH</button>
+        <div style="display:flex;align-items:center;gap:7px;">
+          <span class="suggest-countdown" id="suggest-countdown">--</span>
+          <button class="suggest-refresh" onclick="fetchTradeSuggestion()">↺ REFRESH</button>
+        </div>
       </div>
       <div id="suggest-body">
         <div class="suggest-nogate">Quality gate not passed yet — waiting for all conditions to align...</div>
@@ -2427,6 +2435,8 @@ function renderDashboard(s) {
     document.getElementById('vix-sig').textContent = s.vixSignal || 'AUTO ✅';
     document.getElementById('vix-note-val').textContent = s.vix.toFixed(2) + (s.vixChange != null ? ' (' + (s.vixChange >= 0 ? '+' : '') + s.vixChange.toFixed(2) + ')' : '');
     document.getElementById('vix-note-sub').textContent = s.vixNote || '--';
+    const vixCard = document.getElementById('vix-card');
+    if (vixCard) { if (s.vix > 20) vixCard.classList.add('pv-card-alert'); else vixCard.classList.remove('pv-card-alert'); }
   }
 
   // ADX
@@ -2496,6 +2506,8 @@ function renderDashboard(s) {
   if (s.pcr != null) {
     document.getElementById('pcr-val').textContent = s.pcr.toFixed(2);
     document.getElementById('pcr-sig').textContent = s.pcrSignal || '--';
+    const pcrCard = document.getElementById('pcr-card');
+    if (pcrCard) { if (s.pcr < 0.7 || s.pcr > 1.5) pcrCard.classList.add('pv-card-alert'); else pcrCard.classList.remove('pv-card-alert'); }
   }
   if (s.atmPcr != null) {
     document.getElementById('atm-pcr-val').textContent = s.atmPcr.toFixed(2);
@@ -3004,6 +3016,28 @@ function updateSectorHeatmap(sectors) {
 }
 
 // ─── TRADE SUGGESTION ────────────────────────────────────
+// ── Suggest countdown timer ───────────────────────────────
+let _suggestCountdownTimer = null;
+let _suggestFetchedAt = null;
+const SUGGEST_INTERVAL_S = 120; // matches 2-min auto-refresh
+function _startSuggestCountdown() {
+  _suggestFetchedAt = Date.now();
+  if (_suggestCountdownTimer) clearInterval(_suggestCountdownTimer);
+  const cdEl = document.getElementById('suggest-countdown');
+  _suggestCountdownTimer = setInterval(() => {
+    if (!cdEl) return;
+    const elapsed = Math.floor((Date.now() - _suggestFetchedAt) / 1000);
+    const remaining = SUGGEST_INTERVAL_S - elapsed;
+    if (remaining <= 0) {
+      cdEl.textContent = 'stale';
+      cdEl.classList.add('stale');
+    } else {
+      cdEl.textContent = 'refresh in ' + remaining + 's';
+      cdEl.classList.remove('stale');
+    }
+  }, 1000);
+}
+
 async function fetchTradeSuggestion() {
   const body = document.getElementById('suggest-body');
   const card = document.getElementById('suggest-card');
@@ -3033,6 +3067,7 @@ async function fetchTradeSuggestion() {
       ${reasoning ? `<div class="suggest-rationale">${reasoning}</div>` : ''}
       ${confidence ? `<div class="suggest-conf">Confidence: ${confidence}</div>` : ''}
     `;
+    _startSuggestCountdown();
   } catch (e) {
     if (body) body.innerHTML = `<div class="suggest-nogate">⚠️ Error fetching suggestion: ${e.message}</div>`;
   }
