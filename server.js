@@ -1037,90 +1037,6 @@ ${vixLine}`);
 
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return;
-
-
-    // PCR context if available
-    const pcrLine = marketState.pcr
-        ? `PCR: ${marketState.pcr} (${marketState.pcrSignal})`
-        : 'PCR: Fetching...';
-
-    // VIX context
-    const vixLine = marketState.vix
-        ? `VIX: ${marketState.vix} — ${marketState.vixSignal}`
-        : 'VIX: --';
-
-    // ── CALL SETUP: Both EMAs above VWAP ─────────────────────────────────────
-    if (ema9 > vwap && ema21 > vwap) {
-        ema920AlertSentToday = true;
-        const callStrike = atmStrike;  // ATM call
-        const msg =
-`🟢 <b>VARDAAN 9:20 SETUP — CALL BUY</b>
-
-📈 EMA9 (${ema9Fmt}) + EMA21 (${ema21Fmt})
-✅ Both ABOVE VWAP (${vwapFmt}) — Bullish bias confirmed
-
-🎯 <b>Action: BUY ${callStrike} CE (ATM)</b>
-💰 Target: +25–30% premium gain
-🛑 Stop Loss: −20% premium loss
-⏰ Exit by: 11:00 AM if no movement
-
-📊 NIFTY: ${niftyFmt}
-${pcrLine}
-${vixLine}
-
-⚠️ 1 TRADE ONLY — Do NOT overtrade after this`;
-
-        await sendRawMessage(msg);
-        console.log(`📱 [9:20 Setup] CALL SETUP fired — ${callStrike} CE | EMA9:${ema9Fmt} EMA21:${ema21Fmt} VWAP:${vwapFmt}`);
-        return;
-    }
-
-    // ── PUT SETUP: Both EMAs below VWAP ──────────────────────────────────────
-    if (ema9 < vwap && ema21 < vwap) {
-        ema920AlertSentToday = true;
-        const putStrike = atmStrike;  // ATM put
-        const msg =
-`🔴 <b>VARDAAN 9:20 SETUP — PUT BUY</b>
-
-📉 EMA9 (${ema9Fmt}) + EMA21 (${ema21Fmt})
-✅ Both BELOW VWAP (${vwapFmt}) — Bearish bias confirmed
-
-🎯 <b>Action: BUY ${putStrike} PE (ATM)</b>
-💰 Target: +25–30% premium gain
-🛑 Stop Loss: −20% premium loss
-⏰ Exit by: 11:00 AM if no movement
-
-📊 NIFTY: ${niftyFmt}
-${pcrLine}
-${vixLine}
-
-⚠️ 1 TRADE ONLY — Do NOT overtrade after this`;
-
-        await sendRawMessage(msg);
-        console.log(`📱 [9:20 Setup] PUT SETUP fired — ${putStrike} PE | EMA9:${ema9Fmt} EMA21:${ema21Fmt} VWAP:${vwapFmt}`);
-        return;
-    }
-
-    // ── MIXED / NO SETUP: EMAs on opposite sides of VWAP ─────────────────────
-    // Only send NO TRADE alert once (mark flag so we don't spam)
-    ema920AlertSentToday = true;
-    const msg =
-`⚪ <b>VARDAAN 9:20 SETUP — NO TRADE</b>
-
-⚠️ EMA9 (${ema9Fmt}) and EMA21 (${ema21Fmt}) are on OPPOSITE sides of VWAP (${vwapFmt})
-📊 Market is indecisive — signals mixed
-
-❌ <b>Skip today's opening trade</b>
-💡 Wait for cleaner setup later or sit out
-
-NIFTY: ${niftyFmt} | ${vixLine}`;
-
-    await sendRawMessage(msg);
-    console.log(`📱 [9:20 Setup] NO TRADE — EMA9:${ema9Fmt} EMA21:${ema21Fmt} VWAP:${vwapFmt} (mixed)`);
-}
-
-async function checkTelegramAlerts(newSignal) {
-    if (!isConfigured()||!isMarketOpen()) return;
     // ── Race-condition guard: onTick fires synchronously on every websocket tick,
     //    so multiple concurrent calls can pass a flag check before any one of them
     //    sets the flag. This in-flight lock ensures only one alert send runs at a time.
@@ -1200,6 +1116,12 @@ async function updatePrice(price, change, changePct, source) {
     if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%)`);
     evaluateBTST();
     await checkTelegramAlerts(signal);
+    // ── Auto-log every fresh BUY CALL / BUY PUT transition to signal_log ─────
+    // Runs silently — does NOT block the signal pipeline. Captures full snapshot
+    // (RSI, VIX, PCR, ADX, MTF, quality gate) for later review / pattern mining.
+    if (signal !== 'WAIT' && signal !== prevSignal) {
+        saveSignalToLog(signal, prevSignal).catch(e => console.error('signal log:', e.message));
+    }
     prevSignal=signal;
 }
 
@@ -1766,6 +1688,58 @@ async function initDB() {
             )
         `);
         console.log('✅ PostgreSQL trade_history table ready');
+
+        // ── signal_log table — auto-records every BUY CALL/PUT transition ──────
+        // Lightweight table: one row per signal fire, no outcome tracking.
+        // Gives you full signal history to review even without placing real trades.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS signal_log (
+                id          SERIAL PRIMARY KEY,
+                ts          TIMESTAMPTZ DEFAULT NOW(),
+                signal      TEXT,          -- 'BUY CALL' | 'BUY PUT'
+                confidence  INT,
+                nifty       NUMERIC,
+                rsi         NUMERIC,
+                ema9        NUMERIC,
+                ema21       NUMERIC,
+                vwap        NUMERIC,
+                vix         NUMERIC,
+                pcr         NUMERIC,
+                atm_pcr     NUMERIC,
+                adx         NUMERIC,
+                mtf_signal  TEXT,
+                mtf_aligned BOOLEAN,
+                breadth_sig TEXT,
+                prev_signal TEXT,          -- what signal was before this
+                quality_gate BOOLEAN,
+                entry_window TEXT,
+                reasons     TEXT           -- JSON array of reason strings
+            )
+        `);
+        console.log('✅ PostgreSQL signal_log table ready');
+
+        // ── journal_trades table — manually entered trades from the Journal tab ──
+        // Separate from trade_history (which is AI-suggested auto-saves).
+        // Persists across Railway restarts — in-memory trades[] array does NOT.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS journal_trades (
+                id           SERIAL PRIMARY KEY,
+                ts           TIMESTAMPTZ DEFAULT NOW(),
+                time         TEXT,          -- HH:MM display time (IST)
+                type         TEXT,          -- 'CE' | 'PE'
+                strike       INT,
+                premium      NUMERIC,
+                lots         INT DEFAULT 1,
+                sl           NUMERIC DEFAULT 0,
+                notes        TEXT DEFAULT '',
+                nifty_entry  NUMERIC,
+                exit_premium NUMERIC,
+                exit_time    TEXT,
+                pnl          NUMERIC,
+                status       TEXT DEFAULT 'OPEN'
+            )
+        `);
+        console.log('✅ PostgreSQL journal_trades table ready');
     } catch (e) {
         console.error('DB init error:', e.message);
         dbPool = null;
@@ -1787,6 +1761,36 @@ async function saveTradeToHistory(tradeData) {
         );
     } catch (e) {
         console.error('DB save error:', e.message);
+    }
+}
+
+
+// ── Signal Log Writer ─────────────────────────────────────────────────────────
+// Called every time combineSignals() produces a FRESH BUY CALL or BUY PUT
+// (i.e. signal changed from previous). Records full market snapshot so you can
+// review past setups, filter by quality gate, and spot patterns over time.
+async function saveSignalToLog(signal, prevSig) {
+    if (!dbPool) return;
+    try {
+        const s = marketState;
+        await dbPool.query(
+            `INSERT INTO signal_log
+              (signal, confidence, nifty, rsi, ema9, ema21, vwap, vix, pcr, atm_pcr,
+               adx, mtf_signal, mtf_aligned, breadth_sig, prev_signal,
+               quality_gate, entry_window, reasons)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+            [
+                signal, s.confidence, s.nifty, s.rsi, s.ema9, s.ema21, s.vwap,
+                s.vix, s.pcr, s.atmPcr, s.adx?.adx ?? null,
+                s.mtf?.signal ?? null, s.mtf?.aligned ?? false,
+                s.breadth?.breadthSignal ?? null, prevSig,
+                s.qualityGate?.passed ?? false, s.entryWindow?.label ?? null,
+                JSON.stringify((s.reason || []).slice(0, 12))
+            ]
+        );
+        console.log(`📝 Signal logged: ${signal} @ ₹${s.nifty} (conf:${s.confidence}%)`);
+    } catch (e) {
+        console.error('saveSignalToLog error:', e.message);
     }
 }
 
@@ -2041,6 +2045,43 @@ app.get('/api/trade-history', async (req, res) => {
 });
 
 
+// ── Signal Log endpoint — auto-logged BUY CALL/PUT history ──────────────────
+// Returns last N signal fires with full market context at fire time.
+// Query params:
+//   ?limit=N   — default 50, max 200
+//   ?signal=BUY+CALL  — filter by direction
+//   ?gate=true  — only show quality-gate-passed signals
+app.get('/api/signal-log', async (req, res) => {
+    if (!dbPool) return res.json({ rows: [], msg: 'No DB — add DATABASE_URL to Railway' });
+    try {
+        const limit  = Math.min(parseInt(req.query.limit)  || 50, 200);
+        const sigFil = req.query.signal || null;   // 'BUY CALL' | 'BUY PUT' | null
+        const gateFil= req.query.gate === 'true';  // true = only passed setups
+
+        let q = 'SELECT id,ts,signal,confidence,nifty,rsi,vix,pcr,atm_pcr,adx,' +
+                'mtf_signal,mtf_aligned,breadth_sig,prev_signal,quality_gate,' +
+                'entry_window,reasons FROM signal_log';
+        const params = [];
+        const where  = [];
+        if (sigFil)  { params.push(sigFil);  where.push(`signal=$${params.length}`); }
+        if (gateFil) { where.push(`quality_gate=TRUE`); }
+        if (where.length) q += ' WHERE ' + where.join(' AND ');
+        params.push(limit);
+        q += ` ORDER BY ts DESC LIMIT $${params.length}`;
+
+        const r = await dbPool.query(q, params);
+
+        // Parse reasons JSON back to array for clean frontend consumption
+        const rows = r.rows.map(row => ({
+            ...row,
+            reasons: (() => { try { return JSON.parse(row.reasons || '[]'); } catch { return []; } })()
+        }));
+        res.json({ rows, count: rows.length });
+    } catch (e) {
+        res.json({ rows: [], error: e.message });
+    }
+});
+
 // ── Routes ────────────────────────────────────────────
 app.get('/api/signal',  (req,res) => { updateOpenTradesMTM(); res.json(marketState); });
 app.get('/api/candles', (req,res) => res.json(getCandleHistory()));
@@ -2149,12 +2190,31 @@ app.post('/api/optionflow', (req,res) => {
 });
 
 // ── TRADE JOURNAL ─────────────────────────────────────
-app.post('/api/trade/add', (req,res) => {
+app.post('/api/trade/add', async (req,res) => {
     const {type,strike,premium,lots,sl,notes}=req.body;
     const ist=getIST();
     const time=`${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
+
+    // ── Persist to DB first (if available) so trade survives a Railway restart ──
+    let dbId = null;
+    if (dbPool) {
+        try {
+            const r = await dbPool.query(
+                `INSERT INTO journal_trades (time,type,strike,premium,lots,sl,notes,nifty_entry,status)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN') RETURNING id`,
+                [time, type, parseInt(strike), parseFloat(premium),
+                 parseInt(lots)||1, parseFloat(sl)||0, notes||'',
+                 marketState.nifty||0]
+            );
+            dbId = r.rows[0].id;
+        } catch(e) {
+            console.error('Journal DB save error:', e.message);
+        }
+    }
+
     const trade = {
-        id:tradeCounter++, time, type, strike:parseInt(strike),
+        id: dbId ?? tradeCounter++,   // use DB id when available
+        time, type, strike:parseInt(strike),
         premium:parseFloat(premium), lots:parseInt(lots)||1,
         sl:parseFloat(sl)||0, exitPremium:null, pnl:null,
         status:'OPEN', notes:notes||'',
@@ -2162,12 +2222,14 @@ app.post('/api/trade/add', (req,res) => {
         niftyCurrent:marketState.nifty, niftyMove:0
     };
     trades.push(trade);
-    console.log(`📔 Trade: ${type} ${strike} @₹${premium} × ${lots}lots`);
+    console.log(`📔 Trade saved: ${type} ${strike} @₹${premium} × ${parseInt(lots)||1}lots (DB id:${dbId??'none'})`);
     res.json({success:true, trade});
 });
 
-app.post('/api/trade/exit', (req,res) => {
-    const {id,exitPremium}=req.body;
+app.post('/api/trade/exit', async (req,res) => {
+    const rawId=req.body.id;
+    const id = typeof rawId === 'string' ? parseInt(rawId, 10) : rawId;
+    const {exitPremium}=req.body;
     const trade=trades.find(t=>t.id===id);
     if(!trade) return res.json({success:false,msg:'Not found'});
     trade.exitPremium=parseFloat(exitPremium);
@@ -2175,12 +2237,31 @@ app.post('/api/trade/exit', (req,res) => {
     trade.status='CLOSED';
     const ist=getIST();
     trade.exitTime=`${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
+
+    // ── Persist exit to DB ────────────────────────────────────────────────────
+    if (dbPool) {
+        try {
+            await dbPool.query(
+                `UPDATE journal_trades
+                 SET exit_premium=$1, exit_time=$2, pnl=$3, status='CLOSED'
+                 WHERE id=$4`,
+                [trade.exitPremium, trade.exitTime, trade.pnl, id]
+            );
+        } catch(e) { console.error('Journal exit DB error:', e.message); }
+    }
+
     console.log(`📔 Exit: P&L ${trade.pnl>=0?'+':''}₹${trade.pnl}`);
     res.json({success:true, trade});
 });
 
-app.delete('/api/trade/:id', (req,res) => {
-    trades=trades.filter(t=>t.id!==parseInt(req.params.id));
+app.delete('/api/trade/:id', async (req,res) => {
+    const tid = parseInt(req.params.id);
+    trades = trades.filter(t => t.id !== tid);
+    if (dbPool) {
+        try {
+            await dbPool.query('DELETE FROM journal_trades WHERE id=$1', [tid]);
+        } catch(e) { console.error('Journal delete DB error:', e.message); }
+    }
     res.json({success:true});
 });
 
@@ -2298,8 +2379,10 @@ async function initializeLiveData() {
     console.log('Starting VardaanNifty AI...');
     console.log('Telegram:', isConfigured()?'✅':'❌');
 
-    // DB init — non-blocking; app works fine without it
-    initDB().catch(e => console.error('DB init error:', e.message));
+    // DB init — awaited so dbPool is guaranteed ready before journal reload below.
+    // Previously fire-and-forget (.catch) which caused a race: journal reload ran
+    // before tables existed on a slow Railway DB connection.
+    await initDB().catch(e => console.error('DB init error:', e.message));
 
     // NSE scheduler fires its own async fetches (non-blocking per nseData.js fix)
     startNSEScheduler(() => marketState.nifty);
@@ -2335,6 +2418,40 @@ async function initializeLiveData() {
     ]);
     syncFIIToMarketState(); // FIX: ensure FII/DII shows on breadth tab even after market close
     await withTimeout(fetchCalendarEvents(), 10000, 'fetchCalendarEvents');
+
+    // ── Reload persisted journal trades from DB into memory ─────────────────
+    // journal_trades rows survive Railway restarts. Re-populate trades[] so the
+    // in-memory array (used for real-time MTM tracking) matches the DB on boot.
+    if (dbPool) {
+        try {
+            const jRows = await dbPool.query(
+                `SELECT * FROM journal_trades ORDER BY id ASC`
+            );
+            for (const row of jRows.rows) {
+                trades.push({
+                    id           : row.id,
+                    time         : row.time,
+                    type         : row.type,
+                    strike       : row.strike,
+                    premium      : parseFloat(row.premium),
+                    lots         : row.lots,
+                    sl           : parseFloat(row.sl || 0),
+                    notes        : row.notes || '',
+                    niftyAtEntry : parseFloat(row.nifty_entry || 0),
+                    niftyCurrent : 0,
+                    niftyMove    : 0,
+                    exitPremium  : row.exit_premium ? parseFloat(row.exit_premium) : null,
+                    exitTime     : row.exit_time || null,
+                    pnl          : row.pnl ? parseFloat(row.pnl) : null,
+                    status       : row.status || 'OPEN',
+                });
+                if (row.id >= tradeCounter) tradeCounter = row.id + 1;
+            }
+            console.log(`📔 Reloaded ${jRows.rows.length} journal trades from DB`);
+        } catch(e) {
+            console.error('Journal reload error:', e.message);
+        }
+    }
 
     // Polling intervals start regardless of whether initial fetches succeeded
     startPollingIntervals();
