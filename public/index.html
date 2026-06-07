@@ -1002,13 +1002,15 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="mom-bar-row"><span class="mom-bar-label">VELOCITY</span><div class="mom-bar-track"><div class="mom-bar-fill" id="mom-vel-bar" style="width:0%"></div></div><span class="mom-bar-val" id="mom-vel-val">--</span></div>
         <div class="mom-bar-row"><span class="mom-bar-label">BODY</span><div class="mom-bar-track"><div class="mom-bar-fill" id="mom-body-bar" style="width:0%"></div></div><span class="mom-bar-val" id="mom-body-val">--</span></div>
         <div class="mom-bar-row"><span class="mom-bar-label">VOLUME</span><div class="mom-bar-track"><div class="mom-bar-fill" id="mom-vol-bar" style="width:0%"></div></div><span class="mom-bar-val" id="mom-vol-val">--</span></div>
+        <div class="mom-bar-row"><span class="mom-bar-label">5M SLOPE</span><div class="mom-bar-track"><div class="mom-bar-fill" id="mom-5m-bar" style="width:0%"></div></div><span class="mom-bar-val" id="mom-5m-val">--</span></div>
       </div>
       <div class="mom-strength" id="mom-strength">
         <span class="mom-dot inactive" id="mom-dot-1"></span>
         <span class="mom-dot inactive" id="mom-dot-2"></span>
         <span class="mom-dot inactive" id="mom-dot-3"></span>
         <span class="mom-dot inactive" id="mom-dot-4"></span>
-        <span class="mom-strength-label" id="mom-strength-label">Strength: 0/4</span>
+        <span class="mom-dot inactive" id="mom-dot-5"></span>
+        <span class="mom-strength-label" id="mom-strength-label">Strength: 0/5</span>
       </div>
     </div>
   </div>
@@ -2696,23 +2698,28 @@ function renderMomentum(mom) {
   const velBar  = document.getElementById('mom-vel-bar');
   const bodyBar = document.getElementById('mom-body-bar');
   const volBar  = document.getElementById('mom-vol-bar');
+  const fiveMBar = document.getElementById('mom-5m-bar');
   const velVal  = document.getElementById('mom-vel-val');
   const bodyVal = document.getElementById('mom-body-val');
   const volVal  = document.getElementById('mom-vol-val');
+  const fiveMVal = document.getElementById('mom-5m-val');
 
   // Strength dots
-  const dots = [1,2,3,4].map(i => document.getElementById(`mom-dot-${i}`));
+  const dots = [1,2,3,4,5].map(i => document.getElementById(`mom-dot-${i}`));
   const strengthLabel = document.getElementById('mom-strength-label');
 
   if (!mom || mom.signal === 'NONE' || !mom.canTrade) {
-    // Reset to idle
-    card.className = 'mom-card';
-    badge.className = 'mom-badge';
-    badge.textContent = 'WATCHING';
-    signal.style.color = 'var(--dim)';
-    signal.textContent = mom?.velocity
-      ? `Velocity: ${mom.velocity > 0 ? '+' : ''}${mom.velocity}% — below threshold`
-      : 'Monitoring price velocity...';
+    // Cooldown state: signal fired but suppressed to prevent re-voting on same move
+    const inCooldown = mom && mom.signal !== 'NONE' && !mom.canTrade && mom.reason && mom.reason.includes('cooldown');
+    card.className = inCooldown ? 'mom-card active-out' : 'mom-card';
+    badge.className = inCooldown ? 'mom-badge out' : 'mom-badge';
+    badge.textContent = inCooldown ? '⏳ COOLDOWN' : 'WATCHING';
+    signal.style.color = inCooldown ? 'var(--amber)' : 'var(--dim)';
+    signal.textContent = inCooldown
+      ? mom.reason
+      : mom?.velocity
+        ? `Velocity: ${mom.velocity > 0 ? '+' : ''}${mom.velocity}% — below threshold`
+        : 'Monitoring 1m velocity + 5m confirmation...';
 
     // Bars — show current values even if not firing
     if (mom && velBar) {
@@ -2728,9 +2735,16 @@ function renderMomentum(mom) {
       volBar.style.width  = voPct + '%';
       volBar.style.background = 'var(--amber)';
       volVal.textContent  = mom.volumeRatio > 0 ? mom.volumeRatio + 'x' : 'N/A·Yahoo';
+      // 5m slope bar: show as a binary confirmed/not indicator
+      if (fiveMBar && fiveMVal) {
+        const has5m = mom.reason && mom.reason.includes('5m✓');
+        fiveMBar.style.width = has5m ? '100%' : '15%';
+        fiveMBar.style.background = has5m ? 'var(--green)' : 'var(--amber)';
+        fiveMVal.textContent = has5m ? 'AGREE ✓' : 'WAIT';
+      }
     }
     dots.forEach(d => { if(d) d.className = 'mom-dot inactive'; });
-    if (strengthLabel) strengthLabel.textContent = `Strength: ${mom?.strength || 0}/4`;
+    if (strengthLabel) strengthLabel.textContent = `Strength: ${mom?.strength || 0}/5`;
     return;
   }
 
@@ -2761,13 +2775,20 @@ function renderMomentum(mom) {
     volBar.style.width = voPct + '%'; volBar.style.background = barCol;
     volVal.textContent = mom.volumeRatio > 0 ? mom.volumeRatio + 'x' : 'N/A·Yahoo';
   }
+  // 5m slope confirm bar
+  if (fiveMBar && fiveMVal) {
+    const has5m = mom.reason && mom.reason.includes('5m✓');
+    fiveMBar.style.width = has5m ? '100%' : '25%';
+    fiveMBar.style.background = has5m ? barCol : 'var(--amber)';
+    fiveMVal.textContent = has5m ? 'AGREE ✓' : 'NO MATCH';
+  }
 
   // Strength dots
   dots.forEach((d, i) => {
     if (!d) return;
     d.className = i < mom.strength ? `mom-dot ${dotCls}` : 'mom-dot inactive';
   });
-  if (strengthLabel) strengthLabel.textContent = `Strength: ${mom.strength}/4`;
+  if (strengthLabel) strengthLabel.textContent = `Strength: ${mom.strength}/5`;
 }
 
 // ─── PCR TREND ───────────────────────────────────────────

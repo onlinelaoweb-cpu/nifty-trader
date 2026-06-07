@@ -427,37 +427,50 @@ async function loadCandlesFromYahoo() {
 function getCandleSource() { return candleSource; }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MOMENTUM BREAKDOWN DETECTOR
+// MOMENTUM BREAKDOWN / BREAKOUT DETECTOR
 // ─────────────────────────────────────────────────────────────────────────────
-// Captures the kind of explosive move that happened on Friday May 30 —
-// a late-session S/R breach with velocity + ADX confirmation.
+// Captures explosive directional moves — both breakdowns AND breakouts.
+// Works symmetrically for BUY CALL (breakout) and BUY PUT (breakdown).
 //
 // Returns:
-//   { signal: 'BREAKDOWN'|'BREAKOUT'|'NONE', strength: 0-3,
+//   { signal: 'BREAKDOWN'|'BREAKOUT'|'NONE', strength: 0-5,
 //     velocity: number, volumeRatio: number, candleBody: number,
 //     reason: string, canTrade: boolean }
 //
-// Design — 4 independent evidence layers, each adds 1 strength point:
-//   Layer 1 — VELOCITY   : price moved > 0.35% in last 3 closed candles
-//   Layer 2 — CANDLE BODY: last closed candle body > 0.25% of price (impulsive)
-//   Layer 3 — VOLUME     : current candle volume ≥ 1.8× 20-bar avg (surge)
-//   Layer 4 — MOMENTUM   : 3-candle close slope steepening (acceleration)
+// Design — 5 independent evidence layers:
+//   Layer 1 — VELOCITY    : 1m price moved ≥ 0.40% in last 3 closed candles
+//                           (raised from 0.35% — reduces 1m noise false fires)
+//   Layer 2 — CANDLE BODY : last 1m candle body ≥ 0.25% (impulsive, not doji)
+//   Layer 3 — VOLUME      : volume ≥ 1.8× 20-bar avg (Angel WS only; N/A on Yahoo)
+//   Layer 4 — ACCELERATION: 1m slope steepening — move accelerating not stalling
+//   Layer 5 — 5M CONFIRM  : 5m candle slope agrees with 1m direction
+//                           (key noise filter — eliminates 1m spikes against trend)
 //
-// strength 3 = all 4 layers agree → high conviction momentum
-// strength 2 = 3 layers agree     → moderate conviction
-// strength 1 = 2 layers agree     → weak, informational only
-// strength 0 = <2 layers          → noise, ignored
+// Scoring:
+//   strength ≥ 2 → canTrade = true, injects votes into combineSignals
+//   strength ≥ 4 → high conviction (all 1m layers + 5m confirm)
 //
-// canTrade = strength >= 2 (used for vote injection into combineSignals)
+// Cooldown: 5-minute cooldown after firing to prevent rapid re-firing
+//           on same move (e.g. continuation candles of same impulse)
+//
+// Candle source: sessionCandles (9:15 IST onwards only — no overnight gap issues)
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// Module-level cooldown state
+let _momLastFiredAt   = 0;   // epoch ms of last canTrade fire
+let _momLastSignal    = 'NONE'; // signal that last fired
+const MOM_COOLDOWN_MS = 5 * 60 * 1000;  // 5-minute cooldown
+
 function calcMomentumBreakdown() {
     const result = { signal: 'NONE', strength: 0, velocity: 0, volumeRatio: 0, candleBody: 0, reason: '', canTrade: false };
 
-    // Need at least 25 candles for reliable detection
-    const hist = candleHistory;
-    if (hist.length < 25) return result;
+    // ── Use sessionCandles (today only, no overnight gaps) ────────────────────
+    // candleHistory spans multiple days — overnight price gaps corrupt velocity.
+    // sessionCandles resets at 9:15 IST so it's clean intraday data.
+    const hist = sessionCandles.length >= 10 ? sessionCandles : candleHistory;
+    if (hist.length < 15) return result;   // need at least 15 bars
 
-    const last  = hist[hist.length - 1];   // most recent closed candle
+    const last  = hist[hist.length - 1];   // most recent closed 1m candle
     const prev1 = hist[hist.length - 2];
     const prev2 = hist[hist.length - 3];
     const prev3 = hist[hist.length - 4];
@@ -466,35 +479,61 @@ function calcMomentumBreakdown() {
     const price = last.close;
     if (!price || price <= 0) return result;
 
-    // ── Layer 1: Velocity — 3-candle price move ───────────────────────────────
+    // ── Layer 1: Velocity — 3-candle 1m price move ───────────────────────────
+    // Threshold raised 0.35% → 0.40% to cut false fires on 1m noise.
+    // On Nifty ~24000: 0.40% ≈ 96 pts in 3 minutes = genuine impulse.
     const velocity = ((last.close - prev3.close) / prev3.close) * 100;
     result.velocity = parseFloat(velocity.toFixed(3));
-    const velDown = velocity <= -0.35;
-    const velUp   = velocity >=  0.35;
+    const velDown = velocity <= -0.40;
+    const velUp   = velocity >=  0.40;
     const velFire = velDown || velUp;
 
-    // ── Layer 2: Candle body size — impulsive vs indecisive ──────────────────
+    // ── Layer 2: Candle body — impulsive vs indecisive ────────────────────────
+    // Doji / spinning top candles (body < 0.25%) are noise, not momentum.
     const body = Math.abs(last.close - last.open) / last.open * 100;
     result.candleBody = parseFloat(body.toFixed(3));
     const bodyFire = body >= 0.25;
 
-    // ── Layer 3: Volume surge ─────────────────────────────────────────────────
+    // ── Layer 3: Volume surge (Angel WebSocket only) ──────────────────────────
+    // On Yahoo Finance, all candle volumes = 1 (fake) — guard with avgVol > 2.
+    // 1.8× threshold kept — strong enough to signal institutional participation.
     const recentVols = hist.slice(-21, -1).map(c => c.volume || 1);
     const avgVol = recentVols.length > 0
         ? recentVols.reduce((a, b) => a + b, 0) / recentVols.length
         : 0;
-    const volRatio = avgVol > 2 ? (last.volume || 1) / avgVol : 0;  // 0 on Yahoo (fake vol)
+    const volRatio = avgVol > 2 ? (last.volume || 1) / avgVol : 0;
     result.volumeRatio = parseFloat(volRatio.toFixed(2));
     const volFire = volRatio >= 1.8;
 
-    // ── Layer 4: Acceleration — slope steepening ──────────────────────────────
-    // Compare last 2-candle move vs 2-candle move before that
-    const slope1 = last.close  - prev1.close;   // most recent 2-bar slope
+    // ── Layer 4: Acceleration — 1m slope steepening ──────────────────────────
+    // Recent 2-bar move must be larger than prior 2-bar move in the same direction.
+    // 0.8× factor means: fires if recent ≥ 80% of prior (not just strictly larger)
+    // — allows for a strong continuation even if slightly smaller than the impulse.
+    const slope1 = last.close  - prev1.close;   // last 2-bar slope
     const slope2 = prev1.close - prev3.close;   // prior 2-bar slope
     const accelFire = Math.sign(slope1) === Math.sign(slope2) &&
                       Math.abs(slope1) > Math.abs(slope2) * 0.8;
 
-    // ── Direction ─────────────────────────────────────────────────────────────
+    // ── Layer 5: 5m candle slope confirmation ────────────────────────────────
+    // Key noise filter: a 1m spike AGAINST the 5m trend is usually a stop-hunt,
+    // not a real move. Check last two 5m closes by resampling last 10 1m candles.
+    // If 5m slope agrees with velocity direction → genuine move, not a spike.
+    let fiveMFire = false;
+    if (hist.length >= 10) {
+        // Build last two 5m closes from 1m candles
+        const last10 = hist.slice(-10);
+        const fiveA_close = last10[4]?.close;   // close of 5m bar ending 5 bars ago
+        const fiveB_close = last10[9]?.close;   // close of most recent 5m bar
+        if (fiveA_close && fiveB_close) {
+            const fiveSlope = fiveB_close - fiveA_close;
+            // 5m slope direction must agree with 1m velocity direction
+            fiveMFire = (velocity > 0 && fiveSlope > 0) ||
+                        (velocity < 0 && fiveSlope < 0);
+        }
+    }
+
+    // ── Direction gate ────────────────────────────────────────────────────────
+    // Last candle must be a clean directional candle (not a spinning top).
     const isBearish = velocity < 0 && last.close < last.open;
     const isBullish = velocity > 0 && last.close > last.open;
     if (!isBearish && !isBullish) return result;
@@ -506,13 +545,35 @@ function calcMomentumBreakdown() {
     if (bodyFire)  { strength++; reasons.push(`body ${result.candleBody}%`); }
     if (volFire)   { strength++; reasons.push(`vol ${result.volumeRatio}x`); }
     if (accelFire) { strength++; reasons.push('accel'); }
+    if (fiveMFire) { strength++; reasons.push('5m✓'); }   // 5m confirmation bonus
 
-    if (strength < 2) return result;   // not enough evidence
+    if (strength < 2) return result;   // not enough evidence → noise
 
-    result.signal   = isBearish ? 'BREAKDOWN' : 'BREAKOUT';
+    const sigType = isBearish ? 'BREAKDOWN' : 'BREAKOUT';
+
+    // ── Cooldown gate ─────────────────────────────────────────────────────────
+    // After a valid fire, suppress re-firing for 5 minutes.
+    // This prevents the same impulse from injecting multiple votes into combineSignals
+    // as continuation 1m candles keep meeting thresholds on the same move.
+    const now = Date.now();
+    const inCooldown = (now - _momLastFiredAt) < MOM_COOLDOWN_MS;
+    if (inCooldown && _momLastSignal === sigType) {
+        // Return the signal for UI display but mark canTrade=false to suppress re-voting
+        result.signal   = sigType;
+        result.strength = strength;
+        result.canTrade = false;
+        result.reason   = `🔥 Momentum ${sigType} [${reasons.join(' | ')}] — cooldown`;
+        return result;
+    }
+
+    // ── Fire! ─────────────────────────────────────────────────────────────────
+    _momLastFiredAt = now;
+    _momLastSignal  = sigType;
+
+    result.signal   = sigType;
     result.strength = strength;
-    result.canTrade = strength >= 2;
-    result.reason   = `🔥 Momentum ${result.signal} [${reasons.join(' | ')}]`;
+    result.canTrade = true;
+    result.reason   = `🔥 Momentum ${sigType} [${reasons.join(' | ')}]`;
 
     return result;
 }
