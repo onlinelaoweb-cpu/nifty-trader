@@ -266,6 +266,65 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 /* ═══ JOURNAL PANEL ═══ */
 .journal-wrap{padding:10px 12px;}
 
+/* ── Journal sub-tabs (Trade Log / Guide) ── */
+.j-subtabs{display:flex;gap:6px;margin-bottom:12px;}
+.j-stab{flex:1;padding:7px 4px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;font-family:'Orbitron',monospace;font-size:9px;font-weight:700;letter-spacing:1.5px;color:var(--dim);cursor:pointer;text-align:center;transition:all 0.2s;}
+.j-stab.active{background:rgba(0,255,136,0.08);border-color:var(--green);color:var(--green);box-shadow:0 0 12px rgba(0,255,136,0.1);}
+.j-section{display:none;}
+.j-section.active{display:block;}
+
+/* ── Guide cards ── */
+.guide-section{margin-bottom:14px;}
+.guide-section-hdr{display:flex;align-items:center;gap:8px;padding:8px 0 8px;border-bottom:1px solid var(--border);margin-bottom:10px;}
+.guide-badge{font-family:'Share Tech Mono',monospace;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:500;letter-spacing:0.5px;}
+.guide-badge.g{background:rgba(0,255,136,0.15);color:var(--green);border:1px solid rgba(0,255,136,0.3);}
+.guide-badge.r{background:rgba(255,34,68,0.15);color:var(--red);border:1px solid rgba(255,34,68,0.3);}
+.guide-badge.a{background:rgba(255,187,0,0.15);color:var(--amber);border:1px solid rgba(255,187,0,0.3);}
+.guide-badge.b{background:rgba(0,170,255,0.15);color:var(--blue);border:1px solid rgba(0,170,255,0.3);}
+.guide-section-hdr span{font-family:'Orbitron',monospace;font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--text);}
+.guide-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;}
+.guide-card.warn{border-color:rgba(255,187,0,0.4);background:linear-gradient(135deg,rgba(255,187,0,0.05),var(--bg2));}
+.guide-card.danger{border-color:rgba(255,34,68,0.4);background:linear-gradient(135deg,rgba(255,34,68,0.05),var(--bg2));}
+.guide-card.good{border-color:rgba(0,255,136,0.3);background:linear-gradient(135deg,rgba(0,255,136,0.04),var(--bg2));}
+.guide-card-title{font-family:'Orbitron',monospace;font-size:9px;font-weight:700;letter-spacing:1.5px;color:var(--text);margin-bottom:7px;}
+.guide-card p{font-size:12px;color:#9ab8d0;line-height:1.6;margin-bottom:5px;}
+.guide-card p:last-child{margin-bottom:0;}
+.guide-card p strong{color:var(--text);}
+.guide-rule-list{list-style:none;padding:0;margin:0;}
+.guide-rule-list li{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid rgba(26,58,90,0.6);font-size:12px;color:#9ab8d0;line-height:1.5;}
+.guide-rule-list li:last-child{border-bottom:none;}
+.guide-rule-list li::before{content:'→';color:var(--amber);flex-shrink:0;font-family:'Share Tech Mono',monospace;}
+.guide-step-list{list-style:none;padding:0;margin:0;}
+.guide-step-list li{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid rgba(26,58,90,0.4);align-items:flex-start;}
+.guide-step-list li:last-child{border-bottom:none;}
+.guide-step-num{width:22px;height:22px;border-radius:50%;background:var(--green);color:#000;font-family:'Share Tech Mono',monospace;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;}
+.guide-step-num.a{background:var(--amber);}
+.guide-step-body strong{display:block;font-size:12px;color:var(--text);margin-bottom:2px;font-family:'Rajdhani',sans-serif;font-weight:700;}
+.guide-step-body span{font-size:11px;color:#7a9ab8;line-height:1.5;}
+.guide-signal-row{display:flex;justify-content:space-between;align-items:flex-start;padding:7px 0;border-bottom:1px solid rgba(26,58,90,0.4);gap:8px;}
+.guide-signal-row:last-child{border-bottom:none;}
+.gsr-left{display:flex;align-items:center;gap:7px;flex-shrink:0;}
+.gsr-right{font-size:11px;color:#7a9ab8;text-align:right;line-height:1.4;flex:1;}
+.gsr-action{font-size:10px;color:var(--amber);font-family:'Share Tech Mono',monospace;}
+.sig-tag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-family:'Share Tech Mono',monospace;font-weight:500;letter-spacing:0.5px;}
+.sig-tag.call{background:rgba(0,255,136,0.15);color:var(--green);border:1px solid rgba(0,255,136,0.3);}
+.sig-tag.put{background:rgba(255,34,68,0.15);color:var(--red);border:1px solid rgba(255,34,68,0.3);}
+.sig-tag.wait{background:rgba(255,187,0,0.15);color:var(--amber);border:1px solid rgba(255,187,0,0.3);}
+.sig-tag.block{background:rgba(170,136,255,0.1);color:var(--purple);border:1px solid rgba(170,136,255,0.25);}
+.guide-checklist{list-style:none;padding:0;margin:0;}
+.guide-checklist li{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid rgba(26,58,90,0.4);font-size:12px;line-height:1.5;}
+.guide-checklist li:last-child{border-bottom:none;}
+.guide-checklist li.ok{color:#9ab8d0;}.guide-checklist li.ok::before{content:'✓';color:var(--green);flex-shrink:0;}
+.guide-checklist li.no{color:#9ab8d0;}.guide-checklist li.no::before{content:'✗';color:var(--red);flex-shrink:0;}
+.money-mini-table{width:100%;border-collapse:collapse;font-size:11px;font-family:'Share Tech Mono',monospace;margin-top:8px;}
+.money-mini-table th{color:var(--dim);font-size:9px;letter-spacing:1px;padding:4px 6px;border-bottom:1px solid var(--border);text-align:left;}
+.money-mini-table td{padding:6px 6px;border-bottom:1px solid rgba(26,58,90,0.3);color:#9ab8d0;}
+.money-mini-table td.g{color:var(--green);}.money-mini-table td.r{color:var(--red);}.money-mini-table td.w{color:var(--text);}
+.guide-quote{border-left:2px solid var(--dim);padding:8px 12px;margin:10px 0;font-size:12px;color:var(--dim);font-style:italic;line-height:1.6;}
+.guide-warn-inline{background:rgba(255,187,0,0.06);border:1px solid rgba(255,187,0,0.25);border-radius:7px;padding:8px 12px;display:flex;gap:8px;align-items:flex-start;margin:8px 0;}
+.guide-warn-inline p{font-size:11px;color:#c8a020;margin:0;line-height:1.5;}
+.guide-warn-inline .wi{font-size:14px;flex-shrink:0;margin-top:1px;}
+
 /* P&L Hero */
 .pnl-hero{background:linear-gradient(150deg,var(--bg2),#0c1a28);border:1px solid var(--border);border-radius:var(--card-radius);padding:14px;margin-bottom:10px;box-shadow:var(--card-shadow);}
 .pnl-hero-title{font-family:'Orbitron',monospace;font-size:10px;color:var(--purple);letter-spacing:2px;margin-bottom:10px;}
@@ -1076,6 +1135,15 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 <div class="panel" id="panel-journal">
   <div class="journal-wrap">
 
+    <!-- Journal sub-tabs -->
+    <div class="j-subtabs">
+      <button class="j-stab active" id="jstab-log" onclick="switchJournalTab('log')">📔 TRADE LOG</button>
+      <button class="j-stab" id="jstab-guide" onclick="switchJournalTab('guide')">📘 BEGINNER GUIDE</button>
+    </div>
+
+    <!-- ── SUB-SECTION: TRADE LOG ── -->
+    <div class="j-section active" id="jsec-log">
+
     <!-- Daily P&L Summary -->
     <div class="pnl-hero">
       <div class="pnl-hero-title">📔 TODAY'S TRADING SUMMARY</div>
@@ -1152,6 +1220,198 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 
     <!-- Events Calendar -->
 
+
+    </div><!-- end jsec-log -->
+
+    <!-- ── SUB-SECTION: BEGINNER GUIDE ── -->
+    <div class="j-section" id="jsec-guide">
+
+      <!-- Section 0: Reality Check -->
+      <div class="guide-section">
+        <div class="guide-section-hdr">
+          <span class="guide-badge r">!</span>
+          <span>REALITY CHECK</span>
+        </div>
+        <div class="guide-card danger">
+          <div class="guide-card-title">⚠️ THE HARD TRUTH ABOUT OPTIONS BUYING</div>
+          <p>SEBI data shows <strong>89% of retail options traders lose money.</strong> Options have <strong>theta decay</strong> — your option loses value every day even if Nifty doesn't move. You are competing with algo traders and FIIs who have better data and faster execution.</p>
+          <p>Your app gives you a real edge. But the edge only works <strong>with discipline.</strong></p>
+        </div>
+        <div class="guide-card warn">
+          <div class="guide-card-title">💡 WHY YOUR APP ALONE IS NOT ENOUGH</div>
+          <p>Most losses come from <strong>position sizing, ignoring stop-losses, and overtrading</strong> — not bad signals. Your job is to fix those three things first.</p>
+        </div>
+      </div>
+
+      <!-- Section 1: Understand signals -->
+      <div class="guide-section">
+        <div class="guide-section-hdr">
+          <span class="guide-badge b">0</span>
+          <span>UNDERSTAND YOUR APP'S SIGNALS</span>
+        </div>
+        <div class="guide-card">
+          <div class="guide-signal-row">
+            <div class="gsr-left"><span class="sig-tag call">BUY CALL</span></div>
+            <div class="gsr-right">All gates passed, bull vote ≥65%. <span class="gsr-action">Check confidence %, then consider entry.</span></div>
+          </div>
+          <div class="guide-signal-row">
+            <div class="gsr-left"><span class="sig-tag put">BUY PUT</span></div>
+            <div class="gsr-right">All gates passed, bear vote ≥65%. <span class="gsr-action">Same checks apply.</span></div>
+          </div>
+          <div class="guide-signal-row">
+            <div class="gsr-left"><span class="sig-tag wait">WAIT</span></div>
+            <div class="gsr-right">One or more gates failed. <span class="gsr-action">DO NOT TRADE. Read the gate reason shown below.</span></div>
+          </div>
+          <div class="guide-signal-row">
+            <div class="gsr-left"><span class="sig-tag block">⛔ ADX &lt;20</span></div>
+            <div class="gsr-right">Market is sideways/choppy. Theta kills option buyers here. <span class="gsr-action">Skip the day.</span></div>
+          </div>
+          <div class="guide-signal-row">
+            <div class="gsr-left"><span class="sig-tag block">⛔ MTF</span></div>
+            <div class="gsr-right">Timeframes disagree. <span class="gsr-action">Wait 5–20 min, re-check.</span></div>
+          </div>
+          <div class="guide-signal-row">
+            <div class="gsr-left"><span class="sig-tag block">⛔ S/R</span></div>
+            <div class="gsr-right">Price near support/resistance wall. <span class="gsr-action">Wait for clean break, then re-check.</span></div>
+          </div>
+          <div class="guide-signal-row">
+            <div class="gsr-left"><span class="sig-tag wait">9:15–10:00</span></div>
+            <div class="gsr-right">Volatile gap-fill window. App blocks this. <span class="gsr-action">Never trade before 10:00 AM.</span></div>
+          </div>
+          <div class="guide-signal-row">
+            <div class="gsr-left"><span class="sig-tag wait">14:30+</span></div>
+            <div class="gsr-right">Theta decay accelerating. <span class="gsr-action">Close positions. No new entries after 14:30.</span></div>
+          </div>
+        </div>
+        <div class="guide-warn-inline">
+          <div class="wi">🕐</div>
+          <p><strong>Best window: 10:00 AM – 12:00 PM.</strong> Trend is confirmed, ADX is warmed up, and you have 2–4 hours of time value left in your option.</p>
+        </div>
+      </div>
+
+      <!-- Section 2: Paper Trade -->
+      <div class="guide-section">
+        <div class="guide-section-hdr">
+          <span class="guide-badge g">1</span>
+          <span>PAPER TRADE FOR 30 DAYS FIRST</span>
+        </div>
+        <div class="guide-card good">
+          <div class="guide-card-title">📓 WHAT IS PAPER TRADING?</div>
+          <p>When your app shows BUY CALL or BUY PUT, write it in a notebook — as if you bought. No real money. Then check what happened. This verifies whether YOUR signal works on YOUR market conditions before risking capital.</p>
+        </div>
+        <ul class="guide-step-list">
+          <li><div class="guide-step-num">1</div><div class="guide-step-body"><strong>Open app at 9:50 AM daily</strong><span>ADX and MTF need 35 min to warm up. Signals before this are unreliable.</span></div></li>
+          <li><div class="guide-step-num">2</div><div class="guide-step-body"><strong>Wait for signal with confidence ≥65%</strong><span>All gates must be green. Ignore any WAIT signal completely.</span></div></li>
+          <li><div class="guide-step-num">3</div><div class="guide-step-body"><strong>Note Nifty price + ATM premium</strong><span>Check NSE option chain for the CE or PE premium at that moment.</span></div></li>
+          <li><div class="guide-step-num">4</div><div class="guide-step-body"><strong>Set paper SL and target</strong><span>SL = 30% below premium paid. Target = 50-60% gain. Example: ₹80 premium → SL ₹56, target ₹128.</span></div></li>
+          <li><div class="guide-step-num">5</div><div class="guide-step-body"><strong>Check every 15 min, record outcome</strong><span>Did it hit target? Hit SL? Write ALL outcomes — wins AND losses.</span></div></li>
+          <li><div class="guide-step-num">6</div><div class="guide-step-body"><strong>Do 30 trading days (~6 weeks) before real money</strong><span>You need 20+ signal samples to know if the system has positive expectancy.</span></div></li>
+        </ul>
+        <div class="guide-warn-inline">
+          <div class="wi">⚠️</div>
+          <p>If paper trades show more losses than wins after 30 days — do NOT start real trading. Review which gates were failing. Tune the signal, not add money pressure.</p>
+        </div>
+      </div>
+
+      <!-- Section 3: 6 Rules -->
+      <div class="guide-section">
+        <div class="guide-section-hdr">
+          <span class="guide-badge a">2</span>
+          <span>THE ONLY 6 RULES THAT MATTER</span>
+        </div>
+        <div class="guide-card warn">
+          <div class="guide-card-title">🖨️ PRINT THIS. PUT IT NEXT TO YOUR SCREEN.</div>
+          <ul class="guide-rule-list">
+            <li><strong style="color:var(--text)">RULE 1</strong> — Never trade before 10:00 AM. The first 45 min are for gap-filling. Your app blocks this. Honor it.</li>
+            <li><strong style="color:var(--text)">RULE 2</strong> — Never trade if WAIT is showing. If one gate fails, there is no excuse to enter. WAIT means wait.</li>
+            <li><strong style="color:var(--text)">RULE 3</strong> — Set your SL before you enter. Never remove it once placed. Never move it wider.</li>
+            <li><strong style="color:var(--text)">RULE 4</strong> — Maximum 1 trade per day. One focused trade beats 5 impulsive ones.</li>
+            <li><strong style="color:var(--text)">RULE 5</strong> — Risk only ₹2,000–3,000 per trade until you have 3 months of consistent profit.</li>
+            <li><strong style="color:var(--text)">RULE 6</strong> — Close everything by 14:30. No exceptions. Theta in the last hour will eat your premium.</li>
+          </ul>
+        </div>
+        <div class="guide-quote">"The goal of a beginner is not to make money. The goal is to not lose money while you learn. Profit comes later, after discipline is built."</div>
+      </div>
+
+      <!-- Section 4: Trade Entry Checklist -->
+      <div class="guide-section">
+        <div class="guide-section-hdr">
+          <span class="guide-badge g">4</span>
+          <span>PRE-TRADE CHECKLIST</span>
+        </div>
+        <div class="guide-card">
+          <div class="guide-card-title">✅ GO THROUGH THIS BEFORE EVERY ENTRY</div>
+          <ul class="guide-checklist">
+            <li class="ok"><span>Time is between 10:00 AM and 14:00 PM?</span></li>
+            <li class="ok"><span>Signal is BUY CALL or BUY PUT (not WAIT)?</span></li>
+            <li class="ok"><span>All quality gates are green (MTF, ADX ≥20, RSI, VIX &lt;20, S/R clear)?</span></li>
+            <li class="ok"><span>Confidence is ≥65%?</span></li>
+            <li class="ok"><span>BankNifty moving in same direction as signal?</span></li>
+            <li class="ok"><span>ATM premium is reasonable (₹60–150)?</span></li>
+            <li class="no"><span>Do NOT enter if you feel excited, panicked, or "this looks obvious." Emotional entries almost always lose.</span></li>
+            <li class="no"><span>Do NOT enter on Monday before 10:30 or Friday (expiry day) after 13:00.</span></li>
+            <li class="no"><span>Do NOT enter if major news expected in next 1 hour (RBI, US Fed, election). App cannot predict news shocks.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Section 5: Position Sizing -->
+      <div class="guide-section">
+        <div class="guide-section-hdr">
+          <span class="guide-badge r">5</span>
+          <span>POSITION SIZING & STOP-LOSS</span>
+        </div>
+        <div class="guide-card danger">
+          <div class="guide-card-title">🚨 #1 CAUSE OF BLOWING ACCOUNTS</div>
+          <p>Beginners lose everything not from bad signals — but from buying <strong>too many lots</strong> when wrong. One bad trade wiped 10 winning trades. This is called over-sizing.</p>
+        </div>
+        <div class="guide-card">
+          <div class="guide-card-title">📊 SAFE SIZING BY ACCOUNT SIZE</div>
+          <table class="money-mini-table">
+            <thead><tr><th>ACCOUNT</th><th>MAX RISK/TRADE</th><th>LOTS</th></tr></thead>
+            <tbody>
+              <tr><td>₹25,000</td><td class="r">₹1,500</td><td class="w">1 lot</td></tr>
+              <tr><td>₹50,000</td><td class="w">₹2,500</td><td class="w">1 lot</td></tr>
+              <tr><td>₹1,00,000</td><td class="g">₹4,000</td><td class="w">1–2 lots</td></tr>
+              <tr><td>₹2,00,000+</td><td class="g">₹6,000–8,000</td><td class="w">2 lots max</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="guide-card warn">
+          <div class="guide-card-title">📐 STOP-LOSS RULES</div>
+          <ul class="guide-rule-list">
+            <li>SL = 30% below premium paid. Example: bought CE @ ₹100 → SL @ ₹70. Exit immediately at ₹70.</li>
+            <li>Never "average down" (buy more when price falls). This is how accounts blow up.</li>
+            <li>Target = 50–60% gain. Example: bought CE @ ₹100 → target @ ₹155.</li>
+            <li>If trade reaches +30% profit → move SL to break-even. Lock in safety.</li>
+            <li>Nifty lot size = 50. So 1 lot × ₹1 move in premium = ₹50 profit or loss.</li>
+          </ul>
+        </div>
+        <div class="guide-warn-inline">
+          <div class="wi">💡</div>
+          <p>Winning 40% of trades can still be profitable IF winners are 2× losers. Win ₹3,000 × 4 trades, lose ₹1,500 × 6 trades = +₹12,000 − ₹9,000 = <strong>+₹3,000 net.</strong></p>
+        </div>
+      </div>
+
+      <!-- Section 6: This Week -->
+      <div class="guide-section">
+        <div class="guide-section-hdr">
+          <span class="guide-badge a">→</span>
+          <span>WHAT TO DO THIS WEEK</span>
+        </div>
+        <ul class="guide-step-list">
+          <li><div class="guide-step-num a">1</div><div class="guide-step-body"><strong>Today — Check Railway logs (30 min)</strong><span>Find last 10 BUY CALL / BUY PUT signals. Check timestamps on TradingView 5-min NIFTY chart. Did price move in signal direction?</span></div></li>
+          <li><div class="guide-step-num a">2</div><div class="guide-step-body"><strong>This week — Create Trade Log Google Sheet</strong><span>Columns: Date | Time | Signal | Confidence | ADX | Entry ₹ | Premium | SL | Target | Exit | P&L | Rule Broken?</span></div></li>
+          <li><div class="guide-step-num a">3</div><div class="guide-step-body"><strong>Next 4 weeks — Paper trade only</strong><span>Every day 9:50 AM, open app. Watch for signals. Log everything. No real money yet.</span></div></li>
+          <li><div class="guide-step-num a">4</div><div class="guide-step-body"><strong>After 30 days — Review + decide</strong><span>If paper results show positive expectancy (20+ trades), start 1 lot real money. If not, tune signal thresholds first.</span></div></li>
+        </ul>
+        <div class="guide-card good" style="margin-top:10px;">
+          <div class="guide-card-title">✅ THE MOST IMPORTANT THING</div>
+          <p>You built a working signal app. That already puts you ahead of 99% of retail traders who trade blind. Your only job now: <strong>do not lose your capital while you learn.</strong> Paper trade. Log everything. Understand your app. Real profit comes from discipline first, signals second.</p>
+        </div>
+      </div>
+
+    </div><!-- end jsec-guide -->
 
   </div>
 </div>
@@ -1612,6 +1872,13 @@ function installPWA() {
 }
 
 // TABS
+function switchJournalTab(tab) {
+  document.querySelectorAll('.j-section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.j-stab').forEach(b => b.classList.remove('active'));
+  document.getElementById('jsec-' + tab).classList.add('active');
+  document.getElementById('jstab-' + tab).classList.add('active');
+}
+
 function switchTab(name,btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.btab').forEach(b=>b.classList.remove('active'));
