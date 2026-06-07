@@ -1197,13 +1197,42 @@ async function _fetchPCR(spotPrice) {
                         CE: r.CE || {},
                         PE: r.PE || {},
                     })) || [], angelResult.pcr);
-                    if (oib) _oiBuildup = oib;
-                    const emom = calcEarlyMomentum(angelResult.records?.map(r => ({
+                    if (oib) {
+                        const oiSignal = interpretOIBuildup(oib);
+                        Object.assign(_oiBuildup, oib, {
+                            signal    : oiSignal.signal,
+                            strength  : oiSignal.strength,
+                            label     : oiSignal.label,
+                            fetchedAt : new Date(),
+                            fetchCount: _oiBuildup.fetchCount + 1,
+                        });
+                    }
+                    // FIX: function is parseEarlyMomentum, not calcEarlyMomentum
+                    const emomRaw = parseEarlyMomentum(angelResult.records?.map(r => ({
                         strikePrice: r.strikePrice,
                         CE: r.CE || {},
                         PE: r.PE || {},
                     })) || [], spotPrice);
-                    if (emom) _earlyMom = emom;
+                    if (emomRaw) {
+                        const emSignal = interpretEarlyMomentum({
+                            ...emomRaw,
+                            topCEbuildup    : _oiBuildup.topCEbuildup   || [],
+                            topPEbuildup    : _oiBuildup.topPEbuildup   || [],
+                            maxCEoiAddStrike: _oiBuildup.maxCEoiAddStrike,
+                            maxPEoiAddStrike: _oiBuildup.maxPEoiAddStrike,
+                            maxCEoiAdd      : _oiBuildup.maxCEoiAdd,
+                            maxPEoiAdd      : _oiBuildup.maxPEoiAdd,
+                        });
+                        Object.assign(_earlyMom, emomRaw, {
+                            score    : emSignal.score,
+                            signal   : emSignal.signal,
+                            strength : emSignal.strength,
+                            label    : emSignal.label,
+                            votes    : emSignal.votes,
+                            fetchedAt: new Date(),
+                            fetchCount: _earlyMom.fetchCount + 1,
+                        });
+                    }
                 } catch (_) {}
                 return;  // success — skip ScraperAPI + direct NSE
             }
