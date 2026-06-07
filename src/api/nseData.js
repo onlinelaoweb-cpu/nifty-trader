@@ -1446,7 +1446,7 @@ async function _fetchFIIDII() {
         if (SCRAPERAPI_KEY) {
             try {
                 const scCookie = await getCookie();
-                const scUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(FIIDII_URL)}&render_js=false&country_code=in&session_number=1&custom_headers=true`;
+                const scUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(FIIDII_URL)}&render_js=true&country_code=in&session_number=1&custom_headers=true`;
                 const scRes = await axios.get(scUrl, {
                     timeout: 30_000, validateStatus: () => true,
                     headers: { ...HEADERS, ...(scCookie ? { 'Cookie': scCookie } : {}) },

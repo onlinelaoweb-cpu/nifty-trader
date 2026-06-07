@@ -1454,10 +1454,10 @@ async function refreshPCR() {
         // nseData fetches FII/DII every 15 min on its own; we read it here.
         const fiiState = getFIIState();
         if (fiiState.fiiNet !== null) {
-            marketState.fii = { buy: fiiState.fiiBuy, sell: fiiState.fiiSell, net: fiiState.fiiNet };
+            marketState.fii = { buy: fiiState.fiiBuy, sell: fiiState.fiiSell, net: fiiState.fiiNet, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
         }
         if (fiiState.diiNet !== null) {
-            marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet };
+            marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
         }
         // BUG3 FIX: Refresh Smart Money Bias whenever OI/FII data updates (not only on price ticks)
         marketState.smartMoney = computeSmartMoneyBias();
@@ -1465,6 +1465,24 @@ async function refreshPCR() {
     } catch(e) {
         console.error('refreshPCR:', e.message);
     }
+}
+
+// ── FII/DII Sync (runs always — not gated by market hours) ───────────────────
+// refreshPCR() is skipped when market is closed, so FII data never syncs after 15:30.
+// This standalone function runs every 20 min and ensures FII/DII always shows on breadth tab.
+function syncFIIToMarketState() {
+    try {
+        const fiiState = getFIIState();
+        if (fiiState.fiiNet !== null) {
+            marketState.fii = { buy: fiiState.fiiBuy, sell: fiiState.fiiSell, net: fiiState.fiiNet, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
+        }
+        if (fiiState.diiNet !== null) {
+            marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
+        }
+        if (fiiState.fiiNet !== null || fiiState.diiNet !== null) {
+            marketState.smartMoney = computeSmartMoneyBias();
+        }
+    } catch(e) { console.error('syncFIIToMarketState:', e.message); }
 }
 
 // ── Economic Calendar Auto-Fetch ──────────────────────────────────────────────
@@ -2090,8 +2108,8 @@ app.get('/api/fii-state',      (req,res) => res.json(getFIIState()));   // debug
 // FII DII
 app.post('/api/fiidii', (req,res) => {
     const {fiiBuy,fiiSell,diiBuy,diiSell}=req.body;
-    if(fiiBuy!=null&&fiiSell!=null) marketState.fii={buy:parseFloat(fiiBuy),sell:parseFloat(fiiSell),net:parseFloat((fiiBuy-fiiSell).toFixed(2))};
-    if(diiBuy!=null&&diiSell!=null) marketState.dii={buy:parseFloat(diiBuy),sell:parseFloat(diiSell),net:parseFloat((diiBuy-diiSell).toFixed(2))};
+    if(fiiBuy!=null&&fiiSell!=null) marketState.fii={buy:parseFloat(fiiBuy),sell:parseFloat(fiiSell),net:parseFloat((fiiBuy-fiiSell).toFixed(2)),updatedAt:new Date().toISOString()};
+    if(diiBuy!=null&&diiSell!=null) marketState.dii={buy:parseFloat(diiBuy),sell:parseFloat(diiSell),net:parseFloat((diiBuy-diiSell).toFixed(2)),updatedAt:new Date().toISOString()};
     res.json({success:true});
 });
 
@@ -2194,11 +2212,12 @@ function startPollingIntervals() {
     // This prevents NSE from seeing a burst of 6 requests every 3 minutes.
     setTimeout(() => setInterval(refreshMarketData, 3*60*1000), 0);
     setTimeout(() => setInterval(pollYahooPrice,    60*1000),   15*1000); // 1-min price fix
-    setTimeout(() => setInterval(refreshMTF,        5*60*1000), 30*1000);
-    setTimeout(() => setInterval(refreshGlobal,     5*60*1000), 60*1000);
-    setTimeout(() => setInterval(refreshBreadth,    2*60*1000), 90*1000);   // 2 min — breadth is fast-changing
-    setTimeout(() => setInterval(refreshSR,        10*60*1000), 120*1000);
-    setTimeout(() => setInterval(refreshPCR,        3*60*1000), 150*1000);
+    setTimeout(() => setInterval(refreshMTF,            5*60*1000), 30*1000);
+    setTimeout(() => setInterval(refreshGlobal,         5*60*1000), 60*1000);
+    setTimeout(() => setInterval(refreshBreadth,        2*60*1000), 90*1000);   // 2 min — breadth is fast-changing
+    setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
+    setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
+    setTimeout(() => setInterval(syncFIIToMarketState, 20*60*1000), 5*1000);    // FIX: sync FII always, even after market close
     setTimeout(() => setInterval(fetchCalendarEvents, 60*60*1000), 180*1000); // refresh calendar hourly
     setTimeout(() => setInterval(check920Setup,     30*1000), 0);  // check every 30s — fires once at 9:20 AM
     startTickWatchdog(); // ← watchdog: detects silent WS freeze, falls back to Yahoo
@@ -2286,6 +2305,7 @@ async function initializeLiveData() {
         withTimeout(refreshSR(),  15000, 'refreshSR'),
         withTimeout(refreshPCR(), 15000, 'refreshPCR'),
     ]);
+    syncFIIToMarketState(); // FIX: ensure FII/DII shows on breadth tab even after market close
     await withTimeout(fetchCalendarEvents(), 10000, 'fetchCalendarEvents');
 
     // Polling intervals start regardless of whether initial fetches succeeded
