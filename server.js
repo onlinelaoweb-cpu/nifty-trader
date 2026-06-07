@@ -123,11 +123,39 @@ function isSafeEntryWindow() {
 // Returns true if today is a weekday AND time is within NSE market window (9:00-15:35 IST)
 // Used to skip heavy processing (PCR, MTF, breadth, SR) on weekends and outside market hours
 // The app stays online but conserves Railway CPU/memory — fits within 500 hrs/month hobby plan
+
+// NSE 2026 official market holidays (exchange closed)
+const NSE_HOLIDAYS_2026 = new Set([
+    '2026-01-26',
+    '2026-03-02',
+    '2026-03-20',
+    '2026-04-02',
+    '2026-04-03',
+    '2026-04-14',
+    '2026-05-01',
+    '2026-08-15',
+    '2026-08-27',
+    '2026-10-02',
+    '2026-10-20',
+    '2026-10-21',
+    '2026-11-04',
+    '2026-12-25',
+]);
+
+function isNSEHoliday(date) {
+    const ist = date || new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const yyyy = ist.getFullYear();
+    const mm   = String(ist.getMonth() + 1).padStart(2, '0');
+    const dd   = String(ist.getDate()).padStart(2, '0');
+    return NSE_HOLIDAYS_2026.has(`${yyyy}-${mm}-${dd}`);
+}
+
 function isNSEMarketDay() {
     const ist = getIST();
     const day = ist.getDay();          // 0=Sun, 1=Mon ... 5=Fri, 6=Sat
     const m   = ist.getHours()*60 + ist.getMinutes();
-    if (day === 0 || day === 6) return false;   // Weekend — skip everything
+    if (day === 0 || day === 6) return false;   // Weekend
+    if (isNSEHoliday(ist))     return false;   // NSE holiday
     return m >= 540 && m <= 935;                // 9:00 AM to 15:35 IST only
 }
 

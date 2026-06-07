@@ -1738,27 +1738,46 @@ function updateMarketClosedBanner() {
   }
 
   function nextSessionLabel() {
-    let d = new Date(now);
-    if (isWeekday && secs < OPEN) return 'Today 09:15 AM';
-    let add = 1;
-    while (add <= 7) {
-      const nd = (day + add) % 7;
-      if (nd >= 1 && nd <= 5) break;
+    const holidays = new Set([
+      '2026-01-26','2026-03-02','2026-03-20','2026-04-02','2026-04-03',
+      '2026-04-14','2026-05-01','2026-08-15','2026-08-27','2026-10-02',
+      '2026-10-20','2026-10-21','2026-11-04','2026-12-25',
+    ]);
+    const toStr = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const isSessionDay = d => { const wd = d.getDay(); return wd >= 1 && wd <= 5 && !holidays.has(toStr(d)); };
+    if (isWeekday && secs < OPEN) {
+      // check if today itself is a holiday
+      const todayStr = toStr(now);
+      if (!holidays.has(todayStr)) return 'Today 09:15 AM';
+    }
+    let d = new Date(now); let add = 1;
+    while (add <= 14) {
+      d = new Date(now);
+      d.setDate(now.getDate() + add);
+      if (isSessionDay(d)) break;
       add++;
     }
-    d.setDate(d.getDate() + add);
     const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     return `${days[d.getDay()]} 09:15 AM`;
   }
 
   const isWeekend = (day === 0 || day === 6);
-  const isPostMkt = isWeekday && secs > CLOSE;
-  const isPreMkt  = isWeekday && secs < OPEN;
+  const NSE_HOLIDAYS = new Set([
+    '2026-01-26','2026-03-02','2026-03-20','2026-04-02','2026-04-03',
+    '2026-04-14','2026-05-01','2026-08-15','2026-08-27','2026-10-02',
+    '2026-10-20','2026-10-21','2026-11-04','2026-12-25',
+  ]);
+  const istStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  const isHoliday = NSE_HOLIDAYS.has(istStr);
+  const isPostMkt = isWeekday && !isHoliday && secs > CLOSE;
+  const isPreMkt  = isWeekday && !isHoliday && secs < OPEN;
+  const isHolidayToday = isWeekday && isHoliday;
 
-  if (isWeekend) {
+  if (isWeekend || isHolidayToday) {
     banner.classList.add('weekend');
-    iconEl.textContent  = '📅';
-    titleEl.textContent = day === 0 ? 'SUNDAY — MARKET CLOSED' : 'SATURDAY — MARKET CLOSED';
+    iconEl.textContent  = isHolidayToday ? '🎉' : '🗓';
+    titleEl.textContent = isHolidayToday ? 'NSE HOLIDAY — MARKET CLOSED'
+                        : day === 0 ? 'SUNDAY — MARKET CLOSED' : 'SATURDAY — MARKET CLOSED';
     subEl.textContent   = `Next session: ${nextSessionLabel()} · Data frozen`;
   } else if (isPostMkt) {
     banner.classList.remove('weekend');
@@ -2036,6 +2055,12 @@ function renderDashboard(s) {
     }
   }
   // VWAP multi-TF
+  { const vA=(v,p)=>v!=null&&p>0?p>v:null, vL=a=>a==null?'--':a?'↑ ABOVE':'↓ BELOW', vC=a=>a==null?'var(--dim)':a?'var(--green)':'var(--red)';
+    const v1=vA(s.vwap,s.nifty),v5=vA(s.mtf?.tf5m?.vwap,s.nifty),v15=vA(s.mtf?.tf15m?.vwap,s.nifty);
+    [['1m',v1],['5m',v5],['15m',v15]].forEach(([tf,a])=>{const el=document.getElementById('vwap-'+tf+'-pos');if(el){el.textContent=vL(a);el.style.color=vC(a);}});
+    const vs=document.getElementById('vwap-multi-signal');
+    if(vs){if(v5!=null&&v15!=null){const b=v5&&v15,d=!v5&&!v15;vs.textContent=b?'✅ BULL':d?'🔴 BEAR':'⚠️ MIX';vs.style.color=b?'var(--green)':d?'var(--red)':'var(--amber)';}else{vs.textContent='--';vs.style.color='var(--dim)';}}}
+  // VWAP multi-TF
   {
     const vwapAbove = (vwap, price) => vwap != null && price > 0 ? price > vwap : null;
     const vwapLabel = (a) => a == null ? '--' : a ? '↑ ABOVE' : '↓ BELOW';
@@ -2064,6 +2089,12 @@ function renderDashboard(s) {
     const crossTrend = s.ema9 > s.ema21 ? '↑ BULL' : '↓ BEAR';
     document.getElementById('ema-trend').textContent = crossTrend;
   }
+  // EMA multi-TF
+  { const eL=(a,b)=>a==null||b==null?'--':a>b?'↑ BULL':'↓ BEAR', eC=(a,b)=>a==null||b==null?'var(--dim)':a>b?'var(--green)':'var(--red)';
+    [['1m',s.ema9,s.ema21],['5m',s.mtf?.tf5m?.ema9,s.mtf?.tf5m?.ema21],['15m',s.mtf?.tf15m?.ema9,s.mtf?.tf15m?.ema21]].forEach(([tf,a,b])=>{const el=document.getElementById('ema-'+tf+'-cross');if(el){el.textContent=eL(a,b);el.style.color=eC(a,b);}});
+    const es=document.getElementById('ema-multi-signal');
+    if(es){const e5a=s.mtf?.tf5m?.ema9,e5b=s.mtf?.tf5m?.ema21,e15a=s.mtf?.tf15m?.ema9,e15b=s.mtf?.tf15m?.ema21;
+      if(e5a!=null&&e5b!=null&&e15a!=null&&e15b!=null){const b=e5a>e5b&&e15a>e15b,d=e5a<e5b&&e15a<e15b;es.textContent=b?'✅ BULL':d?'🔴 BEAR':'⚠️ MIX';es.style.color=b?'var(--green)':d?'var(--red)':'var(--amber)';}else{es.textContent='--';es.style.color='var(--dim)';}}}
   // EMA multi-TF
   {
     const emaLabel = (e9, e21) => e9 == null || e21 == null ? '--' : e9 > e21 ? '↑ BULL' : '↓ BEAR';

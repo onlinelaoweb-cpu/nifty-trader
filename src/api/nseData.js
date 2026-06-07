@@ -955,10 +955,18 @@ function parsePCR(data, spotPrice) {
 
 // ── Market hours guard ────────────────────────────────────────────────────────
 // Returns true if current IST time is within 9:10–15:35 (5-min buffer either side)
+// NSE 2026 holidays (keep in sync with server.js)
+const NSE_HOLIDAYS = new Set([
+    '2026-01-26','2026-03-02','2026-03-20','2026-04-02','2026-04-03',
+    '2026-04-14','2026-05-01','2026-08-15','2026-08-27','2026-10-02',
+    '2026-10-20','2026-10-21','2026-11-04','2026-12-25',
+]);
 function isMarketHours() {
     const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const day = ist.getDay(); // 0=Sun, 6=Sat
-    if (day === 0 || day === 6) return false;  // weekend — NSE closed
+    if (day === 0 || day === 6) return false;  // weekend
+    const yyyy = ist.getFullYear(), mm = String(ist.getMonth()+1).padStart(2,'0'), dd = String(ist.getDate()).padStart(2,'0');
+    if (NSE_HOLIDAYS.has(`${yyyy}-${mm}-${dd}`)) return false;  // NSE holiday
     const istMin = ist.getHours() * 60 + ist.getMinutes();
     return istMin >= 550 && istMin <= 935;   // 9:10 to 15:35
 }
