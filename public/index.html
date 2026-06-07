@@ -1969,13 +1969,17 @@ function updateHeaderBadges(){
   if(secs<open){badge.className='hbadge market-pre';badge.textContent='⏰ '+fmt(open-secs);}
   else if(secs<=cls){badge.className='hbadge market-open';badge.textContent='🟢 '+fmt(cls-secs);}
   else{badge.className='hbadge market-closed';badge.textContent='🔴 CLOSED';}
-  // Sync status dot on strike banner
+  // Sync status dot on strike banner (ticker only manages CLOSED/PRE-MARKET text;
+  // LIVE text is owned by renderDashboard to avoid blinking conflict)
   const statusDot=document.getElementById('status-dot');
   const statusTxt=document.getElementById('status-txt');
   if(statusDot&&statusTxt){
     const isOpen=secs>=open&&secs<=cls;
-    statusDot.className=isOpen?'dot-live':'dot-off';
-    if(!isOpen)statusTxt.textContent=secs<open?'PRE-MARKET':'CLOSED';
+    if(!isOpen){
+      statusDot.className='dot-off';
+      statusTxt.textContent=secs<open?'PRE-MARKET':'CLOSED';
+    }
+    // when isOpen: leave dot+text alone — renderDashboard sets them via s.connected
   }
   const day=ist.getDay();
   const daysToExp=day<=2?(2-day):(2+7-day);
