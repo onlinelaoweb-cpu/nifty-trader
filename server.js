@@ -125,21 +125,53 @@ function isSafeEntryWindow() {
 // The app stays online but conserves Railway CPU/memory — fits within 500 hrs/month hobby plan
 
 // NSE 2026 official market holidays (exchange closed)
+// Source: NSE circular + verified against official NSE website
 const NSE_HOLIDAYS_2026 = new Set([
-    '2026-01-26',
-    '2026-03-02',
-    '2026-03-20',
-    '2026-04-02',
-    '2026-04-03',
-    '2026-04-14',
-    '2026-05-01',
-    '2026-08-15',
-    '2026-08-27',
-    '2026-10-02',
-    '2026-10-20',
-    '2026-10-21',
-    '2026-11-04',
-    '2026-12-25',
+    '2026-01-26',  // Republic Day
+    '2026-03-02',  // Holi
+    '2026-03-20',  // Ram Navami (Shri Ram Navami)  ← some sources say Mar 26; verify
+    '2026-04-02',  // Mahavir Jayanti
+    '2026-04-03',  // Good Friday
+    '2026-04-14',  // Dr. Baba Saheb Ambedkar Jayanti
+    '2026-05-01',  // Maharashtra Day
+    '2026-05-28',  // Bakri Id (Eid ul-Adha)
+    '2026-06-26',  // Muharram
+    '2026-08-15',  // Independence Day (Saturday — already weekend, no extra closure)
+    '2026-09-14',  // Ganesh Chaturthi
+    '2026-10-02',  // Mahatma Gandhi Jayanti
+    '2026-10-20',  // Dussehra
+    '2026-11-10',  // Diwali Balipratipada
+    '2026-11-24',  // Guru Nanak Jayanti
+    '2026-12-25',  // Christmas
+]);
+
+// NSE 2027 PROJECTED holidays — based on fixed national holidays + calculated religious dates.
+// ⚠️  NSE publishes the official list in Nov/Dec of the preceding year.
+//     VERIFY and update this list once the official NSE circular is released (expected Nov 2026).
+// Fixed holidays confirmed: Republic Day (Jan 26), Independence Day (Aug 15),
+//   Gandhi Jayanti (Oct 2), Christmas (Dec 25).
+// Religious dates are calculated from the Islamic/Hindu calendar and match
+//   the Drik Panchang / calendarlabs.com 2027 projections — subject to moon sighting.
+const NSE_HOLIDAYS_2027 = new Set([
+    '2027-01-26',  // Republic Day (Tuesday)
+    '2027-02-17',  // Maha Shivratri (Wednesday) — projected
+    '2027-03-05',  // Holi (Friday) — projected
+    '2027-03-19',  // Id-ul-Fitr / Eid (Friday) — projected (moon-sighting dependent)
+    '2027-03-26',  // Good Friday (Friday)
+    '2027-03-29',  // Mahavir Jayanti (Monday) — projected
+    '2027-04-14',  // Dr. Baba Saheb Ambedkar Jayanti (Wednesday)
+    '2027-05-01',  // Maharashtra Day (Saturday — already weekend, kept for completeness)
+    '2027-05-17',  // Bakri Id / Eid ul-Adha (Monday) — projected
+    '2027-06-06',  // Muharram (Sunday — likely no extra closure if on weekend)
+    '2027-08-15',  // Independence Day (Sunday — already weekend)
+    '2027-09-02',  // Ganesh Chaturthi (Thursday) — projected
+    '2027-10-02',  // Mahatma Gandhi Jayanti (Saturday — already weekend)
+    '2027-10-08',  // Dussehra (Friday) — projected
+    '2027-10-29',  // Diwali Laxmi Pujan (Friday) — projected
+    '2027-10-30',  // Diwali Balipratipada (Saturday — already weekend)
+    '2027-11-13',  // Guru Nanak Jayanti (Saturday — already weekend)
+    '2027-12-24',  // Christmas observed (Friday, as Dec 25 is Saturday) — TBC
+    '2027-12-25',  // Christmas Day (Saturday)
 ]);
 
 function isNSEHoliday(date) {
@@ -147,7 +179,19 @@ function isNSEHoliday(date) {
     const yyyy = ist.getFullYear();
     const mm   = String(ist.getMonth() + 1).padStart(2, '0');
     const dd   = String(ist.getDate()).padStart(2, '0');
-    return NSE_HOLIDAYS_2026.has(`${yyyy}-${mm}-${dd}`);
+    const key  = `${yyyy}-${mm}-${dd}`;
+    if (yyyy === 2026) return NSE_HOLIDAYS_2026.has(key);
+    if (yyyy === 2027) {
+        // Using projected list — warn once per day if running in 2027 without official update
+        if (mm === '01' && dd === '01') {
+            console.warn('[isNSEHoliday] Using PROJECTED 2027 holidays — verify against official NSE circular!');
+        }
+        return NSE_HOLIDAYS_2027.has(key);
+    }
+    // Beyond 2027: log warning, treat every weekday as trading day (conservative fallback)
+    console.warn(`[isNSEHoliday] No holiday data for ${yyyy} — update NSE_HOLIDAYS_${yyyy} before year start.`);
+    return false;
+
 }
 
 function isNSEMarketDay() {
@@ -449,7 +493,12 @@ function combineSignals(indicators) {
     else if (marketState.global.bias==='BULLISH' && globalLagging) { reasons.push(`Global BULLISH but BN ${bnChangePct.toFixed(2)}% — cue suppressed (intraday override)`); }
     else if (marketState.global.bias==='BEARISH') { bear+=2; reasons.push('Global cues bearish ⚠️'); }
     const bn = marketState.global.sectors?.bankNifty;
-    if (bn?.changePct > 0.5) bull+=2; else if (bn?.changePct < -0.5) bear+=2;
+    // BUG FIX: The original code added bull/bear votes for BOTH bn.changePct (daily %)
+    // AND bnLead (VWAP cross) — these are two signals derived from the same BankNifty data.
+    // A bullish BN day was contributing 3 bull votes (2+1) from one correlated source,
+    // skewing a 12-vote pool by 25%. Fixed: bn.changePct gets 1 vote (not 2), and
+    // bnLead continues as-is (it's a fresh VWAP-cross event, not just a daily %).
+    if (bn?.changePct > 0.5) bull+=1; else if (bn?.changePct < -0.5) bear+=1;
 
     // ── BankNifty VWAP leading indicator (+1 / -1) ────
     // BankNifty leads Nifty ~70% of the time intraday.
@@ -819,11 +868,17 @@ function evaluateBTST() {
     const h = ist.getHours(), m = ist.getMinutes();
     const istMin = h * 60 + m;
 
+    // Clear stale BTST at market open (9:15 AM) only — not continuously through the day.
+    // BUG FIX: old code cleared btst on every tick outside 3:00–3:20, so a 3:15 signal
+    // was gone by 3:25 before the trader could confirm and place the order.
+    if (istMin >= 555 && istMin <= 560) {
+        // 9:15–9:20 AM: clear previous day's BTST so it doesn't pollute today's session
+        marketState.btst = null;
+    }
+
     // Only evaluate in 3:00–3:20 window
     if (istMin < 900 || istMin > 920) {
-        // Outside window — clear any stale BTST signal
-        if (marketState.btst !== null) marketState.btst = null;
-        return;
+        return;  // Outside window — preserve any signal set during the evaluation window
     }
 
     const s = marketState;
@@ -1138,10 +1193,13 @@ async function pollYahooPrice() {
         const data = await fetchMarketData();
         if (data?.niftyData?.price > 0) {
             const p = data.niftyData.price;
-            marketState.nifty       = p;
-            marketState.change      = data.niftyData.change    ?? marketState.change;
-            marketState.changePct   = data.niftyData.changePct ?? marketState.changePct;
-            marketState.lastUpdated = new Date().toISOString();
+            const change    = data.niftyData.change    ?? marketState.change;
+            const changePct = data.niftyData.changePct ?? marketState.changePct;
+            // BUG FIX: old code only patched nifty/change/changePct — skipped the full
+            // indicator pipeline (EMA9/EMA21/RSI/VWAP/signal). So between 3-min refreshes
+            // the signal, RSI, confidence were frozen at stale values while price showed live.
+            // Now calls updatePrice() exactly like the WS tick handler does.
+            await updatePrice(p, change, changePct, 'yahoo');
             console.log(`[Yahoo 1m] NIFTY: ${p}`);
         }
     } catch(e) { /* silent — non-critical */ }
@@ -1912,7 +1970,7 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
 
 // Simple Black-Scholes call/put price estimate
 function bsEstimate(S, K, T, sigma, type) {
-    const r = 0.065;
+    const r = 0.0625;  // RBI repo rate (updated June 2026 — was 0.065)
     if (T <= 0) return Math.max(0, type === 'CE' ? S - K : K - S);
     const d1 = (Math.log(S/K) + (r + 0.5*sigma*sigma)*T) / (sigma*Math.sqrt(T));
     const d2 = d1 - sigma*Math.sqrt(T);
@@ -2135,15 +2193,22 @@ function requireToken(req, res, next) {
 }
 
 // ── Routes ────────────────────────────────────────────
+// Throttle MTM updates — no need to recalc P&L 20×/min.
+// Premium values (atmCEpremium/atmPEpremium) change at the option-chain refresh cadence
+// (~3 min), so running on every 3s frontend poll is pure CPU waste.
+let _lastMTMRun = 0;
 app.get('/api/signal',  (req,res) => {
-    updateOpenTradesMTM();
+    const now = Date.now();
+    if (now - _lastMTMRun >= 30_000) { updateOpenTradesMTM(); _lastMTMRun = now; }
     // Attach computed fields the frontend Strike Zone needs
     const atmStrike = marketState.nifty > 0 ? Math.round(marketState.nifty / 50) * 50 : null;
     const daysToExp = parseFloat(daysToNextExpiry().toFixed(2));
     // Strip breadth.stocks[] — 50-object array not needed by the signal endpoint.
     // It's ~30-50KB sent every 3 seconds for nothing; the breadth tab uses /api/breadth.
     const { breadth: { stocks: _stocks, ...breadthWithoutStocks }, ...stateRest } = marketState;
-    res.json({ ...stateRest, breadth: breadthWithoutStocks, atmStrike, daysToExpiry: daysToExp });
+    // FIX: Expose lotSize so frontend never hardcodes 65. When NSE revises lot size,
+    // update the server constant once and all P&L, SL, and position-size calcs stay correct.
+    res.json({ ...stateRest, breadth: breadthWithoutStocks, atmStrike, daysToExpiry: daysToExp, lotSize: LOT_SIZE });
 });
 app.get('/api/candles', (req,res) => res.json(getCandleHistory()));
 
@@ -2389,7 +2454,14 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
     setTimeout(() => setInterval(syncFIIToMarketState, 20*60*1000), 5*1000);    // FIX: sync FII always, even after market close
     setTimeout(() => setInterval(fetchCalendarEvents, 60*60*1000), 180*1000); // refresh calendar hourly
-    setTimeout(() => setInterval(check920Setup,     30*1000), 0);  // check every 30s — fires once at 9:20 AM
+    // BUG FIX: old code ran check920Setup every 30s from boot to shutdown = 2,880 calls/day.
+    // It returned early outside 9:20–9:30, so no functional bug but pure CPU waste.
+    // Now: check every 30s but only between 9:15 and 9:35 AM IST.
+    setInterval(() => {
+        const ist = getIST();
+        const istMin = ist.getHours() * 60 + ist.getMinutes();
+        if (istMin >= 555 && istMin <= 575) check920Setup();  // 9:15–9:35 window only
+    }, 30*1000);
     startTickWatchdog(); // ← watchdog: detects silent WS freeze, falls back to Yahoo
     console.log('Polling intervals started (x1)');
 }

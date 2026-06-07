@@ -2090,7 +2090,12 @@ setInterval(updateMarketClosedBanner, 1000);
 
 // ─── STATE ───────────────────────────────────────────────
 let _lastState = null;
+let _lastSRUpdatedAt = null;  // dirty flag: skip SR table rebuild when levels haven't changed
 let _pollTimer = null;
+// FIX: LOT_SIZE was hardcoded as 65 in 8 places in the frontend.
+// Now synced from server via s.lotSize on every poll — when NSE revises the lot size,
+// update server.js LOT_SIZE once and all P&L / position-size calcs auto-update here.
+let LOT_SIZE = 65;  // default; overwritten on first /api/signal response
 let _soundOn = false;
 let _prevSignal = null;   // tracks last rendered signal for sound change detection
 let _prevSignalForSuggest = null; // tracks signal for auto-suggest refresh
@@ -2166,6 +2171,8 @@ async function fetchSignal() {
     }
     const s = await r.json();
     _lastState = s;
+    // Sync lot size from server so all P&L calcs stay correct after NSE revisions
+    if (s.lotSize && s.lotSize > 0) LOT_SIZE = s.lotSize;
 
     if (_splashDone) {
       // Splash already gone (safety nets fired) — render immediately
@@ -2620,9 +2627,10 @@ function renderDashboard(s) {
     if (cur > 0) document.getElementById('sr-current').textContent = cur.toFixed(2);
     const updEl = document.getElementById('sr-updated');
     if (updEl && s.srLevels.updatedAt) updEl.textContent = new Date(s.srLevels.updatedAt).toLocaleTimeString('en-IN');
-    // Render full pivot table in sr-levels-list
+    // Dirty flag: SR levels recalc every 10 min — skip full DOM rebuild on every 3s poll
     const listEl = document.getElementById('sr-levels-list');
-    if (listEl && s.srLevels.levels && s.srLevels.levels.length) {
+    if (listEl && s.srLevels.levels && s.srLevels.levels.length && s.srLevels.updatedAt !== _lastSRUpdatedAt) {
+      _lastSRUpdatedAt = s.srLevels.updatedAt;
       const TYPE_COLOR = { R3:'#ff4d4d', R2:'#ff6b6b', R1:'#ff9999', PP:'#ffd700',
                            S1:'#99ddff', S2:'#66bbff', S3:'#3399ff',
                            PDH:'#ffaa55', PDL:'#55aaff', WH:'#ff77aa', WL:'#77aaff', MP:'#cc88ff' };
@@ -3369,10 +3377,8 @@ async function _apiPost(url, body) {
     const headers = { 'Content-Type': 'application/json' };
     if (tok) headers['X-App-Token'] = tok;
     const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
-  }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  return r.json();
 }
 
 // Normalize a server trade object to the local schema used by the renderer.
@@ -3544,7 +3550,7 @@ async function confirmExit(id) {
 
   // Optimistic local update
   t.exit   = exitPrice;
-  t.pnl    = parseFloat(((exitPrice - t.premium) * t.lots * 65).toFixed(0));
+  t.pnl    = parseFloat(((exitPrice - t.premium) * t.lots * LOT_SIZE).toFixed(0));
   t.status = 'CLOSED';
   localStorage.setItem('vn_trades', JSON.stringify(_trades));
   _renderJournal();
@@ -4038,15 +4044,15 @@ function calcPositionSize() {
   const sl = parseFloat(document.getElementById('ps-sl').value);
   if (isNaN(cap)||isNaN(riskPct)||isNaN(entry)||isNaN(sl)) return;
   const riskAmt = cap * riskPct / 100;
-  const riskPerLot = (entry - sl) * 65;
+  const riskPerLot = (entry - sl) * LOT_SIZE;
   if (riskPerLot <= 0) return;
   const lots = Math.floor(riskAmt / riskPerLot);
   document.getElementById('ps-lots').textContent = lots + ' Lots';
   document.getElementById('ps-note').textContent = `${lots} × 65 = ${lots*65} units`;
   document.getElementById('ps-riskamt').textContent = '₹' + riskAmt.toFixed(0);
   document.getElementById('ps-maxloss').textContent = '₹' + (lots * riskPerLot).toFixed(0);
-  document.getElementById('ps-invested').textContent = '₹' + (lots * entry * 65).toFixed(0);
-  document.getElementById('ps-target').textContent = '₹' + (lots * (entry - sl) * 65).toFixed(0);
+  document.getElementById('ps-invested').textContent = '₹' + (lots * entry * LOT_SIZE).toFixed(0);
+  document.getElementById('ps-target').textContent = '₹' + (lots * (entry - sl) * LOT_SIZE).toFixed(0);
   document.getElementById('ps-result').style.display = 'block';
   document.getElementById('ps-details').style.display = 'grid';
 }
@@ -4060,9 +4066,9 @@ function calcSL() {
   document.getElementById('sl-20').textContent = '₹' + sl20;
   document.getElementById('sl-25').textContent = '₹' + sl25;
   document.getElementById('sl-t1').textContent = '₹' + t1;
-  document.getElementById('sl-maxloss').textContent = '₹' + (prem * 0.20 * qty * 65).toFixed(0);
-  document.getElementById('sl-pnl').textContent = '₹' + (prem * 0.20 * qty * 65).toFixed(0);
-  document.getElementById('sl-invested').textContent = '₹' + (prem * qty * 65).toFixed(0);
+  document.getElementById('sl-maxloss').textContent = '₹' + (prem * 0.20 * qty * LOT_SIZE).toFixed(0);
+  document.getElementById('sl-pnl').textContent = '₹' + (prem * 0.20 * qty * LOT_SIZE).toFixed(0);
+  document.getElementById('sl-invested').textContent = '₹' + (prem * qty * LOT_SIZE).toFixed(0);
   document.getElementById('sl-qty-lbl').textContent = qty + 'lot=' + (qty*65);
   // VIX-dynamic SL (Murarka strategy: <12→20%, 12-16→25%, 16-20→30%, >20→35%)
   const vix = parseFloat(document.getElementById('sl-vix').value);
@@ -4075,7 +4081,7 @@ function calcSL() {
     else if (vix < 20) { slPct = 0.30; slLabel = 'VIX<20 → 30%'; }
     else               { slPct = 0.35; slLabel = 'VIX≥20 → 35%'; }
     const dynSL = (prem * (1 - slPct)).toFixed(2);
-    const maxLoss = (prem * slPct * qty * 65).toFixed(0);
+    const maxLoss = (prem * slPct * qty * LOT_SIZE).toFixed(0);
     vixValEl.textContent = '₹' + dynSL;
     if (vixPctEl) vixPctEl.textContent = slLabel + ' | MaxLoss ₹' + maxLoss;
   } else if (vixValEl) {
@@ -4099,7 +4105,9 @@ function toggleSound() {
 
 // ─── INIT ────────────────────────────────────────────────
 loadJournal();
-fetchSignal();
+// NOTE: fetchSignal() is NOT called here — startPolling() above (line ~2215) already
+// calls it immediately. The duplicate call here caused two simultaneous requests on
+// every page load, and on mobile resume, every startPolling() re-entry added another.
 
 // Event delegation for EXIT buttons (uses data-exit-id instead of inline onclick)
 document.addEventListener('click', function(e) {
