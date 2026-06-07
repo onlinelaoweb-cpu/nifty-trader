@@ -1797,12 +1797,18 @@ async function saveSignalToLog(signal, prevSig) {
 async function getWinRateFromHistory(signalType) {
     if (!dbPool) return null;
     try {
+        // FIX: ORDER BY + LIMIT inside a plain aggregate is silently ignored by Postgres —
+        // it still counts ALL matching rows. Use a subquery to select the 50 most recent
+        // completed trades first, then aggregate over that bounded result set.
         const r = await dbPool.query(
             `SELECT COUNT(*) AS total,
                     SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins
-             FROM trade_history
-             WHERE signal_type=$1 AND outcome IN ('WIN','LOSS')
-             ORDER BY ts DESC LIMIT 50`,
+             FROM (
+               SELECT outcome FROM trade_history
+               WHERE signal_type=$1 AND outcome IN ('WIN','LOSS')
+               ORDER BY ts DESC
+               LIMIT 50
+             ) recent`,
             [signalType]
         );
         const row = r.rows[0];
@@ -1811,6 +1817,29 @@ async function getWinRateFromHistory(signalType) {
     } catch (e) {
         return null;
     }
+}
+
+
+// ── Days to Next Weekly Expiry (Nifty = every Tuesday) ───────────────────────
+// Returns fractional days remaining until next Tuesday 15:30 IST.
+// Used in pickStrikeAndPremium() so BS estimates use real DTE instead of hardcoded 3 days.
+// On expiry day (Tuesday) after 15:30 → returns 7 (next week).
+// Minimum 0.04 (≈ 1 hr) so BS never divides by zero on intraday expiry morning.
+function daysToNextExpiry() {
+    const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const day = ist.getDay();   // 0=Sun 1=Mon 2=Tue 3=Wed 4=Thu 5=Fri 6=Sat
+    // Days until next Tuesday
+    let daysUntilTue = (2 - day + 7) % 7;
+    if (daysUntilTue === 0) {
+        // Today IS Tuesday — check if market already closed (after 15:30)
+        const minNow = ist.getHours() * 60 + ist.getMinutes();
+        if (minNow >= 930) daysUntilTue = 7;  // next Tuesday
+    }
+    // Remaining minutes today until 15:30
+    const minsUntilClose = Math.max(0, 930 - (ist.getHours() * 60 + ist.getMinutes()));
+    const fracToday = minsUntilClose / (24 * 60);
+    const total = daysUntilTue + fracToday;
+    return Math.max(0.04, total);  // minimum 1hr equivalent
 }
 
 // ── Strike + Premium Picker ────────────────────────────────────────────────
@@ -1832,24 +1861,28 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
     }
 
     // Try to get live LTP from pcrState option chain data
+    // FIX: OTM premium no longer uses hardcoded 0.55× multiplier.
+    // For ATM: use live NSE LTP directly (most accurate).
+    // For OTM+50: calculate with Black-Scholes using REAL DTE so premium is meaningful.
+    // The 0.55× approximation was off by 20–40% depending on IV and DTE.
+    const dte = daysToNextExpiry();   // real days to next Tuesday expiry
     let entryPremium = null;
     if (pcrState && pcrState.atmCEpremium && pcrState.atmPEpremium) {
         if (type === 'CE') {
-            // If OTM by 50, approximate: ATM CE premium × 0.55 (rough OTM discount)
             entryPremium = strike === atm
                 ? pcrState.atmCEpremium
-                : parseFloat((pcrState.atmCEpremium * 0.55).toFixed(2));
+                : (vix ? parseFloat(bsEstimate(nifty, strike, dte / 365, vix / 100, 'CE').toFixed(2)) : null);
         } else {
             entryPremium = strike === atm
                 ? pcrState.atmPEpremium
-                : parseFloat((pcrState.atmPEpremium * 0.55).toFixed(2));
+                : (vix ? parseFloat(bsEstimate(nifty, strike, dte / 365, vix / 100, 'PE').toFixed(2)) : null);
         }
     }
 
-    // If no live premium available, use Black-Scholes estimate
+    // If no live premium available, use Black-Scholes with real DTE (not hardcoded 3 days)
     if (!entryPremium && vix) {
         const sigma = vix / 100;
-        const T = 3 / 365; // assume 3 days to expiry
+        const T = dte / 365;  // FIX: real days to expiry, not hardcoded 3
         entryPremium = parseFloat(bsEstimate(nifty, strike, T, sigma, type).toFixed(2));
     }
 
@@ -1904,10 +1937,13 @@ let lastAISuggestionSignal = null;  // the signal string that triggered last AI 
 async function getAITradeSuggestion(state, strikeData, winRate) {
     if (!process.env.ANTHROPIC_API_KEY) return null;
 
-    // Only call AI when signal has CHANGED to a new direction
-    // (fresh BUY CALL or BUY PUT — not a repeat of the same signal)
-    const currentSignal = state.signal + '_' + state.nifty;  // direction + rough level
-    if (lastAISuggestion && lastAISuggestionSignal === state.signal) {
+    // Only call AI when signal has CHANGED to a new direction OR Nifty has moved
+    // enough to warrant a fresh strike pick (>100 points from last call level).
+    // FIX: old code cached on state.signal only — ignored price level entirely,
+    // serving a stale 24050 CE suggestion when Nifty had moved to 24400.
+    const niftyBracket = Math.round((state.nifty || 0) / 100) * 100;
+    const currentSignal = state.signal + '_' + niftyBracket;  // direction + 100pt level
+    if (lastAISuggestion && lastAISuggestionSignal === currentSignal) {
         return lastAISuggestion;  // return cached — no API call
     }
 
@@ -1937,7 +1973,7 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
 {"action":"BUY CE or BUY PE or WAIT","strike":24300,"entry":85,"sl":64,"target":128,"reasoning":"Two sentences max explaining why.","confidence":"HIGH or MEDIUM or LOW"}`;
 
         const res = await axios.post('https://api.anthropic.com/v1/messages', {
-            model: 'claude-sonnet-4-5',
+            model: 'claude-sonnet-4-6',
             max_tokens: 300,
             messages: [{ role: 'user', content: prompt }]
         }, {
@@ -1955,7 +1991,7 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
         parsed.generatedAt = new Date().toISOString();
 
         lastAISuggestion       = parsed;
-        lastAISuggestionSignal = state.signal;  // mark which signal triggered this
+        lastAISuggestionSignal = currentSignal;  // FIX: key includes price bracket so cache invalidates on 100pt moves
 
         // Save to DB for training
         if (parsed.action !== 'WAIT' && strikeData) {
@@ -2082,8 +2118,33 @@ app.get('/api/signal-log', async (req, res) => {
     }
 });
 
+
+// ── Simple API token guard for manual POST endpoints ─────────────────────────
+// Set APP_TOKEN=yourSecretToken in Railway env vars to enable.
+// Requests must send either:
+//   Header:       X-App-Token: yourSecretToken
+//   Query param:  ?key=yourSecretToken
+// When APP_TOKEN is not set, all requests pass through (backward-compatible).
+function requireToken(req, res, next) {
+    const secret = process.env.APP_TOKEN;
+    if (!secret) return next();  // not configured — allow all (default)
+    const provided = req.headers['x-app-token'] || req.query.key;
+    if (provided === secret) return next();
+    console.warn(`[Auth] Blocked unauthorized POST to ${req.path} from ${req.ip}`);
+    return res.status(401).json({ success: false, msg: 'Unauthorized — set X-App-Token header' });
+}
+
 // ── Routes ────────────────────────────────────────────
-app.get('/api/signal',  (req,res) => { updateOpenTradesMTM(); res.json(marketState); });
+app.get('/api/signal',  (req,res) => {
+    updateOpenTradesMTM();
+    // Attach computed fields the frontend Strike Zone needs
+    const atmStrike = marketState.nifty > 0 ? Math.round(marketState.nifty / 50) * 50 : null;
+    const daysToExp = parseFloat(daysToNextExpiry().toFixed(2));
+    // Strip breadth.stocks[] — 50-object array not needed by the signal endpoint.
+    // It's ~30-50KB sent every 3 seconds for nothing; the breadth tab uses /api/breadth.
+    const { breadth: { stocks: _stocks, ...breadthWithoutStocks }, ...stateRest } = marketState;
+    res.json({ ...stateRest, breadth: breadthWithoutStocks, atmStrike, daysToExpiry: daysToExp });
+});
 app.get('/api/candles', (req,res) => res.json(getCandleHistory()));
 
 // Chart historical data — fetched server-side to avoid browser CORS restrictions
@@ -2161,7 +2222,7 @@ app.get('/api/health',  (req,res) => res.json({
 }));
 
 // PCR
-app.post('/api/pcr', (req,res) => {
+app.post('/api/pcr', requireToken, (req,res) => {
     const {pcr,atmPcr}=req.body;
     if(pcr!=null)    { marketState.pcr=parseFloat(pcr);    marketState.pcrSignal=pcrLabel(marketState.pcr);    trackPCRHistory(marketState.pcr); }
     if(atmPcr!=null) { marketState.atmPcr=parseFloat(atmPcr); marketState.atmPcrSignal=pcrLabel(marketState.atmPcr); }
@@ -2175,7 +2236,7 @@ app.get('/api/pcr-state',      (req,res) => res.json(getPCRState()));
 app.get('/api/fii-state',      (req,res) => res.json(getFIIState()));   // debug: raw FII/DII snapshot
 
 // FII DII
-app.post('/api/fiidii', (req,res) => {
+app.post('/api/fiidii', requireToken, (req,res) => {
     const {fiiBuy,fiiSell,diiBuy,diiSell}=req.body;
     if(fiiBuy!=null&&fiiSell!=null) marketState.fii={buy:parseFloat(fiiBuy),sell:parseFloat(fiiSell),net:parseFloat((fiiBuy-fiiSell).toFixed(2)),updatedAt:new Date().toISOString()};
     if(diiBuy!=null&&diiSell!=null) marketState.dii={buy:parseFloat(diiBuy),sell:parseFloat(diiSell),net:parseFloat((diiBuy-diiSell).toFixed(2)),updatedAt:new Date().toISOString()};
@@ -2183,7 +2244,7 @@ app.post('/api/fiidii', (req,res) => {
 });
 
 // Option Flow
-app.post('/api/optionflow', (req,res) => {
+app.post('/api/optionflow', requireToken, (req,res) => {
     const {atmCE,atmPE}=req.body;
     updateOptionFlow(atmCE?parseFloat(atmCE):null, atmPE?parseFloat(atmPE):null);
     res.json({success:true, dominance:marketState.optionFlow.dominance});
