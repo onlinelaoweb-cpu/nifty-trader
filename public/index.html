@@ -530,6 +530,51 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .legend-item{display:flex;align-items:center;gap:4px;}
 .legend-dot{width:8px;height:3px;border-radius:2px;}
 
+
+/* ═══ ANALYTICS PANEL ═══ */
+.an-card{background:var(--bg3);border:1px solid rgba(0,200,255,0.12);border-radius:8px;padding:10px 12px;position:relative;overflow:hidden;}
+.an-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,rgba(0,200,255,0.5),transparent);opacity:0.6;}
+.an-card.good::before{background:linear-gradient(90deg,transparent,var(--green),transparent);}
+.an-card.bad::before{background:linear-gradient(90deg,transparent,var(--red),transparent);}
+.an-card.warn2::before{background:linear-gradient(90deg,transparent,#ffcc00,transparent);}
+.an-label{font-family:var(--mono);font-size:8px;letter-spacing:2px;color:#5a7a8a;text-transform:uppercase;margin-bottom:4px;}
+.an-val{font-family:var(--mono);font-size:22px;font-weight:700;line-height:1;}
+.an-val.green{color:var(--green);text-shadow:0 0 12px rgba(0,255,136,0.4);}
+.an-val.red{color:var(--red);text-shadow:0 0 12px rgba(255,68,102,0.4);}
+.an-val.blue{color:var(--blue);text-shadow:0 0 12px rgba(0,200,255,0.3);}
+.an-val.warn{color:#ffcc00;text-shadow:0 0 12px rgba(255,204,0,0.4);}
+.an-sub{font-size:9px;color:#5a7a8a;margin-top:3px;font-family:var(--mono);}
+.an-panel{background:var(--bg2);border:1px solid rgba(0,200,255,0.1);border-radius:8px;overflow:hidden;}
+.an-ph{padding:8px 12px;border-bottom:1px solid rgba(0,200,255,0.1);background:rgba(10,37,64,0.5);display:flex;align-items:center;justify-content:space-between;}
+.an-pt{font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--blue);text-transform:uppercase;}
+.an-bar-item{margin-bottom:8px;}
+.an-bar-label{display:flex;justify-content:space-between;font-size:9px;color:#9ab8d0;font-family:var(--mono);margin-bottom:3px;}
+.an-bar-track{height:4px;background:rgba(0,200,255,0.08);border-radius:2px;overflow:hidden;}
+.an-bar-fill{height:100%;border-radius:2px;transition:width 0.8s cubic-bezier(0.4,0,0.2,1);}
+.an-bar-fill.g{background:linear-gradient(90deg,var(--green),rgba(0,255,136,0.5));}
+.an-bar-fill.r{background:linear-gradient(90deg,var(--red),rgba(255,68,102,0.5));}
+.an-bar-fill.b{background:linear-gradient(90deg,var(--blue),rgba(0,200,255,0.5));}
+.an-bar-fill.w{background:linear-gradient(90deg,#ffcc00,rgba(255,204,0,0.5));}
+.an-pill{padding:3px 10px;border-radius:20px;font-size:9px;font-family:var(--mono);cursor:pointer;border:1px solid rgba(0,200,255,0.2);color:#5a7a8a;background:transparent;transition:all 0.15s;letter-spacing:0.5px;}
+.an-pill.active-all{border-color:var(--blue);color:var(--blue);background:rgba(0,200,255,0.1);}
+.an-pill.active-call{border-color:var(--green);color:var(--green);background:rgba(0,255,136,0.1);}
+.an-pill.active-put{border-color:var(--red);color:var(--red);background:rgba(255,68,102,0.1);}
+.an-pill.active-gate{border-color:#ffcc00;color:#ffcc00;background:rgba(255,204,0,0.1);}
+.an-tbl{width:100%;border-collapse:collapse;font-size:10px;}
+.an-tbl th{font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid rgba(0,200,255,0.1);text-align:left;background:rgba(10,37,64,0.5);position:sticky;top:0;z-index:1;}
+.an-tbl td{padding:6px 8px;border-bottom:1px solid rgba(0,200,255,0.05);font-family:var(--mono);font-size:9px;white-space:nowrap;}
+.an-tbl tr:hover td{background:rgba(0,200,255,0.04);}
+.an-badge{display:inline-block;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:700;}
+.an-badge.pass{background:rgba(0,255,136,0.12);color:var(--green);border:1px solid rgba(0,255,136,0.25);}
+.an-badge.fail{background:rgba(255,68,102,0.08);color:var(--red);border:1px solid rgba(255,68,102,0.15);}
+.an-badge.call{background:rgba(0,255,136,0.1);color:var(--green);}
+.an-badge.put{background:rgba(255,68,102,0.1);color:var(--red);}
+.an-conf-bar{display:inline-block;width:36px;height:3px;background:rgba(0,200,255,0.1);border-radius:2px;vertical-align:middle;margin-left:3px;overflow:hidden;}
+.an-conf-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,#ffcc00,var(--green));}
+#an-table-wrap::-webkit-scrollbar{width:3px;}
+#an-table-wrap::-webkit-scrollbar-track{background:var(--bg0);}
+#an-table-wrap::-webkit-scrollbar-thumb{background:var(--blue);border-radius:2px;}
+
 /* ═══ TOOLS PANEL ═══ */
 .tools-wrap{padding:10px 12px;}
 .tool-card{background:linear-gradient(150deg,var(--bg2),#0c1a28);border:1px solid var(--border);border-radius:var(--card-radius);padding:13px;margin-bottom:10px;box-shadow:var(--card-shadow);}
@@ -1860,6 +1905,95 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
   </div>
 </div>
 
+
+<!-- PANEL: ANALYTICS                   -->
+<!-- ═══════════════════════════════════ -->
+<div class="panel" id="panel-analytics">
+
+  <!-- Stats row -->
+  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;padding:10px 10px 0;">
+    <div class="an-card" id="an-total">
+      <div class="an-label">TOTAL SIGNALS</div>
+      <div class="an-val blue" id="an-v-total">—</div>
+      <div class="an-sub">logged in DB</div>
+    </div>
+    <div class="an-card good" id="an-gate">
+      <div class="an-label">GATE PASSED</div>
+      <div class="an-val green" id="an-v-gate">—</div>
+      <div class="an-sub" id="an-v-gatepct">of total</div>
+    </div>
+    <div class="an-card" id="an-calls">
+      <div class="an-label">BUY CALL</div>
+      <div class="an-val green" id="an-v-calls">—</div>
+      <div class="an-sub" id="an-v-callpct">signals</div>
+    </div>
+    <div class="an-card bad" id="an-puts">
+      <div class="an-label">BUY PUT</div>
+      <div class="an-val red" id="an-v-puts">—</div>
+      <div class="an-sub" id="an-v-putpct">signals</div>
+    </div>
+    <div class="an-card warn2" id="an-conf">
+      <div class="an-label">AVG CONFIDENCE</div>
+      <div class="an-val warn" id="an-v-conf">—</div>
+      <div class="an-sub">gated signals</div>
+    </div>
+    <div class="an-card" id="an-mtf">
+      <div class="an-label">MTF ALIGNED</div>
+      <div class="an-val blue" id="an-v-mtf">—</div>
+      <div class="an-sub">of gated</div>
+    </div>
+  </div>
+
+  <!-- Filters -->
+  <div style="display:flex;gap:6px;align-items:center;padding:8px 10px 4px;flex-wrap:wrap;">
+    <span style="font-family:var(--mono);font-size:9px;letter-spacing:1.5px;color:#5a7a8a;">FILTER:</span>
+    <button class="an-pill active-all" id="anf-all"  onclick="anSetFilter('all')">ALL</button>
+    <button class="an-pill" id="anf-call" onclick="anSetFilter('call')">BUY CALL</button>
+    <button class="an-pill" id="anf-put"  onclick="anSetFilter('put')">BUY PUT</button>
+    <button class="an-pill" id="anf-gate" onclick="anSetFilter('gate')">GATE ONLY</button>
+    <span style="font-family:var(--mono);font-size:9px;letter-spacing:1.5px;color:#5a7a8a;margin-left:8px;">LIMIT:</span>
+    <select id="an-limit" onchange="loadAnalytics()" style="background:var(--bg3);border:1px solid rgba(0,200,255,0.15);color:#cde8ff;font-family:var(--mono);font-size:9px;padding:4px 8px;border-radius:4px;outline:none;">
+      <option value="50">50</option>
+      <option value="100" selected>100</option>
+      <option value="200">200</option>
+    </select>
+    <span id="an-status" style="margin-left:auto;font-family:var(--mono);font-size:9px;color:#5a7a8a;letter-spacing:1px;"></span>
+  </div>
+
+  <!-- Two col: accuracy + confidence -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 10px 8px;">
+
+    <!-- Accuracy bars -->
+    <div class="an-panel">
+      <div class="an-ph"><span class="an-pt">◈ QUALITY BREAKDOWN</span></div>
+      <div style="padding:12px;" id="an-accuracy-bars">
+        <div style="text-align:center;padding:20px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Confidence + entry windows -->
+    <div class="an-panel">
+      <div class="an-ph"><span class="an-pt">◎ CONFIDENCE DIST</span></div>
+      <div style="padding:12px;" id="an-conf-dist">
+        <div style="text-align:center;padding:20px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">Loading...</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Signal log table -->
+  <div class="an-panel" style="margin:0 10px 10px;">
+    <div class="an-ph">
+      <span class="an-pt">◎ SIGNAL LOG — POSTGRESQL</span>
+      <span id="an-table-count" style="font-family:var(--mono);font-size:9px;color:#5a7a8a;letter-spacing:1px;">—</span>
+    </div>
+    <div id="an-table-wrap" style="max-height:320px;overflow-y:auto;">
+      <div style="text-align:center;padding:30px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">Switch to this tab to load...</div>
+    </div>
+  </div>
+
+</div>
+
 <!-- BOTTOM TABS — 6 tabs -->
 <div class="bottom-tabs">
   <button class="btab active" onclick="switchTab('dashboard',this)"><span class="bi">📊</span>LIVE</button>
@@ -1868,6 +2002,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
   <button class="btab" onclick="switchTab('global',this)"><span class="bi">🌍</span>GLOBAL</button>
   <button class="btab" onclick="switchTab('chart',this)"><span class="bi">🕯️</span>CHART</button>
   <button class="btab" onclick="switchTab('tools',this)"><span class="bi">🔧</span>TOOLS</button>
+  <button class="btab" onclick="switchTab('analytics',this)"><span class="bi">📊</span>ANALYTICS</button>
 </div>
 
 <script>
@@ -1968,6 +2103,7 @@ function switchTab(name,btn){
     autoATM();
   }
   if(name==='journal'){loadJournal();}
+  if(name==='analytics' && !_anLoaded){ loadAnalytics(); }
   if(name==='breadth'||name==='global'){
     // Render immediately from cache — no loading flicker
     if(_lastState){
@@ -4358,6 +4494,246 @@ window.addEventListener('load', () => {
     setTimeout(() => document.getElementById('login-pass')?.focus(), 300);
   }
 });
+
+
+// ─── ANALYTICS TAB ───────────────────────────────────────────────────────────
+let _anSignals = [];
+let _anFilter  = 'all';
+let _anLoaded  = false;
+
+function anSetFilter(f) {
+  _anFilter = f;
+  ['all','call','put','gate'].forEach(x => {
+    const el = document.getElementById('anf-'+x);
+    if (!el) return;
+    el.className = 'an-pill';
+    if (x === f) el.classList.add('active-'+f);
+  });
+  loadAnalytics();
+}
+
+async function loadAnalytics() {
+  const limit = (document.getElementById('an-limit')||{}).value || 100;
+  const gate  = _anFilter === 'gate' ? '&gate=true' : '';
+  const sig   = _anFilter === 'call' ? '&signal=BUY+CALL'
+              : _anFilter === 'put'  ? '&signal=BUY+PUT' : '';
+
+  const wrap = document.getElementById('an-table-wrap');
+  if (wrap) wrap.innerHTML = '<div style="text-align:center;padding:20px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">⟳ Fetching signal_log...</div>';
+  const statusEl = document.getElementById('an-status');
+  if (statusEl) statusEl.textContent = 'LOADING...';
+
+  try {
+    const r = await fetch(`/api/signal-log?limit=${limit}${sig}${gate}`);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    _anSignals = data.rows || [];
+    _anLoaded  = true;
+    anRenderAll(_anSignals);
+    if (statusEl) statusEl.textContent = 'UPDATED ' + new Date().toLocaleTimeString('en-IN');
+  } catch(e) {
+    if (wrap) wrap.innerHTML = '<div style="text-align:center;padding:20px;font-family:var(--mono);font-size:10px;color:var(--red);">❌ ' + e.message + '<br><br>DB connected? DATABASE_URL set?</div>';
+    if (statusEl) statusEl.textContent = 'ERROR';
+  }
+}
+
+function anRenderAll(rows) {
+  anRenderStats(rows);
+  anRenderBars(rows);
+  anRenderConfDist(rows);
+  anRenderTable(rows);
+}
+
+function anRenderStats(rows) {
+  const total  = rows.length;
+  const calls  = rows.filter(r => r.signal === 'BUY CALL').length;
+  const puts   = rows.filter(r => r.signal === 'BUY PUT').length;
+  const gated  = rows.filter(r => r.quality_gate).length;
+  const mtfAl  = rows.filter(r => r.quality_gate && r.mtf_aligned).length;
+  const gatedRows = rows.filter(r => r.quality_gate);
+  const avgConf= gated > 0
+    ? (gatedRows.reduce((a,b) => a + (b.confidence||0), 0) / gated).toFixed(0) + '%'
+    : '—';
+  const gPct = total > 0 ? ((gated/total)*100).toFixed(0)+'%' : '—';
+  const mtfPct = gated > 0 ? ((mtfAl/gated)*100).toFixed(0)+'%' : '—';
+
+  function set(id, val) { const el=document.getElementById(id); if(el) el.textContent=val; }
+  set('an-v-total', total||'—');
+  set('an-v-gate',  gated||'—');
+  set('an-v-gatepct', gPct + ' of total');
+  set('an-v-calls', calls||'—');
+  set('an-v-callpct', total>0 ? ((calls/total)*100).toFixed(0)+'% of total' : '');
+  set('an-v-puts',  puts||'—');
+  set('an-v-putpct', total>0 ? ((puts/total)*100).toFixed(0)+'% of total' : '');
+  set('an-v-conf',  avgConf);
+  set('an-v-mtf',   mtfPct);
+  set('an-table-count', rows.length + ' RECORDS');
+}
+
+function anRenderBars(rows) {
+  const el = document.getElementById('an-accuracy-bars');
+  if (!el) return;
+  const total  = rows.length;
+  const calls  = rows.filter(r => r.signal === 'BUY CALL').length;
+  const puts   = rows.filter(r => r.signal === 'BUY PUT').length;
+  const gated  = rows.filter(r => r.quality_gate).length;
+  const callGated = rows.filter(r => r.quality_gate && r.signal === 'BUY CALL').length;
+  const putGated  = rows.filter(r => r.quality_gate && r.signal === 'BUY PUT').length;
+  const mtfAl  = rows.filter(r => r.quality_gate && r.mtf_aligned).length;
+  const rsiOk  = rows.filter(r => (r.signal==='BUY CALL'&&r.rsi<45)||(r.signal==='BUY PUT'&&r.rsi>55)).length;
+
+  const gateRate = total>0  ? ((gated/total)*100).toFixed(1)    : 0;
+  const callRate = calls>0  ? ((callGated/calls)*100).toFixed(1) : 0;
+  const putRate  = puts>0   ? ((putGated/puts)*100).toFixed(1)   : 0;
+  const mtfRate  = gated>0  ? ((mtfAl/gated)*100).toFixed(1)    : 0;
+  const rsiRate  = total>0  ? ((rsiOk/total)*100).toFixed(1)    : 0;
+
+  // Entry window distribution
+  const windows = {};
+  rows.filter(r=>r.quality_gate).forEach(r => {
+    const w = r.entry_window || 'unknown';
+    windows[w] = (windows[w]||0) + 1;
+  });
+  const winRows = Object.entries(windows).sort((a,b)=>b[1]-a[1]).slice(0,4);
+  const maxWin  = winRows.length ? Math.max(...winRows.map(x=>x[1])) : 1;
+
+  el.innerHTML = `
+    <div class="an-bar-item">
+      <div class="an-bar-label"><span>Quality Gate Pass Rate</span><span style="color:var(--green)">${gateRate}%</span></div>
+      <div class="an-bar-track"><div class="an-bar-fill g" style="width:${gateRate}%"></div></div>
+    </div>
+    <div class="an-bar-item">
+      <div class="an-bar-label"><span>CALL → Gate Pass</span><span style="color:var(--green)">${callRate}%</span></div>
+      <div class="an-bar-track"><div class="an-bar-fill g" style="width:${callRate}%"></div></div>
+    </div>
+    <div class="an-bar-item">
+      <div class="an-bar-label"><span>PUT → Gate Pass</span><span style="color:var(--red)">${putRate}%</span></div>
+      <div class="an-bar-track"><div class="an-bar-fill r" style="width:${putRate}%"></div></div>
+    </div>
+    <div class="an-bar-item">
+      <div class="an-bar-label"><span>MTF Aligned (gated)</span><span style="color:var(--blue)">${mtfRate}%</span></div>
+      <div class="an-bar-track"><div class="an-bar-fill b" style="width:${mtfRate}%"></div></div>
+    </div>
+    <div class="an-bar-item">
+      <div class="an-bar-label"><span>RSI Confirms Signal</span><span style="color:#ffcc00">${rsiRate}%</span></div>
+      <div class="an-bar-track"><div class="an-bar-fill w" style="width:${rsiRate}%"></div></div>
+    </div>
+    ${winRows.length ? `
+    <div style="margin-top:12px;border-top:1px solid rgba(0,200,255,0.08);padding-top:10px;">
+      <div style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;margin-bottom:6px;">BEST ENTRY WINDOWS</div>
+      ${winRows.map(([w,c]) => `
+        <div class="an-bar-item">
+          <div class="an-bar-label"><span style="font-size:8px">${w}</span><span style="color:var(--blue)">${c}</span></div>
+          <div class="an-bar-track"><div class="an-bar-fill b" style="width:${(c/maxWin)*100}%"></div></div>
+        </div>`).join('')}
+    </div>` : ''}
+  `;
+}
+
+function anRenderConfDist(rows) {
+  const el = document.getElementById('an-conf-dist');
+  if (!el) return;
+  const gated  = rows.filter(r => r.quality_gate);
+  const high   = gated.filter(r => r.confidence >= 65).length;
+  const mid    = gated.filter(r => r.confidence >= 45 && r.confidence < 65).length;
+  const low    = gated.filter(r => r.confidence < 45).length;
+  const total  = gated.length || 1;
+
+  // PCR distribution at signal time
+  const pcrBull = rows.filter(r => r.signal==='BUY CALL' && r.atm_pcr > 1.0).length;
+  const pcrBear = rows.filter(r => r.signal==='BUY PUT'  && r.atm_pcr < 1.0).length;
+  const pcrAligned = pcrBull + pcrBear;
+  const pcrRate = rows.length > 0 ? ((pcrAligned/rows.length)*100).toFixed(0) : 0;
+
+  // ADX strength at signals
+  const adxStrong = rows.filter(r => r.quality_gate && r.adx >= 25).length;
+  const adxRate   = total > 0 ? ((adxStrong/total)*100).toFixed(0) : 0;
+
+  // VIX safe zone
+  const vixSafe = rows.filter(r => r.quality_gate && r.vix >= 10 && r.vix <= 20).length;
+  const vixRate = total > 0 ? ((vixSafe/total)*100).toFixed(0) : 0;
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px;">
+      <div style="text-align:center;background:rgba(0,255,136,0.07);border-radius:6px;padding:8px;border:1px solid rgba(0,255,136,0.1);">
+        <div style="font-family:var(--mono);font-size:20px;color:var(--green);font-weight:700;">${high}</div>
+        <div style="font-size:8px;color:#5a7a8a;margin-top:2px;">≥65% CONF</div>
+        <div style="font-size:8px;color:var(--green)">${((high/total)*100).toFixed(0)}%</div>
+      </div>
+      <div style="text-align:center;background:rgba(255,204,0,0.07);border-radius:6px;padding:8px;border:1px solid rgba(255,204,0,0.1);">
+        <div style="font-family:var(--mono);font-size:20px;color:#ffcc00;font-weight:700;">${mid}</div>
+        <div style="font-size:8px;color:#5a7a8a;margin-top:2px;">45–64%</div>
+        <div style="font-size:8px;color:#ffcc00">${((mid/total)*100).toFixed(0)}%</div>
+      </div>
+      <div style="text-align:center;background:rgba(255,68,102,0.07);border-radius:6px;padding:8px;border:1px solid rgba(255,68,102,0.1);">
+        <div style="font-family:var(--mono);font-size:20px;color:var(--red);font-weight:700;">${low}</div>
+        <div style="font-size:8px;color:#5a7a8a;margin-top:2px;">&lt;45%</div>
+        <div style="font-size:8px;color:var(--red)">${((low/total)*100).toFixed(0)}%</div>
+      </div>
+    </div>
+    <div style="border-top:1px solid rgba(0,200,255,0.08);padding-top:10px;">
+      <div style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;margin-bottom:8px;">INDICATOR ALIGNMENT (all signals)</div>
+      <div class="an-bar-item">
+        <div class="an-bar-label"><span>PCR Confirms Direction</span><span style="color:var(--blue)">${pcrRate}%</span></div>
+        <div class="an-bar-track"><div class="an-bar-fill b" style="width:${pcrRate}%"></div></div>
+      </div>
+      <div class="an-bar-item">
+        <div class="an-bar-label"><span>ADX Trending (≥25)</span><span style="color:#ffcc00">${adxRate}%</span></div>
+        <div class="an-bar-track"><div class="an-bar-fill w" style="width:${adxRate}%"></div></div>
+      </div>
+      <div class="an-bar-item">
+        <div class="an-bar-label"><span>VIX Safe Zone (10–20)</span><span style="color:var(--green)">${vixRate}%</span></div>
+        <div class="an-bar-track"><div class="an-bar-fill g" style="width:${vixRate}%"></div></div>
+      </div>
+    </div>
+  `;
+}
+
+function anRenderTable(rows) {
+  const wrap = document.getElementById('an-table-wrap');
+  if (!wrap) return;
+
+  if (!rows.length) {
+    wrap.innerHTML = '<div style="text-align:center;padding:30px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">No signals in DB yet — market hours mein check karo</div>';
+    return;
+  }
+
+  wrap.innerHTML = `<table class="an-tbl">
+    <thead><tr>
+      <th>TIME</th><th>SIGNAL</th><th>CONF</th><th>NIFTY</th>
+      <th>RSI</th><th>ATM PCR</th><th>ADX</th><th>VIX</th>
+      <th>MTF</th><th>GATE</th><th>WINDOW</th><th>REASONS</th>
+    </tr></thead>
+    <tbody>
+      ${rows.map(r => {
+        const ts = new Date(r.ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+        const isCall = r.signal === 'BUY CALL';
+        const conf = Math.min(100, r.confidence||0);
+        const mtfCls = (r.mtf_signal||'').includes('BULL') ? 'color:var(--green)'
+                     : (r.mtf_signal||'').includes('BEAR') ? 'color:var(--red)' : 'color:#5a7a8a';
+        const reasons = (r.reasons||[]).slice(0,3).map(x => String(x).slice(0,22)).join(' · ');
+        return `<tr>
+          <td style="color:#5a7a8a">${ts}</td>
+          <td><span class="an-badge ${isCall?'call':'put'}">${r.signal}</span></td>
+          <td>
+            <span style="color:${conf>=65?'var(--green)':conf>=45?'#ffcc00':'var(--red)'}">${conf}%</span>
+            <span class="an-conf-bar"><span class="an-conf-fill" style="width:${conf}%"></span></span>
+          </td>
+          <td style="color:#cde8ff">${Number(r.nifty||0).toFixed(0)}</td>
+          <td style="color:${r.rsi>60?'var(--red)':r.rsi<40?'var(--green)':'#9ab8d0'}">${Number(r.rsi||0).toFixed(1)}</td>
+          <td style="color:${r.atm_pcr>1.2?'var(--green)':r.atm_pcr<0.8?'var(--red)':'#9ab8d0'}">${Number(r.atm_pcr||r.pcr||0).toFixed(2)}</td>
+          <td style="color:${r.adx>=25?'#ffcc00':'#5a7a8a'}">${Number(r.adx||0).toFixed(1)}</td>
+          <td style="color:${r.vix>20?'var(--red)':'#5a7a8a'}">${Number(r.vix||0).toFixed(1)}</td>
+          <td><span style="font-size:8px;${mtfCls}">${(r.mtf_signal||'—').slice(0,8)}</span></td>
+          <td><span class="an-badge ${r.quality_gate?'pass':'fail'}">${r.quality_gate?'✓':'✗'}</span></td>
+          <td style="color:#5a7a8a;font-size:8px">${r.entry_window||'—'}</td>
+          <td style="color:#5a7a8a;font-size:8px;max-width:160px;overflow:hidden;text-overflow:ellipsis">${reasons||'—'}</td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>`;
+}
 
 </script>
 </body>
