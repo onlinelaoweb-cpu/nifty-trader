@@ -1135,17 +1135,28 @@ async function fetchPCRFromAngel(spotPrice) {
             }
         );
 
-        if (typeof res.data === 'string' && res.data.includes('<html')) return null;
+        if (typeof res.data === 'string' && res.data.includes('<html')) {
+            console.warn('[PCR-Angel] HTML response (IP block) from Angel NFO getMarketData');
+            return null;
+        }
+        // Log full response for diagnosis — Angel blocks Railway IPs on NFO endpoints
+        console.log(`[PCR-Angel] getMarketData response status: ${res.status} | data keys: ${Object.keys(res.data || {}).join(', ')}`);
         const apiStatus = res.data?.status === true || res.data?.status === 'true';
         if (!apiStatus) {
-            console.warn('[PCR-Angel] API error:', res.data?.message || res.data?.errorcode);
+            console.warn(`[PCR-Angel] API returned status=false | errorcode: ${res.data?.errorcode} | message: ${res.data?.message} | full: ${JSON.stringify(res.data).slice(0,200)}`);
             return null;
         }
 
+        // Handle multiple response shapes from Angel getMarketData
+        // Shape A: { status:true, data: { fetched: [...] } }
+        // Shape B: { status:true, data: [...] }
+        // Shape C: { status:true, fetched: [...] }
         const fetched = Array.isArray(res.data?.data?.fetched) ? res.data.data.fetched
-                      : Array.isArray(res.data?.data) ? res.data.data : null;
+                      : Array.isArray(res.data?.data)          ? res.data.data
+                      : Array.isArray(res.data?.fetched)       ? res.data.fetched
+                      : null;
         if (!fetched || fetched.length === 0) {
-            console.warn('[PCR-Angel] Empty fetched array');
+            console.warn(`[PCR-Angel] Empty fetched array | data type: ${typeof res.data?.data} | full: ${JSON.stringify(res.data).slice(0,200)}`);
             return null;
         }
 

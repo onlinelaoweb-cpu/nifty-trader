@@ -197,23 +197,24 @@ async function fetchBreadthFromAngel() {
 
         // Detect WAF/firewall HTML block (Angel One blocks Railway IPs sometimes)
         if (typeof res.data === 'string' && res.data.includes('<html')) {
-            // Silently fail — this is an IP block, not an API error
+            console.warn('[A/D Tier1] HTML response (IP block) from Angel getMarketData');
             return null;
         }
 
-        // Angel API: status can be boolean true or string 'true' — normalise both.
-        // Response shape: { status: true, data: { fetched: [...] } }  (standard)
-        //              OR { status: true, data: [...] }                (some versions)
+        // Log response for diagnosis
+        console.log(`[A/D Tier1] Response status:${res.status} | data keys: ${Object.keys(res.data||{}).join(', ')}`);
+
         const apiStatus = res.data?.status === true || res.data?.status === 'true';
+        // Handle response shape variants
         const fetched   = Array.isArray(res.data?.data?.fetched) ? res.data.data.fetched
                         : Array.isArray(res.data?.data)           ? res.data.data
+                        : Array.isArray(res.data?.fetched)        ? res.data.fetched
                         : null;
 
         if (!apiStatus || !fetched) {
-            const errMsg = res.data?.message || res.data?.errorcode || `HTTP ${res.status}`;
+            const errMsg  = res.data?.message || res.data?.errorcode || `HTTP ${res.status}`;
             const errCode = res.data?.errorcode || res.status;
-            console.warn(`[A/D Tier1] Angel API error (${errCode}): ${errMsg}`);
-            console.warn('[A/D Tier1] Full response:', JSON.stringify(res.data).substring(0, 200));
+            console.warn(`[A/D Tier1] Angel API error (${errCode}): ${errMsg} | full: ${JSON.stringify(res.data).substring(0, 200)}`);
             return null;
         }
 
