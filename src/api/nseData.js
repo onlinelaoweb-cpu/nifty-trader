@@ -65,7 +65,10 @@ const BASE_URL   = 'https://www.nseindia.com';
 // Mirror:    nsearchives subdomain (archive/delayed but better than nothing)
 const OC_URLS = [
     `${BASE_URL}/api/option-chain-indices?symbol=NIFTY`,
+    // v2 endpoint introduced mid-2026 — try before equities fallback
+    `${BASE_URL}/api/option-chain-indices/v2?symbol=NIFTY`,
     `${BASE_URL}/api/option-chain-equities?symbol=NIFTY`,
+    `${BASE_URL}/api/option-chain-equities/v2?symbol=NIFTY`,
     `https://nsearchives.nseindia.com/content/fo/nifty_oc.json`,
 ];
 const OC_URL = OC_URLS[0];  // kept for backward compat
@@ -252,15 +255,22 @@ async function scraperAPIFetch(targetUrl) {
                     continue;
                 }
                 const raw = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-                // NSE has two response formats:
-                // Indices format: {records:{data:[...]}, filtered:{...}}
-                // Equities format: {data:[...], metadata:{...}}
-                // Normalize equities → indices format
-                if (raw?.data && Array.isArray(raw.data) && !raw?.records) {
-                    raw.records = { data: raw.data, expiryDates: raw.metadata?.expiryDates || [] };
+                // NSE has multiple response formats — normalise all to {records:{data:[]}}
+                // Shape 1 (indices):  { records: { data: [...] } }
+                // Shape 2 (equities): { data: [...], metadata: {...} }
+                // Shape 3 (equities v2): { filtered: { data: [...] } }
+                // Shape 4 (equities v3): { status: true, data: { filtered: { data: [...] } } }
+                if (!raw?.records) {
+                    if (raw?.data && Array.isArray(raw.data)) {
+                        raw.records = { data: raw.data, expiryDates: raw.metadata?.expiryDates || [] };
+                    } else if (raw?.filtered?.data && Array.isArray(raw.filtered.data)) {
+                        raw.records = { data: raw.filtered.data, expiryDates: raw.expiryDates || [] };
+                    } else if (raw?.data?.filtered?.data && Array.isArray(raw.data.filtered.data)) {
+                        raw.records = { data: raw.data.filtered.data, expiryDates: [] };
+                    }
                 }
-                if (raw?.records?.data) return raw;
-                console.warn(`[ScraperAPI] Response missing records.data — status:200, body:${JSON.stringify(raw)?.slice(0,120)}`);
+                if (raw?.records?.data && Array.isArray(raw.records.data) && raw.records.data.length > 0) return raw;
+                console.warn(`[ScraperAPI] Response missing records.data — status:200, body:${JSON.stringify(raw)?.slice(0,150)}`);
             } catch (e) {
                 console.warn(`[ScraperAPI] Error on ${ocUrl.split('/').pop()}: ${e.message}`);
             }
@@ -1268,15 +1278,38 @@ async function _fetchPCR(spotPrice) {
                 }
                 if (res?.status === 200 && res.data) {
                     let d = res.data;
-                    // Normalize equities format {data:[]} → indices format {records:{data:[]}}
-                    if (d?.data && Array.isArray(d.data) && !d?.records) {
-                        d.records = { data: d.data, expiryDates: d.metadata?.expiryDates || [] };
+                    // NSE returns HTML (WAF block) even with HTTP 200 — detect and skip
+                    if (typeof d === 'string' && d.includes('<html')) {
+                        console.warn(`[PCR] Direct NSE returned HTML (IP block) for ${ocUrl.split('/').pop()}`);
+                        continue;
                     }
-                    if (d?.records?.data) {
+                    // Parse string JSON if needed
+                    if (typeof d === 'string') { try { d = JSON.parse(d); } catch(_) {} }
+
+                    // NSE response shape variations — normalise all to {records:{data:[]}}:
+                    // Shape 1 (indices):  { records: { data: [...] }, filtered: {...} }
+                    // Shape 2 (equities): { data: [...], metadata: {...} }
+                    // Shape 3 (equities v2): { filtered: { data: [...] } }
+                    // Shape 4 (equities v3): { status: true, data: { filtered: { data: [...] } } }
+                    if (!d?.records) {
+                        if (d?.data && Array.isArray(d.data)) {
+                            // Shape 2
+                            d.records = { data: d.data, expiryDates: d.metadata?.expiryDates || [] };
+                        } else if (d?.filtered?.data && Array.isArray(d.filtered.data)) {
+                            // Shape 3
+                            d.records = { data: d.filtered.data, expiryDates: d.expiryDates || [] };
+                        } else if (d?.data?.filtered?.data && Array.isArray(d.data.filtered.data)) {
+                            // Shape 4
+                            d.records = { data: d.data.filtered.data, expiryDates: [] };
+                        }
+                    }
+                    if (d?.records?.data && Array.isArray(d.records.data) && d.records.data.length > 0) {
                         pcrData = d;
-                        console.log(`[PCR] Direct NSE ✅ (${ocUrl.split('/').pop()})`);
+                        console.log(`[PCR] Direct NSE ✅ (${ocUrl.split('/').pop()}) — ${d.records.data.length} strikes`);
                         break;
                     }
+                    // Log body snippet so we can diagnose future format changes
+                    console.warn(`[PCR] Direct NSE 200 but no usable data from ${ocUrl.split('/').pop()} — body: ${JSON.stringify(d)?.slice(0, 150)}`);
                 }
                 console.warn(`[PCR] Direct NSE failed ${ocUrl.split('/').pop()}: ${res?.status ?? 'no-response'}`);
             }

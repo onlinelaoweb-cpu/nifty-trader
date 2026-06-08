@@ -2596,7 +2596,7 @@ async function initializeLiveData() {
     // is used for the refreshBreadth() call below (real 50 stocks, not 10 sectors).
     // On timeout/failure, tryAngelLogin() keeps retrying internally every 30s and
     // calls refreshBreadth() automatically when it eventually succeeds.
-    await withTimeout(tryAngelLogin(), 12000, 'angelLogin');
+    await withTimeout(tryAngelLogin(), 20000, 'angelLogin');  // FIX: 12s was too tight on Railway cold start — increased to 20s
 
     await new Promise(r => setTimeout(r, 2000));
     await withTimeout(refreshBreadth(true),    20000, 'refreshBreadth');
