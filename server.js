@@ -1117,7 +1117,19 @@ async function checkTelegramAlerts(newSignal) {
     const ist=getIST(), h=ist.getHours(), m=ist.getMinutes();
     if (h===9&&m>=16&&m<=20&&!morningSummarySent) { morningSummarySent=true; await sendMorningSummary(marketState); return; }
     if (h===14&&m===0&&!nishanebaazAlertSent) { nishanebaazAlertSent=true; await sendNishanebaazAlert(marketState); }
-    if (h===15&&m>=30&&!closeSummarySent) { closeSummarySent=true; await sendCloseSummary(marketState); setTimeout(()=>{morningSummarySent=false;closeSummarySent=false;vixAlertSent=false;nishanebaazAlertSent=false;pcrClearedToday=false;btstSentToday=false;telegramAlertInFlight=false;ema920AlertSentToday=false;},6*60*60*1000); return; }
+    if (h===15&&m>=30&&!closeSummarySent) {
+        closeSummarySent=true;
+        await sendCloseSummary(marketState);
+        setTimeout(() => {
+            morningSummarySent=false; closeSummarySent=false; vixAlertSent=false;
+            nishanebaazAlertSent=false; pcrClearedToday=false; btstSentToday=false;
+            telegramAlertInFlight=false; ema920AlertSentToday=false;
+            // Reset intraday trades so yesterday's trades don't show on next morning's fresh session
+            trades = [];
+            console.log('[Daily Reset] Intraday trades cleared for next session');
+        }, 6*60*60*1000); // 6 hours after close = ~21:30 IST
+        return;
+    }
     // ── BTST/STBT Telegram alert — fires once in 3:00–3:20 window if signal passed ──
     if (!btstSentToday && marketState.btst?.passed) {
         btstSentToday = true;
@@ -2431,7 +2443,7 @@ app.delete('/api/event/:id', (req,res) => {
 });
 
 // Telegram test
-app.post('/api/telegram/test', async (req,res) => {
+app.post('/api/telegram/test', requireToken, async (req,res) => {
     if(!isConfigured()) return res.json({success:false,msg:'Not configured'});
     await sendMorningSummary(marketState);
     res.json({success:true,msg:'Test sent!'});

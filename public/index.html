@@ -4138,7 +4138,7 @@ function calcPositionSize() {
   if (riskPerLot <= 0) return;
   const lots = Math.floor(riskAmt / riskPerLot);
   document.getElementById('ps-lots').textContent = lots + ' Lots';
-  document.getElementById('ps-note').textContent = `${lots} × 65 = ${lots*65} units`;
+  document.getElementById('ps-note').textContent = `${lots} × ${LOT_SIZE} = ${lots*LOT_SIZE} units`;
   document.getElementById('ps-riskamt').textContent = '₹' + riskAmt.toFixed(0);
   document.getElementById('ps-maxloss').textContent = '₹' + (lots * riskPerLot).toFixed(0);
   document.getElementById('ps-invested').textContent = '₹' + (lots * entry * LOT_SIZE).toFixed(0);
