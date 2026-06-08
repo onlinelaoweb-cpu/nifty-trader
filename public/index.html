@@ -2957,7 +2957,7 @@ function updateBreadthUI(b) {
   // Stock list — FIX: WT% column was showing arrow (▲/▼) not the actual weight value
   if (b.stocks && b.stocks.length) {
     const tbody = document.getElementById('stock-list-body');
-    if (tbody) tbody.innerHTML = b.stocks.slice(0,20).map(s => {
+    if (tbody) tbody.innerHTML = b.stocks.slice(0,50).map(s => {
       const chg = s.changePct != null ? s.changePct : (s.change || 0);
       const color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : '#9ab8d0';
       const label = s.name || s.symbol || '--';

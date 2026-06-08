@@ -2514,7 +2514,33 @@ async function tryAngelLogin() {
         // Fire initial PCR fetch NOW — Angel session is ready so the Angel Market
         // Data path will work. Without this, first PCR fires 3 min after startup
         // (the scheduler interval), which is too late if container restarts.
-        triggerInitialPCR(marketState.nifty || 0);
+        // FIX: marketState.nifty may be 0 at startup (price not yet fetched from websocket/REST).
+        // Retry with 5s delay to allow nifty price to populate first.
+        if (marketState.nifty > 0) {
+            triggerInitialPCR(marketState.nifty);
+        } else {
+            setTimeout(() => {
+                const spot = marketState.nifty || 0;
+                if (spot > 0) {
+                    console.log(`[PCR] Delayed initial PCR trigger — spot now ${spot}`);
+                    triggerInitialPCR(spot);
+                } else {
+                    // Still 0 — wait for first tick then fire (max 30s)
+                    let _pcrRetries = 0;
+                    const _pcrRetryTimer = setInterval(() => {
+                        _pcrRetries++;
+                        if (marketState.nifty > 0) {
+                            clearInterval(_pcrRetryTimer);
+                            console.log(`[PCR] Retry #${_pcrRetries}: firing initial PCR at spot ${marketState.nifty}`);
+                            triggerInitialPCR(marketState.nifty);
+                        } else if (_pcrRetries >= 6) {
+                            clearInterval(_pcrRetryTimer);
+                            console.warn('[PCR] Initial PCR skipped — no spot price after 30s');
+                        }
+                    }, 5000);
+                }
+            }, 5000);
+        }
         startWebSocket(auth, onTick);
         _angelLoggedIn = true;
         // On retry logins (after init is complete), immediately refresh breadth
