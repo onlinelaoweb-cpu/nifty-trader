@@ -37,7 +37,23 @@ const {
 
 const app    = express();
 const server = http.createServer(app);
-app.use(cors());
+// CORS — allow only the Railway deployment domain and local dev.
+// RAILWAY_PUBLIC_DOMAIN is set automatically by Railway at runtime.
+const _allowedOrigins = [
+    process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null,
+    'http://localhost:8080',
+    'http://localhost:3000',
+].filter(Boolean);
+app.use(cors({
+    origin: (origin, cb) => {
+        // Allow same-origin requests (no Origin header) and whitelisted origins
+        if (!origin || _allowedOrigins.some(o => origin.startsWith(o))) return cb(null, true);
+        console.warn(`[CORS] Blocked request from origin: ${origin}`);
+        cb(new Error('Not allowed by CORS'));
+    },
+    methods: ['GET', 'POST', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'X-App-Token'],
+}));
 app.use(express.json());
 app.use(express.static('public', { etag: false, maxAge: 0 }));
 
@@ -1724,6 +1740,7 @@ async function initDB() {
     }
     try {
         dbPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+        dbPool.on('error', (err) => console.error('⚠️ DB pool error (idle client):', err.message));
         await dbPool.query(`
             CREATE TABLE IF NOT EXISTS trade_history (
                 id          SERIAL PRIMARY KEY,
@@ -2112,7 +2129,7 @@ app.get('/api/trade-suggestion', async (req, res) => {
 });
 
 // Update trade outcome in DB (call when you manually exit a trade)
-app.post('/api/trade-history/outcome', async (req, res) => {
+app.post('/api/trade-history/outcome', requireToken, async (req, res) => {
     const { id, outcome, exitPrice } = req.body;
     if (!dbPool) return res.json({ success: false, msg: 'No DB configured' });
     try {
@@ -2197,6 +2214,9 @@ function requireToken(req, res, next) {
 // Premium values (atmCEpremium/atmPEpremium) change at the option-chain refresh cadence
 // (~3 min), so running on every 3s frontend poll is pure CPU waste.
 let _lastMTMRun = 0;
+// Login probe — frontend uses this to verify password without exposing data
+app.get('/api/auth/check', requireToken, (req, res) => res.json({ ok: true }));
+
 app.get('/api/signal',  (req,res) => {
     const now = Date.now();
     if (now - _lastMTMRun >= 30_000) { updateOpenTradesMTM(); _lastMTMRun = now; }
@@ -2316,7 +2336,7 @@ app.post('/api/optionflow', requireToken, (req,res) => {
 });
 
 // ── TRADE JOURNAL ─────────────────────────────────────
-app.post('/api/trade/add', async (req,res) => {
+app.post('/api/trade/add', requireToken, async (req,res) => {
     const {type,strike,premium,lots,sl,notes}=req.body;
     const ist=getIST();
     const time=`${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
@@ -2352,7 +2372,7 @@ app.post('/api/trade/add', async (req,res) => {
     res.json({success:true, trade});
 });
 
-app.post('/api/trade/exit', async (req,res) => {
+app.post('/api/trade/exit', requireToken, async (req,res) => {
     const rawId=req.body.id;
     const id = typeof rawId === 'string' ? parseInt(rawId, 10) : rawId;
     const {exitPremium}=req.body;
@@ -2380,7 +2400,7 @@ app.post('/api/trade/exit', async (req,res) => {
     res.json({success:true, trade});
 });
 
-app.delete('/api/trade/:id', async (req,res) => {
+app.delete('/api/trade/:id', requireToken, async (req,res) => {
     const tid = parseInt(req.params.id);
     trades = trades.filter(t => t.id !== tid);
     if (dbPool) {

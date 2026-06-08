@@ -38,6 +38,23 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 #vn-splash .splash-dot{width:6px;height:6px;border-radius:50%;background:#00ff88;animation:splashBounce 1.2s ease-in-out infinite;}
 #vn-splash .splash-dot:nth-child(2){animation-delay:0.2s;}
 #vn-splash .splash-dot:nth-child(3){animation-delay:0.4s;}
+
+/* ── Login overlay ─────────────────────────────────────── */
+#vn-login{position:fixed;inset:0;background:#020508;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99998;transition:opacity 0.4s ease,visibility 0.4s ease;}
+#vn-login.hide{opacity:0;visibility:hidden;pointer-events:none;}
+#vn-login .login-box{width:min(320px,88vw);display:flex;flex-direction:column;align-items:center;gap:18px;}
+#vn-login .login-logo{width:54px;height:54px;filter:drop-shadow(0 0 14px rgba(0,255,136,0.6));}
+#vn-login .login-title{font-family:'Orbitron',monospace;font-size:13px;font-weight:900;letter-spacing:3px;color:#00ff88;text-shadow:0 0 16px rgba(0,255,136,0.6);}
+#vn-login .login-sub{font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;color:rgba(0,255,136,0.4);margin-top:-10px;}
+#vn-login .login-input-wrap{width:100%;position:relative;}
+#vn-login .login-input{width:100%;box-sizing:border-box;background:rgba(0,255,136,0.04);border:1px solid rgba(0,255,136,0.2);border-radius:8px;padding:13px 44px 13px 16px;font-family:'Share Tech Mono',monospace;font-size:14px;color:#e0ffe8;outline:none;letter-spacing:2px;transition:border-color 0.2s;}
+#vn-login .login-input:focus{border-color:rgba(0,255,136,0.5);box-shadow:0 0 12px rgba(0,255,136,0.1);}
+#vn-login .login-eye{position:absolute;right:13px;top:50%;transform:translateY(-50%);background:none;border:none;color:rgba(0,255,136,0.4);cursor:pointer;font-size:16px;padding:2px;}
+#vn-login .login-btn{width:100%;padding:13px;background:linear-gradient(135deg,rgba(0,255,136,0.15),rgba(0,255,136,0.08));border:1px solid rgba(0,255,136,0.35);border-radius:8px;color:#00ff88;font-family:'Rajdhani',sans-serif;font-size:15px;font-weight:700;letter-spacing:3px;cursor:pointer;transition:all 0.2s;}
+#vn-login .login-btn:hover{background:rgba(0,255,136,0.2);box-shadow:0 0 18px rgba(0,255,136,0.2);}
+#vn-login .login-btn:active{transform:scale(0.98);}
+#vn-login .login-err{font-family:'Share Tech Mono',monospace;font-size:11px;color:#ff4d4d;letter-spacing:1px;min-height:16px;text-align:center;animation:loginShake 0.35s ease;}
+@keyframes loginShake{0%,100%{transform:translateX(0);}25%{transform:translateX(-6px);}75%{transform:translateX(6px);}}
 @keyframes splashPulse{0%,100%{filter:drop-shadow(0 0 18px rgba(0,255,136,0.7))}50%{filter:drop-shadow(0 0 35px rgba(0,255,136,1));}}
 @keyframes splashFadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 @keyframes splashBounce{0%,80%,100%{transform:scale(0.6);opacity:0.4}40%{transform:scale(1);opacity:1}}
@@ -680,6 +697,26 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 </style>
 </head>
 <body>
+
+<!-- ═══════════════════════════════════ -->
+<!-- LOGIN OVERLAY                       -->
+<!-- ═══════════════════════════════════ -->
+<div id="vn-login">
+  <div class="login-box">
+    <svg class="login-logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <polygon points="60,5 25,55 50,55 40,95 75,45 50,45" fill="#00ff88"/>
+    </svg>
+    <div class="login-title">VARDAAN NIFTY AI</div>
+    <div class="login-sub">ENTER ACCESS PASSWORD</div>
+    <div class="login-input-wrap">
+      <input class="login-input" id="login-pass" type="password" placeholder="Password" autocomplete="current-password"
+        onkeydown="if(event.key==='Enter')_doLogin()"/>
+      <button class="login-eye" onclick="_toggleLoginEye()" title="Show/hide">👁</button>
+    </div>
+    <button class="login-btn" onclick="_doLogin()">ENTER →</button>
+    <div class="login-err" id="login-err"></div>
+  </div>
+</div>
 
 <!-- ═══════════════════════════════════ -->
 <!-- SPLASH SCREEN                       -->
@@ -4253,6 +4290,74 @@ async function fetchGlobalManual() {
 setInterval(() => {
   if (document.getElementById('panel-global')?.classList.contains('active')) fetchGlobalManual();
 }, 5 * 60 * 1000);
+
+// ── Login overlay logic ───────────────────────────────────────────────────────
+(function _initLogin() {
+  const overlay = document.getElementById('vn-login');
+  if (!overlay) return;
+
+  // If token already saved and valid-looking, skip login screen
+  const saved = localStorage.getItem('vn_token');
+  if (saved && saved.length > 3) {
+    overlay.classList.add('hide');
+    return;
+  }
+
+  // Show login, pause the app until authenticated
+  overlay.classList.remove('hide');
+})();
+
+function _doLogin() {
+  const input = document.getElementById('login-pass');
+  const errEl = document.getElementById('login-err');
+  const val   = (input?.value || '').trim();
+  if (!val) { _loginError('Enter password'); return; }
+
+  // Verify against server — dedicated auth probe endpoint
+  fetch('/api/auth/check', { headers: { 'X-App-Token': val } })
+    .then(r => {
+      if (r.ok) {
+        // Token accepted — save and dismiss
+        localStorage.setItem('vn_token', val);
+        document.getElementById('vn-login').classList.add('hide');
+        errEl.textContent = '';
+        // Start polling if not already running
+        if (typeof startPolling === 'function') startPolling();
+        if (typeof fetchTradeSuggestion === 'function' && document.getElementById('suggest-body')) {
+          setTimeout(fetchTradeSuggestion, 800);
+        }
+      } else {
+        _loginError('Wrong password');
+        input.value = '';
+        input.focus();
+      }
+    })
+    .catch(() => _loginError('Connection error — retry'));
+}
+
+function _loginError(msg) {
+  const errEl = document.getElementById('login-err');
+  if (!errEl) return;
+  errEl.textContent = msg;
+  // re-trigger shake animation
+  errEl.style.animation = 'none';
+  errEl.offsetHeight; // reflow
+  errEl.style.animation = '';
+}
+
+function _toggleLoginEye() {
+  const input = document.getElementById('login-pass');
+  if (!input) return;
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+// Focus password field when overlay is visible
+window.addEventListener('load', () => {
+  const overlay = document.getElementById('vn-login');
+  if (overlay && !overlay.classList.contains('hide')) {
+    setTimeout(() => document.getElementById('login-pass')?.focus(), 300);
+  }
+});
 
 </script>
 </body>
