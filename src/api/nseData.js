@@ -79,18 +79,16 @@ const PCR_INTERVAL_MS    =  3 * 60 * 1000;   // re-fetch PCR every 3 min
 const FIIDII_INTERVAL_MS = 15 * 60 * 1000;   // re-fetch FII/DII every 15 min
 const COOKIE_TTL_MS      = 15 * 60 * 1000;   // proactive cookie re-warm
 
-// ── ScraperAPI proxy config ───────────────────────────────────────────────────
-// Railway US-West IPs get rate-limited by NSE within minutes of market open.
-// ScraperAPI rotates residential IPs + handles cookies automatically.
-// Free tier: 1000 calls/month → enough for PCR (3 min interval × 6.5 hr × 22 days ≈ 2860)
-// So use SCRAPER_TIER=basic (₹0 free) for PCR only; direct for FII/DII (15 min = manageable).
-//
-// Setup: Add SCRAPERAPI_KEY=your_key to Railway env vars.
-// Get free key at: https://scraperapi.com (no card needed for free tier)
-//
-// Fallback: if key not set, tries direct NSE (may timeout on Railway)
-const SCRAPERAPI_KEY = process.env.SCRAPERAPI_KEY || null;
-const SCRAPERAPI_BASE = 'https://api.scraperapi.com';
+
+// ── Dhan API config ────────────────────────────────────────────────────────────
+// Dhan option chain works from Railway US IPs (confirmed not IP-blocked).
+// Set DHAN_ACCESS_TOKEN + DHAN_CLIENT_ID in Railway env vars.
+const DHAN_ACCESS_TOKEN = process.env.DHAN_ACCESS_TOKEN || null;
+const DHAN_CLIENT_ID    = process.env.DHAN_CLIENT_ID    || null;
+
+// ScraperAPI removed — trial ended. Dhan API is now the primary PCR source.
+const SCRAPERAPI_KEY  = null;   // disabled
+const SCRAPERAPI_BASE = 'https://api.scraperapi.com';  // kept for reference only
 
 // FII/DII uses a longer timeout because Railway→NSE latency spikes more on this endpoint
 const FIIDII_TIMEOUT_MS  = 20_000;   // 20s dedicated timeout for FII/DII
@@ -203,11 +201,14 @@ async function scraperAPIFetch(targetUrl) {
         // We must explicitly extract the NSE cookies from step 1 and inject them into step 2
         // using ScraperAPI's custom_headers parameter. This is what was missing.
 
-        // Build ScraperAPI URL — custom_headers=true allows us to send extra headers to the target
-        const buildUrl = (target, extraCookie) => {
-            let url = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(target)}&render_js=false&country_code=in&session_number=1&custom_headers=true`;
-            return url;
-        };
+        // Build ScraperAPI URL
+        // Warm step uses render_js=true (headless browser — sets NSE JS cookies properly)
+        // API step uses render_js=false (faster JSON fetch, reuses session cookies)
+        const buildWarmUrl = (target) =>
+            `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(target)}&render_js=true&country_code=in&session_number=1`;
+        const buildApiUrl = (target) =>
+            `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(target)}&render_js=false&country_code=in&session_number=1&custom_headers=true`;
+        const buildUrl = buildApiUrl;  // backward compat for API calls below
 
         // Axios config that injects the NSE cookie as a forwarded header
         const axiosConfig = (cookie) => ({
@@ -225,8 +226,9 @@ async function scraperAPIFetch(targetUrl) {
         if (nowMs - _scraperSessionWarmedAt > 8 * 60 * 1000) {
             try {
                 const warmRes = await axios.get(
-                    buildUrl('https://www.nseindia.com/option-chain'),
-                    { ...axiosConfig(null), headers: { ...HEADERS, Accept: 'text/html,application/xhtml+xml,*/*' } }
+                    buildWarmUrl('https://www.nseindia.com/option-chain'),
+                    { timeout: 40_000, validateStatus: () => true,
+                      headers: { ...HEADERS, Accept: 'text/html,application/xhtml+xml,*/*' } }
                 );
                 // Capture the NSE session cookies returned by ScraperAPI
                 const setCookie = warmRes.headers['set-cookie'];
@@ -1232,6 +1234,116 @@ async function fetchPCRFromAngel(spotPrice) {
     }
 }
 
+
+// ── Dhan API PCR ──────────────────────────────────────────────────────────────
+// Dhan option chain API works from Railway US IPs.
+// Docs: https://dhanhq.co/docs/v2/option-chain/
+// Requires DHAN_ACCESS_TOKEN + DHAN_CLIENT_ID env vars.
+async function fetchPCRFromDhan(spotPrice) {
+    if (!DHAN_ACCESS_TOKEN || !DHAN_CLIENT_ID) return null;
+    if (!spotPrice || spotPrice <= 0) return null;
+
+    try {
+        // Get upcoming Thursday expiry
+        const getNextExpiry = () => {
+            const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+            const day = now.getDay(); // 0=Sun
+            // Days until Thursday (4)
+            let daysAhead = (4 - day + 7) % 7;
+            if (daysAhead === 0) daysAhead = 7; // if today is Thursday, next Thursday
+            const expiry = new Date(now);
+            expiry.setDate(now.getDate() + daysAhead);
+            return `${expiry.getFullYear()}-${String(expiry.getMonth()+1).padStart(2,'0')}-${String(expiry.getDate()).padStart(2,'0')}`;
+        };
+
+        const expiry = getNextExpiry();
+        console.log(`[PCR-Dhan] Fetching option chain for expiry ${expiry}...`);
+
+        const res = await axios.post(
+            'https://api.dhan.co/v2/optionchain',
+            {
+                UnderlyingScrip : 13,          // NIFTY 50 scrip code
+                UnderlyingType  : 'INDEX',
+                Expiry          : expiry,
+            },
+            {
+                headers: {
+                    'Content-Type' : 'application/json',
+                    'Accept'       : 'application/json',
+                    'access-token' : DHAN_ACCESS_TOKEN,
+                    'client-id'    : DHAN_CLIENT_ID,
+                },
+                timeout: 12_000,
+            }
+        );
+
+        if (res.status !== 200) {
+            console.warn(`[PCR-Dhan] HTTP ${res.status}`);
+            return null;
+        }
+
+        const body = res.data;
+        // Dhan response: { data: { oc: { [strikeStr]: { call_options: {...}, put_options: {...} } } } }
+        const oc = body?.data?.oc || body?.oc || body?.data;
+        if (!oc || typeof oc !== 'object') {
+            console.warn(`[PCR-Dhan] Unexpected response shape: ${JSON.stringify(body)?.slice(0,120)}`);
+            return null;
+        }
+
+        const atmStrike = Math.round(spotPrice / 50) * 50;
+        let totalCeOI = 0, totalPeOI = 0;
+        let ceWall = 0, ceWallStrike = 0, peWall = 0, peWallStrike = 0;
+        const records = [];
+
+        for (const [strikeStr, data] of Object.entries(oc)) {
+            const strike = parseFloat(strikeStr);
+            if (isNaN(strike)) continue;
+            const ceOI = parseInt(data?.call_options?.oi || data?.CE?.openInterest || 0);
+            const peOI = parseInt(data?.put_options?.oi  || data?.PE?.openInterest || 0);
+            const ceLtp = parseFloat(data?.call_options?.last_price || data?.CE?.lastPrice || 0);
+            const peLtp = parseFloat(data?.put_options?.last_price  || data?.PE?.lastPrice || 0);
+            const ceOIChg = parseInt(data?.call_options?.oi_change || data?.CE?.changeinOpenInterest || 0);
+            const peOIChg = parseInt(data?.put_options?.oi_change  || data?.PE?.changeinOpenInterest || 0);
+
+            totalCeOI += ceOI;
+            totalPeOI += peOI;
+            if (ceOI > ceWall) { ceWall = ceOI; ceWallStrike = strike; }
+            if (peOI > peWall) { peWall = peOI; peWallStrike = strike; }
+
+            records.push({
+                strikePrice: strike,
+                CE: { openInterest: ceOI, lastPrice: ceLtp, changeinOpenInterest: ceOIChg },
+                PE: { openInterest: peOI, lastPrice: peLtp, changeinOpenInterest: peOIChg },
+            });
+        }
+
+        if (totalCeOI === 0 || totalPeOI === 0) {
+            console.warn('[PCR-Dhan] Zero OI — market closed or no data');
+            return null;
+        }
+
+        const pcr    = parseFloat((totalPeOI / totalCeOI).toFixed(3));
+        const atmRange = records.filter(r => Math.abs(r.strikePrice - atmStrike) <= 150);
+        const atmCeOI  = atmRange.reduce((s, r) => s + (r.CE?.openInterest || 0), 0);
+        const atmPeOI  = atmRange.reduce((s, r) => s + (r.PE?.openInterest || 0), 0);
+        const atmPcr   = atmCeOI > 0 ? parseFloat((atmPeOI / atmCeOI).toFixed(3)) : null;
+
+        console.log(`[PCR-Dhan] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike}(${ceWall}) | PE Wall:${peWallStrike}(${peWall}) | Expiry:${expiry}`);
+
+        return {
+            pcr, atmPcr, atm: atmStrike,
+            ceWall  : { strike: ceWallStrike, oi: ceWall },
+            peWall  : { strike: peWallStrike, oi: peWall },
+            maxPain : calcMaxPain(records),
+            records,
+            source  : 'dhan',
+        };
+    } catch (e) {
+        console.warn(`[PCR-Dhan] Error: ${e.message}`);
+        return null;
+    }
+}
+
 async function _fetchPCR(spotPrice) {
     if (!spotPrice || spotPrice <= 0) return;
     // Skip PCR fetch entirely outside market hours — NSE returns 404/garbage pre/post market
@@ -1243,9 +1355,58 @@ async function _fetchPCR(spotPrice) {
     try {
         let pcrData = null;
 
-        // ── Path 0: Angel One SmartAPI — preferred (no IP block, uses existing session) ──
-        // Angel API works from Railway US IPs; no ScraperAPI credit usage.
-        if (_angelSession?.jwtToken) {
+        // ── Path 0: Dhan API — primary PCR source (works from Railway US IPs) ─────────
+        if (DHAN_ACCESS_TOKEN && DHAN_CLIENT_ID) {
+            console.log('[PCR] Trying Dhan API...');
+            const dhanResult = await fetchPCRFromDhan(spotPrice);
+            if (dhanResult) {
+                Object.assign(_pcr, {
+                    pcr       : dhanResult.pcr,
+                    atmPcr    : dhanResult.atmPcr,
+                    atm       : dhanResult.atm,
+                    ceWall    : dhanResult.ceWall,
+                    peWall    : dhanResult.peWall,
+                    maxPain   : dhanResult.maxPain,
+                    expiryDay : isExpiryDay(),
+                    fetchedAt : new Date(),
+                    lastError : null,
+                    fetchCount: _pcr.fetchCount + 1,
+                });
+                try {
+                    const oib = calcOIBuildup(dhanResult.records || [], dhanResult.pcr);
+                    if (oib) {
+                        const oiSignal = interpretOIBuildup(oib);
+                        Object.assign(_oiBuildup, oib, {
+                            signal: oiSignal.signal, strength: oiSignal.strength,
+                            label: oiSignal.label, fetchedAt: new Date(),
+                            fetchCount: _oiBuildup.fetchCount + 1,
+                        });
+                    }
+                    const emomRaw = parseEarlyMomentum(dhanResult.records || [], spotPrice);
+                    if (emomRaw) {
+                        const emSignal = interpretEarlyMomentum({
+                            ...emomRaw,
+                            topCEbuildup: _oiBuildup.topCEbuildup || [],
+                            topPEbuildup: _oiBuildup.topPEbuildup || [],
+                            maxCEoiAddStrike: _oiBuildup.maxCEoiAddStrike,
+                            maxPEoiAddStrike: _oiBuildup.maxPEoiAddStrike,
+                            maxCEoiAdd: _oiBuildup.maxCEoiAdd,
+                            maxPEoiAdd: _oiBuildup.maxPEoiAdd,
+                        });
+                        Object.assign(_earlyMom, emomRaw, {
+                            score: emSignal.score, signal: emSignal.signal,
+                            strength: emSignal.strength, label: emSignal.label,
+                            votes: emSignal.votes, fetchedAt: new Date(),
+                        });
+                    }
+                } catch (_) {}
+                return;  // ✅ Dhan success — skip all other paths
+            }
+            console.warn('[PCR] Dhan path failed — falling back to direct NSE');
+        }
+
+        // ── Path 0b: Angel One SmartAPI (DISABLED — HTML IP block on Railway) ─────────
+        if (false && _angelSession?.jwtToken) {  // DISABLED — Angel NFO IP blocked on Railway
             console.log('[PCR] Trying Angel Market Data...');
             const angelResult = await fetchPCRFromAngel(spotPrice);
             if (angelResult) {
@@ -1308,20 +1469,11 @@ async function _fetchPCR(spotPrice) {
                 } catch (_) {}
                 return;  // success — skip ScraperAPI + direct NSE
             }
-            console.warn('[PCR] Angel path failed — trying ScraperAPI');
+            // Angel path disabled
         }
 
-        // ── Path A: ScraperAPI with session warming + URL rotation ──────────
-        if (SCRAPERAPI_KEY) {
-            console.log('[PCR] Trying ScraperAPI...');
-            pcrData = await scraperAPIFetch(OC_URLS[0]);  // internally tries all OC_URLS
-            if (pcrData?.records?.data) {
-                console.log('[PCR] ScraperAPI ✅');
-            } else {
-                console.warn('[PCR] ScraperAPI exhausted all URLs — falling back to direct NSE');
-                pcrData = null;
-            }
-        }
+        // ── Path A: ScraperAPI — REMOVED (trial ended) ───────────────────
+        // Direct NSE below as final fallback
 
         // ── Path B: Direct NSE with URL rotation ─────────────────────────────
         if (!pcrData) {
@@ -1579,30 +1731,7 @@ async function _fetchFIIDII() {
         return;
     }
     try {
-        // -- Path A: ScraperAPI (bypasses Railway IP block) --
-        if (SCRAPERAPI_KEY) {
-            try {
-                const scCookie = await getCookie();
-                const scUrl = `${SCRAPERAPI_BASE}/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(FIIDII_URL)}&render_js=true&country_code=in&session_number=1&custom_headers=true`;
-                const scRes = await axios.get(scUrl, {
-                    timeout: 30_000, validateStatus: () => true,
-                    headers: { ...HEADERS, ...(scCookie ? { 'Cookie': scCookie } : {}) },
-                });
-                if (scRes.status === 200 && scRes.data) {
-                    const parsed = parseFIIDII(scRes.data);
-                    if (parsed) {
-                        Object.assign(_fii, parsed, { fetchedAt: new Date(), lastError: null, fetchCount: _fii.fetchCount + 1 });
-                        const fmt = v => v === null ? 'N/A' : `Rs.${v >= 0 ? '+' : ''}${v.toFixed(0)}Cr`;
-                        console.log(`[FII/DII] ScraperAPI OK | FII: ${fmt(parsed.fiiNet)} DII: ${fmt(parsed.diiNet)}`);
-                        return;
-                    }
-                }
-            } catch (se) {
-                console.warn('[FII/DII] ScraperAPI error:', se.message, '- trying direct NSE');
-            }
-        }
-
-        // -- Path B: Direct NSE (bypasses Railway IP block) --
+        // -- Path A: Direct NSE --
         // Use dedicated longer timeout for FII/DII
         const cookie = await getCookie();
         let res = await axios.get(FIIDII_URL, {
