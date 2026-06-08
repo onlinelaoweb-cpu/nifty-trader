@@ -255,6 +255,11 @@ async function scraperAPIFetch(targetUrl) {
                     continue;
                 }
                 const raw = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+                // Empty object = IP blocked silently
+                if (raw && typeof raw === 'object' && Object.keys(raw).length === 0) {
+                    console.warn(`[ScraperAPI] Empty object response (IP block?) for ${ocUrl.split('/').pop()}`);
+                    continue;
+                }
                 // NSE has multiple response formats — normalise all to {records:{data:[]}}
                 // Shape 1 (indices):  { records: { data: [...] } }
                 // Shape 2 (equities): { data: [...], metadata: {...} }
@@ -1060,11 +1065,20 @@ async function fetchPCRFromAngel(spotPrice) {
         // Find tokens for these strikes on the nearest expiry
         const tokens = [];
         const strikeMap = {};  // token → { strike, optionType }
+
+        // ScripMaster strike field format varies:
+        //   Paise format: 2314300 (divide by 100 = 23143.00)
+        //   Normal format: 23143 (use as-is)
+        // Detect by checking if values are >> 10000 (paise) or ~10000-30000 (normal Nifty range)
+        const sampleStrike = parseFloat(niftyOptions[0]?.strike || 0);
+        const strikeDivisor = sampleStrike > 100000 ? 100 : 1;
+        console.log(`[PCR-Angel] Strike format: sample=${sampleStrike} divisor=${strikeDivisor}`);
+
         for (const strike of strikesToFetch) {
             for (const optType of ['CE', 'PE']) {
                 const s = niftyOptions.find(x =>
                     x.expiry === nearestExpiry &&
-                    Math.abs(parseFloat(x.strike) / 100 - strike) < 1 &&
+                    Math.abs(parseFloat(x.strike) / strikeDivisor - strike) < 1 &&
                     x.symbol.endsWith(optType)
                 );
                 if (s) {
@@ -1074,10 +1088,32 @@ async function fetchPCRFromAngel(spotPrice) {
             }
         }
 
-        if (tokens.length < 10) {
-            console.warn(`[PCR-Angel] Too few tokens found (${tokens.length}) for expiry ${nearestExpiry}`);
+        if (tokens.length < 6) {
+            // Fallback: if still too few, try without divisor (in case detection was wrong)
+            const altDivisor = strikeDivisor === 100 ? 1 : 100;
+            console.warn(`[PCR-Angel] Too few tokens (${tokens.length}) with divisor=${strikeDivisor}, retrying divisor=${altDivisor}`);
+            tokens.length = 0;
+            for (const k in strikeMap) delete strikeMap[k];
+            for (const strike of strikesToFetch) {
+                for (const optType of ['CE', 'PE']) {
+                    const s = niftyOptions.find(x =>
+                        x.expiry === nearestExpiry &&
+                        Math.abs(parseFloat(x.strike) / altDivisor - strike) < 1 &&
+                        x.symbol.endsWith(optType)
+                    );
+                    if (s) {
+                        tokens.push(s.token);
+                        strikeMap[s.token] = { strike, optionType: optType };
+                    }
+                }
+            }
+        }
+
+        if (tokens.length < 6) {
+            console.warn(`[PCR-Angel] Too few tokens found (${tokens.length}) for expiry ${nearestExpiry} — ATM:${atmStrike}`);
             return null;
         }
+        console.log(`[PCR-Angel] Found ${tokens.length} tokens for expiry ${nearestExpiry}`);
 
         // Fetch market data for these tokens
         const res = await axios.post(
@@ -1286,6 +1322,11 @@ async function _fetchPCR(spotPrice) {
                     // Parse string JSON if needed
                     if (typeof d === 'string') { try { d = JSON.parse(d); } catch(_) {} }
 
+                    // Empty object {} = Railway IP silently blocked by NSE
+                    if (d && typeof d === 'object' && Object.keys(d).length === 0) {
+                        console.warn(`[PCR] Direct NSE returned empty object (IP block?) for ${ocUrl.split('/').pop()}`);
+                        continue;
+                    }
                     // NSE response shape variations — normalise all to {records:{data:[]}}:
                     // Shape 1 (indices):  { records: { data: [...] }, filtered: {...} }
                     // Shape 2 (equities): { data: [...], metadata: {...} }
