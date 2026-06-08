@@ -1365,10 +1365,10 @@ async function refreshMTF() {
         };
     } catch(e) { console.error('MTF:', e.message); }
 }
-async function refreshGlobal() { if (!isNSEMarketDay()) return; try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); } }
+async function refreshGlobal() { try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); } }
 let _breadthInFlight = false;
-async function refreshBreadth() {
-    if (!isNSEMarketDay()) return;
+async function refreshBreadth(force = false) {
+    if (!force && !isNSEMarketDay()) return; // skip outside market hours unless forced (e.g. startup)
     if (_breadthInFlight) return; // prevent duplicate A/D fetches (e.g. post-login call overlapping staggered init)
     _breadthInFlight = true;
     try { const d=await fetchAdvanceDecline(); if(d) marketState.breadth=d; }
@@ -2522,7 +2522,7 @@ async function tryAngelLogin() {
         // because initializeLiveData() calls refreshBreadth() 2s after tryAngelLogin()
         // returns — firing it here too causes the double A/D fetch seen in logs.
         if (_initSequenceComplete) {
-            refreshBreadth().catch(e => console.error('Post-login breadth error:', e.message));
+            refreshBreadth(true).catch(e => console.error('Post-login breadth error:', e.message));
         }
     }
     else      { console.log('Yahoo Finance fallback — retry in 30s'); setTimeout(tryAngelLogin, 30000); }
@@ -2573,7 +2573,7 @@ async function initializeLiveData() {
     await withTimeout(tryAngelLogin(), 12000, 'angelLogin');
 
     await new Promise(r => setTimeout(r, 2000));
-    await withTimeout(refreshBreadth(),    20000, 'refreshBreadth');
+    await withTimeout(refreshBreadth(true),    20000, 'refreshBreadth');
     await new Promise(r => setTimeout(r, 2000));
     await withTimeout(refreshMTF(), 20000, 'refreshMTF');
     await new Promise(r => setTimeout(r, 2000));
