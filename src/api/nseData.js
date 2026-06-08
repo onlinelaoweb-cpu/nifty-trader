@@ -1155,26 +1155,41 @@ async function fetchPCRFromAngel(spotPrice) {
         const records = [];
         const strikeRows = {};
 
+        // Log first item to detect field name changes in Angel API response
+        if (fetched.length > 0) {
+            console.log(`[PCR-Angel] Sample fetched item keys: ${Object.keys(fetched[0]).join(', ')}`);
+            console.log(`[PCR-Angel] Sample item: ${JSON.stringify(fetched[0]).slice(0, 200)}`);
+        }
+
+        let matchedCount = 0;
         for (const item of fetched) {
-            const info = strikeMap[item.symbolToken];
+            // Angel API field name variants: symbolToken / token / scripCode / instrumentToken
+            const tok = item.symbolToken || item.token || item.scripCode || item.instrumentToken || String(item.symboltoken || '');
+            const info = strikeMap[tok] || strikeMap[String(tok)];
             if (!info) continue;
-            const oi = parseInt(item.openInterest || 0);
-            const ltp = parseFloat(item.lastPrice || 0);
+            matchedCount++;
+            // OI field variants: openInterest / oi / openInterestQty
+            const oi = parseInt(item.openInterest ?? item.oi ?? item.openInterestQty ?? 0);
+            // Price field variants: lastPrice / ltp / closePrice
+            const ltp = parseFloat(item.lastPrice ?? item.ltp ?? item.closePrice ?? 0);
+            // OI change field variants: netChange / changeinOpenInterest / oiChange
+            const oiChg = parseInt(item.netChange ?? item.changeinOpenInterest ?? item.oiChange ?? 0);
             const { strike, optionType } = info;
             if (!strikeRows[strike]) strikeRows[strike] = { strikePrice: strike };
             if (optionType === 'CE') {
-                strikeRows[strike].CE = { openInterest: oi, lastPrice: ltp, changeinOpenInterest: parseInt(item.netChange || 0) };
+                strikeRows[strike].CE = { openInterest: oi, lastPrice: ltp, changeinOpenInterest: oiChg };
                 totalCeOI += oi;
                 if (oi > ceWall) { ceWall = oi; ceWallStrike = strike; }
             } else {
-                strikeRows[strike].PE = { openInterest: oi, lastPrice: ltp, changeinOpenInterest: parseInt(item.netChange || 0) };
+                strikeRows[strike].PE = { openInterest: oi, lastPrice: ltp, changeinOpenInterest: oiChg };
                 totalPeOI += oi;
                 if (oi > peWall) { peWall = oi; peWallStrike = strike; }
             }
         }
+        console.log(`[PCR-Angel] Matched ${matchedCount}/${fetched.length} items | CE OI:${totalCeOI} PE OI:${totalPeOI}`);
 
         if (totalCeOI === 0 || totalPeOI === 0) {
-            console.warn('[PCR-Angel] Zero OI — market closed or data unavailable');
+            console.warn('[PCR-Angel] Zero OI — token match failed or market closed. Check field names above.');
             return null;
         }
 

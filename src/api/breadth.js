@@ -227,11 +227,22 @@ async function fetchBreadthFromAngel() {
         let bullWeight = 0, bearWeight = 0;
         const stockList = [];
 
+        // Log first item to detect Angel API field name changes
+        if (stocks.length > 0) {
+            console.log(`[A/D Tier1] Sample keys: ${Object.keys(stocks[0]).join(', ')}`);
+        }
+
         for (const s of stocks) {
-            // Angel FULL mode: percentChange = today's % move vs prev close
-            const changePct = parseFloat(s.percentChange ?? s.netChange ?? '0');
-            const price     = parseFloat(s.ltp ?? s.close ?? 0);
-            const symbol    = s.tradingSymbol || s.symbolToken || '';
+            // Angel FULL mode field variants — API response format changes occasionally
+            // percentChange / pChange / percentageChange / dayChangePerc
+            const changePct = parseFloat(
+                s.percentChange ?? s.pChange ?? s.percentageChange ?? s.dayChangePerc ??
+                s.netChange ?? s.change ?? '0'
+            );
+            // price: ltp / lastPrice / close / closePrice
+            const price  = parseFloat(s.ltp ?? s.lastPrice ?? s.close ?? s.closePrice ?? 0);
+            // symbol: tradingSymbol / symbol / scripName
+            const symbol = s.tradingSymbol || s.symbol || s.scripName || s.symbolToken || '';
 
             // Try to match weight from NIFTY_STOCKS list
             const meta = NIFTY_STOCKS.find(n => symbol.includes(n.symbol));
@@ -246,7 +257,10 @@ async function fetchBreadthFromAngel() {
             stockList.push({ name, symbol, weight, price, change: 0, changePct, status });
         }
 
-        if ((advances + declines + unchanged) < 10) return null;
+        if ((advances + declines + unchanged) < 10) {
+            console.warn(`[A/D Tier1] Too few valid stocks (${advances+declines+unchanged}) — check field names above`);
+            return null;
+        }
         return buildResult(advances, declines, unchanged, bullWeight, bearWeight, stockList, 'angel-nifty50');
 
     } catch (err) {
