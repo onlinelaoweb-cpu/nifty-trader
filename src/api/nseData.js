@@ -1558,7 +1558,13 @@ async function _fetchFIIDII() {
  * getSpotPrice: () => number — callback that returns the current Nifty spot.
  * This avoids a circular dependency between nseData and your price feed.
  */
+let _nseSchedulerStarted = false;
 function startNSEScheduler(getSpotPrice) {
+    if (_nseSchedulerStarted) {
+        console.warn('[NSE] startNSEScheduler called more than once — skipping duplicate start');
+        return;
+    }
+    _nseSchedulerStarted = true;
     console.log('[NSE] 🚀 Starting NSE scheduler (PCR: 3 min | FII/DII: 15 min)');
 
     // Fire first fetches async — intentionally NOT awaited so the app never

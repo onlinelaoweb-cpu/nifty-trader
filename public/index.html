@@ -3629,8 +3629,10 @@ async function clearAllTrades() {
   hideClearConfirm();
 
   // Fire server deletes in parallel (best-effort)
+  const _delTok = localStorage.getItem('vn_token') || '';
+  const _delHeaders = _delTok ? { 'X-App-Token': _delTok } : {};
   const deletePromises = _trades.map(t =>
-    fetch('/api/trade/' + t.id, { method: 'DELETE' }).catch(() => {})
+    fetch('/api/trade/' + t.id, { method: 'DELETE', headers: _delHeaders }).catch(() => {})
   );
   await Promise.allSettled(deletePromises);
 
@@ -4225,7 +4227,7 @@ async function fetchAndRenderCalendar() {
 
 // Fetch calendar on load and refresh every 30 minutes
 fetchAndRenderCalendar();
-setInterval(fetchAndRenderCalendar, 30 * 60 * 1000);
+const _calendarTimer = setInterval(fetchAndRenderCalendar, 30 * 60 * 1000);
 
 // ─── GLOBAL TAB: manual refresh + dedicated auto-fetch every 5m ──────────
 async function fetchGlobalManual() {
