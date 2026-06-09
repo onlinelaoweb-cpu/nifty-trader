@@ -86,7 +86,10 @@ const COOKIE_TTL_MS      = 15 * 60 * 1000;   // proactive cookie re-warm
 const DHAN_ACCESS_TOKEN = (process.env.DHAN_ACCESS_TOKEN || '').trim() || null;
 const DHAN_CLIENT_ID    = (process.env.DHAN_CLIENT_ID    || '').trim() || null;
 // Log Dhan status at module load — appears in Railway startup logs
-console.log(`[nseData] Dhan PCR: ${DHAN_ACCESS_TOKEN ? '✅ token present (' + DHAN_ACCESS_TOKEN.slice(0,12) + '...)' : '❌ DHAN_ACCESS_TOKEN missing'} | ClientID: ${DHAN_CLIENT_ID || '❌ MISSING'}`);
+console.log(`[nseData] Dhan PCR: ${DHAN_ACCESS_TOKEN ? '✅ token present (' + DHAN_ACCESS_TOKEN.slice(0,12) + '...)' : '❌ DHAN_ACCESS_TOKEN missing'} | ClientID: ${DHAN_CLIENT_ID ? '✅ ' + DHAN_CLIENT_ID : '❌ MISSING — set DHAN_CLIENT_ID in Railway Variables!'}`);
+if (!DHAN_CLIENT_ID || !DHAN_ACCESS_TOKEN) {
+    console.error('[nseData] ⚠️  PCR DISABLED — DHAN_ACCESS_TOKEN + DHAN_CLIENT_ID dono Railway Variables mein set karo. PCR tab N/A dikhega jab tak fix nahi hota.');
+}
 
 // ScraperAPI removed — trial ended. Dhan API is now the primary PCR source.
 const SCRAPERAPI_KEY  = null;   // disabled
@@ -1246,13 +1249,13 @@ async function fetchPCRFromDhan(spotPrice) {
     if (!spotPrice || spotPrice <= 0) return null;
 
     try {
-        // Get upcoming Thursday expiry
+        // Get current/upcoming Thursday expiry (Nifty weekly)
+        // If today IS Thursday → use today (same-day expiry)
+        // Otherwise → find next Thursday
         const getNextExpiry = () => {
             const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-            const day = now.getDay(); // 0=Sun
-            // Days until Thursday (4)
-            let daysAhead = (4 - day + 7) % 7;
-            if (daysAhead === 0) daysAhead = 7; // if today is Thursday, next Thursday
+            const day = now.getDay(); // 0=Sun, 4=Thu
+            let daysAhead = (4 - day + 7) % 7; // 0 if today is Thursday
             const expiry = new Date(now);
             expiry.setDate(now.getDate() + daysAhead);
             return `${expiry.getFullYear()}-${String(expiry.getMonth()+1).padStart(2,'0')}-${String(expiry.getDate()).padStart(2,'0')}`;
