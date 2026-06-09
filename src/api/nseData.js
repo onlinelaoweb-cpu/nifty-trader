@@ -128,6 +128,14 @@ renewDhanToken();
 const SCRAPERAPI_KEY  = null;   // disabled
 const SCRAPERAPI_BASE = 'https://api.scraperapi.com';  // kept for reference only
 
+// ── Fyers API config ───────────────────────────────────────────────────────────
+// Fyers option chain — no IP restriction, 365-day token, works on Railway.
+// Set FYERS_APP_ID + FYERS_ACCESS_TOKEN in Railway env vars.
+// To generate token: see server startup log for auth URL, open in browser, paste token.
+const FYERS_APP_ID      = (process.env.FYERS_APP_ID      || '').trim() || null;
+let   FYERS_ACCESS_TOKEN = (process.env.FYERS_ACCESS_TOKEN || '').trim() || null;
+console.log(`[nseData] Fyers PCR: ${FYERS_APP_ID ? '✅ AppID ' + FYERS_APP_ID : '❌ FYERS_APP_ID missing'} | Token: ${FYERS_ACCESS_TOKEN ? '✅ present (' + FYERS_ACCESS_TOKEN.slice(0,12) + '...)' : '❌ FYERS_ACCESS_TOKEN missing'}`);
+
 // FII/DII uses a longer timeout because Railway→NSE latency spikes more on this endpoint
 const FIIDII_TIMEOUT_MS  = 20_000;   // 20s dedicated timeout for FII/DII
 
@@ -1277,6 +1285,105 @@ async function fetchPCRFromAngel(spotPrice) {
 // Dhan option chain API works from Railway US IPs.
 // Docs: https://dhanhq.co/docs/v2/option-chain/
 // Requires DHAN_ACCESS_TOKEN + DHAN_CLIENT_ID env vars.
+
+// ── Fyers API PCR ─────────────────────────────────────────────────────────────
+// Fetches Nifty option chain from Fyers API v3 → computes PCR, ATM PCR, walls.
+// No IP restriction, 365-day token. Primary PCR source replacing Dhan.
+async function fetchPCRFromFyers(spotPrice) {
+    if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return null;
+    if (!spotPrice || spotPrice <= 0) return null;
+
+    try {
+        // Fyers option chain endpoint — symbol format: NSE:NIFTY50-INDEX
+        const res = await axios.get(
+            'https://api-t1.fyers.in/data/v3/options-chain',
+            {
+                params: {
+                    symbol     : 'NSE:NIFTY50-INDEX',
+                    strikecount: 20,   // ATM ±20 strikes
+                    timestamp  : '',
+                },
+                headers: {
+                    'Authorization' : `${FYERS_APP_ID}:${FYERS_ACCESS_TOKEN}`,
+                    'Content-Type'  : 'application/json',
+                },
+                timeout: 10_000,
+            }
+        );
+
+        if (typeof res.data === 'string' && res.data.includes('<html')) {
+            console.warn('[PCR-Fyers] HTML response — IP block or auth issue');
+            return null;
+        }
+
+        const d = res.data;
+        if (!d || d.s !== 'ok' || !d.data?.optionsChain) {
+            console.warn(`[PCR-Fyers] Bad response: s=${d?.s} | msg=${d?.message || d?.errmsg || JSON.stringify(d)?.slice(0,120)}`);
+            return null;
+        }
+
+        const chain = d.data.optionsChain;
+        if (!chain || chain.length === 0) {
+            console.warn('[PCR-Fyers] Empty options chain');
+            return null;
+        }
+
+        // Compute PCR from chain
+        let totalCeOI = 0, totalPeOI = 0;
+        let ceWall = 0, ceWallStrike = 0, peWall = 0, peWallStrike = 0;
+        const atmStrike = Math.round(spotPrice / 50) * 50;
+        let atmCeOI = 0, atmPeOI = 0;
+        const records = [];
+
+        for (const row of chain) {
+            const strike = row.strike_price;
+            const ceOI   = row.call_options?.oi || 0;
+            const peOI   = row.put_options?.oi  || 0;
+            totalCeOI += ceOI;
+            totalPeOI += peOI;
+            if (ceOI > ceWall) { ceWall = ceOI; ceWallStrike = strike; }
+            if (peOI > peWall) { peWall = peOI; peWallStrike = strike; }
+            if (strike === atmStrike) { atmCeOI = ceOI; atmPeOI = peOI; }
+            // Build records compatible with calcOIBuildup
+            records.push({
+                strikePrice : strike,
+                CE          : { openInterest: ceOI, changeinOpenInterest: row.call_options?.oiChange || 0, lastPrice: row.call_options?.ltp || 0 },
+                PE          : { openInterest: peOI, changeinOpenInterest: row.put_options?.oiChange  || 0, lastPrice: row.put_options?.ltp  || 0 },
+            });
+        }
+
+        if (totalCeOI === 0 && totalPeOI === 0) {
+            console.warn('[PCR-Fyers] All OI values zero — market closed or bad data');
+            return null;
+        }
+
+        const pcr    = totalCeOI > 0 ? +(totalPeOI / totalCeOI).toFixed(3) : 0;
+        const atmPcr = atmCeOI   > 0 ? +(atmPeOI   / atmCeOI  ).toFixed(3) : 0;
+
+        // Max pain — strike with minimum total loss for writers
+        let maxPain = atmStrike;
+        let minLoss = Infinity;
+        for (const row of chain) {
+            const s = row.strike_price;
+            let loss = 0;
+            for (const r2 of chain) {
+                const ceOI2 = r2.call_options?.oi || 0;
+                const peOI2 = r2.put_options?.oi  || 0;
+                loss += ceOI2 * Math.max(0, r2.strike_price - s);
+                loss += peOI2 * Math.max(0, s - r2.strike_price);
+            }
+            if (loss < minLoss) { minLoss = loss; maxPain = s; }
+        }
+
+        console.log(`[PCR-Fyers] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike} | PE Wall:${peWallStrike} | MaxPain:${maxPain} | Strikes:${chain.length}`);
+        return { pcr, atmPcr, atm: atmStrike, ceWall: ceWallStrike, peWall: peWallStrike, maxPain, records };
+
+    } catch (e) {
+        console.warn(`[PCR-Fyers] Error: ${e.response?.status || e.message}`);
+        return null;
+    }
+}
+
 async function fetchPCRFromDhan(spotPrice) {
     if (!DHAN_ACCESS_TOKEN || !DHAN_CLIENT_ID) return null;
     if (!spotPrice || spotPrice <= 0) return null;
@@ -1393,7 +1500,57 @@ async function _fetchPCR(spotPrice) {
     try {
         let pcrData = null;
 
-        // ── Path 0: Dhan API — primary PCR source (works from Railway US IPs) ─────────
+        // ── Path 0: Fyers API — primary PCR source (no IP restriction, 365-day token) ──
+        if (FYERS_ACCESS_TOKEN && FYERS_APP_ID) {
+            console.log('[PCR] Trying Fyers API...');
+            const fyersResult = await fetchPCRFromFyers(spotPrice);
+            if (fyersResult) {
+                Object.assign(_pcr, {
+                    pcr       : fyersResult.pcr,
+                    atmPcr    : fyersResult.atmPcr,
+                    atm       : fyersResult.atm,
+                    ceWall    : fyersResult.ceWall,
+                    peWall    : fyersResult.peWall,
+                    maxPain   : fyersResult.maxPain,
+                    expiryDay : isExpiryDay(),
+                    fetchedAt : new Date(),
+                    lastError : null,
+                    fetchCount: _pcr.fetchCount + 1,
+                });
+                try {
+                    const oib = calcOIBuildup(fyersResult.records || [], fyersResult.pcr);
+                    if (oib) {
+                        const oiSignal = interpretOIBuildup(oib);
+                        Object.assign(_oiBuildup, oib, {
+                            signal: oiSignal.signal, strength: oiSignal.strength,
+                            label: oiSignal.label, fetchedAt: new Date(),
+                            fetchCount: _oiBuildup.fetchCount + 1,
+                        });
+                    }
+                    const emomRaw = parseEarlyMomentum(fyersResult.records || [], spotPrice);
+                    if (emomRaw) {
+                        const emSignal = interpretEarlyMomentum({
+                            ...emomRaw,
+                            topCEbuildup: _oiBuildup.topCEbuildup || [],
+                            topPEbuildup: _oiBuildup.topPEbuildup || [],
+                            maxCEoiAddStrike: _oiBuildup.maxCEoiAddStrike,
+                            maxPEoiAddStrike: _oiBuildup.maxPEoiAddStrike,
+                            maxCEoiAdd: _oiBuildup.maxCEoiAdd,
+                            maxPEoiAdd: _oiBuildup.maxPEoiAdd,
+                        });
+                        Object.assign(_earlyMom, emomRaw, {
+                            score: emSignal.score, signal: emSignal.signal,
+                            strength: emSignal.strength, label: emSignal.label,
+                            votes: emSignal.votes, fetchedAt: new Date(),
+                        });
+                    }
+                } catch (_) {}
+                return;  // ✅ Fyers success — skip all other paths
+            }
+            console.warn('[PCR] Fyers path failed — falling back to Dhan');
+        }
+
+        // ── Path 0b: Dhan API — fallback (1-day token, needs manual refresh) ────────────
         if (DHAN_ACCESS_TOKEN && DHAN_CLIENT_ID) {
             console.log('[PCR] Trying Dhan API...');
             const dhanResult = await fetchPCRFromDhan(spotPrice);

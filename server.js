@@ -2727,10 +2727,20 @@ server.listen(PORT, () => {
     console.log(`VardaanNifty AI running on port ${PORT}`);
     server.keepAliveTimeout = 120000;
     server.headersTimeout   = 125000;
-    // Print outgoing IP for Dhan Static IP whitelist setup
+    // Print outgoing IP for reference
     axios.get('https://api.ipify.org?format=json', { timeout: 5000 })
-        .then(r => console.log(`[Railway] Outgoing IP: ${r.data.ip} — Add this to Dhan Static IP Setting!`))
+        .then(r => console.log(`[Railway] Outgoing IP: ${r.data.ip}`))
         .catch(() => console.log('[Railway] Could not fetch outgoing IP'));
+    // Print Fyers auth URL if token not set
+    const fyersAppId = (process.env.FYERS_APP_ID || '').trim();
+    const fyersToken = (process.env.FYERS_ACCESS_TOKEN || '').trim();
+    if (fyersAppId && !fyersToken) {
+        const authUrl = `https://api-t1.fyers.in/api/v3/generate-authcode?client_id=${fyersAppId}&redirect_uri=https://trade.fyers.in/api-login/redirect-uri/index.html&response_type=code&state=vardaannifty`;
+        console.log(`[Fyers] ⚠️  FYERS_ACCESS_TOKEN missing! Generate token by visiting:`);
+        console.log(`[Fyers] 👉 ${authUrl}`);
+    } else if (fyersToken) {
+        console.log(`[Fyers] ✅ Access token present — PCR via Fyers enabled`);
+    }
     // Start init AFTER server is already accepting connections
     initializeLiveData().catch(e => console.error('Init error:', e.message));
 });
