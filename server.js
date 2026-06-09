@@ -7,6 +7,15 @@ const axios    = require('axios');
 
 const loginAngel                    = require('./src/api/angelAuth');
 const startWebSocket                = require('./src/api/websocket');
+
+// ── SSE: Server-Sent Events for instant frontend push ────────────────────────
+const _sseClients = new Set();
+function sseBroadcast(event, data) {
+    const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const res of _sseClients) {
+        try { res.write(msg); } catch(_) { _sseClients.delete(res); }
+    }
+}
 const { processIndicators,
         initializeHistory,
         getCandleHistory,
@@ -1183,6 +1192,12 @@ async function updatePrice(price, change, changePct, source) {
     const indicators=processIndicators(price, marketState.global?.bankNiftyLeadSignal ?? null);
     const { signal, confidence, reasons }=combineSignals(indicators);
     marketState.nifty=price; marketState.lastClose=price; marketState.change=change; marketState.changePct=changePct; marketState.marketClosed=false;
+    // Push live tick to SSE clients (throttled — max 1 push per second)
+    const _now = Date.now();
+    if (!global._lastSsePush || _now - global._lastSsePush > 1000) {
+        global._lastSsePush = _now;
+        sseBroadcast('tick', { nifty: price, change, changePct, ts: _now });
+    }
     marketState.signal=signal; marketState.confidence=confidence;
     // Derive strength from confidence so the frontend badge is meaningful
     marketState.strength = signal === 'WAIT' ? 'WEAK'
@@ -1852,6 +1867,16 @@ async function saveTradeToHistory(tradeData) {
 }
 
 
+// ── SSE payload builder — same shape as /api/signal ─────────────────────────
+function buildSignalPayload() {
+    try {
+        const atmStrike = marketState.nifty > 0 ? Math.round(marketState.nifty / 50) * 50 : null;
+        const daysToExp = parseFloat(daysToNextExpiry().toFixed(2));
+        const { breadth: { stocks: _s, ...breadthRest }, ...rest } = marketState;
+        return { ...rest, breadth: breadthRest, atmStrike, daysToExpiry: daysToExp, lotSize: LOT_SIZE };
+    } catch(_) { return marketState; }
+}
+
 // ── Signal Log Writer ─────────────────────────────────────────────────────────
 // Called every time combineSignals() produces a FRESH BUY CALL or BUY PUT
 // (i.e. signal changed from previous). Records full market snapshot so you can
@@ -1876,6 +1901,10 @@ async function saveSignalToLog(signal, prevSig) {
             ]
         );
         console.log(`📝 Signal logged: ${signal} @ ₹${s.nifty} (conf:${s.confidence}%)`);
+        // Push instant SSE to all connected clients — analytics + live tab update immediately
+        sseBroadcast('signal', buildSignalPayload());
+        sseBroadcast('new_signal', { signal, nifty: s.nifty, confidence: s.confidence,
+            qualityGate: s.qualityGate?.passed ?? false, ts: new Date().toISOString() });
     } catch (e) {
         console.error('saveSignalToLog error:', e.message);
     }
@@ -2243,6 +2272,32 @@ app.get('/api/signal',  (req,res) => {
     res.json({ ...stateRest, breadth: breadthWithoutStocks, atmStrike, daysToExpiry: daysToExp, lotSize: LOT_SIZE });
 });
 app.get('/api/candles', (req,res) => res.json(getCandleHistory()));
+
+// ── SSE stream — client connects once, server pushes events instantly ─────────
+app.get('/api/stream', (req, res) => {
+    res.setHeader('Content-Type',  'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection',    'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');   // disable Nginx buffering on Railway
+    res.flushHeaders();
+
+    // Send current state immediately on connect so client doesn't wait
+    res.write(`event: signal\ndata: ${JSON.stringify(buildSignalPayload())}\n\n`);
+
+    _sseClients.add(res);
+    console.log(`[SSE] Client connected (total: ${_sseClients.size})`);
+
+    // Heartbeat every 25s — keeps Railway/proxy from closing idle connection
+    const hb = setInterval(() => {
+        try { res.write(':heartbeat\n\n'); } catch(_) { clearInterval(hb); }
+    }, 25000);
+
+    req.on('close', () => {
+        clearInterval(hb);
+        _sseClients.delete(res);
+        console.log(`[SSE] Client disconnected (total: ${_sseClients.size})`);
+    });
+});
 
 // Chart historical data — fetched server-side to avoid browser CORS restrictions
 app.get('/api/chart', async (req,res) => {

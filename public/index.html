@@ -560,6 +560,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .an-pill.active-call{border-color:var(--green);color:var(--green);background:rgba(0,255,136,0.1);}
 .an-pill.active-put{border-color:var(--red);color:var(--red);background:rgba(255,68,102,0.1);}
 .an-pill.active-gate{border-color:#ffcc00;color:#ffcc00;background:rgba(255,204,0,0.1);}
+.an-pill.active-date{border-color:var(--blue);color:var(--blue);background:rgba(0,200,255,0.1);}
 .an-tbl{width:100%;border-collapse:collapse;font-size:10px;}
 .an-tbl th{font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid rgba(0,200,255,0.1);text-align:left;background:rgba(10,37,64,0.5);position:sticky;top:0;z-index:1;}
 .an-tbl td{padding:6px 8px;border-bottom:1px solid rgba(0,200,255,0.05);font-family:var(--mono);font-size:9px;white-space:nowrap;}
@@ -785,7 +786,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
   <div class="header-row1">
     <div class="logo"><div class="logo-dot"></div>VARDAAN NIFTY AI</div>
     <div class="header-controls">
-      <span id="live-clock">--:--:--</span>
+      <span id="sse-dot" title="Connecting..." style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#ffcc00;margin-right:6px;vertical-align:middle;box-shadow:0 0 5px #ffcc00;transition:background 0.4s,box-shadow 0.4s;"></span><span id="live-clock">--:--:--</span>
       <button class="icon-btn" id="sound-btn" onclick="toggleSound()">🔕</button>
     </div>
   </div>
@@ -1910,75 +1911,98 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 <!-- ═══════════════════════════════════ -->
 <div class="panel" id="panel-analytics">
 
+  <!-- Top bar: date filter + refresh -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px 0;flex-wrap:wrap;gap:6px;">
+    <div style="display:flex;gap:5px;align-items:center;">
+      <span style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;">DATE:</span>
+      <button class="an-pill active-date" id="and-today" onclick="anSetDate('today')">TODAY</button>
+      <button class="an-pill" id="and-week"  onclick="anSetDate('week')">THIS WEEK</button>
+      <button class="an-pill" id="and-all"   onclick="anSetDate('all')">ALL</button>
+      <span style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;margin-left:8px;">SIGNAL:</span>
+      <button class="an-pill active-all" id="anf-all"  onclick="anSetFilter('all')">ALL</button>
+      <button class="an-pill" id="anf-call" onclick="anSetFilter('call')">CALL</button>
+      <button class="an-pill" id="anf-put"  onclick="anSetFilter('put')">PUT</button>
+      <button class="an-pill" id="anf-gate" onclick="anSetFilter('gate')">GATE✓</button>
+      <select id="an-limit" onchange="loadAnalytics()" style="background:var(--bg3);border:1px solid rgba(0,200,255,0.15);color:#cde8ff;font-family:var(--mono);font-size:9px;padding:3px 6px;border-radius:4px;outline:none;">
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="200">200</option>
+      </select>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span id="an-refresh-badge" style="font-family:var(--mono);font-size:8px;color:#5a7a8a;letter-spacing:1px;"></span>
+      <span id="an-status" style="font-family:var(--mono);font-size:8px;color:#5a7a8a;letter-spacing:1px;"></span>
+      <button onclick="loadAnalytics(true)" style="font-family:var(--mono);font-size:9px;padding:3px 10px;border:1px solid rgba(0,200,255,0.3);background:rgba(0,200,255,0.07);color:var(--blue);border-radius:4px;cursor:pointer;letter-spacing:1px;">⟳ REFRESH</button>
+    </div>
+  </div>
+
   <!-- Stats row -->
-  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;padding:10px 10px 0;">
-    <div class="an-card" id="an-total">
+  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;padding:8px 10px 0;">
+    <div class="an-card">
       <div class="an-label">TOTAL SIGNALS</div>
       <div class="an-val blue" id="an-v-total">—</div>
       <div class="an-sub">logged in DB</div>
     </div>
-    <div class="an-card good" id="an-gate">
+    <div class="an-card good">
       <div class="an-label">GATE PASSED</div>
       <div class="an-val green" id="an-v-gate">—</div>
       <div class="an-sub" id="an-v-gatepct">of total</div>
     </div>
-    <div class="an-card" id="an-calls">
+    <div class="an-card">
       <div class="an-label">BUY CALL</div>
       <div class="an-val green" id="an-v-calls">—</div>
       <div class="an-sub" id="an-v-callpct">signals</div>
     </div>
-    <div class="an-card bad" id="an-puts">
+    <div class="an-card bad">
       <div class="an-label">BUY PUT</div>
       <div class="an-val red" id="an-v-puts">—</div>
       <div class="an-sub" id="an-v-putpct">signals</div>
     </div>
-    <div class="an-card warn2" id="an-conf">
+    <div class="an-card warn2">
       <div class="an-label">AVG CONFIDENCE</div>
       <div class="an-val warn" id="an-v-conf">—</div>
       <div class="an-sub">gated signals</div>
     </div>
-    <div class="an-card" id="an-mtf">
+    <div class="an-card">
       <div class="an-label">MTF ALIGNED</div>
       <div class="an-val blue" id="an-v-mtf">—</div>
       <div class="an-sub">of gated</div>
     </div>
   </div>
 
-  <!-- Filters -->
-  <div style="display:flex;gap:6px;align-items:center;padding:8px 10px 4px;flex-wrap:wrap;">
-    <span style="font-family:var(--mono);font-size:9px;letter-spacing:1.5px;color:#5a7a8a;">FILTER:</span>
-    <button class="an-pill active-all" id="anf-all"  onclick="anSetFilter('all')">ALL</button>
-    <button class="an-pill" id="anf-call" onclick="anSetFilter('call')">BUY CALL</button>
-    <button class="an-pill" id="anf-put"  onclick="anSetFilter('put')">BUY PUT</button>
-    <button class="an-pill" id="anf-gate" onclick="anSetFilter('gate')">GATE ONLY</button>
-    <span style="font-family:var(--mono);font-size:9px;letter-spacing:1.5px;color:#5a7a8a;margin-left:8px;">LIMIT:</span>
-    <select id="an-limit" onchange="loadAnalytics()" style="background:var(--bg3);border:1px solid rgba(0,200,255,0.15);color:#cde8ff;font-family:var(--mono);font-size:9px;padding:4px 8px;border-radius:4px;outline:none;">
-      <option value="50">50</option>
-      <option value="100" selected>100</option>
-      <option value="200">200</option>
-    </select>
-    <span id="an-status" style="margin-left:auto;font-family:var(--mono);font-size:9px;color:#5a7a8a;letter-spacing:1px;"></span>
+  <!-- Last Signal highlight -->
+  <div style="padding:6px 10px 0;">
+    <div id="an-last-signal" style="display:none;border-radius:8px;padding:8px 14px;border:1px solid rgba(0,255,136,0.2);background:rgba(0,255,136,0.05);font-family:var(--mono);font-size:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+    </div>
   </div>
 
-  <!-- Two col: accuracy + confidence -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 10px 8px;">
+  <!-- Signal Timeline -->
+  <div style="padding:6px 10px 0;">
+    <div class="an-panel">
+      <div class="an-ph">
+        <span class="an-pt">⬡ SIGNAL TIMELINE — TODAY</span>
+        <span id="an-tl-info" style="font-family:var(--mono);font-size:8px;color:#5a7a8a;"></span>
+      </div>
+      <div style="padding:10px 12px;" id="an-timeline">
+        <div style="font-family:var(--mono);font-size:9px;color:#5a7a8a;text-align:center;padding:10px;">No signals today</div>
+      </div>
+    </div>
+  </div>
 
-    <!-- Accuracy bars -->
+  <!-- Two col: quality + confidence -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px 10px;">
     <div class="an-panel">
       <div class="an-ph"><span class="an-pt">◈ QUALITY BREAKDOWN</span></div>
       <div style="padding:12px;" id="an-accuracy-bars">
-        <div style="text-align:center;padding:20px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">Loading...</div>
+        <div style="text-align:center;padding:20px;font-family:var(--mono);font-size:9px;color:#5a7a8a;">Loading...</div>
       </div>
     </div>
-
-    <!-- Confidence + entry windows -->
     <div class="an-panel">
-      <div class="an-ph"><span class="an-pt">◎ CONFIDENCE DIST</span></div>
+      <div class="an-ph"><span class="an-pt">◎ CONFIDENCE + INDICATORS</span></div>
       <div style="padding:12px;" id="an-conf-dist">
-        <div style="text-align:center;padding:20px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">Loading...</div>
+        <div style="text-align:center;padding:20px;font-family:var(--mono);font-size:9px;color:#5a7a8a;">Loading...</div>
       </div>
     </div>
-
   </div>
 
   <!-- Signal log table -->
@@ -1987,12 +2011,13 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <span class="an-pt">◎ SIGNAL LOG — POSTGRESQL</span>
       <span id="an-table-count" style="font-family:var(--mono);font-size:9px;color:#5a7a8a;letter-spacing:1px;">—</span>
     </div>
-    <div id="an-table-wrap" style="max-height:320px;overflow-y:auto;">
+    <div id="an-table-wrap" style="max-height:300px;overflow-y:auto;">
       <div style="text-align:center;padding:30px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">Switch to this tab to load...</div>
     </div>
   </div>
 
 </div>
+
 
 <!-- BOTTOM TABS — 6 tabs -->
 <div class="bottom-tabs">
@@ -2103,7 +2128,16 @@ function switchTab(name,btn){
     autoATM();
   }
   if(name==='journal'){loadJournal();}
-  if(name==='analytics' && !_anLoaded){ loadAnalytics(); }
+  if(name==='analytics'){ if(!_anLoaded){ loadAnalytics(); } else { anRenderAll(anApplyDateFilter(_anSignals), _anSignals); } }
+  if(name==='breadth'){
+    // Always fetch full breadth (with stocks[]) when tab opens — /api/signal strips stocks
+    fetchBreadthFull();
+    if (_breadthTabTimer) clearInterval(_breadthTabTimer);
+    _breadthTabTimer = setInterval(fetchBreadthFull, 60000);
+  } else {
+    // Stop polling when leaving breadth tab
+    if (_breadthTabTimer) { clearInterval(_breadthTabTimer); _breadthTabTimer = null; }
+  }
   if(name==='breadth'||name==='global'){
     // Render immediately from cache — no loading flicker
     if(_lastState){
@@ -2276,7 +2310,9 @@ setInterval(updateMarketClosedBanner, 1000);
 // ─── STATE ───────────────────────────────────────────────
 let _lastState = null;
 let _lastSRUpdatedAt = null;  // dirty flag: skip SR table rebuild when levels haven't changed
-let _pollTimer = null;
+let _pollTimer    = null;
+let _sseConn      = null;   // EventSource connection
+let _sseFallback  = false;  // true if SSE failed, using polling
 // FIX: LOT_SIZE was hardcoded as 65 in 8 places in the frontend.
 // Now synced from server via s.lotSize on every poll — when NSE revises the lot size,
 // update server.js LOT_SIZE once and all P&L / position-size calcs auto-update here.
@@ -2391,10 +2427,102 @@ setTimeout(dismissSplash, 9000);
 );
 
 let _suggestTimer = null;  // FIX: store handle so it can be cleared and not leak
+// ── SSE connection — instant push from server ────────────────────────────────
+function startSSE() {
+  if (_sseConn) { _sseConn.close(); _sseConn = null; }
+
+  try {
+    _sseConn = new EventSource('/api/stream');
+  } catch(e) {
+    console.warn('[SSE] EventSource not supported — falling back to polling');
+    _sseFallback = true;
+    if (_pollTimer) clearInterval(_pollTimer);
+    _pollTimer = setInterval(fetchSignal, 3000);
+    return;
+  }
+
+  _sseConn.onopen = () => {
+    console.log('[SSE] Connected — live updates active');
+    _sseFallback = false;
+    // Show live indicator
+    const dot = document.getElementById('sse-dot');
+    if (dot) { dot.style.background = 'var(--green)'; dot.title = 'Live (SSE)'; }
+  };
+
+  // ── signal event — full marketState update (same as /api/signal) ──────────
+  _sseConn.addEventListener('signal', e => {
+    try {
+      const s = JSON.parse(e.data);
+      // Merge cached stocks[] back in (stripped from signal endpoint to save bandwidth)
+      if (s.breadth && _lastBreadthStocks && !s.breadth.stocks) {
+        s.breadth.stocks = _lastBreadthStocks;
+      }
+      _lastState = s;
+      if (s.lotSize && s.lotSize > 0) LOT_SIZE = s.lotSize;
+      if (_splashDone) {
+        try { renderDashboard(s); } catch(err) { console.warn('renderDashboard SSE:', err.message); }
+      } else {
+        _pendingState = s;
+        dismissSplash();
+      }
+    } catch(err) { console.warn('[SSE] signal parse error:', err); }
+  });
+
+  // ── tick event — lightweight price-only update ────────────────────────────
+  _sseConn.addEventListener('tick', e => {
+    try {
+      const t = JSON.parse(e.data);
+      // Update Nifty price display without full re-render
+      const priceEl = document.getElementById('nifty-price');
+      const changeEl = document.getElementById('nifty-change');
+      if (priceEl && t.nifty > 0) {
+        priceEl.textContent = t.nifty.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
+      }
+      if (changeEl && t.change != null) {
+        const sign = t.change >= 0 ? '+' : '';
+        changeEl.textContent = `${sign}${t.change.toFixed(2)} (${sign}${t.changePct.toFixed(2)}%)`;
+        changeEl.style.color = t.change >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+    } catch(_) {}
+  });
+
+  // ── new_signal event — a fresh BUY signal was just logged to DB ───────────
+  _sseConn.addEventListener('new_signal', e => {
+    try {
+      const sig = JSON.parse(e.data);
+      console.log('[SSE] New signal logged:', sig.signal, '@', sig.nifty);
+      // Refresh analytics instantly (DB write is complete by the time SSE fires)
+      if (typeof _anLoaded !== 'undefined' && _anLoaded) {
+        loadAnalytics();
+        // Flash ANALYTICS tab
+        const anTab = document.querySelector('.btab[onclick*="analytics"]');
+        if (anTab) {
+          anTab.style.transition = 'background 0.3s';
+          anTab.style.background = sig.signal === 'BUY CALL'
+            ? 'rgba(0,255,136,0.25)' : 'rgba(255,68,102,0.25)';
+          setTimeout(() => { anTab.style.background = ''; }, 2500);
+        }
+      }
+    } catch(_) {}
+  });
+
+  // ── error — reconnect after 5s ────────────────────────────────────────────
+  _sseConn.onerror = () => {
+    console.warn('[SSE] Connection lost — reconnecting in 5s');
+    const dot = document.getElementById('sse-dot');
+    if (dot) { dot.style.background = '#ffcc00'; dot.title = 'Reconnecting...'; }
+    _sseConn.close();
+    _sseConn = null;
+    setTimeout(startSSE, 5000);
+  };
+}
+
 function startPolling() {
-  fetchSignal();
+  // Try SSE first — instant updates, no polling overhead
+  startSSE();
+  // Always keep a slow poll as safety net (30s) — catches missed SSE events
   if (_pollTimer) clearInterval(_pollTimer);
-  _pollTimer = setInterval(fetchSignal, 3000);
+  _pollTimer = setInterval(fetchSignal, 30000);
   // Poll AI suggestion every 2 min — but only if signal is non-WAIT (gate passed)
   // FIX: guard against duplicate interval accumulation on hot-reload / resume
   if (_suggestTimer) clearInterval(_suggestTimer);
@@ -2457,6 +2585,7 @@ function renderDashboard(s) {
     else if (sig === 'BUY PUT')  playAlert('put');
     else                         playAlert('warn');
   }
+  // Analytics + tab flash now handled via SSE new_signal event (instant, no delay needed)
   _prevSignal = sig;
   // Confidence strength badge
   const csEl = document.getElementById('conf-strength');
@@ -3022,6 +3151,22 @@ function renderDashboard(s) {
 }
 
 // ─── BREADTH UI ──────────────────────────────────────────
+// Fetch full breadth data including stocks[] from /api/breadth
+// Called when breadth tab opens + every 60s while on tab
+let _breadthTabTimer = null;
+let _lastBreadthStocks = null;  // cache stocks[] for SSE merge
+async function fetchBreadthFull() {
+  try {
+    const r = await fetch('/api/breadth');
+    if (!r.ok) return;
+    const b = await r.json();
+    if (b) {
+      if (b.stocks && b.stocks.length) _lastBreadthStocks = b.stocks;
+      updateBreadthUI(b);
+    }
+  } catch(e) { console.warn('[Breadth] fetch error:', e.message); }
+}
+
 function updateBreadthUI(b) {
   if (!b) return;
   const up = b.advances || 0, dn = b.declines || 0, unch = b.unchanged || 0;
@@ -3091,16 +3236,31 @@ function updateBreadthUI(b) {
   }
 
   // Stock list — FIX: WT% column was showing arrow (▲/▼) not the actual weight value
-  if (b.stocks && b.stocks.length) {
-    const tbody = document.getElementById('stock-list-body');
-    if (tbody) tbody.innerHTML = b.stocks.slice(0,50).map(s => {
-      const chg = s.changePct != null ? s.changePct : (s.change || 0);
-      const color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : '#9ab8d0';
-      const label = s.name || s.symbol || '--';
-      // FIX: show actual weight (e.g. "9.2") not a direction arrow
-      const wt = s.weight != null ? s.weight.toFixed(1) : '--';
-      return `<div class="stock-row"><span style="color:#9ab8d0;font-size:9px;">${wt}</span><span>${label}</span><span style="color:${color};text-align:right;">${chg >= 0 ? '+' : ''}${parseFloat(chg).toFixed(2)}%</span></div>`;
-    }).join('');
+  const tbody = document.getElementById('stock-list-body');
+  if (tbody) {
+    if (b.stocks && b.stocks.length) {
+      tbody.innerHTML = b.stocks.slice(0,50).map(s => {
+        const chg = s.changePct != null ? s.changePct : (s.change || 0);
+        const color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : '#9ab8d0';
+        const label = s.name || s.symbol || '--';
+        const wt = s.weight != null ? s.weight.toFixed(1) : '--';
+        const arrow = chg > 0 ? '▲' : chg < 0 ? '▼' : '—';
+        return `<div class="stock-row">
+          <span style="color:#9ab8d0;font-size:9px;">${wt}</span>
+          <span style="font-size:11px;">${label}</span>
+          <span style="color:${color};text-align:right;font-size:10px;">${arrow} ${chg >= 0 ? '+' : ''}${parseFloat(chg).toFixed(2)}%</span>
+        </div>`;
+      }).join('');
+    } else {
+      // Source tells us why stocks are missing
+      const src = b.source || '';
+      const msg = src === 'sectors'
+        ? '⚠️ Sector indices mode — individual stocks unavailable'
+        : src === '' || !src
+        ? '⏳ Stock data loading... open Breadth tab again in 10s'
+        : `⚠️ Source: ${src} — stock list not available`;
+      tbody.innerHTML = `<div style="text-align:center;padding:16px;font-size:10px;color:#9ab8d0;font-family:var(--mono);">${msg}</div>`;
+    }
   }
 }
 
@@ -4496,11 +4656,16 @@ window.addEventListener('load', () => {
 });
 
 
-// ─── ANALYTICS TAB ───────────────────────────────────────────────────────────
-let _anSignals = [];
-let _anFilter  = 'all';
-let _anLoaded  = false;
+// ─── ANALYTICS TAB ────────────────────────────────────────────────────────────
+let _anSignals    = [];
+let _anFilter     = 'all';
+let _anDateFilter = 'today';
+let _anLoaded     = false;
+let _anRefreshTimer = null;
+let _anRefreshSecs  = 0;
+let _anRefreshTick  = null;
 
+// ── Filter helpers ────────────────────────────────────────────────────────────
 function anSetFilter(f) {
   _anFilter = f;
   ['all','call','put','gate'].forEach(x => {
@@ -4512,39 +4677,105 @@ function anSetFilter(f) {
   loadAnalytics();
 }
 
-async function loadAnalytics() {
-  const limit = (document.getElementById('an-limit')||{}).value || 100;
-  const gate  = _anFilter === 'gate' ? '&gate=true' : '';
-  const sig   = _anFilter === 'call' ? '&signal=BUY+CALL'
-              : _anFilter === 'put'  ? '&signal=BUY+PUT' : '';
+function anSetDate(d) {
+  _anDateFilter = d;
+  ['today','week','all'].forEach(x => {
+    const el = document.getElementById('and-'+x);
+    if (!el) return;
+    el.className = 'an-pill';
+    if (x === d) el.classList.add('active-date');
+  });
+  loadAnalytics();
+}
 
-  const wrap = document.getElementById('an-table-wrap');
-  if (wrap) wrap.innerHTML = '<div style="text-align:center;padding:20px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">⟳ Fetching signal_log...</div>';
-  const statusEl = document.getElementById('an-status');
-  if (statusEl) statusEl.textContent = 'LOADING...';
+// ── Filter rows by date ───────────────────────────────────────────────────────
+function anApplyDateFilter(rows) {
+  if (_anDateFilter === 'all') return rows;
+  const now = new Date();
+  const todayStr  = new Date(now.toLocaleString('en-US',{timeZone:'Asia/Kolkata'})).toISOString().slice(0,10);
+  if (_anDateFilter === 'today') {
+    return rows.filter(r => r.ts && r.ts.slice(0,10) === todayStr);
+  }
+  if (_anDateFilter === 'week') {
+    const weekAgo = new Date(now.getTime() - 7 * 86400000);
+    return rows.filter(r => r.ts && new Date(r.ts) >= weekAgo);
+  }
+  return rows;
+}
+
+// ── Main load ─────────────────────────────────────────────────────────────────
+async function loadAnalytics(manual) {
+  const limit   = (document.getElementById('an-limit')||{}).value || 100;
+  const gate    = _anFilter === 'gate'  ? '&gate=true' : '';
+  const sig     = _anFilter === 'call'  ? '&signal=BUY+CALL'
+                : _anFilter === 'put'   ? '&signal=BUY+PUT' : '';
+
+  const statusEl  = document.getElementById('an-status');
+  const badgeEl   = document.getElementById('an-refresh-badge');
+  if (statusEl) statusEl.textContent = '⟳ LOADING...';
 
   try {
-    const r = await fetch(`/api/signal-log?limit=${limit}${sig}${gate}`);
+    const r = await fetch('/api/signal-log?limit=' + limit + sig + gate);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const data = await r.json();
     if (data.error) throw new Error(data.error);
+
     _anSignals = data.rows || [];
     _anLoaded  = true;
-    anRenderAll(_anSignals);
-    if (statusEl) statusEl.textContent = 'UPDATED ' + new Date().toLocaleTimeString('en-IN');
+
+    // Apply date filter locally (no extra DB query)
+    const filtered = anApplyDateFilter(_anSignals);
+    anRenderAll(filtered, _anSignals);
+
+    const ts = new Date().toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+    if (statusEl) statusEl.textContent = 'UPDATED ' + ts;
+
+    // Schedule next auto-refresh (3 min during market hours, 10 min otherwise)
+    anScheduleRefresh();
+
   } catch(e) {
-    if (wrap) wrap.innerHTML = '<div style="text-align:center;padding:20px;font-family:var(--mono);font-size:10px;color:var(--red);">❌ ' + e.message + '<br><br>DB connected? DATABASE_URL set?</div>';
+    const wrap = document.getElementById('an-table-wrap');
+    if (wrap) wrap.innerHTML = '<div style="text-align:center;padding:20px;font-family:var(--mono);font-size:10px;color:var(--red);">❌ ' + e.message + '</div>';
     if (statusEl) statusEl.textContent = 'ERROR';
   }
 }
 
-function anRenderAll(rows) {
+// ── Auto-refresh scheduler ────────────────────────────────────────────────────
+function anScheduleRefresh() {
+  if (_anRefreshTimer)  clearTimeout(_anRefreshTimer);
+  if (_anRefreshTick)   clearInterval(_anRefreshTick);
+
+  // Market hours IST: 9:15–15:30 → 3 min refresh. Outside → 10 min.
+  const _istRef = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+  const h = _istRef.getHours(), m = _istRef.getMinutes();
+  const mins = h*60+m;
+  const inMarket = mins >= 555 && mins <= 930;
+  const delaySec = inMarket ? 180 : 600;
+
+  _anRefreshSecs = delaySec;
+  _anRefreshTick = setInterval(() => {
+    _anRefreshSecs--;
+    const el = document.getElementById('an-refresh-badge');
+    if (el) el.textContent = 'NEXT REFRESH ' + _anRefreshSecs + 's';
+    if (_anRefreshSecs <= 0) clearInterval(_anRefreshTick);
+  }, 1000);
+
+  _anRefreshTimer = setTimeout(() => {
+    loadAnalytics();
+  }, delaySec * 1000);
+}
+
+// ── Render all ────────────────────────────────────────────────────────────────
+function anRenderAll(rows, allRows) {
   anRenderStats(rows);
+  anRenderLastSignal(allRows || rows);
+  anRenderTimeline(rows);
   anRenderBars(rows);
   anRenderConfDist(rows);
   anRenderTable(rows);
 }
 
+// ── Stats cards ───────────────────────────────────────────────────────────────
 function anRenderStats(rows) {
   const total  = rows.length;
   const calls  = rows.filter(r => r.signal === 'BUY CALL').length;
@@ -4552,150 +4783,226 @@ function anRenderStats(rows) {
   const gated  = rows.filter(r => r.quality_gate).length;
   const mtfAl  = rows.filter(r => r.quality_gate && r.mtf_aligned).length;
   const gatedRows = rows.filter(r => r.quality_gate);
-  const avgConf= gated > 0
+  const avgConf = gated > 0
     ? (gatedRows.reduce((a,b) => a + (b.confidence||0), 0) / gated).toFixed(0) + '%'
     : '—';
-  const gPct = total > 0 ? ((gated/total)*100).toFixed(0)+'%' : '—';
+  const gPct   = total > 0 ? ((gated/total)*100).toFixed(0)+'%' : '—';
   const mtfPct = gated > 0 ? ((mtfAl/gated)*100).toFixed(0)+'%' : '—';
 
   function set(id, val) { const el=document.getElementById(id); if(el) el.textContent=val; }
-  set('an-v-total', total||'—');
-  set('an-v-gate',  gated||'—');
+  set('an-v-total', total > 0 ? total : '0');
+  set('an-v-gate',  gated > 0 ? gated : '0');
   set('an-v-gatepct', gPct + ' of total');
-  set('an-v-calls', calls||'—');
-  set('an-v-callpct', total>0 ? ((calls/total)*100).toFixed(0)+'% of total' : '');
-  set('an-v-puts',  puts||'—');
-  set('an-v-putpct', total>0 ? ((puts/total)*100).toFixed(0)+'% of total' : '');
+  set('an-v-calls', calls);           // always show number, never dash
+  set('an-v-callpct', total>0 ? ((calls/total)*100).toFixed(0)+'% of total' : '0%');
+  set('an-v-puts',  puts);
+  set('an-v-putpct', total>0 ? ((puts/total)*100).toFixed(0)+'% of total' : '0%');
   set('an-v-conf',  avgConf);
   set('an-v-mtf',   mtfPct);
   set('an-table-count', rows.length + ' RECORDS');
 }
 
+// ── Last signal highlight ─────────────────────────────────────────────────────
+function anRenderLastSignal(rows) {
+  const el = document.getElementById('an-last-signal');
+  if (!el || !rows.length) return;
+  const last = rows[0];
+  if (!last) { el.style.display='none'; return; }
+
+  const isCall = last.signal === 'BUY CALL';
+  const col    = isCall ? 'var(--green)' : 'var(--red)';
+  const ts     = new Date(last.ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:false});
+  const pcrVal = (last.atm_pcr && last.atm_pcr > 0) ? Number(last.atm_pcr).toFixed(2) : 'N/A';
+  const adxVal = last.adx > 0 ? Number(last.adx).toFixed(1) : '—';
+
+  el.style.display = 'flex';
+  el.style.borderColor = isCall ? 'rgba(0,255,136,0.25)' : 'rgba(255,68,102,0.25)';
+  el.style.background  = isCall ? 'rgba(0,255,136,0.04)' : 'rgba(255,68,102,0.04)';
+  el.innerHTML = `
+    <span style="font-size:8px;color:#5a7a8a;letter-spacing:1.5px;">LAST SIGNAL</span>
+    <span style="color:${col};font-weight:700;letter-spacing:1px;">${last.signal}</span>
+    <span style="color:#5a7a8a;">@${ts}</span>
+    <span style="color:#cde8ff;">Nifty <b>${Number(last.nifty||0).toFixed(0)}</b></span>
+    <span style="color:#9ab8d0;">RSI <b style="color:${last.rsi>60?'var(--red)':last.rsi<40?'var(--green)':'#cde8ff'}">${Number(last.rsi||0).toFixed(1)}</b></span>
+    <span style="color:#9ab8d0;">ATM PCR <b style="color:${col}">${pcrVal}</b></span>
+    <span style="color:#9ab8d0;">ADX <b style="color:${last.adx>=25?'#ffcc00':'#9ab8d0'}">${adxVal}</b></span>
+    <span class="an-badge ${last.quality_gate?'pass':'fail'}" style="margin-left:auto;">${last.quality_gate?'✓ GATE PASSED':'✗ GATE FAILED'}</span>
+  `;
+}
+
+// ── Signal Timeline ───────────────────────────────────────────────────────────
+function anRenderTimeline(rows) {
+  const el    = document.getElementById('an-timeline');
+  const infoEl= document.getElementById('an-tl-info');
+  if (!el) return;
+
+  const _istNow = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+  const todayStr = _istNow.toISOString().slice(0,10);
+  const todayRows = rows.filter(r => r.ts && (r.ts.slice(0,10) === todayStr || new Date(r.ts).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'}) === todayStr));
+
+  if (infoEl) infoEl.textContent = todayRows.length + ' signals';
+
+  if (!todayRows.length) {
+    el.innerHTML = '<div style="font-family:var(--mono);font-size:9px;color:#5a7a8a;text-align:center;padding:10px;">No signals today yet</div>';
+    return;
+  }
+
+  // Build timeline: 9:15 to 15:30 = 375 minutes
+  const marketStart = 9*60+15;
+  const marketEnd   = 15*60+30;
+  const totalMins   = marketEnd - marketStart;
+
+  const dots = todayRows.map(r => {
+    const t   = new Date(r.ts);
+    const istDate = new Date(t.toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+    const mins = istDate.getHours()*60 + istDate.getMinutes() - marketStart;
+    const pct  = Math.max(0, Math.min(100, (mins/totalMins)*100));
+    const isC  = r.signal==='BUY CALL';
+    const ts   = new Date(t).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',hour12:false});
+    const pcrV = (r.atm_pcr && r.atm_pcr > 0) ? Number(r.atm_pcr).toFixed(2) : 'N/A';
+    return { pct, isC, ts, r, pcrV };
+  });
+
+  el.innerHTML = `
+    <div style="position:relative;height:48px;margin:0 4px;">
+      <!-- Track -->
+      <div style="position:absolute;top:20px;left:0;right:0;height:2px;background:rgba(0,200,255,0.15);border-radius:1px;"></div>
+      <!-- Time labels -->
+      <div style="position:absolute;top:28px;left:0;font-family:var(--mono);font-size:7px;color:#5a7a8a;">9:15</div>
+      <div style="position:absolute;top:28px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:#5a7a8a;">12:22</div>
+      <div style="position:absolute;top:28px;right:0;font-family:var(--mono);font-size:7px;color:#5a7a8a;">15:30</div>
+      <!-- Signal dots -->
+      ${dots.map(d => `
+        <div title="${d.ts} | ${d.r.signal} | RSI:${Number(d.r.rsi||0).toFixed(1)} | PCR:${d.pcrV} | Conf:${d.r.confidence}%"
+             style="position:absolute;left:${d.pct}%;top:${d.isC?4:10}px;transform:translateX(-50%);
+                    width:10px;height:10px;border-radius:50%;cursor:pointer;
+                    background:${d.r.quality_gate?(d.isC?'var(--green)':'var(--red)'):'rgba(154,184,208,0.4)'};
+                    border:1px solid ${d.isC?'rgba(0,255,136,0.6)':'rgba(255,68,102,0.6)'};
+                    box-shadow:0 0 6px ${d.isC?'rgba(0,255,136,0.5)':'rgba(255,68,102,0.5)'};
+                    transition:transform 0.15s;"
+             onmouseover="this.style.transform='translateX(-50%) scale(1.4)'"
+             onmouseout="this.style.transform='translateX(-50%) scale(1)'">
+        </div>
+        <div style="position:absolute;left:${d.pct}%;top:${d.isC?0:24}px;transform:translateX(-50%);
+                    font-family:var(--mono);font-size:7px;color:${d.isC?'var(--green)':'var(--red)'};
+                    white-space:nowrap;">${d.ts}</div>
+      `).join('')}
+    </div>
+  `;
+}
+
+// ── Quality bars ──────────────────────────────────────────────────────────────
 function anRenderBars(rows) {
   const el = document.getElementById('an-accuracy-bars');
   if (!el) return;
-  const total  = rows.length;
-  const calls  = rows.filter(r => r.signal === 'BUY CALL').length;
-  const puts   = rows.filter(r => r.signal === 'BUY PUT').length;
-  const gated  = rows.filter(r => r.quality_gate).length;
-  const callGated = rows.filter(r => r.quality_gate && r.signal === 'BUY CALL').length;
-  const putGated  = rows.filter(r => r.quality_gate && r.signal === 'BUY PUT').length;
-  const mtfAl  = rows.filter(r => r.quality_gate && r.mtf_aligned).length;
-  const rsiOk  = rows.filter(r => (r.signal==='BUY CALL'&&r.rsi<45)||(r.signal==='BUY PUT'&&r.rsi>55)).length;
+  const total     = rows.length || 1;
+  const calls     = rows.filter(r => r.signal==='BUY CALL').length;
+  const puts      = rows.filter(r => r.signal==='BUY PUT').length;
+  const gated     = rows.filter(r => r.quality_gate).length;
+  const callGated = rows.filter(r => r.quality_gate && r.signal==='BUY CALL').length;
+  const putGated  = rows.filter(r => r.quality_gate && r.signal==='BUY PUT').length;
+  const mtfAl     = rows.filter(r => r.quality_gate && r.mtf_aligned).length;
+  const rsiOk     = rows.filter(r => (r.signal==='BUY CALL'&&r.rsi<45)||(r.signal==='BUY PUT'&&r.rsi>55)).length;
 
-  const gateRate = total>0  ? ((gated/total)*100).toFixed(1)    : 0;
-  const callRate = calls>0  ? ((callGated/calls)*100).toFixed(1) : 0;
-  const putRate  = puts>0   ? ((putGated/puts)*100).toFixed(1)   : 0;
-  const mtfRate  = gated>0  ? ((mtfAl/gated)*100).toFixed(1)    : 0;
-  const rsiRate  = total>0  ? ((rsiOk/total)*100).toFixed(1)    : 0;
+  const gateRate = ((gated/total)*100).toFixed(1);
+  const callRate = calls>0 ? ((callGated/calls)*100).toFixed(1) : 0;
+  const putRate  = puts>0  ? ((putGated/puts)*100).toFixed(1)   : 0;
+  const mtfRate  = gated>0 ? ((mtfAl/gated)*100).toFixed(1)    : 0;
+  const rsiRate  = ((rsiOk/total)*100).toFixed(1);
 
-  // Entry window distribution
-  const windows = {};
+  const windows  = {};
   rows.filter(r=>r.quality_gate).forEach(r => {
-    const w = r.entry_window || 'unknown';
-    windows[w] = (windows[w]||0) + 1;
+    const w = r.entry_window||'unknown';
+    windows[w] = (windows[w]||0)+1;
   });
   const winRows = Object.entries(windows).sort((a,b)=>b[1]-a[1]).slice(0,4);
   const maxWin  = winRows.length ? Math.max(...winRows.map(x=>x[1])) : 1;
 
-  el.innerHTML = `
-    <div class="an-bar-item">
-      <div class="an-bar-label"><span>Quality Gate Pass Rate</span><span style="color:var(--green)">${gateRate}%</span></div>
-      <div class="an-bar-track"><div class="an-bar-fill g" style="width:${gateRate}%"></div></div>
-    </div>
-    <div class="an-bar-item">
-      <div class="an-bar-label"><span>CALL → Gate Pass</span><span style="color:var(--green)">${callRate}%</span></div>
-      <div class="an-bar-track"><div class="an-bar-fill g" style="width:${callRate}%"></div></div>
-    </div>
-    <div class="an-bar-item">
-      <div class="an-bar-label"><span>PUT → Gate Pass</span><span style="color:var(--red)">${putRate}%</span></div>
-      <div class="an-bar-track"><div class="an-bar-fill r" style="width:${putRate}%"></div></div>
-    </div>
-    <div class="an-bar-item">
-      <div class="an-bar-label"><span>MTF Aligned (gated)</span><span style="color:var(--blue)">${mtfRate}%</span></div>
-      <div class="an-bar-track"><div class="an-bar-fill b" style="width:${mtfRate}%"></div></div>
-    </div>
-    <div class="an-bar-item">
-      <div class="an-bar-label"><span>RSI Confirms Signal</span><span style="color:#ffcc00">${rsiRate}%</span></div>
-      <div class="an-bar-track"><div class="an-bar-fill w" style="width:${rsiRate}%"></div></div>
-    </div>
-    ${winRows.length ? `
-    <div style="margin-top:12px;border-top:1px solid rgba(0,200,255,0.08);padding-top:10px;">
-      <div style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;margin-bottom:6px;">BEST ENTRY WINDOWS</div>
-      ${winRows.map(([w,c]) => `
-        <div class="an-bar-item">
-          <div class="an-bar-label"><span style="font-size:8px">${w}</span><span style="color:var(--blue)">${c}</span></div>
-          <div class="an-bar-track"><div class="an-bar-fill b" style="width:${(c/maxWin)*100}%"></div></div>
-        </div>`).join('')}
-    </div>` : ''}
-  `;
+  const bar = (label, val, cls, extra) =>
+    `<div class="an-bar-item">
+      <div class="an-bar-label"><span>${label}</span><span style="color:${cls==='g'?'var(--green)':cls==='r'?'var(--red)':cls==='w'?'#ffcc00':'var(--blue)'}">${val}%${extra||''}</span></div>
+      <div class="an-bar-track"><div class="an-bar-fill ${cls}" style="width:${val}%"></div></div>
+    </div>`;
+
+  el.innerHTML =
+    bar('Quality Gate Pass Rate', gateRate, 'g') +
+    bar('CALL → Gate Pass', callRate, 'g', ` (${callGated}/${calls})`) +
+    bar('PUT → Gate Pass', putRate, 'r', ` (${putGated}/${puts})`) +
+    bar('MTF Aligned (gated)', mtfRate, 'b') +
+    bar('RSI Confirms Signal', rsiRate, 'w') +
+    (winRows.length ? `
+    <div style="margin-top:10px;border-top:1px solid rgba(0,200,255,0.08);padding-top:8px;">
+      <div style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;margin-bottom:6px;">TOP ENTRY WINDOWS</div>
+      ${winRows.map(([w,c]) =>
+        bar(w, ((c/maxWin)*100).toFixed(0), 'b', ' ('+c+')')
+      ).join('')}
+    </div>` : '');
 }
 
+// ── Confidence + indicators ───────────────────────────────────────────────────
 function anRenderConfDist(rows) {
   const el = document.getElementById('an-conf-dist');
   if (!el) return;
   const gated  = rows.filter(r => r.quality_gate);
-  const high   = gated.filter(r => r.confidence >= 65).length;
-  const mid    = gated.filter(r => r.confidence >= 45 && r.confidence < 65).length;
-  const low    = gated.filter(r => r.confidence < 45).length;
   const total  = gated.length || 1;
+  const high   = gated.filter(r => r.confidence>=65).length;
+  const mid    = gated.filter(r => r.confidence>=45&&r.confidence<65).length;
+  const low    = gated.filter(r => r.confidence<45).length;
 
-  // PCR distribution at signal time
-  const pcrBull = rows.filter(r => r.signal==='BUY CALL' && r.atm_pcr > 1.0).length;
-  const pcrBear = rows.filter(r => r.signal==='BUY PUT'  && r.atm_pcr < 1.0).length;
-  const pcrAligned = pcrBull + pcrBear;
-  const pcrRate = rows.length > 0 ? ((pcrAligned/rows.length)*100).toFixed(0) : 0;
+  // PCR available rate
+  const pcrAvail   = rows.filter(r => r.atm_pcr>0||r.pcr>0).length;
+  const pcrRate    = ((pcrAvail/(rows.length||1))*100).toFixed(0);
 
-  // ADX strength at signals
-  const adxStrong = rows.filter(r => r.quality_gate && r.adx >= 25).length;
-  const adxRate   = total > 0 ? ((adxStrong/total)*100).toFixed(0) : 0;
+  // PCR alignment
+  const pcrBull    = rows.filter(r => r.signal==='BUY CALL'&&(r.atm_pcr||r.pcr)>1.0).length;
+  const pcrBear    = rows.filter(r => r.signal==='BUY PUT' &&(r.atm_pcr||r.pcr)<1.0).length;
+  const pcrAligned = pcrBull+pcrBear;
+  const pcrAlRate  = ((pcrAligned/(rows.length||1))*100).toFixed(0);
 
-  // VIX safe zone
-  const vixSafe = rows.filter(r => r.quality_gate && r.vix >= 10 && r.vix <= 20).length;
-  const vixRate = total > 0 ? ((vixSafe/total)*100).toFixed(0) : 0;
+  const adxStrong  = rows.filter(r=>r.quality_gate&&r.adx>=25).length;
+  const adxRate    = ((adxStrong/total)*100).toFixed(0);
+  const vixSafe    = rows.filter(r=>r.quality_gate&&r.vix>=10&&r.vix<=20).length;
+  const vixRate    = ((vixSafe/total)*100).toFixed(0);
+
+  const box = (val, pct, label, col) =>
+    `<div style="text-align:center;background:rgba(${col},0.07);border-radius:6px;padding:7px 4px;border:1px solid rgba(${col},0.12);">
+      <div style="font-family:var(--mono);font-size:18px;color:rgba(${col},1);font-weight:700;">${val}</div>
+      <div style="font-size:7px;color:#5a7a8a;margin-top:1px;">${label}</div>
+      <div style="font-size:8px;color:rgba(${col},0.9);margin-top:1px;">${pct}%</div>
+    </div>`;
+
+  const bar2 = (label, val, col, note) =>
+    `<div class="an-bar-item">
+      <div class="an-bar-label">
+        <span>${label}</span>
+        <span style="color:${col}">${val}%${note?` <span style="color:#5a7a8a;font-size:7px;">${note}</span>`:''}</span>
+      </div>
+      <div class="an-bar-track"><div class="an-bar-fill b" style="width:${val}%;background:linear-gradient(90deg,${col},rgba(0,200,255,0.4));"></div></div>
+    </div>`;
 
   el.innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px;">
-      <div style="text-align:center;background:rgba(0,255,136,0.07);border-radius:6px;padding:8px;border:1px solid rgba(0,255,136,0.1);">
-        <div style="font-family:var(--mono);font-size:20px;color:var(--green);font-weight:700;">${high}</div>
-        <div style="font-size:8px;color:#5a7a8a;margin-top:2px;">≥65% CONF</div>
-        <div style="font-size:8px;color:var(--green)">${((high/total)*100).toFixed(0)}%</div>
-      </div>
-      <div style="text-align:center;background:rgba(255,204,0,0.07);border-radius:6px;padding:8px;border:1px solid rgba(255,204,0,0.1);">
-        <div style="font-family:var(--mono);font-size:20px;color:#ffcc00;font-weight:700;">${mid}</div>
-        <div style="font-size:8px;color:#5a7a8a;margin-top:2px;">45–64%</div>
-        <div style="font-size:8px;color:#ffcc00">${((mid/total)*100).toFixed(0)}%</div>
-      </div>
-      <div style="text-align:center;background:rgba(255,68,102,0.07);border-radius:6px;padding:8px;border:1px solid rgba(255,68,102,0.1);">
-        <div style="font-family:var(--mono);font-size:20px;color:var(--red);font-weight:700;">${low}</div>
-        <div style="font-size:8px;color:#5a7a8a;margin-top:2px;">&lt;45%</div>
-        <div style="font-size:8px;color:var(--red)">${((low/total)*100).toFixed(0)}%</div>
-      </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:10px;">
+      ${box(high, ((high/total)*100).toFixed(0), '≥65% HIGH', '0,255,136')}
+      ${box(mid,  ((mid/total)*100).toFixed(0),  '45–64% MID', '255,204,0')}
+      ${box(low,  ((low/total)*100).toFixed(0),  '<45% LOW', '255,68,102')}
     </div>
-    <div style="border-top:1px solid rgba(0,200,255,0.08);padding-top:10px;">
-      <div style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;margin-bottom:8px;">INDICATOR ALIGNMENT (all signals)</div>
-      <div class="an-bar-item">
-        <div class="an-bar-label"><span>PCR Confirms Direction</span><span style="color:var(--blue)">${pcrRate}%</span></div>
-        <div class="an-bar-track"><div class="an-bar-fill b" style="width:${pcrRate}%"></div></div>
-      </div>
-      <div class="an-bar-item">
-        <div class="an-bar-label"><span>ADX Trending (≥25)</span><span style="color:#ffcc00">${adxRate}%</span></div>
-        <div class="an-bar-track"><div class="an-bar-fill w" style="width:${adxRate}%"></div></div>
-      </div>
-      <div class="an-bar-item">
-        <div class="an-bar-label"><span>VIX Safe Zone (10–20)</span><span style="color:var(--green)">${vixRate}%</span></div>
-        <div class="an-bar-track"><div class="an-bar-fill g" style="width:${vixRate}%"></div></div>
-      </div>
+    <div style="border-top:1px solid rgba(0,200,255,0.08);padding-top:8px;">
+      <div style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;margin-bottom:7px;">INDICATOR QUALITY</div>
+      ${bar2('PCR Available', pcrRate, 'var(--blue)', pcrAvail+'/'+rows.length)}
+      ${bar2('PCR Confirms Direction', pcrAlRate, 'var(--blue)')}
+      ${bar2('ADX Trending (≥25)', adxRate, '#ffcc00')}
+      ${bar2('VIX Safe Zone (10–20)', vixRate, 'var(--green)')}
     </div>
   `;
 }
 
+// ── Signal table ──────────────────────────────────────────────────────────────
 function anRenderTable(rows) {
   const wrap = document.getElementById('an-table-wrap');
   if (!wrap) return;
 
   if (!rows.length) {
-    wrap.innerHTML = '<div style="text-align:center;padding:30px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">No signals in DB yet — market hours mein check karo</div>';
+    wrap.innerHTML = '<div style="text-align:center;padding:30px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">No signals found for selected filter/date</div>';
     return;
   }
 
@@ -4707,28 +5014,31 @@ function anRenderTable(rows) {
     </tr></thead>
     <tbody>
       ${rows.map(r => {
-        const ts = new Date(r.ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
-        const isCall = r.signal === 'BUY CALL';
-        const conf = Math.min(100, r.confidence||0);
+        const ts  = new Date(r.ts).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+        const isC = r.signal==='BUY CALL';
+        const conf= Math.min(100,r.confidence||0);
         const mtfCls = (r.mtf_signal||'').includes('BULL') ? 'color:var(--green)'
                      : (r.mtf_signal||'').includes('BEAR') ? 'color:var(--red)' : 'color:#5a7a8a';
-        const reasons = (r.reasons||[]).slice(0,3).map(x => String(x).slice(0,22)).join(' · ');
+        // PCR: show N/A when 0
+        const pcrShow = (r.atm_pcr>0||r.pcr>0) ? Number(r.atm_pcr||r.pcr).toFixed(2) : '<span style="color:#5a7a8a">N/A</span>';
+        const pcrCol  = r.atm_pcr>1.2?'var(--green)':r.atm_pcr>0&&r.atm_pcr<0.8?'var(--red)':'#9ab8d0';
+        const reasons = (r.reasons||[]).slice(0,2).map(x => String(x).slice(0,24)).join(' · ');
         return `<tr>
           <td style="color:#5a7a8a">${ts}</td>
-          <td><span class="an-badge ${isCall?'call':'put'}">${r.signal}</span></td>
+          <td><span class="an-badge ${isC?'call':'put'}">${r.signal}</span></td>
           <td>
             <span style="color:${conf>=65?'var(--green)':conf>=45?'#ffcc00':'var(--red)'}">${conf}%</span>
             <span class="an-conf-bar"><span class="an-conf-fill" style="width:${conf}%"></span></span>
           </td>
           <td style="color:#cde8ff">${Number(r.nifty||0).toFixed(0)}</td>
           <td style="color:${r.rsi>60?'var(--red)':r.rsi<40?'var(--green)':'#9ab8d0'}">${Number(r.rsi||0).toFixed(1)}</td>
-          <td style="color:${r.atm_pcr>1.2?'var(--green)':r.atm_pcr<0.8?'var(--red)':'#9ab8d0'}">${Number(r.atm_pcr||r.pcr||0).toFixed(2)}</td>
+          <td style="color:${pcrCol}">${pcrShow}</td>
           <td style="color:${r.adx>=25?'#ffcc00':'#5a7a8a'}">${Number(r.adx||0).toFixed(1)}</td>
           <td style="color:${r.vix>20?'var(--red)':'#5a7a8a'}">${Number(r.vix||0).toFixed(1)}</td>
           <td><span style="font-size:8px;${mtfCls}">${(r.mtf_signal||'—').slice(0,8)}</span></td>
           <td><span class="an-badge ${r.quality_gate?'pass':'fail'}">${r.quality_gate?'✓':'✗'}</span></td>
           <td style="color:#5a7a8a;font-size:8px">${r.entry_window||'—'}</td>
-          <td style="color:#5a7a8a;font-size:8px;max-width:160px;overflow:hidden;text-overflow:ellipsis">${reasons||'—'}</td>
+          <td style="color:#5a7a8a;font-size:8px;max-width:160px;overflow:hidden;text-overflow:ellipsis" title="${(r.reasons||[]).join(' | ')}">${reasons||'—'}</td>
         </tr>`;
       }).join('')}
     </tbody>
