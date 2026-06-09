@@ -83,8 +83,10 @@ const COOKIE_TTL_MS      = 15 * 60 * 1000;   // proactive cookie re-warm
 // ── Dhan API config ────────────────────────────────────────────────────────────
 // Dhan option chain works from Railway US IPs (confirmed not IP-blocked).
 // Set DHAN_ACCESS_TOKEN + DHAN_CLIENT_ID in Railway env vars.
-const DHAN_ACCESS_TOKEN = process.env.DHAN_ACCESS_TOKEN || null;
-const DHAN_CLIENT_ID    = process.env.DHAN_CLIENT_ID    || null;
+const DHAN_ACCESS_TOKEN = (process.env.DHAN_ACCESS_TOKEN || '').trim() || null;
+const DHAN_CLIENT_ID    = (process.env.DHAN_CLIENT_ID    || '').trim() || null;
+// Log Dhan status at module load — appears in Railway startup logs
+console.log(`[nseData] Dhan PCR: ${DHAN_ACCESS_TOKEN ? '✅ token present (' + DHAN_ACCESS_TOKEN.slice(0,12) + '...)' : '❌ DHAN_ACCESS_TOKEN missing'} | ClientID: ${DHAN_CLIENT_ID || '❌ MISSING'}`);
 
 // ScraperAPI removed — trial ended. Dhan API is now the primary PCR source.
 const SCRAPERAPI_KEY  = null;   // disabled
