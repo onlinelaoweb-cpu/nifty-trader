@@ -1782,8 +1782,8 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div style="font-family:'Share Tech Mono',monospace;font-size:11px;color:#9ab8d0;" id="chart-nifty-label">--</div>
     </div>
     <div class="chart-controls">
-      <button class="chart-btn active" onclick="setChartTF('1m',this)">1m</button>
-      <button class="chart-btn" onclick="setChartTF('5m',this)">5m</button>
+      <button class="chart-btn" onclick="setChartTF('1m',this)">1m</button>
+      <button class="chart-btn active" onclick="setChartTF('5m',this)">5m</button>
       <button class="chart-btn" onclick="setChartTF('15m',this)">15m</button>
       <button class="chart-btn" onclick="setChartTF('1h',this)">1h</button>
     </div>
@@ -1796,7 +1796,9 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="chart-legend">
       <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div><span>Bull</span></div>
       <div class="legend-item"><div class="legend-dot" style="background:var(--red)"></div><span>Bear</span></div>
-      <div class="legend-item"><div class="legend-dot" style="background:var(--blue)"></div><span>VWAP</span></div>
+      <div class="legend-item"><div class="legend-dot" style="background:#3399ff"></div><span>VWAP</span></div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ffcc00"></div><span>EMA9</span></div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ff8c00"></div><span>EMA21</span></div>
     </div>
     <div class="ind-grid" style="margin-top:8px;">
       <div class="ind-card"><div class="ind-label"><span>OPEN</span></div><div class="ind-val" id="chart-open" style="font-size:14px;">--</div></div>
@@ -2346,7 +2348,7 @@ function playAlert(type) {
     });
   } catch(e) { console.warn('playAlert:', e.message); }
 }
-let _chartTF = '1m';
+let _chartTF = '5m';  // default 5m — less noisy than 1m for intraday reading
 let _chartData = [];
 let _clCalendarReady = false; // becomes true once calendar API returns data
 
@@ -4258,99 +4260,228 @@ async function refreshChart() {
   const loadEl  = document.getElementById('chart-loading');
   const emptyEl = document.getElementById('chart-empty');
   const updEl   = document.getElementById('chart-updated');
-  // Show loading overlay
-  if (loadEl)  { loadEl.style.display  = 'flex'; }
+  if (loadEl)  { loadEl.style.display = 'flex'; }
   if (emptyEl) { emptyEl.style.display = 'none'; }
   canvas.style.opacity = '0.3';
   try {
     const r = await fetch('/api/chart?tf=' + _chartTF);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     const candles = await r.json();
     if (loadEl) loadEl.style.display = 'none';
     canvas.style.opacity = '1';
     if (!candles || !candles.length) {
-      if (emptyEl) emptyEl.style.display = 'flex';
+      if (emptyEl) { emptyEl.style.display = 'flex'; emptyEl.textContent = '📭 NO DATA — market closed or Yahoo unavailable'; }
       return;
     }
-    // Update OHLC summary
-    const last = candles[candles.length-1];
-    const setVal = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v!=null?v:'--'; };
-    setVal('chart-open', last.open?.toFixed(2));
-    setVal('chart-close', last.close?.toFixed(2));
-    setVal('chart-high', Math.max(...candles.slice(-20).map(c=>c.high)).toFixed(2));
-    setVal('chart-low', Math.min(...candles.slice(-20).map(c=>c.low)).toFixed(2));
-    setVal('chart-nifty-label', last.close?.toFixed(2));
-    // Attach VWAP from _lastState if available
-    const vwapVal = (_lastState && _lastState.vwap != null) ? _lastState.vwap : null;
-    renderCandlestickChart(canvas, candles, vwapVal);
-    if (updEl) updEl.textContent = 'Updated: ' + new Date().toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    // ── OHLC summary — use FULL DAY range, not just last 20 ──────────────────
+    const first = candles[0];
+    const last  = candles[candles.length - 1];
+    const dayHigh = Math.max(...candles.map(c => c.high));
+    const dayLow  = Math.min(...candles.map(c => c.low));
+    const setVal = (id, v, color) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = v != null ? v : '--';
+      if (color) el.style.color = color;
+    };
+    setVal('chart-open',  first.open?.toFixed(2));
+    setVal('chart-close', last.close?.toFixed(2),
+      last.close >= first.open ? 'var(--green)' : 'var(--red)');
+    setVal('chart-high',  dayHigh.toFixed(2), 'var(--green)');
+    setVal('chart-low',   dayLow.toFixed(2),  'var(--red)');
+    setVal('chart-nifty-label', last.close?.toFixed(2) + ' (' + (last.close >= first.open ? '+' : '') + ((last.close - first.open) / first.open * 100).toFixed(2) + '%)');
+
+    renderCandlestickChart(canvas, candles);
+    if (updEl) updEl.textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   } catch (e) {
     if (loadEl) loadEl.style.display = 'none';
     canvas.style.opacity = '1';
-    if (emptyEl) { emptyEl.style.display = 'flex'; emptyEl.textContent = '⚠️ CHART LOAD FAILED'; }
+    if (emptyEl) { emptyEl.style.display = 'flex'; emptyEl.textContent = '⚠️ CHART LOAD FAILED: ' + e.message; }
     console.warn('Chart error:', e.message);
   }
 }
 
-function renderCandlestickChart(canvas, candles, vwapVal) {
-  const W = canvas.parentElement.clientWidth || 360, H = 220;
+// ── EMA calculator ─────────────────────────────────────────────────────────────
+function _calcEMA(closes, period) {
+  const k = 2 / (period + 1);
+  const out = new Array(closes.length).fill(null);
+  let seed = closes.slice(0, period).reduce((a,b) => a+b, 0) / period;
+  out[period - 1] = seed;
+  for (let i = period; i < closes.length; i++) {
+    seed = closes[i] * k + seed * (1 - k);
+    out[i] = seed;
+  }
+  return out;
+}
+
+// ── VWAP calculator from candles ───────────────────────────────────────────────
+function _calcVWAP(candles) {
+  let cumTPV = 0, cumVol = 0;
+  return candles.map(c => {
+    const tp = (c.high + c.low + c.close) / 3;
+    cumTPV += tp * (c.volume || 1);
+    cumVol += (c.volume || 1);
+    return cumTPV / cumVol;
+  });
+}
+
+let _chartResizeTimer = null;
+function renderCandlestickChart(canvas, candles) {
+  const W = canvas.parentElement.clientWidth || 360, H = 240;
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  const tfLimits = { '1m': 75, '5m': 60, '15m': 40, '1h': 30 };
-  const n = Math.min(candles.length, tfLimits[_chartTF] || 60);
+
+  const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30 };
+  const n     = Math.min(candles.length, tfLimits[_chartTF] || 65);
   const slice = candles.slice(-n);
-  const highs = slice.map(c => c.high), lows = slice.map(c => c.low);
-  // If VWAP is provided, include it in the price range so it's always visible
-  const allPrices = [...highs, ...lows];
-  if (vwapVal != null) allPrices.push(vwapVal);
+  const closes = slice.map(c => c.close);
+
+  // ── Compute overlays ───────────────────────────────────────────────────────
+  const ema9  = _calcEMA(closes, 9);
+  const ema21 = _calcEMA(closes, 21);
+  const vwap  = _calcVWAP(slice);   // cumulative intraday VWAP from slice start
+
+  // Price range includes all overlays
+  const allPrices = [...slice.map(c=>c.high), ...slice.map(c=>c.low),
+                     ...ema9.filter(Boolean), ...ema21.filter(Boolean), ...vwap];
   const minP = Math.min(...allPrices), maxP = Math.max(...allPrices);
   const range = maxP - minP || 1;
-  const pad = 8, bw = Math.max(2, Math.floor((W - pad*2) / n) - 1);
-  const toY = p => H - pad - ((p - minP) / range) * (H - pad*2);
 
-  ctx.fillStyle = '#060d14'; ctx.fillRect(0,0,W,H);
+  const padL = 8, padR = 44, padT = 10, padB = 16;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+  const bw = Math.max(2, Math.floor(chartW / n) - 1);
+  const toX = i => padL + i * (bw + 1) + bw / 2;
+  const toY = p => padT + chartH - ((p - minP) / range) * chartH;
 
-  // Grid
-  for (let i = 0; i <= 4; i++) {
-    const y = pad + (i/4)*(H-pad*2);
-    ctx.strokeStyle='#1a3a5a'; ctx.setLineDash([3,3]); ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(W-40,y); ctx.stroke();
+  // ── Background ─────────────────────────────────────────────────────────────
+  ctx.fillStyle = '#060d14';
+  ctx.fillRect(0, 0, W, H);
+
+  // ── Grid lines ─────────────────────────────────────────────────────────────
+  for (let i = 0; i <= 5; i++) {
+    const y = padT + (i / 5) * chartH;
+    ctx.strokeStyle = '#0d2035';
+    ctx.setLineDash([2, 4]);
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
     ctx.setLineDash([]);
-    const price = maxP - (i/4)*range;
-    ctx.fillStyle='#4a6a8a'; ctx.font='7px monospace'; ctx.fillText(price.toFixed(0), W-36, y+3);
+    const price = maxP - (i / 5) * range;
+    ctx.fillStyle = '#4a6a8a';
+    ctx.font = '7px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(price.toFixed(0), W - padR + 4, y + 3);
   }
 
-  // Candles
+  // ── Candles ────────────────────────────────────────────────────────────────
   slice.forEach((c, i) => {
-    const x = pad + i*(bw+1);
+    const x  = padL + i * (bw + 1);
     const isUp = c.close >= c.open;
-    const color = isUp ? '#00ff88' : '#ff2244';
-    const openY = toY(c.open), closeY = toY(c.close), highY = toY(c.high), lowY = toY(c.low);
-    const bodyTop = Math.min(openY, closeY), bodyH = Math.max(1, Math.abs(closeY - openY));
-    ctx.strokeStyle = color; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(x+bw/2, highY); ctx.lineTo(x+bw/2, lowY); ctx.stroke();
-    ctx.fillStyle = color; ctx.fillRect(x, bodyTop, bw, bodyH);
+    const col  = isUp ? '#00ff88' : '#ff2244';
+    const bodyTop = toY(Math.max(c.open, c.close));
+    const bodyBot = toY(Math.min(c.open, c.close));
+    const bodyH = Math.max(1, bodyBot - bodyTop);
+    // Wick
+    ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(x + bw/2, toY(c.high)); ctx.lineTo(x + bw/2, toY(c.low)); ctx.stroke();
+    // Body
+    ctx.fillStyle = isUp ? 'rgba(0,255,136,0.75)' : 'rgba(255,34,68,0.75)';
+    ctx.fillRect(x, bodyTop, bw, bodyH);
+    ctx.strokeRect(x, bodyTop, bw, bodyH);
   });
 
-  // VWAP line
-  if (vwapVal != null) {
-    const vy = toY(vwapVal);
+  // ── EMA 9 ─────────────────────────────────────────────────────────────────
+  ctx.save();
+  ctx.strokeStyle = '#ffcc00';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([]);
+  let started = false;
+  ctx.beginPath();
+  ema9.forEach((v, i) => {
+    if (v == null) return;
+    if (!started) { ctx.moveTo(toX(i), toY(v)); started = true; }
+    else ctx.lineTo(toX(i), toY(v));
+  });
+  ctx.stroke();
+  // Label
+  const lastEma9 = ema9.filter(Boolean).pop();
+  if (lastEma9) {
+    ctx.fillStyle = '#ffcc00'; ctx.font = '7px monospace'; ctx.textAlign = 'left';
+    ctx.fillText('E9 ' + lastEma9.toFixed(0), W - padR + 4, toY(lastEma9) + 3);
+  }
+  ctx.restore();
+
+  // ── EMA 21 ────────────────────────────────────────────────────────────────
+  ctx.save();
+  ctx.strokeStyle = '#ff8c00';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([]);
+  started = false;
+  ctx.beginPath();
+  ema21.forEach((v, i) => {
+    if (v == null) return;
+    if (!started) { ctx.moveTo(toX(i), toY(v)); started = true; }
+    else ctx.lineTo(toX(i), toY(v));
+  });
+  ctx.stroke();
+  const lastEma21 = ema21.filter(Boolean).pop();
+  if (lastEma21) {
+    ctx.fillStyle = '#ff8c00'; ctx.font = '7px monospace'; ctx.textAlign = 'left';
+    ctx.fillText('E21 ' + lastEma21.toFixed(0), W - padR + 4, toY(lastEma21) + 3);
+  }
+  ctx.restore();
+
+  // ── VWAP ──────────────────────────────────────────────────────────────────
+  ctx.save();
+  ctx.strokeStyle = '#3399ff';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 3]);
+  ctx.beginPath();
+  vwap.forEach((v, i) => {
+    if (i === 0) ctx.moveTo(toX(i), toY(v));
+    else ctx.lineTo(toX(i), toY(v));
+  });
+  ctx.stroke();
+  ctx.setLineDash([]);
+  const lastVwap = vwap[vwap.length - 1];
+  if (lastVwap) {
+    ctx.fillStyle = '#3399ff'; ctx.font = '7px monospace'; ctx.textAlign = 'left';
+    ctx.fillText('VP ' + lastVwap.toFixed(0), W - padR + 4, toY(lastVwap) + 3);
+  }
+  ctx.restore();
+
+  // ── Current price line ────────────────────────────────────────────────────
+  const curPrice = slice[slice.length - 1]?.close;
+  if (curPrice) {
+    const cy = toY(curPrice);
     ctx.save();
-    ctx.strokeStyle = '#3399ff';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([5, 3]);
-    ctx.beginPath();
-    ctx.moveTo(pad, vy);
-    ctx.lineTo(W - 40, vy);
-    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 5]);
+    ctx.beginPath(); ctx.moveTo(padL, cy); ctx.lineTo(W - padR, cy); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = '#3399ff';
-    ctx.font = '8px monospace';
-    ctx.fillText('V ' + vwapVal.toFixed(0), W - 36, vy + 3);
+    // Price badge
+    ctx.fillStyle = curPrice >= slice[0]?.open ? '#00ff88' : '#ff2244';
+    ctx.fillRect(W - padR + 1, cy - 6, padR - 2, 12);
+    ctx.fillStyle = '#000'; ctx.font = 'bold 7px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(curPrice.toFixed(0), W - padR/2 + 1, cy + 3);
     ctx.restore();
   }
 
   canvas.style.display = 'block';
+
+  // ── Window resize handler — redraw on resize ──────────────────────────────
+  if (!canvas._resizeHandlerSet) {
+    canvas._resizeHandlerSet = true;
+    window.addEventListener('resize', () => {
+      if (_chartResizeTimer) clearTimeout(_chartResizeTimer);
+      _chartResizeTimer = setTimeout(() => {
+        const chartPanel = document.getElementById('panel-chart');
+        if (chartPanel && chartPanel.classList.contains('active')) refreshChart();
+      }, 200);
+    });
+  }
 }
 
 // ─── TOOLS ───────────────────────────────────────────────
