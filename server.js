@@ -2727,6 +2727,10 @@ server.listen(PORT, () => {
     console.log(`VardaanNifty AI running on port ${PORT}`);
     server.keepAliveTimeout = 120000;
     server.headersTimeout   = 125000;
+    // Print outgoing IP for Dhan Static IP whitelist setup
+    axios.get('https://api.ipify.org?format=json', { timeout: 5000 })
+        .then(r => console.log(`[Railway] Outgoing IP: ${r.data.ip} — Add this to Dhan Static IP Setting!`))
+        .catch(() => console.log('[Railway] Could not fetch outgoing IP'));
     // Start init AFTER server is already accepting connections
     initializeLiveData().catch(e => console.error('Init error:', e.message));
 });

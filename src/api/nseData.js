@@ -83,13 +83,46 @@ const COOKIE_TTL_MS      = 15 * 60 * 1000;   // proactive cookie re-warm
 // ── Dhan API config ────────────────────────────────────────────────────────────
 // Dhan option chain works from Railway US IPs (confirmed not IP-blocked).
 // Set DHAN_ACCESS_TOKEN + DHAN_CLIENT_ID in Railway env vars.
-const DHAN_ACCESS_TOKEN = (process.env.DHAN_ACCESS_TOKEN || '').trim() || null;
+// NOTE: Dhan token expires daily — app auto-renews it at startup using RenewToken API.
+let   DHAN_ACCESS_TOKEN = (process.env.DHAN_ACCESS_TOKEN || '').trim() || null;
 const DHAN_CLIENT_ID    = (process.env.DHAN_CLIENT_ID    || '').trim() || null;
 // Log Dhan status at module load — appears in Railway startup logs
 console.log(`[nseData] Dhan PCR: ${DHAN_ACCESS_TOKEN ? '✅ token present (' + DHAN_ACCESS_TOKEN.slice(0,12) + '...)' : '❌ DHAN_ACCESS_TOKEN missing'} | ClientID: ${DHAN_CLIENT_ID ? '✅ ' + DHAN_CLIENT_ID : '❌ MISSING — set DHAN_CLIENT_ID in Railway Variables!'}`);
 if (!DHAN_CLIENT_ID || !DHAN_ACCESS_TOKEN) {
     console.error('[nseData] ⚠️  PCR DISABLED — DHAN_ACCESS_TOKEN + DHAN_CLIENT_ID dono Railway Variables mein set karo. PCR tab N/A dikhega jab tak fix nahi hota.');
 }
+
+// ── Dhan Token Auto-Renewal ────────────────────────────────────────────────────
+// Dhan token validity is set to 1 day. On each app startup, auto-renew it
+// so Railway redeploys always get a fresh token without manual intervention.
+async function renewDhanToken() {
+    if (!DHAN_ACCESS_TOKEN || !DHAN_CLIENT_ID) return;
+    try {
+        const res = await axios.post(
+            'https://api.dhan.co/v2/RenewToken',
+            {},
+            {
+                headers: {
+                    'access-token' : DHAN_ACCESS_TOKEN,
+                    'dhanClientId'  : DHAN_CLIENT_ID,
+                    'Content-Type'  : 'application/json',
+                },
+                timeout: 8000,
+            }
+        );
+        if (res.data?.accessToken) {
+            DHAN_ACCESS_TOKEN = res.data.accessToken.trim();
+            console.log('[Dhan] ✅ Token auto-renewed successfully (' + DHAN_ACCESS_TOKEN.slice(0,12) + '...)');
+        } else {
+            console.warn('[Dhan] Token renewal response unexpected:', JSON.stringify(res.data)?.slice(0,120));
+        }
+    } catch (e) {
+        // 400 = token already expired (cannot renew expired), 401 = invalid
+        console.warn(`[Dhan] Token renewal failed (${e.response?.status || e.message}) — using existing token`);
+    }
+}
+// Run renewal at startup (non-blocking)
+renewDhanToken();
 
 // ScraperAPI removed — trial ended. Dhan API is now the primary PCR source.
 const SCRAPERAPI_KEY  = null;   // disabled
