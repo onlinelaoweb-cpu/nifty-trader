@@ -1294,13 +1294,14 @@ async function fetchPCRFromFyers(spotPrice) {
     if (!spotPrice || spotPrice <= 0) return null;
 
     try {
-        // Fyers option chain endpoint — symbol format: NSE:NIFTY50-INDEX
+        // Fyers option chain endpoint — correct v3 URL
+        // Symbol: NSE:NIFTY50-INDEX, strikecount = ATM ± N strikes
         const res = await axios.get(
-            'https://api-t1.fyers.in/data/v3/options-chain',
+            'https://api.fyers.in/v3/data/options-chain',
             {
                 params: {
                     symbol     : 'NSE:NIFTY50-INDEX',
-                    strikecount: 20,   // ATM ±20 strikes
+                    strikecount: 20,
                     timestamp  : '',
                 },
                 headers: {
