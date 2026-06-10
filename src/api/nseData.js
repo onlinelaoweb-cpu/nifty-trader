@@ -1379,7 +1379,15 @@ async function fetchPCRFromFyers(spotPrice) {
         return { pcr, atmPcr, atm: atmStrike, ceWall: ceWallStrike, peWall: peWallStrike, maxPain, records };
 
     } catch (e) {
-        console.warn(`[PCR-Fyers] Error: ${e.response?.status || e.message}`);
+        const status = e.response?.status;
+        if (status === 401) {
+            console.error('[PCR-Fyers] ❌ 401 Unauthorized — FYERS_ACCESS_TOKEN expired! Regenerate token at myapi.fyers.in and update FYERS_ACCESS_TOKEN in Railway Variables.');
+            FYERS_ACCESS_TOKEN = null;  // disable further calls until token is updated
+        } else if (status === 403) {
+            console.error('[PCR-Fyers] ❌ 403 Forbidden — check FYERS_APP_ID is correct');
+        } else {
+            console.warn(`[PCR-Fyers] Error: ${status || e.message}`);
+        }
         return null;
     }
 }
@@ -1389,13 +1397,13 @@ async function fetchPCRFromDhan(spotPrice) {
     if (!spotPrice || spotPrice <= 0) return null;
 
     try {
-        // Get current/upcoming Thursday expiry (Nifty weekly)
-        // If today IS Thursday → use today (same-day expiry)
-        // Otherwise → find next Thursday
+        // Get current/upcoming Tuesday expiry (Nifty weekly — changed from Thursday to Tuesday)
+        // If today IS Tuesday → use today (same-day expiry)
+        // Otherwise → find next Tuesday
         const getNextExpiry = () => {
             const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-            const day = now.getDay(); // 0=Sun, 4=Thu
-            let daysAhead = (4 - day + 7) % 7; // 0 if today is Thursday
+            const day = now.getDay(); // 0=Sun, 2=Tue
+            let daysAhead = (2 - day + 7) % 7; // 0 if today is Tuesday
             const expiry = new Date(now);
             expiry.setDate(now.getDate() + daysAhead);
             return `${expiry.getFullYear()}-${String(expiry.getMonth()+1).padStart(2,'0')}-${String(expiry.getDate()).padStart(2,'0')}`;

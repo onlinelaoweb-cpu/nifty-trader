@@ -130,7 +130,13 @@ let ema920AlertSentToday=false;  // one-shot: 9:20 AM EMA-VWAP setup alert per d
 
 function isMarketOpen() {
     const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
-    const m   = ist.getHours()*60 + ist.getMinutes();
+    const day = ist.getDay();
+    if (day === 0 || day === 6) return false;  // weekend
+    const yyyy = ist.getFullYear(), mm = String(ist.getMonth()+1).padStart(2,'0'), dd = String(ist.getDate()).padStart(2,'0');
+    // NSE holidays — keep in sync with nseData.js NSE_HOLIDAYS set
+    const NSE_HOLIDAYS_SRV = new Set(['2026-01-26','2026-02-19','2026-03-25','2026-04-01','2026-04-10','2026-04-14','2026-05-01','2026-08-15','2026-10-02','2026-10-20','2026-10-24','2026-11-04','2026-11-05','2026-12-25']);
+    if (NSE_HOLIDAYS_SRV.has(`${yyyy}-${mm}-${dd}`)) return false;
+    const m = ist.getHours()*60 + ist.getMinutes();
     return m >= 555 && m <= 930;
 }
 function getIST() { return new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'})); }
