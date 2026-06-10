@@ -136,6 +136,7 @@ const FYERS_APP_ID        = (process.env.FYERS_APP_ID        || '').trim() || nu
 const FYERS_SECRET_ID     = (process.env.FYERS_SECRET_ID     || '').trim() || null;
 let   FYERS_ACCESS_TOKEN  = (process.env.FYERS_ACCESS_TOKEN  || '').trim() || null;
 let   FYERS_REFRESH_TOKEN = (process.env.FYERS_REFRESH_TOKEN || '').trim() || null;
+const FYERS_PIN           = (process.env.FYERS_PIN           || '').trim() || '';
 console.log(`[nseData] Fyers: AppID=${FYERS_APP_ID ? '✅' : '❌'} | AccessToken=${FYERS_ACCESS_TOKEN ? '✅ (' + FYERS_ACCESS_TOKEN.slice(0,10) + '...)' : '❌'} | RefreshToken=${FYERS_REFRESH_TOKEN ? '✅ present' : '❌ MISSING'}`);
 
 // ── Fyers Auto Token Refresh ───────────────────────────────────────────────────
@@ -163,7 +164,7 @@ async function autoRefreshFyersToken() {
             grant_type    : 'refresh_token',
             appIdHash     : appIdHash,
             refresh_token : FYERS_REFRESH_TOKEN,
-            pin           : '',
+            pin           : FYERS_PIN,
         };
 
         console.log('[Fyers] 🔄 Auto-refreshing access token using refresh token...');
