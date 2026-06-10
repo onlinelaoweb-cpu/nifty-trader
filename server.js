@@ -2737,15 +2737,18 @@ server.listen(PORT, () => {
     axios.get('https://api.ipify.org?format=json', { timeout: 5000 })
         .then(r => console.log(`[Railway] Outgoing IP: ${r.data.ip}`))
         .catch(() => console.log('[Railway] Could not fetch outgoing IP'));
-    // Print Fyers auth URL if token not set
-    const fyersAppId = (process.env.FYERS_APP_ID || '').trim();
-    const fyersToken = (process.env.FYERS_ACCESS_TOKEN || '').trim();
-    if (fyersAppId && !fyersToken) {
+    // Fyers startup status
+    const fyersAppId  = (process.env.FYERS_APP_ID        || '').trim();
+    const fyersToken  = (process.env.FYERS_ACCESS_TOKEN  || '').trim();
+    const fyersRefresh= (process.env.FYERS_REFRESH_TOKEN || '').trim();
+    if (fyersAppId && fyersRefresh) {
+        console.log(`[Fyers] ✅ AppID + RefreshToken present — auto-refresh enabled (token refreshes on each restart)`);
+    } else if (fyersAppId && !fyersRefresh) {
         const authUrl = `https://api-t1.fyers.in/api/v3/generate-authcode?client_id=${fyersAppId}&redirect_uri=https://trade.fyers.in/api-login/redirect-uri/index.html&response_type=code&state=vardaannifty`;
-        console.log(`[Fyers] ⚠️  FYERS_ACCESS_TOKEN missing! Generate token by visiting:`);
-        console.log(`[Fyers] 👉 ${authUrl}`);
-    } else if (fyersToken) {
-        console.log(`[Fyers] ✅ Access token present — PCR via Fyers enabled`);
+        console.log(`[Fyers] ⚠️  FYERS_REFRESH_TOKEN missing! Generate tokens at: ${authUrl}`);
+    }
+    if (fyersToken) {
+        console.log(`[Fyers] ✅ Access token present (${fyersToken.slice(0,10)}...) — PCR via Fyers enabled`);
     }
     // Start init AFTER server is already accepting connections
     initializeLiveData().catch(e => console.error('Init error:', e.message));

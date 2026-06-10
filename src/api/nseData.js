@@ -129,12 +129,68 @@ const SCRAPERAPI_KEY  = null;   // disabled
 const SCRAPERAPI_BASE = 'https://api.scraperapi.com';  // kept for reference only
 
 // ── Fyers API config ───────────────────────────────────────────────────────────
-// Fyers option chain — no IP restriction, 365-day token, works on Railway.
-// Set FYERS_APP_ID + FYERS_ACCESS_TOKEN in Railway env vars.
-// To generate token: see server startup log for auth URL, open in browser, paste token.
-const FYERS_APP_ID      = (process.env.FYERS_APP_ID      || '').trim() || null;
-let   FYERS_ACCESS_TOKEN = (process.env.FYERS_ACCESS_TOKEN || '').trim() || null;
-console.log(`[nseData] Fyers PCR: ${FYERS_APP_ID ? '✅ AppID ' + FYERS_APP_ID : '❌ FYERS_APP_ID missing'} | Token: ${FYERS_ACCESS_TOKEN ? '✅ present (' + FYERS_ACCESS_TOKEN.slice(0,12) + '...)' : '❌ FYERS_ACCESS_TOKEN missing'}`);
+// Fyers option chain — no IP restriction, access token expires daily.
+// Required Railway env vars: FYERS_APP_ID, FYERS_ACCESS_TOKEN, FYERS_REFRESH_TOKEN
+// On startup: auto-refresh access token using refresh token (valid 15 days).
+const FYERS_APP_ID        = (process.env.FYERS_APP_ID        || '').trim() || null;
+const FYERS_SECRET_ID     = (process.env.FYERS_SECRET_ID     || '').trim() || null;
+let   FYERS_ACCESS_TOKEN  = (process.env.FYERS_ACCESS_TOKEN  || '').trim() || null;
+let   FYERS_REFRESH_TOKEN = (process.env.FYERS_REFRESH_TOKEN || '').trim() || null;
+console.log(`[nseData] Fyers: AppID=${FYERS_APP_ID ? '✅' : '❌'} | AccessToken=${FYERS_ACCESS_TOKEN ? '✅ (' + FYERS_ACCESS_TOKEN.slice(0,10) + '...)' : '❌'} | RefreshToken=${FYERS_REFRESH_TOKEN ? '✅ present' : '❌ MISSING'}`);
+
+// ── Fyers Auto Token Refresh ───────────────────────────────────────────────────
+// Fyers access token expires every day at midnight.
+// On every app startup, auto-refresh using refresh token so no manual work needed.
+// Refresh token itself is valid for 15 days — after that regenerate manually once.
+async function autoRefreshFyersToken() {
+    if (!FYERS_REFRESH_TOKEN || !FYERS_APP_ID) {
+        console.warn('[Fyers] ⚠️  Cannot auto-refresh — FYERS_REFRESH_TOKEN missing in Railway Variables');
+        return;
+    }
+    try {
+        const crypto = require('crypto');
+        const appIdOnly = FYERS_APP_ID.split('-')[0]; // e.g. "2U5JAL826U" from "2U5JAL826U-100"
+        // appIdHash = SHA256(app_id:secret_id) — secret_id needed for refresh
+        // If FYERS_SECRET_ID not set, try without hash (some tokens work this way)
+        let appIdHash = '';
+        if (FYERS_SECRET_ID) {
+            appIdHash = crypto.createHash('sha256')
+                .update(`${FYERS_APP_ID}:${FYERS_SECRET_ID}`)
+                .digest('hex');
+        }
+
+        const payload = {
+            grant_type    : 'refresh_token',
+            appIdHash     : appIdHash,
+            refresh_token : FYERS_REFRESH_TOKEN,
+            pin           : '',
+        };
+
+        console.log('[Fyers] 🔄 Auto-refreshing access token using refresh token...');
+        const res = await axios.post(
+            'https://api-t1.fyers.in/api/v3/validate-refresh-token',
+            payload,
+            { headers: { 'Content-Type': 'application/json' }, timeout: 10_000 }
+        );
+
+        const d = res.data;
+        if (d?.access_token) {
+            FYERS_ACCESS_TOKEN = d.access_token.trim();
+            // Update refresh token if a new one was returned
+            if (d.refresh_token) FYERS_REFRESH_TOKEN = d.refresh_token.trim();
+            console.log(`[Fyers] ✅ Access token auto-refreshed successfully (${FYERS_ACCESS_TOKEN.slice(0,10)}...)`);
+        } else {
+            console.warn(`[Fyers] ⚠️  Refresh failed: ${JSON.stringify(d)?.slice(0, 200)}`);
+            console.warn('[Fyers] Using existing FYERS_ACCESS_TOKEN — may be expired. Regenerate manually at myapi.fyers.in if PCR fails.');
+        }
+    } catch (e) {
+        const body = JSON.stringify(e.response?.data)?.slice(0, 200) || e.message;
+        console.warn(`[Fyers] ⚠️  Token refresh error (${e.response?.status || e.message}): ${body}`);
+        console.warn('[Fyers] Using existing FYERS_ACCESS_TOKEN — may be expired.');
+    }
+}
+// Run on startup (non-blocking)
+autoRefreshFyersToken();
 
 // FII/DII uses a longer timeout because Railway→NSE latency spikes more on this endpoint
 const FIIDII_TIMEOUT_MS  = 20_000;   // 20s dedicated timeout for FII/DII
@@ -1294,10 +1350,13 @@ async function fetchPCRFromFyers(spotPrice) {
     if (!spotPrice || spotPrice <= 0) return null;
 
     try {
-        // Fyers option chain endpoint — correct v3 URL
-        // Symbol: NSE:NIFTY50-INDEX, strikecount = ATM ± N strikes
+        // Fyers option chain — confirmed from official fyers-apiv3 SDK source:
+        // URL:    https://api-t1.fyers.in/data/options-chain-v3
+        // Method: GET with query params
+        // Auth:   "AppID:AccessToken" (NOT Bearer)
+        // Header: version: "3" also required
         const res = await axios.get(
-            'https://api.fyers.in/v3/data/options-chain',
+            'https://api-t1.fyers.in/data/options-chain-v3',
             {
                 params: {
                     symbol     : 'NSE:NIFTY50-INDEX',
@@ -1307,6 +1366,7 @@ async function fetchPCRFromFyers(spotPrice) {
                 headers: {
                     'Authorization' : `${FYERS_APP_ID}:${FYERS_ACCESS_TOKEN}`,
                     'Content-Type'  : 'application/json',
+                    'version'       : '3',
                 },
                 timeout: 10_000,
             }
@@ -1319,7 +1379,7 @@ async function fetchPCRFromFyers(spotPrice) {
 
         const d = res.data;
         if (!d || d.s !== 'ok' || !d.data?.optionsChain) {
-            console.warn(`[PCR-Fyers] Bad response: s=${d?.s} | msg=${d?.message || d?.errmsg || JSON.stringify(d)?.slice(0,120)}`);
+            console.warn(`[PCR-Fyers] Bad response: s=${d?.s} | code=${d?.code} | msg=${d?.message || JSON.stringify(d)?.slice(0,200)}`);
             return null;
         }
 
@@ -1329,27 +1389,42 @@ async function fetchPCRFromFyers(spotPrice) {
             return null;
         }
 
-        // Compute PCR from chain
+        // Fyers returns flat list: each row has option_type="CE" or "PE"
+        // Group by strike price first
+        const strikeMap = {};
+        for (const row of chain) {
+            const strike = Number(row.strike_price);
+            if (!strikeMap[strike]) strikeMap[strike] = { CE: null, PE: null };
+            if (row.option_type === 'CE') strikeMap[strike].CE = row;
+            else if (row.option_type === 'PE') strikeMap[strike].PE = row;
+        }
+
+        // Compute PCR from grouped map
         let totalCeOI = 0, totalPeOI = 0;
         let ceWall = 0, ceWallStrike = 0, peWall = 0, peWallStrike = 0;
         const atmStrike = Math.round(spotPrice / 50) * 50;
         let atmCeOI = 0, atmPeOI = 0;
         const records = [];
 
-        for (const row of chain) {
-            const strike = row.strike_price;
-            const ceOI   = row.call_options?.oi || 0;
-            const peOI   = row.put_options?.oi  || 0;
+        for (const [strikeStr, sides] of Object.entries(strikeMap)) {
+            const strike = Number(strikeStr);
+            const ceOI   = Number(sides.CE?.oi  || 0);
+            const peOI   = Number(sides.PE?.oi  || 0);
+            const ceOIch = Number(sides.CE?.oich || 0);
+            const peOIch = Number(sides.PE?.oich || 0);
+            const ceLtp  = Number(sides.CE?.ltp  || 0);
+            const peLtp  = Number(sides.PE?.ltp  || 0);
+
             totalCeOI += ceOI;
             totalPeOI += peOI;
             if (ceOI > ceWall) { ceWall = ceOI; ceWallStrike = strike; }
             if (peOI > peWall) { peWall = peOI; peWallStrike = strike; }
             if (strike === atmStrike) { atmCeOI = ceOI; atmPeOI = peOI; }
-            // Build records compatible with calcOIBuildup
+
             records.push({
                 strikePrice : strike,
-                CE          : { openInterest: ceOI, changeinOpenInterest: row.call_options?.oiChange || 0, lastPrice: row.call_options?.ltp || 0 },
-                PE          : { openInterest: peOI, changeinOpenInterest: row.put_options?.oiChange  || 0, lastPrice: row.put_options?.ltp  || 0 },
+                CE          : { openInterest: ceOI, changeinOpenInterest: ceOIch, lastPrice: ceLtp },
+                PE          : { openInterest: peOI, changeinOpenInterest: peOIch, lastPrice: peLtp },
             });
         }
 
@@ -1364,30 +1439,31 @@ async function fetchPCRFromFyers(spotPrice) {
         // Max pain — strike with minimum total loss for writers
         let maxPain = atmStrike;
         let minLoss = Infinity;
-        for (const row of chain) {
-            const s = row.strike_price;
+        for (const rec of records) {
+            const s = rec.strikePrice;
             let loss = 0;
-            for (const r2 of chain) {
-                const ceOI2 = r2.call_options?.oi || 0;
-                const peOI2 = r2.put_options?.oi  || 0;
-                loss += ceOI2 * Math.max(0, r2.strike_price - s);
-                loss += peOI2 * Math.max(0, s - r2.strike_price);
+            for (const r2 of records) {
+                loss += r2.CE.openInterest * Math.max(0, r2.strikePrice - s);
+                loss += r2.PE.openInterest * Math.max(0, s - r2.strikePrice);
             }
             if (loss < minLoss) { minLoss = loss; maxPain = s; }
         }
 
-        console.log(`[PCR-Fyers] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike} | PE Wall:${peWallStrike} | MaxPain:${maxPain} | Strikes:${chain.length}`);
+        console.log(`[PCR-Fyers] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike} | PE Wall:${peWallStrike} | MaxPain:${maxPain} | Strikes:${records.length}`);
         return { pcr, atmPcr, atm: atmStrike, ceWall: ceWallStrike, peWall: peWallStrike, maxPain, records };
 
     } catch (e) {
         const status = e.response?.status;
+        const body   = JSON.stringify(e.response?.data)?.slice(0, 300) || e.message;
         if (status === 401) {
             console.error('[PCR-Fyers] ❌ 401 Unauthorized — FYERS_ACCESS_TOKEN expired! Regenerate token at myapi.fyers.in and update FYERS_ACCESS_TOKEN in Railway Variables.');
-            FYERS_ACCESS_TOKEN = null;  // disable further calls until token is updated
+            FYERS_ACCESS_TOKEN = null;
         } else if (status === 403) {
-            console.error('[PCR-Fyers] ❌ 403 Forbidden — check FYERS_APP_ID is correct');
+            console.error(`[PCR-Fyers] ❌ 403 Forbidden — body: ${body}`);
+        } else if (status === 500) {
+            console.error(`[PCR-Fyers] ❌ 500 Server Error — body: ${body}`);
         } else {
-            console.warn(`[PCR-Fyers] Error: ${status || e.message}`);
+            console.warn(`[PCR-Fyers] Error: ${status || e.message} — body: ${body}`);
         }
         return null;
     }
