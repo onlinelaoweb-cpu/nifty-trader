@@ -468,6 +468,98 @@ function computeSmartMoneyBias() {
     return { bias, score, label, components, updatedAt: new Date().toISOString() };
 }
 
+
+// ── Candle Pattern Detector ────────────────────────────────────────────────────
+// Detects: Hammer, Inverted Hammer, Shooting Star, Doji, Bullish/Bearish Engulfing
+// Uses last 2 candles from session history.
+// Returns: { pattern, direction, strength, reason }
+// direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+// strength: 1 (weak) | 2 (moderate) | 3 (strong)
+function detectCandlePattern() {
+    const candles = getSessionCandles();
+    if (candles.length < 2) return { pattern: 'NONE', direction: 'NEUTRAL', strength: 0, reason: '' };
+
+    const c  = candles[candles.length - 1];  // latest closed candle
+    const p  = candles[candles.length - 2];  // previous candle
+
+    if (!c?.open || !c?.high || !c?.low || !c?.close) return { pattern: 'NONE', direction: 'NEUTRAL', strength: 0, reason: '' };
+
+    const body        = Math.abs(c.close - c.open);
+    const range       = c.high - c.low;
+    const upperWick   = c.high - Math.max(c.open, c.close);
+    const lowerWick   = Math.min(c.open, c.close) - c.low;
+    const isBullCandle = c.close > c.open;
+    const isBearCandle = c.close < c.open;
+    const bodyRatio   = range > 0 ? body / range : 0;
+
+    // ── Doji — indecision ────────────────────────────────────────────────────
+    // Body < 10% of range = market indecision
+    if (bodyRatio < 0.10 && range > 0) {
+        return { pattern: 'DOJI', direction: 'NEUTRAL', strength: 1,
+                 reason: `🕯️ Doji — indecision (body=${body.toFixed(1)} range=${range.toFixed(1)})` };
+    }
+
+    // ── Hammer — bullish reversal ─────────────────────────────────────────────
+    // Lower wick >= 2× body, small upper wick, body in upper 1/3 of range
+    if (lowerWick >= 2 * body && upperWick <= 0.3 * body && lowerWick > 0) {
+        const str = lowerWick >= 3 * body ? 3 : 2;
+        return { pattern: 'HAMMER', direction: 'BULLISH', strength: str,
+                 reason: `🔨 Hammer — bullish reversal (lower wick=${lowerWick.toFixed(1)}, body=${body.toFixed(1)})` };
+    }
+
+    // ── Shooting Star — bearish reversal ──────────────────────────────────────
+    // Upper wick >= 2× body, small lower wick, body in lower 1/3 of range
+    if (upperWick >= 2 * body && lowerWick <= 0.3 * body && upperWick > 0) {
+        const str = upperWick >= 3 * body ? 3 : 2;
+        return { pattern: 'SHOOTING_STAR', direction: 'BEARISH', strength: str,
+                 reason: `⭐ Shooting Star — bearish reversal (upper wick=${upperWick.toFixed(1)}, body=${body.toFixed(1)})` };
+    }
+
+    // ── Inverted Hammer — potential bullish reversal ──────────────────────────
+    // Upper wick >= 2× body at bottom of downtrend
+    if (upperWick >= 2 * body && lowerWick <= 0.3 * body && isBullCandle) {
+        return { pattern: 'INVERTED_HAMMER', direction: 'BULLISH', strength: 1,
+                 reason: `🕯️ Inverted Hammer — potential bullish reversal` };
+    }
+
+    // ── Bullish Engulfing ─────────────────────────────────────────────────────
+    // Current bullish candle fully covers previous bearish candle body
+    const pBody = Math.abs(p.close - p.open);
+    const pBear = p.close < p.open;
+    if (isBullCandle && pBear && body > 0 && pBody > 0) {
+        if (c.open <= p.close && c.close >= p.open) {
+            const str = body >= 1.5 * pBody ? 3 : 2;
+            return { pattern: 'BULLISH_ENGULFING', direction: 'BULLISH', strength: str,
+                     reason: `🟢 Bullish Engulfing — strong reversal (body=${body.toFixed(1)} > prev=${pBody.toFixed(1)})` };
+        }
+    }
+
+    // ── Bearish Engulfing ─────────────────────────────────────────────────────
+    // Current bearish candle fully covers previous bullish candle body
+    const pBull = p.close > p.open;
+    if (isBearCandle && pBull && body > 0 && pBody > 0) {
+        if (c.open >= p.close && c.close <= p.open) {
+            const str = body >= 1.5 * pBody ? 3 : 2;
+            return { pattern: 'BEARISH_ENGULFING', direction: 'BEARISH', strength: str,
+                     reason: `🔴 Bearish Engulfing — strong reversal (body=${body.toFixed(1)} > prev=${pBody.toFixed(1)})` };
+        }
+    }
+
+    // ── Strong Bullish candle (Marubozu-like) ─────────────────────────────────
+    if (isBullCandle && bodyRatio >= 0.75) {
+        return { pattern: 'STRONG_BULL', direction: 'BULLISH', strength: 2,
+                 reason: `📈 Strong Bull candle — momentum (body ${Math.round(bodyRatio*100)}% of range)` };
+    }
+
+    // ── Strong Bearish candle ──────────────────────────────────────────────────
+    if (isBearCandle && bodyRatio >= 0.75) {
+        return { pattern: 'STRONG_BEAR', direction: 'BEARISH', strength: 2,
+                 reason: `📉 Strong Bear candle — momentum (body ${Math.round(bodyRatio*100)}% of range)` };
+    }
+
+    return { pattern: 'NONE', direction: 'NEUTRAL', strength: 0, reason: '' };
+}
+
 // ── Signal Generator ──────────────────────────────────
 function combineSignals(indicators) {
     // ── Gate 1: safe time window (IST) ────────────────
@@ -649,6 +741,24 @@ function combineSignals(indicators) {
         }
     }
 
+    // ── Candle Pattern ────────────────────────────────────────────────────────
+    // Adds 1-3 votes depending on pattern strength.
+    // Strong patterns (Engulfing str=3) = 2 votes, moderate (Hammer str=2) = 1 vote.
+    const cp = detectCandlePattern();
+    marketState.candlePattern = cp;
+    if (cp.strength >= 2 && cp.direction !== 'NEUTRAL') {
+        const cpVotes = cp.strength - 1;  // str2=1 vote, str3=2 votes
+        if (cp.direction === 'BULLISH') {
+            bull += cpVotes;
+            reasons.push(`${cp.reason} (+${cpVotes}pts ✅)`);
+        } else if (cp.direction === 'BEARISH') {
+            bear += cpVotes;
+            reasons.push(`${cp.reason} (+${cpVotes}pts ⚠️)`);
+        }
+    } else if (cp.pattern !== 'NONE') {
+        reasons.push(cp.reason);  // show even weak patterns as info
+    }
+
     // Raw directional intention from the vote tally
     const total = bull + bear;
     let rawSignal = 'WAIT', rawConfidence = 0;
@@ -689,6 +799,7 @@ function combineSignals(indicators) {
         reasons.push(`⏳ ADX gate inactive — need ${remaining} more candles (before ~10:00 AM)`);
     }
     marketState.adx = adxData;   // expose to frontend via /api/signal
+    // candlePattern already set in scoring block above
 
     const adxVal      = adxData?.adx ?? null;
     const adxTooWeak  = adxVal !== null && adxVal < 20;

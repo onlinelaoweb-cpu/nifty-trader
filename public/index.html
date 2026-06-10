@@ -991,6 +991,20 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
   <div class="pcr-row">
     <div class="pv-card" style="color:var(--amber)" id="pcr-card"><div class="pv-label">PCR</div><div class="pv-val" id="pcr-val">--</div><div class="pv-sig" id="pcr-sig">FETCHING…</div><div class="pv-src" id="pcr-source-lbl" style="font-size:8px;letter-spacing:1px;margin-top:2px;color:var(--dim);">NSE AUTO</div></div>
     <div class="pv-card" style="color:var(--amber)" id="atm-pcr-card"><div class="pv-label">ATM PCR</div><div class="pv-val" id="atm-pcr-val">--</div><div class="pv-sig" id="atm-pcr-sig">FETCHING…</div><div class="pv-src" id="atm-pcr-source-lbl" style="font-size:8px;letter-spacing:1px;margin-top:2px;color:var(--dim);">NSE AUTO</div></div>
+    <!-- Candle Pattern Card -->
+    <div class="ind-card" id="candle-card" style="margin-bottom:8px;">
+      <div class="ind-label"><span>🕯️ CANDLE PATTERN</span><span id="cp-direction" style="font-size:8px;">--</span></div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+        <div style="font-family:'Orbitron',monospace;font-size:15px;font-weight:700;" id="cp-name">--</div>
+        <div style="display:flex;gap:3px;align-items:center;">
+          <div style="width:8px;height:8px;border-radius:50%;background:var(--border);" id="cp-dot1"></div>
+          <div style="width:8px;height:8px;border-radius:50%;background:var(--border);" id="cp-dot2"></div>
+          <div style="width:8px;height:8px;border-radius:50%;background:var(--border);" id="cp-dot3"></div>
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--dim);margin-top:3px;" id="cp-reason">Waiting for candle data...</div>
+    </div>
+
     <div class="pv-card" style="color:var(--amber)" id="vix-card"><div class="pv-label">VIX</div><div class="pv-val" id="vix-val">--</div><div class="pv-sig" id="vix-sig">AUTO ✅</div></div>
   </div>
 
@@ -2735,6 +2749,37 @@ function renderDashboard(s) {
         esig.style.color = bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--amber)';
       } else { esig.textContent = '--'; esig.style.color = 'var(--dim)'; }
     }
+  }
+
+  // Candle Pattern
+  if (s.candlePattern) {
+    const cp = s.candlePattern;
+    const nameMap = {
+      'HAMMER'            : '🔨 HAMMER',
+      'SHOOTING_STAR'     : '⭐ SHOOTING STAR',
+      'INVERTED_HAMMER'   : '🕯️ INV. HAMMER',
+      'DOJI'              : '➕ DOJI',
+      'BULLISH_ENGULFING' : '🟢 BULL ENGULFING',
+      'BEARISH_ENGULFING' : '🔴 BEAR ENGULFING',
+      'STRONG_BULL'       : '📈 STRONG BULL',
+      'STRONG_BEAR'       : '📉 STRONG BEAR',
+      'NONE'              : '--',
+    };
+    const cpNameEl = document.getElementById('cp-name');
+    const cpDirEl  = document.getElementById('cp-direction');
+    const cpResEl  = document.getElementById('cp-reason');
+    if (cpNameEl) cpNameEl.textContent = nameMap[cp.pattern] || cp.pattern || '--';
+    if (cpDirEl) {
+      cpDirEl.textContent = cp.direction || '--';
+      cpDirEl.style.color = cp.direction === 'BULLISH' ? 'var(--green)' : cp.direction === 'BEARISH' ? 'var(--red)' : 'var(--amber)';
+    }
+    if (cpResEl) cpResEl.textContent = cp.reason || 'No pattern detected';
+    // Strength dots
+    const dotColor = cp.direction === 'BULLISH' ? 'var(--green)' : cp.direction === 'BEARISH' ? 'var(--red)' : 'var(--amber)';
+    [1,2,3].forEach(i => {
+      const dot = document.getElementById('cp-dot'+i);
+      if (dot) dot.style.background = i <= (cp.strength||0) ? dotColor : 'var(--border)';
+    });
   }
 
   // VIX
