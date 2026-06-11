@@ -29,6 +29,13 @@ const { fetchAdvanceDecline,
         injectAngelSession }        = require('./src/api/breadth');
 const { calculateSRLevels }         = require('./src/api/levels');
 const {
+    injectDBPool      : injectHistDBPool,
+    initHistoricalData,
+    dailyTopUp        : histDailyTopUp,
+    runBacktest,
+    getHistoricalCandles,
+}                                   = require('./src/api/historicalData');
+const {
     startNSEScheduler,
     getPCRState, getFIIState, getOIBuildupState, getEarlyMomState,
     getCurrentFIINet, getCurrentDIINet,
@@ -2116,6 +2123,10 @@ async function initDB() {
             )
         `);
         console.log('✅ PostgreSQL journal_trades table ready');
+
+        // ── Inject DB pool into historical data module ────────────────────────
+        injectHistDBPool(dbPool);
+        console.log('✅ Historical data module connected to DB');
     } catch (e) {
         console.error('DB init error:', e.message);
         dbPool = null;
@@ -2809,6 +2820,59 @@ app.get('/manifest.json', (req,res) => res.sendFile(__dirname+'/public/manifest.
 app.use('/icons', require('express').static(__dirname+'/public/icons'));
 app.get('/apple-touch-icon.png', (req,res) => res.sendFile(__dirname+'/public/icons/apple-touch-icon.png'));
 
+// ── /api/historical — 1-year Nifty daily OHLCV ───────────────────────────────
+// Query params: ?days=252 (default, 1 trading year) | ?days=30 | ?days=90
+// Used by: frontend chart tab (1yr view), levels.js (52W SR levels), backtest
+app.get('/api/historical', async (req, res) => {
+    try {
+        const days    = Math.min(parseInt(req.query.days) || 252, 365);
+        const candles = await getHistoricalCandles(days);
+        res.json({
+            days   : candles.length,
+            from   : candles[0]?.date   || null,
+            to     : candles[candles.length - 1]?.date || null,
+            candles,
+        });
+    } catch (e) {
+        res.json({ candles: [], error: e.message });
+    }
+});
+
+// ── /api/backtest — Signal accuracy analysis against 1-year historical data ──
+// Reads signal_log (auto-recorded by Vardaan on every BUY CALL/PUT fire)
+// and checks how Nifty actually moved the next day.
+// WIN  = price moved >= 0.3% in signal direction
+// LOSS = price moved >= 0.3% against signal
+// Query params:
+//   ?signal=BUY+CALL   filter by direction
+//   ?gate=true          only quality-gate-passed signals
+//   ?minConf=65         minimum confidence threshold
+//   ?limit=200          max signals to analyze (default 200)
+app.get('/api/backtest', async (req, res) => {
+    try {
+        const result = await runBacktest({
+            signalType: req.query.signal || null,
+            gateOnly  : req.query.gate   === 'true',
+            minConf   : parseInt(req.query.minConf) || 0,
+            limit     : Math.min(parseInt(req.query.limit) || 200, 500),
+        });
+        res.json(result);
+    } catch (e) {
+        res.json({ error: e.message });
+    }
+});
+
+// ── /api/historical/topup — manual trigger to refresh historical data ─────────
+app.post('/api/historical/topup', requireToken, async (req, res) => {
+    try {
+        await histDailyTopUp();
+        const candles = await getHistoricalCandles(365);
+        res.json({ success: true, count: candles.length, latest: candles[candles.length - 1]?.date });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // ── Init ──────────────────────────────────────────────
 let _intervalsStarted     = false;
 let _angelLoggedIn        = false;   // true once Angel session is injected
@@ -2837,6 +2901,14 @@ function startPollingIntervals() {
         if (istMin >= 555 && istMin <= 575) check920Setup();  // 9:15–9:35 window only
     }, 30*1000);
     startTickWatchdog(); // ← watchdog: detects silent WS freeze, falls back to Yahoo
+    // Daily 6 PM IST top-up — fetch any new daily candles from Yahoo Finance
+    setTimeout(() => setInterval(async () => {
+        const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        if (ist.getHours() === 18 && ist.getMinutes() < 5) {
+            console.log('[HistData] Daily 6PM top-up starting...');
+            await histDailyTopUp();
+        }
+    }, 5 * 60 * 1000), 10000); // check every 5 min
     console.log('Polling intervals started (x1)');
 }
 
@@ -2916,6 +2988,12 @@ async function initializeLiveData() {
     // Previously fire-and-forget (.catch) which caused a race: journal reload ran
     // before tables existed on a slow Railway DB connection.
     await initDB().catch(e => console.error('DB init error:', e.message));
+
+    // ── Initialize 1-year historical data (non-blocking background task) ─────
+    // First run: seeds 365 days from Yahoo Finance into PostgreSQL (~5-10s).
+    // Subsequent runs: checks for gaps, tops up missing days only.
+    // Does NOT block server startup — data loads in background.
+    initHistoricalData().catch(e => console.error('[HistData] Init error:', e.message));
 
     // NSE scheduler fires its own async fetches (non-blocking per nseData.js fix)
     startNSEScheduler(() => marketState.nifty);
