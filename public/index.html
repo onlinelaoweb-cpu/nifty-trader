@@ -920,6 +920,18 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <span style="color:var(--dim)">No active PA signal</span>
       </div>
 
+      <!-- Entry Quality Score -->
+      <div id="entry-quality-box" style="margin-top:6px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:9px;color:var(--dim);letter-spacing:1px;text-transform:uppercase;">Entry Quality</span>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div id="eq-bar-wrap" style="width:80px;height:6px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden;">
+            <div id="eq-bar" style="height:100%;width:0%;background:var(--green);border-radius:3px;transition:width 0.4s;"></div>
+          </div>
+          <span id="eq-score" style="font-family:'Share Tech Mono',monospace;font-size:15px;font-weight:700;color:var(--dim);">--</span>
+          <span id="eq-grade" style="font-size:11px;font-weight:700;color:var(--dim);">-</span>
+        </div>
+      </div>
+
       <!-- FIX: Call Wall / Put Wall from live option chain OI — most important levels for option buyer -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0 4px;">
         <div style="background:rgba(255,34,68,0.07);border:1px solid rgba(255,34,68,0.3);border-radius:8px;padding:7px 10px;text-align:center;">
@@ -997,6 +1009,36 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
   <div class="pcr-row">
     <div class="pv-card" style="color:var(--amber)" id="pcr-card"><div class="pv-label">PCR</div><div class="pv-val" id="pcr-val">--</div><div class="pv-sig" id="pcr-sig">FETCHING…</div><div class="pv-src" id="pcr-source-lbl" style="font-size:8px;letter-spacing:1px;margin-top:2px;color:var(--dim);">NSE AUTO</div></div>
     <div class="pv-card" style="color:var(--amber)" id="atm-pcr-card"><div class="pv-label">ATM PCR</div><div class="pv-val" id="atm-pcr-val">--</div><div class="pv-sig" id="atm-pcr-sig">FETCHING…</div><div class="pv-src" id="atm-pcr-source-lbl" style="font-size:8px;letter-spacing:1px;margin-top:2px;color:var(--dim);">NSE AUTO</div></div>
+    <!-- Manual PCR Override -->
+    <div id="manual-pcr-wrap" style="grid-column:1/-1;margin:2px 0 6px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <span style="font-size:9px;color:var(--dim);letter-spacing:1.5px;text-transform:uppercase;">PCR Override</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-size:9px;color:var(--dim);">Auto</span>
+          <div id="pcr-mode-toggle" onclick="togglePCRMode()" style="width:36px;height:18px;background:var(--green);border-radius:9px;cursor:pointer;position:relative;transition:background 0.2s;">
+            <div id="pcr-toggle-knob" style="width:14px;height:14px;background:#fff;border-radius:50%;position:absolute;top:2px;left:2px;transition:left 0.2s;"></div>
+          </div>
+          <span style="font-size:9px;color:var(--dim);">Manual</span>
+        </div>
+      </div>
+      <div id="manual-pcr-inputs" style="display:none;gap:6px;grid-template-columns:1fr 1fr auto;align-items:center;">
+        <div>
+          <div style="font-size:8px;color:var(--dim);margin-bottom:2px;">PCR Value</div>
+          <input id="inp-pcr" type="number" step="0.01" min="0" max="5" placeholder="e.g. 1.15"
+            style="width:100%;padding:5px 7px;background:var(--bg3,#0d1117);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;font-family:'Share Tech Mono',monospace;box-sizing:border-box;">
+        </div>
+        <div>
+          <div style="font-size:8px;color:var(--dim);margin-bottom:2px;">ATM PCR</div>
+          <input id="inp-atm-pcr" type="number" step="0.01" min="0" max="5" placeholder="e.g. 1.05"
+            style="width:100%;padding:5px 7px;background:var(--bg3,#0d1117);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;font-family:'Share Tech Mono',monospace;box-sizing:border-box;">
+        </div>
+        <div style="margin-top:14px;">
+          <button onclick="submitManualPCR()" style="padding:5px 12px;background:var(--amber);color:#000;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">SET</button>
+        </div>
+      </div>
+      <div id="manual-pcr-status" style="font-size:9px;color:var(--dim);margin-top:4px;display:none;"></div>
+    </div>
+
     <!-- Candle Pattern Card -->
     <div class="ind-card" id="candle-card" style="margin-bottom:8px;">
       <div class="ind-label"><span>🕯️ CANDLE PATTERN</span><span id="cp-direction" style="font-size:8px;">--</span></div>
@@ -3022,6 +3064,22 @@ function renderDashboard(s) {
       }
     }
 
+    // Entry Quality Score update
+    const eqScore = document.getElementById('eq-score');
+    const eqGrade = document.getElementById('eq-grade');
+    const eqBar   = document.getElementById('eq-bar');
+    if (eqScore && s.entryQuality) {
+      const eq = s.entryQuality;
+      const score = eq.score || 0;
+      const grade = eq.grade || '-';
+      const color = score >= 65 ? 'var(--green)' : score >= 40 ? 'var(--amber)' : score > 0 ? 'var(--red)' : 'var(--dim)';
+      eqScore.textContent = score > 0 ? score : '--';
+      eqScore.style.color = color;
+      eqGrade.textContent = grade;
+      eqGrade.style.color = color;
+      if (eqBar) { eqBar.style.width = score + '%'; eqBar.style.background = color; }
+    }
+
     const updEl = document.getElementById('sr-updated');
     if (updEl && s.srLevels.updatedAt) updEl.textContent = new Date(s.srLevels.updatedAt).toLocaleTimeString('en-IN');
     // Dirty flag: SR levels recalc every 10 min — skip full DOM rebuild on every 3s poll
@@ -3752,8 +3810,77 @@ function updateFlowHistory(history) {
   }).join('');
 }
 
-// ─── PCR SUBMIT ──────────────────────────────────────────
-// PCR is now fully auto-fetched from NSE option chain — no manual entry needed
+// ─── PCR MODE TOGGLE + MANUAL SUBMIT ──────────────────────────────────────────
+let _pcrManualMode = false;
+
+function togglePCRMode() {
+  _pcrManualMode = !_pcrManualMode;
+  const toggle = document.getElementById('pcr-mode-toggle');
+  const knob   = document.getElementById('pcr-toggle-knob');
+  const inputs = document.getElementById('manual-pcr-inputs');
+  const status = document.getElementById('manual-pcr-status');
+
+  if (_pcrManualMode) {
+    // Manual mode ON
+    toggle.style.background = 'var(--amber)';
+    knob.style.left = '20px';
+    inputs.style.display = 'grid';
+    status.style.display = 'block';
+    status.textContent = '⚠️ Manual mode — auto-fetch paused. Enter PCR below.';
+    status.style.color = 'var(--amber)';
+    // Update source labels
+    const pcrSrc = document.getElementById('pcr-source-lbl');
+    const atmSrc = document.getElementById('atm-pcr-source-lbl');
+    if (pcrSrc) pcrSrc.textContent = 'MANUAL ✏️';
+    if (atmSrc) atmSrc.textContent = 'MANUAL ✏️';
+  } else {
+    // Auto mode ON
+    toggle.style.background = 'var(--green)';
+    knob.style.left = '2px';
+    inputs.style.display = 'none';
+    status.style.display = 'none';
+    status.textContent = '';
+  }
+}
+
+async function submitManualPCR() {
+  const pcrVal    = parseFloat(document.getElementById('inp-pcr').value);
+  const atmPcrVal = parseFloat(document.getElementById('inp-atm-pcr').value);
+  const status    = document.getElementById('manual-pcr-status');
+
+  if (isNaN(pcrVal) || pcrVal <= 0) {
+    status.textContent = '❌ Valid PCR value daalo (e.g. 1.15)';
+    status.style.color = 'var(--red)';
+    return;
+  }
+
+  const body = { pcr: pcrVal };
+  if (!isNaN(atmPcrVal) && atmPcrVal > 0) body.atmPcr = atmPcrVal;
+
+  try {
+    const res = await fetch('/api/pcr', {
+      method : 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-app-token': localStorage.getItem('vn_token') || '' },
+      body   : JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.success) {
+      status.textContent = `✅ PCR set: ${pcrVal}${!isNaN(atmPcrVal) ? ' | ATM PCR: ' + atmPcrVal : ''} — signal sync ho gaya`;
+      status.style.color = 'var(--green)';
+      // Update display immediately
+      const pcrEl  = document.getElementById('pcr-val');
+      const atmEl  = document.getElementById('atm-pcr-val');
+      if (pcrEl)  pcrEl.textContent  = pcrVal.toFixed(2);
+      if (atmEl && !isNaN(atmPcrVal)) atmEl.textContent = atmPcrVal.toFixed(2);
+    } else {
+      status.textContent = '❌ Error — try again';
+      status.style.color = 'var(--red)';
+    }
+  } catch(e) {
+    status.textContent = '❌ Network error: ' + e.message;
+    status.style.color = 'var(--red)';
+  }
+}
 
 // ─── FII/DII auto display ────────────────────────────────
 function updateFIIDIIDisplay(fii, dii) {

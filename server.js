@@ -1044,6 +1044,95 @@ function combineSignals(indicators) {
     // Expose streak count to frontend
     marketState.signalStreak = signalStreak.count;
 
+    // ── Entry Quality Score ────────────────────────────────────────────────────
+    // 0–100 numeric score showing how confluent the entry is.
+    // Only meaningful when signal !== 'WAIT'.
+    // Components: ADX strength, PCR confluence, RSI alignment, S/R proximity, candle pattern, MTF alignment
+    if (signal !== 'WAIT') {
+        let qs = 0;
+        const scoreBreakdown = [];
+
+        // 1. ADX strength (0–25 pts)
+        if (adxVal !== null) {
+            if      (adxVal >= 40) { qs += 25; scoreBreakdown.push(`ADX:25 (${adxVal.toFixed(0)} very strong)`); }
+            else if (adxVal >= 30) { qs += 20; scoreBreakdown.push(`ADX:20 (${adxVal.toFixed(0)} strong)`); }
+            else if (adxVal >= 25) { qs += 15; scoreBreakdown.push(`ADX:15 (${adxVal.toFixed(0)} moderate)`); }
+            else if (adxVal >= 20) { qs +=  8; scoreBreakdown.push(`ADX:8 (${adxVal.toFixed(0)} weak)`); }
+            else                   { qs +=  0; scoreBreakdown.push(`ADX:0 (${adxVal.toFixed(0)} very weak)`); }
+        }
+
+        // 2. PCR confluence (0–20 pts)
+        const pcr = ind.pcr?.pcr;
+        if (pcr != null) {
+            const pcrBullish = pcr > 1.2;
+            const pcrBearish = pcr < 0.8;
+            const signalBullish = signal === 'BUY_CALL';
+            if ((signalBullish && pcrBullish) || (!signalBullish && pcrBearish)) {
+                qs += 20; scoreBreakdown.push(`PCR:20 (${pcr.toFixed(2)} strong confluence)`);
+            } else if ((signalBullish && pcr >= 1.0) || (!signalBullish && pcr <= 1.0)) {
+                qs += 10; scoreBreakdown.push(`PCR:10 (${pcr.toFixed(2)} mild confluence)`);
+            } else {
+                qs +=  0; scoreBreakdown.push(`PCR:0 (${pcr.toFixed(2)} against signal)`);
+            }
+        }
+
+        // 3. RSI alignment (0–15 pts)
+        const rsi = ind.rsi;
+        if (rsi != null) {
+            const rsiBullish = rsi > 55 && rsi < 75;
+            const rsiBearish = rsi < 45 && rsi > 25;
+            if ((signal === 'BUY_CALL' && rsiBullish) || (signal === 'BUY_PUT' && rsiBearish)) {
+                qs += 15; scoreBreakdown.push(`RSI:15 (${rsi.toFixed(0)} aligned)`);
+            } else if (rsi >= 40 && rsi <= 60) {
+                qs +=  5; scoreBreakdown.push(`RSI:5 (${rsi.toFixed(0)} neutral)`);
+            } else {
+                qs +=  0; scoreBreakdown.push(`RSI:0 (${rsi.toFixed(0)} against)`);
+            }
+        }
+
+        // 4. MTF alignment (0–20 pts)
+        const mtf = ind.mtfSignal;
+        if (mtf) {
+            const aligned = (signal === 'BUY_CALL' && mtf === 'BULLISH') || (signal === 'BUY_PUT' && mtf === 'BEARISH');
+            const neutral = mtf === 'NEUTRAL' || mtf === 'WAIT';
+            if (aligned)      { qs += 20; scoreBreakdown.push(`MTF:20 (${mtf} aligned)`); }
+            else if (neutral) { qs += 8;  scoreBreakdown.push(`MTF:8 (${mtf} neutral)`); }
+            else              { qs += 0;  scoreBreakdown.push(`MTF:0 (${mtf} against)`); }
+        }
+
+        // 5. S/R proximity bonus (0–10 pts)
+        const pa = marketState.paSignal;
+        if (pa) {
+            const bounceForCall   = signal === 'BUY_CALL' && pa.type === 'SUPPORT_BOUNCE';
+            const breakForCall    = signal === 'BUY_CALL' && pa.type === 'RESISTANCE_BREAK';
+            const rejectForPut    = signal === 'BUY_PUT'  && pa.type === 'RESISTANCE_REJECT';
+            const breakForPut     = signal === 'BUY_PUT'  && pa.type === 'SUPPORT_BREAK';
+            if (bounceForCall || breakForCall || rejectForPut || breakForPut) {
+                qs += 10; scoreBreakdown.push(`S/R:10 (price action confirms)`);
+            }
+        }
+
+        // 6. Candle pattern (0–10 pts)
+        const cp = ind.candlePattern;
+        if (cp && cp.direction !== 'NEUTRAL') {
+            const cpAligned = (signal === 'BUY_CALL' && cp.direction === 'BULLISH') || (signal === 'BUY_PUT' && cp.direction === 'BEARISH');
+            if (cpAligned) {
+                const pts = cp.strength >= 3 ? 10 : 5;
+                qs += pts; scoreBreakdown.push(`Candle:${pts} (${cp.pattern} aligned)`);
+            }
+        }
+
+        // Grade
+        const grade = qs >= 80 ? 'A+' : qs >= 65 ? 'A' : qs >= 50 ? 'B' : qs >= 35 ? 'C' : 'D';
+        const gradeColor = qs >= 80 ? '🟢' : qs >= 65 ? '🟢' : qs >= 50 ? '🟡' : '🔴';
+
+        marketState.entryQuality = { score: qs, grade, gradeColor, breakdown: scoreBreakdown };
+        // Add to reasons for display
+        reasons.push(`${gradeColor} Entry Quality: ${qs}/100 (${grade}) — ${scoreBreakdown.slice(0,3).join(' | ')}`);
+    } else {
+        marketState.entryQuality = { score: 0, grade: '-', gradeColor: '⚪', breakdown: [] };
+    }
+
     return { signal, confidence, reasons };
 }
 
@@ -2556,9 +2645,22 @@ app.get('/api/health',  (req,res) => res.json({
 // PCR
 app.post('/api/pcr', requireToken, (req,res) => {
     const {pcr,atmPcr}=req.body;
-    if(pcr!=null)    { marketState.pcr=parseFloat(pcr);    marketState.pcrSignal=pcrLabel(marketState.pcr);    trackPCRHistory(marketState.pcr); }
-    if(atmPcr!=null) { marketState.atmPcr=parseFloat(atmPcr); marketState.atmPcrSignal=pcrLabel(marketState.atmPcr); }
-    res.json({success:true});
+    if(pcr!=null)    {
+        marketState.pcr       = parseFloat(pcr);
+        marketState.pcrSignal = pcrLabel(marketState.pcr);
+        trackPCRHistory(marketState.pcr);
+        marketState.pcrSource = 'manual';   // mark as manual so signal engine uses it
+        marketState.pcr.fetchedAt = new Date().toISOString();
+        console.log(`[PCR] ✏️ Manual PCR set: ${pcr} (${marketState.pcrSignal})`);
+    }
+    if(atmPcr!=null) {
+        marketState.atmPcr       = parseFloat(atmPcr);
+        marketState.atmPcrSignal = pcrLabel(marketState.atmPcr);
+        console.log(`[PCR] ✏️ Manual ATM PCR set: ${atmPcr}`);
+    }
+    // Push update to SSE clients immediately so signal refreshes without waiting for next poll
+    sseBroadcast('signal', buildSignalPayload());
+    res.json({success:true, pcr: marketState.pcr, pcrSignal: marketState.pcrSignal});
 });
 
 // NSE Early Momentum + OI Buildup debug endpoints
