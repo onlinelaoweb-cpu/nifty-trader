@@ -927,6 +927,68 @@ function combineSignals(indicators) {
         }
     }
 
+    // ── Price Action Level Analysis ──────────────────────────────────────────
+    // After S/R gate: analyze WHAT the price is doing relative to levels.
+    // This ADDS votes (unlike the gate above which BLOCKS).
+    // Rules:
+    // 1. Price bouncing from Support → BULLISH vote (+1 to +2)
+    // 2. Price rejected from Resistance → BEARISH vote (+1 to +2)  
+    // 3. Price breaking above Resistance → BULLISH confirmation (+2)
+    // 4. Price breaking below Support → BEARISH confirmation (+2)
+    // 5. Price in "no man's land" (far from any level) → neutral
+    {
+        const srLvls = marketState.srLevels?.levels;
+        const price  = marketState.nifty;
+        const prevPrice = marketState.prevNifty || price;  // previous tick price
+
+        if (srLvls?.length > 0 && price > 0) {
+            const BOUNCE_ZONE  = 25;   // within 25pts of level = in zone
+            const BREAK_BUFFER = 15;   // 15pts past a level = confirmed break
+
+            // Find nearest support and resistance
+            const above = srLvls.filter(l => l.price > price);
+            const below = srLvls.filter(l => l.price < price);
+            const nearRes = above.length > 0 ? above[above.length - 1] : null;
+            const nearSup = below.length > 0 ? below[0] : null;
+
+            if (nearSup) {
+                const distToSup = price - nearSup.price;
+                const strBonus  = nearSup.strength >= 3 ? 2 : 1;  // PDH/PDL/PP/WH/WL = strong
+
+                // Bouncing from Support — price is just above support and was lower before
+                if (distToSup <= BOUNCE_ZONE && price >= prevPrice) {
+                    bull += strBonus;
+                    reasons.push(`🔄 Bouncing from ${nearSup.label} @ ${nearSup.price} (+${strBonus}pts ✅)`);
+                    marketState.paSignal = { type: 'SUPPORT_BOUNCE', level: nearSup, dist: distToSup };
+                }
+                // Breaking below Support — price just fell through support
+                else if (distToSup < 0 && Math.abs(distToSup) > BREAK_BUFFER && price < prevPrice) {
+                    bear += strBonus + 1;
+                    reasons.push(`💥 Break below ${nearSup.label} @ ${nearSup.price} — bearish breakdown! (+${strBonus+1}pts ⚠️)`);
+                    marketState.paSignal = { type: 'SUPPORT_BREAK', level: nearSup, dist: distToSup };
+                }
+            }
+
+            if (nearRes) {
+                const distToRes = nearRes.price - price;
+                const strBonus  = nearRes.strength >= 3 ? 2 : 1;
+
+                // Rejected from Resistance — price near resistance and falling
+                if (distToRes <= BOUNCE_ZONE && price <= prevPrice) {
+                    bear += strBonus;
+                    reasons.push(`🔄 Rejection at ${nearRes.label} @ ${nearRes.price} (+${strBonus}pts ⚠️)`);
+                    marketState.paSignal = { type: 'RESISTANCE_REJECT', level: nearRes, dist: distToRes };
+                }
+                // Breaking above Resistance — price just pushed through
+                else if (distToRes < 0 && Math.abs(distToRes) > BREAK_BUFFER && price > prevPrice) {
+                    bull += strBonus + 1;
+                    reasons.push(`🚀 Break above ${nearRes.label} @ ${nearRes.price} — bullish breakout! (+${strBonus+1}pts ✅)`);
+                    marketState.paSignal = { type: 'RESISTANCE_BREAK', level: nearRes, dist: distToRes };
+                }
+            }
+        }
+    }
+
     // Recompute passed HERE — srClear may have been flipped to false inside the gate block above.
     qualityGate.passed = qualityGate.mtfAligned && qualityGate.rsiClean
                       && qualityGate.safeWindow  && qualityGate.vixSafe
@@ -1308,6 +1370,7 @@ async function checkTelegramAlerts(newSignal) {
 async function updatePrice(price, change, changePct, source) {
     const indicators=processIndicators(price, marketState.global?.bankNiftyLeadSignal ?? null);
     const { signal, confidence, reasons }=combineSignals(indicators);
+    marketState.prevNifty = marketState.nifty || price;
     marketState.nifty=price; marketState.lastClose=price; marketState.change=change; marketState.changePct=changePct; marketState.marketClosed=false;
     // Push live tick to SSE clients (throttled — max 1 push per second)
     const _now = Date.now();
