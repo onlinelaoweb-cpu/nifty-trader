@@ -75,7 +75,7 @@ let marketState = {
     signal: 'WAIT', confidence: 0,
     rsi: null, ema9: null, ema21: null, vwap: null,
     pcr: null, atmPcr: null, pcrSignal: 'N/A', atmPcrSignal: 'N/A',
-    pcrSource: 'manual', // 'auto' when NSE fetch succeeds
+    pcrSource: 'pending', // 'auto' after first NSE fetch | 'manual' if user overrides
     pcrUnavailable: false, // true when NSE has never returned option chain data
     vix: null, vixChange: null, vixSignal: 'N/A', vixNote: '', strikeRange: 'ATM ±200',
     mtf: {
@@ -1062,11 +1062,12 @@ function combineSignals(indicators) {
         }
 
         // 2. PCR confluence (0–20 pts)
-        const pcr = ind.pcr?.pcr;
+        // FIX: use marketState.pcr directly (not ind.pcr?.pcr which is undefined)
+        const pcr = marketState.pcr;
         if (pcr != null) {
             const pcrBullish = pcr > 1.2;
             const pcrBearish = pcr < 0.8;
-            const signalBullish = signal === 'BUY_CALL';
+            const signalBullish = signal === 'BUY CALL';   // FIX: space not underscore
             if ((signalBullish && pcrBullish) || (!signalBullish && pcrBearish)) {
                 qs += 20; scoreBreakdown.push(`PCR:20 (${pcr.toFixed(2)} strong confluence)`);
             } else if ((signalBullish && pcr >= 1.0) || (!signalBullish && pcr <= 1.0)) {
@@ -1077,45 +1078,49 @@ function combineSignals(indicators) {
         }
 
         // 3. RSI alignment (0–15 pts)
-        const rsi = ind.rsi;
-        if (rsi != null) {
-            const rsiBullish = rsi > 55 && rsi < 75;
-            const rsiBearish = rsi < 45 && rsi > 25;
-            if ((signal === 'BUY_CALL' && rsiBullish) || (signal === 'BUY_PUT' && rsiBearish)) {
-                qs += 15; scoreBreakdown.push(`RSI:15 (${rsi.toFixed(0)} aligned)`);
-            } else if (rsi >= 40 && rsi <= 60) {
-                qs +=  5; scoreBreakdown.push(`RSI:5 (${rsi.toFixed(0)} neutral)`);
+        // FIX: use indicators.rsi (the function param) not ind.rsi
+        const rsiQ = indicators.rsi;
+        if (rsiQ != null) {
+            const rsiBullish = rsiQ > 55 && rsiQ < 75;
+            const rsiBearish = rsiQ < 45 && rsiQ > 25;
+            if ((signal === 'BUY CALL' && rsiBullish) || (signal === 'BUY PUT' && rsiBearish)) {
+                qs += 15; scoreBreakdown.push(`RSI:15 (${rsiQ.toFixed(0)} aligned)`);
+            } else if (rsiQ >= 40 && rsiQ <= 60) {
+                qs +=  5; scoreBreakdown.push(`RSI:5 (${rsiQ.toFixed(0)} neutral)`);
             } else {
-                qs +=  0; scoreBreakdown.push(`RSI:0 (${rsi.toFixed(0)} against)`);
+                qs +=  0; scoreBreakdown.push(`RSI:0 (${rsiQ.toFixed(0)} against)`);
             }
         }
 
         // 4. MTF alignment (0–20 pts)
-        const mtf = ind.mtfSignal;
-        if (mtf) {
-            const aligned = (signal === 'BUY_CALL' && mtf === 'BULLISH') || (signal === 'BUY_PUT' && mtf === 'BEARISH');
-            const neutral = mtf === 'NEUTRAL' || mtf === 'WAIT';
-            if (aligned)      { qs += 20; scoreBreakdown.push(`MTF:20 (${mtf} aligned)`); }
-            else if (neutral) { qs += 8;  scoreBreakdown.push(`MTF:8 (${mtf} neutral)`); }
-            else              { qs += 0;  scoreBreakdown.push(`MTF:0 (${mtf} against)`); }
+        // FIX: use marketState.mtf.signal (not ind.mtfSignal which is undefined)
+        // marketState.mtf.signal is 'BUY CALL' / 'BUY PUT' / 'WAIT'
+        const mtfSig = marketState.mtf?.signal;
+        if (mtfSig) {
+            const aligned = (signal === 'BUY CALL' && mtfSig === 'BUY CALL') || (signal === 'BUY PUT' && mtfSig === 'BUY PUT');
+            const neutral = !mtfSig || mtfSig === 'WAIT';
+            if (aligned)      { qs += 20; scoreBreakdown.push(`MTF:20 (aligned)`); }
+            else if (neutral) { qs += 8;  scoreBreakdown.push(`MTF:8 (neutral)`); }
+            else              { qs += 0;  scoreBreakdown.push(`MTF:0 (against)`); }
         }
 
         // 5. S/R proximity bonus (0–10 pts)
         const pa = marketState.paSignal;
         if (pa) {
-            const bounceForCall   = signal === 'BUY_CALL' && pa.type === 'SUPPORT_BOUNCE';
-            const breakForCall    = signal === 'BUY_CALL' && pa.type === 'RESISTANCE_BREAK';
-            const rejectForPut    = signal === 'BUY_PUT'  && pa.type === 'RESISTANCE_REJECT';
-            const breakForPut     = signal === 'BUY_PUT'  && pa.type === 'SUPPORT_BREAK';
+            const bounceForCall   = signal === 'BUY CALL' && pa.type === 'SUPPORT_BOUNCE';
+            const breakForCall    = signal === 'BUY CALL' && pa.type === 'RESISTANCE_BREAK';
+            const rejectForPut    = signal === 'BUY PUT'  && pa.type === 'RESISTANCE_REJECT';
+            const breakForPut     = signal === 'BUY PUT'  && pa.type === 'SUPPORT_BREAK';
             if (bounceForCall || breakForCall || rejectForPut || breakForPut) {
                 qs += 10; scoreBreakdown.push(`S/R:10 (price action confirms)`);
             }
         }
 
         // 6. Candle pattern (0–10 pts)
-        const cp = ind.candlePattern;
+        // FIX: use marketState.candlePattern (not ind.candlePattern which is undefined)
+        const cp = marketState.candlePattern;
         if (cp && cp.direction !== 'NEUTRAL') {
-            const cpAligned = (signal === 'BUY_CALL' && cp.direction === 'BULLISH') || (signal === 'BUY_PUT' && cp.direction === 'BEARISH');
+            const cpAligned = (signal === 'BUY CALL' && cp.direction === 'BULLISH') || (signal === 'BUY PUT' && cp.direction === 'BEARISH');
             if (cpAligned) {
                 const pts = cp.strength >= 3 ? 10 : 5;
                 qs += pts; scoreBreakdown.push(`Candle:${pts} (${cp.pattern} aligned)`);
@@ -2650,7 +2655,7 @@ app.post('/api/pcr', requireToken, (req,res) => {
         marketState.pcrSignal = pcrLabel(marketState.pcr);
         trackPCRHistory(marketState.pcr);
         marketState.pcrSource = 'manual';   // mark as manual so signal engine uses it
-        marketState.pcr.fetchedAt = new Date().toISOString();
+        marketState.pcrManualSetAt = new Date().toISOString(); // FIX: pcr is float, store timestamp separately
         console.log(`[PCR] ✏️ Manual PCR set: ${pcr} (${marketState.pcrSignal})`);
     }
     if(atmPcr!=null) {

@@ -216,9 +216,12 @@ function getIndicatorSignal(price, rsi, ema9, ema21, vwap, bnLeadSignal) {
     }
 
     if (rsi !== null) {
-        // Option buyer zones: 40/60 for momentum, 30/70 are hard OB/OS
-        if      (rsi < 40)  { bull += 2; reasons.push(`RSI ${rsi} — Oversold, reversal zone ✅`); }
-        else if (rsi > 60)  { bear += 2; reasons.push(`RSI ${rsi} — Overbought, pullback zone ⚠️`); }
+        // FIX: Align with quality gate thresholds (momentum strategy, not mean-reversion).
+        // Gate requires RSI>55 for CALL and RSI<45 for PUT.
+        // Old logic (RSI<40=bull, RSI>60=bear) was mean-reversion — created ghost votes
+        // that inflated confidence even when the gate would block the signal.
+        if      (rsi > 60)  { bull += 2; reasons.push(`RSI ${rsi} — Strong bullish momentum ✅`); }
+        else if (rsi < 40)  { bear += 2; reasons.push(`RSI ${rsi} — Strong bearish momentum ⚠️`); }
         else if (rsi >= 52) { bull++;    reasons.push(`RSI ${rsi} — Bullish momentum zone`); }
         else if (rsi <= 48) { bear++;    reasons.push(`RSI ${rsi} — Bearish momentum zone`); }
         else                {            reasons.push(`RSI ${rsi} — Neutral band (48–52)`); }
