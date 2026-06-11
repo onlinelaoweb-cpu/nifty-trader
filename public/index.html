@@ -4036,7 +4036,12 @@ function _renderJournal() {
   }
   tbody.innerHTML = _trades.slice().reverse().map(t => {
     const d       = new Date(t.time);
-    const timeStr = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    const now     = new Date();
+    const isToday = d.toDateString() === now.toDateString();
+    const timeStr = isToday
+      ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) + ' '
+        + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
     const isClosed = t.exit != null;
     const pnlStr  = isClosed
       ? (t.pnl >= 0 ? '+₹' : '₹') + t.pnl.toFixed(0)
