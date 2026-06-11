@@ -89,6 +89,279 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .btab.active::before{content:'';position:absolute;top:-4px;left:20%;right:20%;height:2px;background:var(--green);border-radius:0 0 3px 3px;box-shadow:0 0 8px var(--green);}
 .panel{display:none;}.panel.active{display:block;}
 
+/* ═══════════════════════════════════════════════════════
+   DESKTOP LAYOUT  (≥ 900px)
+   Sidebar left + scrollable content right
+═══════════════════════════════════════════════════════ */
+@media (min-width: 900px) {
+  body {
+    padding-bottom: 0;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    min-height: 100vh;
+  }
+
+  /* Header spans full width */
+  .header { grid-column: 1 / -1; }
+
+  /* Desktop shell wrapper — injected by JS below */
+  #desktop-shell {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    min-height: calc(100vh - 60px);
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  #desktop-sidebar {
+    background: linear-gradient(180deg,#061020 0%,#040c18 100%);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 12px 8px;
+    gap: 4px;
+    position: sticky;
+    top: 60px;
+    height: calc(100vh - 60px);
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  #desktop-sidebar .btab {
+    width: 100%;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    font-size: 11px;
+    letter-spacing: 1px;
+    border-radius: 8px;
+    flex: none;
+  }
+  #desktop-sidebar .btab .bi {
+    font-size: 17px;
+    display: inline;
+    margin-bottom: 0;
+    min-width: 22px;
+    text-align: center;
+  }
+  #desktop-sidebar .btab.active::before {
+    top: 0; bottom: 0; left: -8px; right: auto;
+    width: 3px; height: auto;
+    border-radius: 0 3px 3px 0;
+  }
+  #desktop-sidebar .sidebar-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 6px 4px;
+    opacity: 0.5;
+  }
+  #desktop-sidebar .sidebar-label {
+    font-size: 8px;
+    letter-spacing: 2px;
+    color: var(--dim);
+    padding: 4px 12px 2px;
+    opacity: 0.6;
+    font-family: 'Share Tech Mono', monospace;
+  }
+
+  /* ── Content area ── */
+  #desktop-content {
+    overflow-y: auto;
+    height: calc(100vh - 60px);
+    background: var(--bg0);
+  }
+
+  /* Hide mobile bottom tabs on desktop */
+  .bottom-tabs { display: none !important; }
+
+  /* Panels show as block when active */
+  .panel.active { display: block; }
+
+  /* ── Wider content improvements ── */
+  .price-value { font-size: 52px; }
+  .price-change { font-size: 16px; }
+  .signal-card { max-width: 860px; margin: 0 auto 12px; }
+  .ind-grid { grid-template-columns: 1fr 1fr 1fr 1fr; padding: 0 16px; }
+  .mtf-grid { grid-template-columns: repeat(4, 1fr); }
+  .pcr-row { grid-template-columns: repeat(5, 1fr); }
+  .pnl-grid { grid-template-columns: repeat(5, 1fr); }
+  .sector-heatmap { grid-template-columns: repeat(6, 1fr); }
+  .global-grid { grid-template-columns: repeat(4, 1fr); }
+  .global-grid-3 { grid-template-columns: repeat(5, 1fr); }
+
+  /* Chart taller on desktop */
+  #chart-canvas { min-height: 340px; }
+  .chart-wrap { padding: 20px 24px; }
+
+  /* Panels max-width for very wide screens */
+  .panel > * { max-width: 1200px; }
+  .price-section { padding: 20px 24px 18px; }
+
+  /* Panel sections get better spacing */
+  .section-title, .panel-title { padding-left: 16px; padding-right: 16px; }
+  .ind-card { padding: 10px 12px; }
+
+  /* OI walls, tools wider */
+  .oi-walls { grid-template-columns: 1fr 1fr 1fr; }
+  .tool-grid { grid-template-columns: repeat(3, 1fr); }
+  .suggest-grid { grid-template-columns: repeat(6, 1fr); }
+  .fiidii-grid { grid-template-columns: repeat(4, 1fr); }
+  .trade-form-grid { grid-template-columns: repeat(5, 1fr); }
+  .result-grid-3 { grid-template-columns: repeat(4, 1fr); }
+}
+
+@media (min-width: 1200px) {
+  #desktop-shell { grid-template-columns: 220px 1fr; }
+  .price-value { font-size: 60px; }
+  .ind-grid { grid-template-columns: repeat(5, 1fr); }
+  .pnl-grid { grid-template-columns: repeat(6, 1fr); }
+}
+
+/* ═══════════════════════════════════════════════════════
+   MOBILE IMPROVEMENTS  (< 900px)
+═══════════════════════════════════════════════════════ */
+@media (max-width: 899px) {
+
+  /* ── Bottom tab bar — taller, easier to tap ── */
+  .bottom-tabs {
+    padding: 6px 4px calc(8px + env(safe-area-inset-bottom, 0px));
+    gap: 2px;
+    background: rgba(4, 10, 18, 0.98);
+    border-top: 1px solid rgba(0,255,136,0.12);
+  }
+  .btab {
+    padding: 6px 2px 4px;
+    font-size: 8.5px;
+    letter-spacing: 0.5px;
+    min-height: 52px;
+    border-radius: 12px;
+  }
+  .btab .bi { font-size: 20px; margin-bottom: 3px; }
+  .btab.active { background: rgba(0,255,136,0.09); }
+
+  /* ── Header compact but clear ── */
+  .header { padding: 8px 12px; }
+  .logo { font-size: 12px; letter-spacing: 2px; }
+  #live-clock { font-size: 11px; }
+
+  /* ── Price section — more breathing room ── */
+  .price-section { padding: 16px 14px 14px; }
+  .price-label { font-size: 10px; letter-spacing: 4px; margin-bottom: 5px; }
+  .price-value { font-size: 42px; letter-spacing: 2px; }
+  .price-change { font-size: 14px; margin-top: 6px; }
+
+  /* ── Signal card — bigger text, more padding ── */
+  .signal-wrap { padding: 10px 12px 8px; }
+  .signal-card { padding: 16px 16px 14px; border-radius: 14px; }
+  .signal-badge { font-size: clamp(22px, 7vw, 30px); letter-spacing: 5px; margin-bottom: 8px; }
+  .conf-label { font-size: 12px; }
+  .conf-wrap { height: 10px; margin: 9px 0 5px; }
+
+  /* ── Indicator cards — larger values, better touch ── */
+  .ind-grid { gap: 7px; padding: 0 12px; }
+  .ind-card { padding: 11px 12px; border-radius: 12px; }
+  .ind-label { font-size: 9.5px; letter-spacing: 1.5px; margin-bottom: 5px; }
+  .ind-val { font-size: 22px; }
+  .ind-sub { font-size: 11.5px; margin-top: 4px; }
+
+  /* ── PCR/VIX cards ── */
+  .pv-card { padding: 10px 8px; border-radius: 12px; }
+  .pv-label { font-size: 9px; letter-spacing: 1.5px; }
+  .pv-val { font-size: 19px; }
+  .pv-sig { font-size: 10.5px; }
+
+  /* ── S/R Levels ── */
+  .sr-card { padding: 13px 14px; }
+  .sr-price { font-size: 14px; }
+  .sr-label { font-size: 12px; }
+  .sr-near-val { font-size: 16px; }
+  .sr-near-dist { font-size: 11px; }
+
+  /* ── Strike banner ── */
+  .strike-banner { padding: 10px 14px; border-radius: 12px; margin: 0 12px 10px; }
+  .strike-val { font-size: 15px; }
+
+  /* ── MTF cards ── */
+  .mtf-card { padding: 9px 7px; border-radius: 10px; }
+  .mtf-sig { font-size: 10px; }
+  .mtf-stats { font-size: 10.5px; line-height: 1.7; }
+
+  /* ── Chart ── */
+  #chart-canvas { height: 220px; }
+  .chart-btn { padding: 6px 13px; font-size: 12px; border-radius: 7px; }
+  .chart-controls { gap: 7px; }
+  .chart-box { border-radius: 12px; padding: 10px; }
+
+  /* ── Section labels spacing ── */
+  .sec-label { font-size: 9.5px; letter-spacing: 2.5px; padding: 0 12px; margin-bottom: 7px; }
+
+  /* ── Cards inside panels ── */
+  .checklist-card { border-radius: 12px; margin: 0 12px 10px; }
+  .checklist-header { padding: 12px 14px; }
+  .cl-item { padding: 8px 0; }
+  .cl-text { font-size: 13px; }
+  .cl-box { width: 20px; height: 20px; }
+  .cl-verd-main { font-size: 14px; }
+  .cl-verd-score { font-size: 24px; }
+
+  /* ── Journal / trade form ── */
+  .tf-input, .tf-select { font-size: 14px; padding: 9px 8px; }
+  .add-trade-btn { padding: 12px; font-size: 12px; letter-spacing: 2px; }
+  .trade-time { font-size: 12px; }
+  .trade-pnl { font-size: 16px; }
+
+  /* ── Global / Breadth items ── */
+  .gitem { padding: 8px 10px; border-radius: 9px; }
+  .gitem-price { font-size: 13px; }
+  .gitem-chg { font-size: 11px; }
+  .gitem-name { font-size: 10px; }
+
+  /* ── Scrollable areas — momentum scroll ── */
+  .panel { -webkit-overflow-scrolling: touch; }
+  .trend-list { -webkit-overflow-scrolling: touch; }
+
+  /* ── Sector heatmap: 3 cols on mobile (was 4 — cells too tiny) ── */
+  .sector-heatmap { grid-template-columns: repeat(3, 1fr); gap: 5px; }
+  .sc-label { font-size: 9px; }
+  .sc-chg { font-size: 12px; }
+  .sector-cell { padding: 7px 4px; border-radius: 8px; }
+
+  /* ── Analytics table readable on small screens ── */
+  .an-tbl th { font-size: 9px; padding: 8px 8px; }
+  .an-tbl td { font-size: 10px; padding: 7px 8px; }
+  .an-val { font-size: 24px; }
+  .an-label { font-size: 9px; letter-spacing: 1.5px; }
+
+  /* ── Reasons card ── */
+  .reason-row { font-size: 12px; line-height: 1.6; padding: 5px 0; }
+
+  /* ── P&L ── */
+  .pnl-stat-val { font-size: 22px; }
+  .pnl-big-val { font-size: 38px; }
+  .pnl-stat-label { font-size: 10px; }
+
+  /* ── Buttons tap-friendly ── */
+  .icon-btn { padding: 5px 10px; font-size: 15px; min-height: 34px; }
+  .tg-btn { padding: 9px; font-size: 11px; border-radius: 10px; }
+  .j-stab { padding: 9px 4px; font-size: 9.5px; border-radius: 10px; }
+  .exit-btn, .del-btn { padding: 8px 14px; font-size: 13px; }
+
+  /* ── Input placeholders readable ── */
+  input::placeholder, select::placeholder { font-size: 13px; }
+
+  /* ── OI walls ── */
+  .oi-walls { gap: 8px; }
+
+  /* ── Wcard (Breadth weights) ── */
+  .wcard { padding: 9px; border-radius: 10px; }
+  .wcard-val { font-size: 19px; }
+  .wcard-label { font-size: 10px; letter-spacing: 1px; }
+
+  /* ── RSI dial bigger ── */
+  .rsi-dial-val { font-size: 22px; }
+}
+
 /* PRICE */
 .price-section{background:linear-gradient(150deg,#040c18 0%,#071828 60%,#050f20 100%);border-bottom:1px solid var(--border);padding:14px 12px 12px;text-align:center;transition:background 0.3s;position:relative;overflow:hidden;}
 .price-section::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,rgba(0,170,255,0.06) 0%,transparent 70%);pointer-events:none;}
@@ -1848,6 +2121,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <button class="chart-btn active" onclick="setChartTF('5m',this)">5m</button>
       <button class="chart-btn" onclick="setChartTF('15m',this)">15m</button>
       <button class="chart-btn" onclick="setChartTF('1h',this)">1h</button>
+      <button class="chart-btn" onclick="setChartTF('1D',this)">1D</button>
     </div>
     <div class="chart-box" style="position:relative;">
       <canvas id="chart-canvas"></canvas>
@@ -2098,6 +2372,67 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 // Error handler — never let any JS error kill the whole page
 window.onerror=function(msg,src,line){console.warn('JS Error:',msg,'at line',line);return true;};
 window.addEventListener('unhandledrejection',function(e){console.warn('Unhandled promise:',e.reason);e.preventDefault();});
+
+// ── Desktop layout init ───────────────────────────────────────────────────────
+(function _initDesktopLayout() {
+  if (window.innerWidth < 900) return;
+
+  const TAB_META = [
+    { id: 'dashboard', icon: '📊', label: 'LIVE' },
+    { id: 'journal',   icon: '📔', label: 'JOURNAL' },
+    { id: 'breadth',   icon: '📈', label: 'BREADTH' },
+    { id: 'global',    icon: '🌍', label: 'GLOBAL' },
+    { id: 'chart',     icon: '🕯️', label: 'CHART' },
+    { id: 'tools',     icon: '🔧', label: 'TOOLS' },
+    { id: 'analytics', icon: '📊', label: 'ANALYTICS' },
+  ];
+
+  // Build sidebar
+  const sidebar = document.createElement('nav');
+  sidebar.id = 'desktop-sidebar';
+  const sideLabel = document.createElement('div');
+  sideLabel.className = 'sidebar-label'; sideLabel.textContent = 'NAVIGATION';
+  sidebar.appendChild(sideLabel);
+
+  TAB_META.forEach(t => {
+    const btn = document.createElement('button');
+    btn.className = 'btab' + (t.id === 'dashboard' ? ' active' : '');
+    btn.dataset.tab = t.id;
+    btn.innerHTML = `<span class="bi">${t.icon}</span>${t.label}`;
+    btn.onclick = () => {
+      const el = document.querySelector('.bottom-tabs .btab[onclick*="${t.id}"]');
+      switchTab(t.id, el);
+    };
+    sidebar.appendChild(btn);
+  });
+
+  // Wrap all panels in content div
+  const content = document.createElement('div');
+  content.id = 'desktop-content';
+  const panels = [...document.querySelectorAll('.panel')];
+  const firstPanel = panels[0];
+  firstPanel.parentNode.insertBefore(content, firstPanel);
+  panels.forEach(p => content.appendChild(p));
+
+  // Build shell
+  const shell = document.createElement('div');
+  shell.id = 'desktop-shell';
+  content.parentNode.insertBefore(shell, content);
+  shell.appendChild(sidebar);
+  shell.appendChild(content);
+
+  // Sync sidebar active state on tab switch
+  const _origSwitch = window.switchTab;
+  window.switchTab = function(id, btn) {
+    _origSwitch && _origSwitch(id, btn);
+    sidebar.querySelectorAll('.btab').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+  };
+
+  // Re-run on resize crossing breakpoint
+  window.addEventListener('resize', () => {
+    if (window.innerWidth < 900 && document.getElementById('desktop-shell')) location.reload();
+  });
+})();
 
 // PWA — only register sw.js if it actually exists (Railway may not have it)
 if('serviceWorker' in navigator){
@@ -4433,6 +4768,7 @@ function resetChecklist() {
 // ─── CHART ───────────────────────────────────────────────
 function setChartTF(tf, btn) {
   _chartTF = tf;
+  _chartZoomBars = 0; _chartViewOffset = 0; // reset view on TF change
   document.querySelectorAll('.chart-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   refreshChart();
@@ -4440,15 +4776,10 @@ function setChartTF(tf, btn) {
 
 let _chartAutoRefreshTimer = null;
 
-function _startChartAutoRefresh() {
-  _stopChartAutoRefresh();
-  _chartAutoRefreshTimer = setInterval(() => {
-    const chartPanel = document.getElementById('panel-chart');
-    if (chartPanel && chartPanel.classList.contains('active')) refreshChart();
-  }, 3 * 60 * 1000); // every 3 min
-}
+function _startChartAutoRefresh() { /* handled by renderCandlestickChart live timer */ }
 function _stopChartAutoRefresh() {
   if (_chartAutoRefreshTimer) { clearInterval(_chartAutoRefreshTimer); _chartAutoRefreshTimer = null; }
+  if (_chartLiveTimer) { clearInterval(_chartLiveTimer); _chartLiveTimer = null; }
 }
 
 async function refreshChart() {
@@ -4461,9 +4792,18 @@ async function refreshChart() {
   if (emptyEl) { emptyEl.style.display = 'none'; }
   canvas.style.opacity = '0.3';
   try {
-    const r = await fetch('/api/chart?tf=' + _chartTF);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const candles = await r.json();
+    let candles;
+    if (_chartTF === '1D') {
+      const r = await fetch('/api/historical');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      // /api/historical returns { days, candles } or array
+      candles = Array.isArray(data) ? data : (data.candles || []);
+    } else {
+      const r = await fetch('/api/chart?tf=' + _chartTF);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      candles = await r.json();
+    }
     if (loadEl) loadEl.style.display = 'none';
     canvas.style.opacity = '1';
     if (!candles || !candles.length) {
@@ -4486,7 +4826,13 @@ async function refreshChart() {
       last.close >= first.open ? 'var(--green)' : 'var(--red)');
     setVal('chart-high',  dayHigh.toFixed(2), 'var(--green)');
     setVal('chart-low',   dayLow.toFixed(2),  'var(--red)');
-    setVal('chart-nifty-label', last.close?.toFixed(2) + ' (' + (last.close >= first.open ? '+' : '') + ((last.close - first.open) / first.open * 100).toFixed(2) + '%)');
+    if (_chartTF === '1D') {
+      // For daily chart show last candle's OHLC + 1-year range
+      setVal('chart-open',  last.open?.toFixed(2));
+      setVal('chart-nifty-label', last.close?.toFixed(2) + ' | 52W H:' + dayHigh.toFixed(0) + ' L:' + dayLow.toFixed(0));
+    } else {
+      setVal('chart-nifty-label', last.close?.toFixed(2) + ' (' + (last.close >= first.open ? '+' : '') + ((last.close - first.open) / first.open * 100).toFixed(2) + '%)');
+    }
 
     renderCandlestickChart(canvas, candles);
     if (updEl) updEl.textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -4522,163 +4868,336 @@ function _calcVWAP(candles) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// DYNAMIC CHART ENGINE — scroll / zoom / pan / crosshair / live refresh
+// ═══════════════════════════════════════════════════════════════════════════
 let _chartResizeTimer = null;
+let _chartAllCandles  = [];   // full dataset from last fetch
+let _chartViewOffset  = 0;    // how many candles from the right are hidden (pan)
+let _chartZoomBars    = 0;    // visible bars count (0 = use tfLimits default)
+let _chartDragging    = false;
+let _chartDragStartX  = 0;
+let _chartDragStartOffset = 0;
+let _chartPinchStartDist  = 0;
+let _chartPinchStartZoom  = 0;
+let _chartCrosshairX  = -1;
+let _chartCrosshairY  = -1;
+let _chartLiveTimer   = null;
+const _CHART_LIVE_MS  = { '1m': 30000, '5m': 60000, '15m': 90000, '1h': 120000, '1D': 300000 };
+
+// ── Called by refreshChart after data arrives ──────────────────────────────
 function renderCandlestickChart(canvas, candles) {
-  const W = canvas.parentElement.clientWidth || 360, H = 240;
+  // Store full dataset; reset view only when TF changes (handled by setChartTF)
+  _chartAllCandles = candles;
+  _drawChart(canvas);
+  _setupChartInteractions(canvas);
+
+  // ── Live refresh timer ───────────────────────────────────────────────────
+  if (_chartLiveTimer) clearInterval(_chartLiveTimer);
+  const interval = _CHART_LIVE_MS[_chartTF] || 60000;
+  _chartLiveTimer = setInterval(async () => {
+    const chartPanel = document.getElementById('panel-chart');
+    if (!chartPanel || !chartPanel.classList.contains('active')) return;
+    // Silent refresh — just re-fetch and redraw without full loading spinner
+    try {
+      let fresh;
+      if (_chartTF === '1D') {
+        const r = await fetch('/api/historical'); if (!r.ok) return;
+        const d = await r.json(); fresh = Array.isArray(d) ? d : (d.candles || []);
+      } else {
+        const r = await fetch('/api/chart?tf=' + _chartTF); if (!r.ok) return;
+        fresh = await r.json();
+      }
+      if (fresh && fresh.length) {
+        _chartAllCandles = fresh;
+        _drawChart(canvas);
+        const updEl = document.getElementById('chart-updated');
+        if (updEl) updEl.textContent = 'Live · ' + new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      }
+    } catch(_) {}
+  }, interval);
+}
+
+// ── Core draw function — uses _chartViewOffset + _chartZoomBars ────────────
+function _drawChart(canvas) {
+  const candles = _chartAllCandles;
+  if (!candles || !candles.length) return;
+
+  const W = canvas.parentElement.clientWidth || 360, H = 260;
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
-  const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30 };
-  const n     = Math.min(candles.length, tfLimits[_chartTF] || 65);
-  const slice = candles.slice(-n);
+  const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30, '1D': 120 };
+  const defaultN = tfLimits[_chartTF] || 65;
+  const visibleN = _chartZoomBars > 0 ? _chartZoomBars : defaultN;
+  const n = Math.min(visibleN, candles.length);
+  const offset = Math.max(0, Math.min(_chartViewOffset, candles.length - n));
+  const slice = candles.slice(candles.length - n - offset, candles.length - offset || undefined);
+
   const closes = slice.map(c => c.close);
+  const ema9   = _calcEMA(closes, 9);
+  const ema21  = _calcEMA(closes, 21);
+  const vwap   = _chartTF !== '1D' ? _calcVWAP(slice) : [];
 
-  // ── Compute overlays ───────────────────────────────────────────────────────
-  const ema9  = _calcEMA(closes, 9);
-  const ema21 = _calcEMA(closes, 21);
-  const vwap  = _calcVWAP(slice);   // cumulative intraday VWAP from slice start
-
-  // Price range includes all overlays
   const allPrices = [...slice.map(c=>c.high), ...slice.map(c=>c.low),
                      ...ema9.filter(Boolean), ...ema21.filter(Boolean), ...vwap];
-  const minP = Math.min(...allPrices), maxP = Math.max(...allPrices);
+  const minP = Math.min(...allPrices) * 0.9995;
+  const maxP = Math.max(...allPrices) * 1.0005;
   const range = maxP - minP || 1;
 
-  const padL = 8, padR = 44, padT = 10, padB = 16;
+  const padL = 4, padR = 48, padT = 12, padB = 20;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
   const bw = Math.max(2, Math.floor(chartW / n) - 1);
-  const toX = i => padL + i * (bw + 1) + bw / 2;
+  const toX = i => padL + i * (chartW / n) + (chartW / n) / 2 - bw / 2;
   const toY = p => padT + chartH - ((p - minP) / range) * chartH;
 
-  // ── Background ─────────────────────────────────────────────────────────────
+  // ── Background ──────────────────────────────────────────────────────────
   ctx.fillStyle = '#060d14';
   ctx.fillRect(0, 0, W, H);
 
-  // ── Grid lines ─────────────────────────────────────────────────────────────
-  for (let i = 0; i <= 5; i++) {
-    const y = padT + (i / 5) * chartH;
-    ctx.strokeStyle = '#0d2035';
-    ctx.setLineDash([2, 4]);
-    ctx.lineWidth = 1;
+  // ── Grid ────────────────────────────────────────────────────────────────
+  const gridLines = 6;
+  for (let i = 0; i <= gridLines; i++) {
+    const y = padT + (i / gridLines) * chartH;
+    ctx.strokeStyle = '#0d2035'; ctx.setLineDash([2, 4]); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
     ctx.setLineDash([]);
-    const price = maxP - (i / 5) * range;
-    ctx.fillStyle = '#4a6a8a';
-    ctx.font = '7px monospace';
-    ctx.textAlign = 'left';
+    const price = maxP - (i / gridLines) * range;
+    ctx.fillStyle = '#4a6a8a'; ctx.font = '7px monospace'; ctx.textAlign = 'left';
     ctx.fillText(price.toFixed(0), W - padR + 4, y + 3);
   }
+  // Vertical grid — time labels
+  const vStep = Math.max(1, Math.floor(n / 5));
+  for (let i = 0; i < n; i += vStep) {
+    const x = toX(i) + bw / 2;
+    ctx.strokeStyle = '#0a1a28'; ctx.setLineDash([1,4]); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + chartH); ctx.stroke();
+    ctx.setLineDash([]);
+    const c = slice[i];
+    if (c) {
+      const label = c.date ? String(c.date).slice(5,10) :
+                    (c.ts ? new Date(c.ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}) : '');
+      ctx.fillStyle = '#3a5a7a'; ctx.font = '6px monospace'; ctx.textAlign = 'center';
+      ctx.fillText(label, x, padT + chartH + 12);
+    }
+  }
 
-  // ── Candles ────────────────────────────────────────────────────────────────
+  // ── Candles ─────────────────────────────────────────────────────────────
   slice.forEach((c, i) => {
-    const x  = padL + i * (bw + 1);
+    const x    = toX(i);
     const isUp = c.close >= c.open;
     const col  = isUp ? '#00ff88' : '#ff2244';
     const bodyTop = toY(Math.max(c.open, c.close));
     const bodyBot = toY(Math.min(c.open, c.close));
     const bodyH = Math.max(1, bodyBot - bodyTop);
-    // Wick
     ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.setLineDash([]);
     ctx.beginPath(); ctx.moveTo(x + bw/2, toY(c.high)); ctx.lineTo(x + bw/2, toY(c.low)); ctx.stroke();
-    // Body
-    ctx.fillStyle = isUp ? 'rgba(0,255,136,0.75)' : 'rgba(255,34,68,0.75)';
+    ctx.fillStyle = isUp ? 'rgba(0,255,136,0.8)' : 'rgba(255,34,68,0.8)';
     ctx.fillRect(x, bodyTop, bw, bodyH);
     ctx.strokeRect(x, bodyTop, bw, bodyH);
   });
 
-  // ── EMA 9 ─────────────────────────────────────────────────────────────────
-  ctx.save();
-  ctx.strokeStyle = '#ffcc00';
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([]);
-  let started = false;
-  ctx.beginPath();
-  ema9.forEach((v, i) => {
-    if (v == null) return;
-    if (!started) { ctx.moveTo(toX(i), toY(v)); started = true; }
-    else ctx.lineTo(toX(i), toY(v));
-  });
+  // ── EMA 9 ───────────────────────────────────────────────────────────────
+  ctx.save(); ctx.strokeStyle='#ffcc00'; ctx.lineWidth=1.5; ctx.setLineDash([]);
+  let started=false; ctx.beginPath();
+  ema9.forEach((v,i)=>{ if(!v)return; if(!started){ctx.moveTo(toX(i)+bw/2,toY(v));started=true;}else ctx.lineTo(toX(i)+bw/2,toY(v)); });
   ctx.stroke();
-  // Label
-  const lastEma9 = ema9.filter(Boolean).pop();
-  if (lastEma9) {
-    ctx.fillStyle = '#ffcc00'; ctx.font = '7px monospace'; ctx.textAlign = 'left';
-    ctx.fillText('E9 ' + lastEma9.toFixed(0), W - padR + 4, toY(lastEma9) + 3);
-  }
+  const lastE9=ema9.filter(Boolean).pop();
+  if(lastE9){ctx.fillStyle='#ffcc00';ctx.font='7px monospace';ctx.textAlign='left';ctx.fillText('E9 '+lastE9.toFixed(0),W-padR+4,toY(lastE9)+3);}
   ctx.restore();
 
-  // ── EMA 21 ────────────────────────────────────────────────────────────────
-  ctx.save();
-  ctx.strokeStyle = '#ff8c00';
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([]);
-  started = false;
-  ctx.beginPath();
-  ema21.forEach((v, i) => {
-    if (v == null) return;
-    if (!started) { ctx.moveTo(toX(i), toY(v)); started = true; }
-    else ctx.lineTo(toX(i), toY(v));
-  });
+  // ── EMA 21 ──────────────────────────────────────────────────────────────
+  ctx.save(); ctx.strokeStyle='#ff8c00'; ctx.lineWidth=1.5; ctx.setLineDash([]);
+  started=false; ctx.beginPath();
+  ema21.forEach((v,i)=>{ if(!v)return; if(!started){ctx.moveTo(toX(i)+bw/2,toY(v));started=true;}else ctx.lineTo(toX(i)+bw/2,toY(v)); });
   ctx.stroke();
-  const lastEma21 = ema21.filter(Boolean).pop();
-  if (lastEma21) {
-    ctx.fillStyle = '#ff8c00'; ctx.font = '7px monospace'; ctx.textAlign = 'left';
-    ctx.fillText('E21 ' + lastEma21.toFixed(0), W - padR + 4, toY(lastEma21) + 3);
-  }
+  const lastE21=ema21.filter(Boolean).pop();
+  if(lastE21){ctx.fillStyle='#ff8c00';ctx.font='7px monospace';ctx.textAlign='left';ctx.fillText('E21 '+lastE21.toFixed(0),W-padR+4,toY(lastE21)+3);}
   ctx.restore();
 
-  // ── VWAP ──────────────────────────────────────────────────────────────────
-  ctx.save();
-  ctx.strokeStyle = '#3399ff';
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([5, 3]);
-  ctx.beginPath();
-  vwap.forEach((v, i) => {
-    if (i === 0) ctx.moveTo(toX(i), toY(v));
-    else ctx.lineTo(toX(i), toY(v));
-  });
-  ctx.stroke();
-  ctx.setLineDash([]);
-  const lastVwap = vwap[vwap.length - 1];
-  if (lastVwap) {
-    ctx.fillStyle = '#3399ff'; ctx.font = '7px monospace'; ctx.textAlign = 'left';
-    ctx.fillText('VP ' + lastVwap.toFixed(0), W - padR + 4, toY(lastVwap) + 3);
-  }
-  ctx.restore();
-
-  // ── Current price line ────────────────────────────────────────────────────
-  const curPrice = slice[slice.length - 1]?.close;
-  if (curPrice) {
-    const cy = toY(curPrice);
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([2, 5]);
-    ctx.beginPath(); ctx.moveTo(padL, cy); ctx.lineTo(W - padR, cy); ctx.stroke();
-    ctx.setLineDash([]);
-    // Price badge
-    ctx.fillStyle = curPrice >= slice[0]?.open ? '#00ff88' : '#ff2244';
-    ctx.fillRect(W - padR + 1, cy - 6, padR - 2, 12);
-    ctx.fillStyle = '#000'; ctx.font = 'bold 7px monospace'; ctx.textAlign = 'center';
-    ctx.fillText(curPrice.toFixed(0), W - padR/2 + 1, cy + 3);
+  // ── VWAP ────────────────────────────────────────────────────────────────
+  if (_chartTF !== '1D' && vwap.length) {
+    ctx.save(); ctx.strokeStyle='#3399ff'; ctx.lineWidth=1.5; ctx.setLineDash([5,3]);
+    ctx.beginPath();
+    vwap.forEach((v,i)=>{ if(i===0)ctx.moveTo(toX(i)+bw/2,toY(v));else ctx.lineTo(toX(i)+bw/2,toY(v)); });
+    ctx.stroke(); ctx.setLineDash([]);
+    const lastVp=vwap[vwap.length-1];
+    if(lastVp){ctx.fillStyle='#3399ff';ctx.font='7px monospace';ctx.textAlign='left';ctx.fillText('VP '+lastVp.toFixed(0),W-padR+4,toY(lastVp)+3);}
     ctx.restore();
   }
 
-  canvas.style.display = 'block';
-
-  // ── Window resize handler — redraw on resize ──────────────────────────────
-  if (!canvas._resizeHandlerSet) {
-    canvas._resizeHandlerSet = true;
-    window.addEventListener('resize', () => {
-      if (_chartResizeTimer) clearTimeout(_chartResizeTimer);
-      _chartResizeTimer = setTimeout(() => {
-        const chartPanel = document.getElementById('panel-chart');
-        if (chartPanel && chartPanel.classList.contains('active')) refreshChart();
-      }, 200);
-    });
+  // ── Current price line ───────────────────────────────────────────────────
+  const curPrice = slice[slice.length-1]?.close;
+  if (curPrice) {
+    const cy = toY(curPrice);
+    ctx.save();
+    ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1; ctx.setLineDash([3,5]);
+    ctx.beginPath(); ctx.moveTo(padL,cy); ctx.lineTo(W-padR,cy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = curPrice>=slice[0]?.open?'#00ff88':'#ff2244';
+    ctx.fillRect(W-padR+1,cy-7,padR-2,13);
+    ctx.fillStyle='#000'; ctx.font='bold 8px monospace'; ctx.textAlign='center';
+    ctx.fillText(curPrice.toFixed(0),W-padR/2+1,cy+3);
+    ctx.restore();
   }
+
+  // ── Crosshair ────────────────────────────────────────────────────────────
+  if (_chartCrosshairX >= 0 && _chartCrosshairX <= W) {
+    const mx = _chartCrosshairX, my = _chartCrosshairY;
+    // Vertical line
+    ctx.save();
+    ctx.strokeStyle='rgba(180,220,255,0.4)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(mx,padT); ctx.lineTo(mx,padT+chartH); ctx.stroke();
+    // Horizontal line
+    ctx.beginPath(); ctx.moveTo(padL,my); ctx.lineTo(W-padR,my); ctx.stroke();
+    ctx.setLineDash([]);
+    // Price label on right axis
+    const hoverPrice = maxP - ((my - padT) / chartH) * range;
+    if (hoverPrice > minP && hoverPrice < maxP) {
+      ctx.fillStyle='rgba(20,60,90,0.95)'; ctx.fillRect(W-padR+1,my-7,padR-2,13);
+      ctx.fillStyle='#9ab8d0'; ctx.font='bold 7px monospace'; ctx.textAlign='center';
+      ctx.fillText(hoverPrice.toFixed(0),W-padR/2+1,my+3);
+    }
+    // Candle tooltip
+    const barW = chartW / n;
+    const hoverIdx = Math.floor((mx - padL) / barW);
+    if (hoverIdx >= 0 && hoverIdx < slice.length) {
+      const hc = slice[hoverIdx];
+      const isUp = hc.close >= hc.open;
+      const chg = ((hc.close - hc.open) / hc.open * 100).toFixed(2);
+      const label = hc.date ? String(hc.date).slice(0,10) :
+                    (hc.ts ? new Date(hc.ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}) : '');
+      const lines = [
+        label,
+        'O:'+hc.open?.toFixed(0)+'  H:'+hc.high?.toFixed(0),
+        'L:'+hc.low?.toFixed(0)+'  C:'+hc.close?.toFixed(0),
+        (isUp?'▲ +':' ▼ ')+chg+'%'
+      ];
+      const tw = 96, th = 52;
+      let tx = mx + 8; let ty = my - th - 4;
+      if (tx + tw > W - padR) tx = mx - tw - 8;
+      if (ty < padT) ty = my + 8;
+      ctx.fillStyle='rgba(6,20,34,0.93)';
+      ctx.strokeStyle=isUp?'#00ff88':'#ff2244'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.roundRect?ctx.roundRect(tx,ty,tw,th,4):ctx.rect(tx,ty,tw,th); ctx.fill(); ctx.stroke();
+      ctx.font='7.5px monospace'; ctx.textAlign='left';
+      lines.forEach((l,i)=>{
+        ctx.fillStyle = i===3?(isUp?'#00ff88':'#ff2244'):'#9ab8d0';
+        ctx.fillText(l, tx+6, ty+13+i*11);
+      });
+    }
+    ctx.restore();
+  }
+
+  // ── Zoom indicator ────────────────────────────────────────────────────────
+  if (offset > 0) {
+    ctx.fillStyle='rgba(0,180,255,0.5)'; ctx.font='8px monospace'; ctx.textAlign='left';
+    ctx.fillText('◀ scroll', padL+4, padT+chartH+12);
+  }
+
+  canvas.style.display = 'block';
+}
+
+// ── Interaction setup — wheel zoom, mouse/touch pan, crosshair ────────────
+function _setupChartInteractions(canvas) {
+  if (canvas._interactionsSet) return;
+  canvas._interactionsSet = true;
+
+  // ── Wheel zoom ────────────────────────────────────────────────────────
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30, '1D': 120 };
+    const defaultN = tfLimits[_chartTF] || 65;
+    const cur = _chartZoomBars > 0 ? _chartZoomBars : defaultN;
+    const delta = e.deltaY > 0 ? 5 : -5;
+    _chartZoomBars = Math.max(10, Math.min(_chartAllCandles.length, cur + delta));
+    _drawChart(canvas);
+  }, { passive: false });
+
+  // ── Mouse pan + crosshair ─────────────────────────────────────────────
+  canvas.addEventListener('mousedown', e => {
+    _chartDragging = true;
+    _chartDragStartX = e.clientX;
+    _chartDragStartOffset = _chartViewOffset;
+    canvas.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mouseup', () => {
+    _chartDragging = false;
+    canvas.style.cursor = 'crosshair';
+  });
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    _chartCrosshairX = e.clientX - rect.left;
+    _chartCrosshairY = e.clientY - rect.top;
+    if (_chartDragging) {
+      const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30, '1D': 120 };
+      const visN = _chartZoomBars > 0 ? _chartZoomBars : (tfLimits[_chartTF] || 65);
+      const barW = (canvas.width - 52) / visN;
+      const dx = e.clientX - _chartDragStartX;
+      const barsShifted = Math.round(-dx / barW);
+      _chartViewOffset = Math.max(0, Math.min(_chartAllCandles.length - visN, _chartDragStartOffset + barsShifted));
+    }
+    _drawChart(canvas);
+  });
+  canvas.addEventListener('mouseleave', () => {
+    _chartCrosshairX = -1; _chartCrosshairY = -1;
+    _chartDragging = false;
+    _drawChart(canvas);
+  });
+  canvas.style.cursor = 'crosshair';
+
+  // ── Touch pan + pinch zoom ────────────────────────────────────────────
+  canvas.addEventListener('touchstart', e => {
+    if (e.touches.length === 1) {
+      _chartDragging = true;
+      _chartDragStartX = e.touches[0].clientX;
+      _chartDragStartOffset = _chartViewOffset;
+    } else if (e.touches.length === 2) {
+      _chartDragging = false;
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      _chartPinchStartDist = Math.sqrt(dx*dx + dy*dy);
+      const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30, '1D': 120 };
+      _chartPinchStartZoom = _chartZoomBars > 0 ? _chartZoomBars : (tfLimits[_chartTF] || 65);
+    }
+    e.preventDefault();
+  }, { passive: false });
+  canvas.addEventListener('touchmove', e => {
+    if (e.touches.length === 1 && _chartDragging) {
+      const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30, '1D': 120 };
+      const visN = _chartZoomBars > 0 ? _chartZoomBars : (tfLimits[_chartTF] || 65);
+      const barW = (canvas.width - 52) / visN;
+      const dx = e.touches[0].clientX - _chartDragStartX;
+      const barsShifted = Math.round(-dx / barW);
+      _chartViewOffset = Math.max(0, Math.min(_chartAllCandles.length - visN, _chartDragStartOffset + barsShifted));
+      _drawChart(canvas);
+    } else if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      const scale = _chartPinchStartDist / dist;
+      _chartZoomBars = Math.max(10, Math.min(_chartAllCandles.length, Math.round(_chartPinchStartZoom * scale)));
+      _drawChart(canvas);
+    }
+    e.preventDefault();
+  }, { passive: false });
+  canvas.addEventListener('touchend', () => { _chartDragging = false; });
+
+  // ── Double-tap / double-click reset ──────────────────────────────────
+  canvas.addEventListener('dblclick', () => {
+    _chartZoomBars = 0; _chartViewOffset = 0; _drawChart(canvas);
+  });
+
+  // ── Window resize ─────────────────────────────────────────────────────
+  window.addEventListener('resize', () => {
+    if (_chartResizeTimer) clearTimeout(_chartResizeTimer);
+    _chartResizeTimer = setTimeout(() => {
+      const chartPanel = document.getElementById('panel-chart');
+      if (chartPanel && chartPanel.classList.contains('active')) _drawChart(canvas);
+    }, 150);
+  });
 }
 
 // ─── TOOLS ───────────────────────────────────────────────
