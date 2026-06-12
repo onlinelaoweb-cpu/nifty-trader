@@ -298,8 +298,15 @@ function calcIndicators(candles, tfLabel) {
                     : candles.slice(-80);                    // last 80 of multi-day (strip oldest gaps)
     const adxData  = calculateADX(adxSource);
     const adxVal   = adxData?.adx ?? null;
-    // ADX < 20 = choppy, override signal to NEUTRAL even if bull/bear votes pass
-    const adxValid = adxVal === null || adxVal >= 20;
+    // ADX < 20 = choppy, override signal to NEUTRAL even if bull/bear votes pass.
+    // BREAKOUT EXCEPTION: When ADX is in 17-20 range AND this is the 1h timeframe,
+    // the indicator may be lagging a real breakout. We use a relaxed floor of 17
+    // so that strong trending days (like June 12 +400pts) don't get blocked just
+    // because the slow 1h ADX hasn't caught up yet.
+    // For 5m and 15m TFs we keep the strict 20 threshold (short-TF ADX responds faster).
+    // The tf label is passed as the second argument to calcIndicators().
+    const adxFloor = (tfLabel === '1h') ? 17 : 20;
+    const adxValid = adxVal === null || adxVal >= adxFloor;
 
     // ── Bull / bear vote ──────────────────────────────
     let bull = 0, bear = 0;
@@ -423,8 +430,8 @@ async function analyzeMultiTimeframe() {
         const bars = tf.barCount ?? '?';
         if (tf.signal === 'INSUFFICIENT') {
             console.log(`⚠️ MTF ${tfLabels[i]}: INSUFFICIENT data (${bars} bars < ${MIN_BARS[tfLabels[i]]} min) — excluded from vote`);
-        } else if (tf.adx !== null && tf.adx < 20) {
-            console.log(`⚠️ MTF ${tfLabels[i]}: ADX ${tf.adx} < 20 → NEUTRAL override`);
+        } else if (tf.adx !== null && tf.adx < (tfLabels[i] === '1h' ? 17 : 20)) {
+            console.log(`⚠️ MTF ${tfLabels[i]}: ADX ${tf.adx} < ${tfLabels[i] === '1h' ? 17 : 20} → NEUTRAL override`);
         }
     });
 

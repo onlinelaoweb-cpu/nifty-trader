@@ -588,6 +588,11 @@ function combineSignals(indicators) {
     // ── PCR — graduated score (-3 to +3) ─────────────────────────────────────
     // Replaces old binary BULLISH/BEARISH: threshold >1.5/<0.7 almost never fired.
     // Now every reading contributes proportionally, positive or negative.
+    // FIX: When PCR is unavailable (all sources blocked/401/404), treat as NEUTRAL (1.0)
+    // so the missing data doesn't silently kill confidence and block valid signals.
+    // A null PCR means "we don't know" — not "bearish" — so 0 net votes is correct.
+    // We still add +1 to both bull and bear (net 0) to keep the denominator honest
+    // and show the PCR row in the UI as "unavailable" rather than simply absent.
     if (marketState.pcr !== null) {
         const ps = pcrScore(marketState.pcr);
         if      (ps >= 2)  { bull += ps;           reasons.push(`PCR ${marketState.pcr} — Strongly Bullish ✅`); }
@@ -595,17 +600,23 @@ function combineSignals(indicators) {
         else if (ps <= -2) { bear += Math.abs(ps); reasons.push(`PCR ${marketState.pcr} — Strongly Bearish ⚠️`); }
         else if (ps === -1){ bear += 1;            reasons.push(`PCR ${marketState.pcr} — Mildly Bearish ⚠️`); }
         else               {                       reasons.push(`PCR ${marketState.pcr} — Neutral`); }
+    } else {
+        // PCR unavailable — treated as neutral, signal NOT blocked
+        reasons.push(`PCR — ⚠️ Unavailable (API blocked/401) — treated as neutral, signal not affected`);
     }
 
     // ── ATM PCR — 1.5× weight (nearest strikes = real money intent) ──────────
     // ATM PCR tells you what writers are actually doing at the current price.
     // It's more accurate than broad PCR, so it gets heavier weighting.
+    // FIX: Same neutral treatment when unavailable — don't silently drop points.
     if (marketState.atmPcr !== null) {
         const as = pcrScore(marketState.atmPcr);
         const w = Math.min(Math.max(Math.round(as * 1.5), -4), 4); // cap ±4
         if      (w > 0) { bull += w;  reasons.push(`ATM PCR ${marketState.atmPcr} — Bullish near-strike ✅ (+${w}pts)`); }
         else if (w < 0) { bear += -w; reasons.push(`ATM PCR ${marketState.atmPcr} — Bearish near-strike ⚠️ (+${-w}pts)`); }
         else            {             reasons.push(`ATM PCR ${marketState.atmPcr} — Neutral near-strike`); }
+    } else {
+        reasons.push(`ATM PCR — ⚠️ Unavailable — treated as neutral`);
     }
     if (marketState.vix) {
         if      (marketState.vixChange < -0.5) { bull++; reasons.push(`VIX falling (${marketState.vix}) ✅`); }
@@ -809,7 +820,25 @@ function combineSignals(indicators) {
     // candlePattern already set in scoring block above
 
     const adxVal      = adxData?.adx ?? null;
-    const adxTooWeak  = adxVal !== null && adxVal < 20;
+
+    // ── ADX Breakout Override — catches trending days where 1h ADX lags ──────
+    // Problem (observed June 12): Nifty rallied 400pts but 1h ADX stayed <20 until
+    // 14:22 IST because Wilder's smoothing takes 30-45 mins to respond to a breakout.
+    // The signal fired late (14:22) after most of the move was done.
+    // Fix: If 15m ADX >= 22 AND 5m ADX >= 25, the short-term trend is clearly strong
+    // enough to trade even if 1h ADX hasn't caught up yet.
+    // This is the "breakout exception" — we still require BOTH shorter TFs to confirm
+    // strongly, so it doesn't fire on random noise.
+    const adx5m  = marketState.mtf?.tf5m?.adx  ?? null;
+    const adx15m = marketState.mtf?.tf15m?.adx ?? null;
+    const shortTfBreakout = (adx15m !== null && adx15m >= 22) && (adx5m !== null && adx5m >= 25);
+
+    // adxTooWeak: block when 1m ADX < 20 UNLESS short-TF breakout exception fires
+    const adxTooWeak  = adxVal !== null && adxVal < 20 && !shortTfBreakout;
+
+    if (shortTfBreakout && adxVal !== null && adxVal < 20) {
+        reasons.push(`⚡ Breakout exception: 5m ADX ${adx5m?.toFixed(1)} + 15m ADX ${adx15m?.toFixed(1)} strong — 1h ADX lag waived`);
+    }
 
     if (adxVal !== null) {
         if      (adxVal >= 40) reasons.push(`🔥 ADX ${adxVal} — Explosive trend (wider SL advised)`);
@@ -1070,6 +1099,8 @@ function combineSignals(indicators) {
 
         // 2. PCR confluence (0–20 pts)
         // FIX: use marketState.pcr directly (not ind.pcr?.pcr which is undefined)
+        // FIX 2: When PCR unavailable (API blocked), award 10pts neutral — don't
+        // penalize valid signals with 0pts just because Railway IPs are blocked.
         const pcr = marketState.pcr;
         if (pcr != null) {
             const pcrBullish = pcr > 1.2;
@@ -1082,6 +1113,9 @@ function combineSignals(indicators) {
             } else {
                 qs +=  0; scoreBreakdown.push(`PCR:0 (${pcr.toFixed(2)} against signal)`);
             }
+        } else {
+            // PCR unavailable — award neutral score, mark clearly
+            qs += 10; scoreBreakdown.push(`PCR:10 (unavailable — neutral assumed)`);
         }
 
         // 3. RSI alignment (0–15 pts)
@@ -1694,8 +1728,10 @@ async function refreshPCR() {
         // nseData.js scheduler fetches on its own interval — we just READ the state.
         const pcrState = getPCRState();
         if (!pcrState || !pcrState.pcr) {
-            // If NSE has never returned data, expose flag so UI can show "NSE Unavailable"
-            if (pcrState?._fallback) marketState.pcrUnavailable = true;
+            // PCR fetch failed — could be first startup OR all sources blocked (Railway IP ban).
+            // Set pcrUnavailable whenever pcr is null regardless of _fallback flag,
+            // so the UI always shows "NSE UNAVAIL" when we have no PCR data.
+            marketState.pcrUnavailable = true;
             return;
         }
         marketState.pcrUnavailable = false;  // clear flag on success
