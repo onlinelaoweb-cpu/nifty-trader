@@ -10,6 +10,21 @@ on:
     - cron: '30 13 * * *'
     # BITCOIN: Sleep Daily 11:00 PM IST = 5:30 PM UTC
     - cron: '30 17 * * *'
+    # FII/DII: Every 30 min on market days 9:00–16:00 IST (3:30–10:30 UTC)
+    - cron: '30 3 * * 1-5'
+    - cron: '0 4 * * 1-5'
+    - cron: '30 4 * * 1-5'
+    - cron: '0 5 * * 1-5'
+    - cron: '30 5 * * 1-5'
+    - cron: '0 6 * * 1-5'
+    - cron: '30 6 * * 1-5'
+    - cron: '0 7 * * 1-5'
+    - cron: '30 7 * * 1-5'
+    - cron: '0 8 * * 1-5'
+    - cron: '30 8 * * 1-5'
+    - cron: '0 9 * * 1-5'
+    - cron: '30 9 * * 1-5'
+    - cron: '0 10 * * 1-5'
 
   workflow_dispatch:
     inputs:
@@ -159,3 +174,99 @@ jobs:
 
           echo "Stop response: $STOP_RESPONSE"
           echo "✅ Bitcoin is SLEEPING!"
+
+# ─────────────────────────────────────────────
+# FII/DII PUSH — fetch from NSE, push to Railway
+# Runs every 30 min on market days 6:00–22:00 IST
+# GitHub runners bypass Railway's NSE IP block
+# Requires secrets: NIFTY_APP_URL, NIFTY_APP_TOKEN
+# ─────────────────────────────────────────────
+  fiidii-push:
+    name: 'FII/DII Push (NSE to Railway)'
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'nifty-wake')
+    steps:
+      - name: Fetch FII/DII from NSE and push to Railway
+        shell: bash
+        env:
+          APP_URL: ${{ secrets.NIFTY_APP_URL }}
+          APP_TOKEN: ${{ secrets.NIFTY_APP_TOKEN }}
+        run: |
+          # Get NSE cookie
+          curl -s -c /tmp/nse.txt -b /tmp/nse.txt \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+            -o /dev/null "https://www.nseindia.com"
+          sleep 2
+
+          # Fetch FII/DII JSON
+          curl -s -c /tmp/nse.txt -b /tmp/nse.txt \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+            -H "Accept: application/json" \
+            -H "Referer: https://www.nseindia.com/option-chain" \
+            -o /tmp/fiidii.json \
+            "https://www.nseindia.com/api/fiidiiTradeReact"
+
+          echo "Response size: $(wc -c < /tmp/fiidii.json) bytes"
+
+          # Parse and extract values
+          cat > /tmp/parse_fiidii.py << 'PYEOF'
+          import json, sys
+          try:
+              with open('/tmp/fiidii.json') as f:
+                  raw = f.read()
+              data = json.loads(raw)
+              rows = data if isinstance(data, list) else data.get('data', [])
+              if not rows:
+                  sys.exit(1)
+              by_date = {}
+              for r in rows:
+                  d = r.get('date') or r.get('Date') or r.get('tradeDate') or 'nodate'
+                  by_date.setdefault(d, []).append(r)
+              latest = sorted(by_date.keys())[-1]
+              fii = dii = None
+              for r in by_date[latest]:
+                  cat = str(r.get('category','') or r.get('Category','')).upper()
+                  if 'FII' in cat or 'FPI' in cat or 'FOREIGN' in cat:
+                      fii = r
+                  if 'DII' in cat or 'DOMESTIC' in cat:
+                      dii = r
+              def n(obj, *keys):
+                  if not obj: return None
+                  for k in keys:
+                      for vk in [k, k.capitalize(), k.upper()]:
+                          v = obj.get(vk)
+                          if v is not None and v != '':
+                              try: return float(v)
+                              except: pass
+                  return None
+              out = {
+                  'fiiBuy':  n(fii, 'buyValue','buy_value','grossPurchase'),
+                  'fiiSell': n(fii, 'sellValue','sell_value','grossSale'),
+                  'diiBuy':  n(dii, 'buyValue','buy_value','grossPurchase'),
+                  'diiSell': n(dii, 'sellValue','sell_value','grossSale'),
+              }
+              if out['fiiBuy'] is None and out['diiBuy'] is None:
+                  print('PARSE_FAILED'); sys.exit(1)
+              print(json.dumps(out))
+          except Exception as e:
+              print(f'ERROR: {e}', file=sys.stderr)
+              sys.exit(1)
+          PYEOF
+
+          PARSED=$(python3 /tmp/parse_fiidii.py)
+          echo "Parsed: $PARSED"
+
+          if [ $? -ne 0 ] || [ -z "$PARSED" ]; then
+            echo "Parse failed — skipping push"
+            exit 0
+          fi
+
+          # Push to Railway
+          RESP=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-App-Token: $APP_TOKEN" \
+            -d "$PARSED" \
+            "$APP_URL/api/fiidii")
+          echo "Push response: $RESP"

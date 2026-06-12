@@ -2374,7 +2374,7 @@ window.onerror=function(msg,src,line){console.warn('JS Error:',msg,'at line',lin
 window.addEventListener('unhandledrejection',function(e){console.warn('Unhandled promise:',e.reason);e.preventDefault();});
 
 // ── Desktop layout init ───────────────────────────────────────────────────────
-(function _initDesktopLayout() {
+function _initDesktopLayout() {
   if (window.innerWidth < 900) return;
 
   const TAB_META = [
@@ -2400,16 +2400,19 @@ window.addEventListener('unhandledrejection',function(e){console.warn('Unhandled
     btn.dataset.tab = t.id;
     btn.innerHTML = `<span class="bi">${t.icon}</span>${t.label}`;
     btn.onclick = () => {
-      const el = document.querySelector('.bottom-tabs .btab[onclick*="${t.id}"]');
-      switchTab(t.id, el);
+      // Direct call — no querySelector needed, switchTab handles tab activation
+      switchTab(t.id, document.querySelector('.bottom-tabs .btab[onclick*="' + t.id + '"]') || btn);
     };
     sidebar.appendChild(btn);
   });
 
+  // Guard: don't double-init, and ensure panels exist
+  if (document.getElementById('desktop-shell')) return;
   // Wrap all panels in content div
   const content = document.createElement('div');
   content.id = 'desktop-content';
   const panels = [...document.querySelectorAll('.panel')];
+  if (!panels.length) return; // panels not yet in DOM — abort
   const firstPanel = panels[0];
   firstPanel.parentNode.insertBefore(content, firstPanel);
   panels.forEach(p => content.appendChild(p));
@@ -2421,18 +2424,23 @@ window.addEventListener('unhandledrejection',function(e){console.warn('Unhandled
   shell.appendChild(sidebar);
   shell.appendChild(content);
 
-  // Sync sidebar active state on tab switch
-  const _origSwitch = window.switchTab;
-  window.switchTab = function(id, btn) {
-    _origSwitch && _origSwitch(id, btn);
+  // Sync sidebar active state on tab switch — patch switchTab (called after DOMContentLoaded so switchTab is defined)
+  const _sidebarSyncTab = (id) => {
     sidebar.querySelectorAll('.btab').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+  };
+  const _orig = window.switchTab;
+  window.switchTab = function(id, btn) {
+    _orig && _orig(id, btn);
+    _sidebarSyncTab(id);
   };
 
   // Re-run on resize crossing breakpoint
   window.addEventListener('resize', () => {
     if (window.innerWidth < 900 && document.getElementById('desktop-shell')) location.reload();
   });
-})();
+}
+// Call after DOM is ready so panels exist to wrap
+document.addEventListener('DOMContentLoaded', _initDesktopLayout);
 
 // PWA — only register sw.js if it actually exists (Railway may not have it)
 if('serviceWorker' in navigator){
@@ -2514,8 +2522,7 @@ function switchTab(name,btn){
   document.getElementById('panel-'+name).classList.add('active');
   btn.classList.add('active');
   if(name==='chart'){
-    refreshChart();
-    _startChartAutoRefresh();
+    refreshChart(); // live timer starts inside renderCandlestickChart
   } else {
     _stopChartAutoRefresh();
   }
@@ -4219,8 +4226,17 @@ async function submitManualPCR() {
 
 // ─── FII/DII auto display ────────────────────────────────
 function updateFIIDIIDisplay(fii, dii) {
+  // If all values null (NSE blocked / not yet fetched) — don't overwrite with N/A
+  const hasData = fii?.net != null || dii?.net != null;
+  if (!hasData) {
+    const updEl = document.getElementById('fii-updated-at');
+    if (updEl && updEl.textContent === 'Auto-fetched from NSE' || updEl?.textContent === '') {
+      if (updEl) updEl.textContent = 'Awaiting NSE data…';
+    }
+    return; // keep existing '--' values, don't replace with N/A
+  }
   // FIX: add thousand separators for large Cr values (was showing 12345Cr not 12,345Cr)
-  const fmtCr = v => v == null ? 'N/A' : Math.abs(v).toLocaleString('en-IN', {maximumFractionDigits:0}) + 'Cr';
+  const fmtCr = v => v == null ? '--' : Math.abs(v).toLocaleString('en-IN', {maximumFractionDigits:0}) + 'Cr';
   const col = v => v == null ? '#9ab8d0' : v >= 0 ? 'var(--green)' : 'var(--red)';
 
   // FII buy/sell/net

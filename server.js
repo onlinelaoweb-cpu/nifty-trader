@@ -2690,7 +2690,11 @@ app.post('/api/fiidii', requireToken, (req,res) => {
     const {fiiBuy,fiiSell,diiBuy,diiSell}=req.body;
     if(fiiBuy!=null&&fiiSell!=null) marketState.fii={buy:parseFloat(fiiBuy),sell:parseFloat(fiiSell),net:parseFloat((fiiBuy-fiiSell).toFixed(2)),updatedAt:new Date().toISOString()};
     if(diiBuy!=null&&diiSell!=null) marketState.dii={buy:parseFloat(diiBuy),sell:parseFloat(diiSell),net:parseFloat((diiBuy-diiSell).toFixed(2)),updatedAt:new Date().toISOString()};
-    res.json({success:true});
+    marketState.smartMoney = computeSmartMoneyBias();
+    // Broadcast instantly to all SSE clients so FII/DII appears without waiting for next poll
+    sseBroadcast('signal', buildSignalPayload());
+    console.log(`💰 [FII/DII] Manual push — FII Net: ${marketState.fii?.net} | DII Net: ${marketState.dii?.net}`);
+    res.json({success:true, fiiNet: marketState.fii?.net, diiNet: marketState.dii?.net});
 });
 
 // Option Flow
