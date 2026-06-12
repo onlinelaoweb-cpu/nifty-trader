@@ -5455,15 +5455,16 @@ setInterval(() => {
   const overlay = document.getElementById('vn-login');
   if (!overlay) return;
 
-  // If token already saved and valid-looking, skip login screen
+  // Token already saved on this device — skip login (remembered device)
   const saved = localStorage.getItem('vn_token');
   if (saved && saved.length > 3) {
     overlay.classList.add('hide');
     return;
   }
 
-  // Show login, pause the app until authenticated
+  // New device / cleared storage — show login
   overlay.classList.remove('hide');
+  setTimeout(() => document.getElementById('login-pass')?.focus(), 300);
 })();
 
 function _doLogin() {

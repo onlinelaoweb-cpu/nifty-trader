@@ -477,6 +477,58 @@ function computeSmartMoneyBias() {
 
 
 // ── Candle Pattern Detector ────────────────────────────────────────────────────
+// Generic candle pattern detector — accepts any candle array (for multi-TF use)
+// Returns same shape as detectCandlePattern().
+function detectCandlePatternForTF(candles) {
+    if (!candles || candles.length < 2) return { pattern: 'NONE', direction: 'NEUTRAL', strength: 0, reason: '' };
+
+    const c  = candles[candles.length - 1];
+    const p  = candles[candles.length - 2];
+
+    if (!c?.open || !c?.high || !c?.low || !c?.close) return { pattern: 'NONE', direction: 'NEUTRAL', strength: 0, reason: '' };
+
+    const body        = Math.abs(c.close - c.open);
+    const range       = c.high - c.low;
+    const upperWick   = c.high - Math.max(c.open, c.close);
+    const lowerWick   = Math.min(c.open, c.close) - c.low;
+    const isBullCandle = c.close > c.open;
+    const isBearCandle = c.close < c.open;
+    const bodyRatio   = range > 0 ? body / range : 0;
+
+    if (bodyRatio < 0.10 && range > 0)
+        return { pattern: 'DOJI', direction: 'NEUTRAL', strength: 1, reason: `➕ Doji — indecision` };
+
+    if (lowerWick >= 2 * body && upperWick <= 0.3 * body && lowerWick > 0) {
+        const str = lowerWick >= 3 * body ? 3 : 2;
+        return { pattern: 'HAMMER', direction: 'BULLISH', strength: str, reason: `🔨 Hammer` };
+    }
+    if (upperWick >= 2 * body && lowerWick <= 0.3 * body && upperWick > 0 && isBearCandle) {
+        const str = upperWick >= 3 * body ? 3 : 2;
+        return { pattern: 'SHOOTING_STAR', direction: 'BEARISH', strength: str, reason: `⭐ Shooting Star` };
+    }
+    if (upperWick >= 2 * body && lowerWick <= 0.3 * body && isBullCandle)
+        return { pattern: 'INVERTED_HAMMER', direction: 'BULLISH', strength: 1, reason: `🕯️ Inv. Hammer` };
+
+    const pBody = Math.abs(p.close - p.open);
+    const pBear = p.close < p.open;
+    const pBull = p.close > p.open;
+
+    if (isBullCandle && pBear && body > 0 && pBody > 0 && c.open <= p.close && c.close >= p.open) {
+        const str = body >= 1.5 * pBody ? 3 : 2;
+        return { pattern: 'BULLISH_ENGULFING', direction: 'BULLISH', strength: str, reason: `🟢 Bull Engulfing` };
+    }
+    if (isBearCandle && pBull && body > 0 && pBody > 0 && c.open >= p.close && c.close <= p.open) {
+        const str = body >= 1.5 * pBody ? 3 : 2;
+        return { pattern: 'BEARISH_ENGULFING', direction: 'BEARISH', strength: str, reason: `🔴 Bear Engulfing` };
+    }
+    if (isBullCandle && bodyRatio >= 0.75)
+        return { pattern: 'STRONG_BULL', direction: 'BULLISH', strength: 2, reason: `📈 Strong Bull` };
+    if (isBearCandle && bodyRatio >= 0.75)
+        return { pattern: 'STRONG_BEAR', direction: 'BEARISH', strength: 2, reason: `📉 Strong Bear` };
+
+    return { pattern: 'NONE', direction: 'NEUTRAL', strength: 0, reason: '' };
+}
+
 // Detects: Hammer, Inverted Hammer, Shooting Star, Doji, Bullish/Bearish Engulfing
 // Uses last 2 candles from session history.
 // Returns: { pattern, direction, strength, reason }
@@ -647,6 +699,21 @@ function combineSignals(indicators) {
     const bnLead = marketState.global?.bankNiftyLeadSignal;
     if (bnLead?.signal === 1)  { bull += 1; reasons.push(`🏦 ${bnLead.reason}`); }
     if (bnLead?.signal === -1) { bear += 1; reasons.push(`🏦 ${bnLead.reason}`); }
+
+    // ── Nifty vs BankNifty correlation ─────────────────────────────────────
+    // BN Leading = +1 vote confirming direction. Divergence = suppress 1 vote.
+    const bnCorr = marketState.global?.bnCorrelation;
+    if (bnCorr) {
+        if (bnCorr.status === 'BN_LEADING') {
+            // BN strongly leading: extra confirmation vote in direction of lead
+            if (bnLead?.signal === 1)  { bull += 1; reasons.push(`🏦 BankNifty leading Nifty — strong bull confirmation ✅`); }
+            if (bnLead?.signal === -1) { bear += 1; reasons.push(`🏦 BankNifty leading Nifty — strong bear confirmation ⚠️`); }
+        } else if (bnCorr.status === 'DIVERGE') {
+            // BN and Nifty going opposite — cancel 1 vote from whichever side built up
+            if (bull > bear && bull > 0) { bull = Math.max(0, bull - 1); reasons.push(`⚡ BN/Nifty divergence — bull vote suppressed`); }
+            else if (bear > bull && bear > 0) { bear = Math.max(0, bear - 1); reasons.push(`⚡ BN/Nifty divergence — bear vote suppressed`); }
+        }
+    }
     const br = marketState.breadth;
     if      (br.breadthSignal==='BULLISH') { bull+=2; reasons.push(`A/D ${br.advances}↑/${br.declines}↓ Bullish ✅`); }
     else if (br.breadthSignal==='BEARISH') { bear+=2; reasons.push(`A/D ${br.advances}↑/${br.declines}↓ Bearish ⚠️`); }
@@ -1693,6 +1760,25 @@ async function refreshMTF() {
             tf5mWarming   : d.tf5mWarming      ?? false, // true for ~22 min after restart
             tf5mBarsNeeded: d.tf5mBarsNeeded   ?? 0,     // how many more 5m bars until warm
         };
+
+        // ── Per-timeframe candle patterns (5m / 15m / 1h) ─────────────────────
+        // Uses the raw candle arrays returned by analyzeMultiTimeframe so we detect
+        // patterns on the SAME bars used for RSI/EMA — fully consistent.
+        const cp5m  = detectCandlePatternForTF(d.candles5m  || []);
+        const cp15m = detectCandlePatternForTF(d.candles15m || []);
+        const cp1h  = detectCandlePatternForTF(d.candles1h  || []);
+
+        // Consensus: count bullish/bearish TF patterns (strength ≥ 2 counts as vote)
+        const cpBull = [cp5m, cp15m, cp1h].filter(x => x.direction === 'BULLISH' && x.strength >= 2).length;
+        const cpBear = [cp5m, cp15m, cp1h].filter(x => x.direction === 'BEARISH' && x.strength >= 2).length;
+        let cpConsensus = 'NEUTRAL', cpConsensusLabel = '—';
+        if (cpBull >= 2) { cpConsensus = 'BULLISH'; cpConsensusLabel = `🟢 ${cpBull}/3 TF Bullish`; }
+        else if (cpBear >= 2) { cpConsensus = 'BEARISH'; cpConsensusLabel = `🔴 ${cpBear}/3 TF Bearish`; }
+        else if (cpBull === 1 && cpBear === 0) cpConsensusLabel = '1/3 Bullish';
+        else if (cpBear === 1 && cpBull === 0) cpConsensusLabel = '1/3 Bearish';
+        else if (cpBull === 1 && cpBear === 1) cpConsensusLabel = '⚡ Mixed';
+
+        marketState.cpMTF = { cp5m, cp15m, cp1h, cpBull, cpBear, cpConsensus, cpConsensusLabel };
     } catch(e) { console.error('MTF:', e.message); }
 }
 async function refreshGlobal() { try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); } }

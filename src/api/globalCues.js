@@ -62,6 +62,71 @@ async function bankNiftyVWAPLead() {
     } catch (e) { return empty; }
 }
 
+// ── Nifty vs BankNifty Correlation Analysis ──────────────────────────────────
+// Compares intraday direction and relative strength of Nifty vs BankNifty.
+// Returns a correlation object used by AI signals and frontend display.
+async function niftyBNCorrelation(niftyChangePct, bnChangePct) {
+    try {
+        if (niftyChangePct == null || bnChangePct == null) {
+            return { status: 'UNAVAILABLE', label: '--', detail: '', multiplier: 1.0, reason: 'Price data unavailable' };
+        }
+
+        // Direction agreement
+        const niftyDir = niftyChangePct > 0.15 ? 1 : niftyChangePct < -0.15 ? -1 : 0;
+        const bnDir    = bnChangePct   > 0.15 ? 1 : bnChangePct   < -0.15 ? -1 : 0;
+        const aligned  = niftyDir !== 0 && bnDir !== 0 && niftyDir === bnDir;
+        const diverge  = niftyDir !== 0 && bnDir !== 0 && niftyDir !== bnDir;
+
+        // BN leads Nifty — measure relative strength ratio
+        // e.g. BN +2.97% vs Nifty +1.99% → BN leading strongly (ratio 1.49)
+        const ratio = niftyChangePct !== 0 ? Math.abs(bnChangePct / niftyChangePct) : null;
+
+        // BankNifty sector weight ~34% of Nifty — if BN move >> Nifty, it's driving
+        const bnLeading    = ratio != null && ratio >= 1.3 && aligned;
+        const bnLagging    = ratio != null && ratio <= 0.7 && aligned;
+        const bnDivergence = diverge;
+
+        let status = 'ALIGNED', label = '', detail = '', multiplier = 1.0, reason = '';
+
+        if (bnDivergence) {
+            status     = 'DIVERGE';
+            label      = '⚡ DIVERGENCE';
+            detail     = `BN ${bnChangePct > 0 ? '+' : ''}${bnChangePct.toFixed(2)}% vs Nifty ${niftyChangePct > 0 ? '+' : ''}${niftyChangePct.toFixed(2)}%`;
+            multiplier = 0.7;  // reduce signal confidence — mixed tape
+            reason     = `⚠️ BankNifty ${bnDir > 0 ? 'bullish' : 'bearish'} while Nifty ${niftyDir > 0 ? 'bullish' : 'bearish'} — conflicting signals`;
+        } else if (bnLeading) {
+            status     = 'BN_LEADING';
+            label      = `🏦 BN LEADING`;
+            detail     = `BN ${bnChangePct > 0 ? '+' : ''}${bnChangePct.toFixed(2)}% vs Nifty ${niftyChangePct > 0 ? '+' : ''}${niftyChangePct.toFixed(2)}%`;
+            multiplier = 1.2;  // amplify — BN confirming & leading move
+            reason     = `🏦 BankNifty leading Nifty (${Math.round((ratio-1)*100)}% stronger) — high conviction ${bnDir > 0 ? 'bullish' : 'bearish'}`;
+        } else if (bnLagging) {
+            status     = 'BN_LAGGING';
+            label      = `🔶 BN LAGGING`;
+            detail     = `BN ${bnChangePct > 0 ? '+' : ''}${bnChangePct.toFixed(2)}% vs Nifty ${niftyChangePct > 0 ? '+' : ''}${niftyChangePct.toFixed(2)}%`;
+            multiplier = 0.85; // mild reduction — move missing bank participation
+            reason     = `⚠️ Nifty moving but BankNifty lagging — weak conviction without banking support`;
+        } else if (aligned) {
+            status     = 'ALIGNED';
+            label      = `✅ ALIGNED`;
+            detail     = `BN ${bnChangePct > 0 ? '+' : ''}${bnChangePct.toFixed(2)}% / Nifty ${niftyChangePct > 0 ? '+' : ''}${niftyChangePct.toFixed(2)}%`;
+            multiplier = 1.0;
+            reason     = `✅ BankNifty & Nifty aligned — confirming move`;
+        } else {
+            // One or both near flat
+            status     = 'FLAT';
+            label      = `— FLAT`;
+            detail     = `BN ${bnChangePct > 0 ? '+' : ''}${bnChangePct.toFixed(2)}% / Nifty ${niftyChangePct > 0 ? '+' : ''}${niftyChangePct.toFixed(2)}%`;
+            multiplier = 1.0;
+            reason     = `Both indices near flat — no directional lead`;
+        }
+
+        return { status, label, detail, multiplier, reason, bnChangePct, niftyChangePct, ratio: ratio ? parseFloat(ratio.toFixed(2)) : null };
+    } catch (e) {
+        return { status: 'UNAVAILABLE', label: '--', detail: '', multiplier: 1.0, reason: 'Correlation error: ' + e.message };
+    }
+}
+
 function score(changePct, reverseLogic) {
     if (changePct == null) return 0;
     const t = 0.3;
@@ -111,6 +176,14 @@ async function fetchGlobalCues() {
         bankNiftyLeadSignal: bnVWAPLead,
     };
 
+    // ── Nifty vs BankNifty correlation ────────────────────────────────────────
+    // Uses today's changePct from both indices (already fetched above).
+    // niftySpot changePct comes from GIFT Nifty proxy (same symbol used for pre-market)
+    const niftySpotPct = giftNifty?.changePct ?? null;
+    const bnPct        = banknifty?.changePct ?? null;
+    const bnCorrelation = await niftyBNCorrelation(niftySpotPct, bnPct);
+    globalData.bnCorrelation = bnCorrelation;
+
     const allScores = [];
     [globalData.us.dow, globalData.us.nasdaq, globalData.us.sp500].forEach(d => { if (d) { allScores.push(d.score*3,d.score*3,d.score*3); } });
     [globalData.asia.nikkei, globalData.asia.hangseng, globalData.asia.shanghai].forEach(d => { if (d) { allScores.push(d.score*2,d.score*2); } });
@@ -134,6 +207,9 @@ async function fetchGlobalCues() {
     if (globalData.sectors.bankNifty?.changePct < -0.5)reasons.push(`⚠️ Bank Nifty ${globalData.sectors.bankNifty.changePct}% — Weak banks`);
     if (globalData.sectors.niftyIT?.changePct > 1)     reasons.push(`✅ IT Sector +${globalData.sectors.niftyIT.changePct}% — Carrying market`);
     if (bnVWAPLead.signal !== 0) reasons.push(`🏦 ${bnVWAPLead.reason}`);
+    // Add BN correlation context to reasons
+    if (bnCorrelation.status === 'DIVERGE')    reasons.push(bnCorrelation.reason);
+    if (bnCorrelation.status === 'BN_LEADING') reasons.push(bnCorrelation.reason);
 
     Object.assign(globalData, { bias: globalBias, score: globalScore, reasons, updatedAt: new Date().toISOString() });
     console.log(`🌍 Global: ${globalBias} (score:${globalScore})`);
@@ -142,4 +218,4 @@ async function fetchGlobalCues() {
     return globalData;
 }
 
-module.exports = { fetchGlobalCues, bankNiftyVWAPLead };
+module.exports = { fetchGlobalCues, bankNiftyVWAPLead, niftyBNCorrelation };

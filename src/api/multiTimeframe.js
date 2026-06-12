@@ -477,6 +477,10 @@ async function analyzeMultiTimeframe() {
         validTFCount: validCount,
         tf5mWarming: tf5m.signal === 'INSUFFICIENT', // true during first ~22 min after restart
         tf5mBarsNeeded: tf5m.signal === 'INSUFFICIENT' ? (MIN_BARS['5m'] - (tf5m.barCount ?? 0)) : 0,
+        // Raw candle arrays — used by server.js for per-TF candle pattern detection
+        candles5m: c5m,
+        candles15m: c15m,
+        candles1h: c1h,
     };
 }
 
