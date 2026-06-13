@@ -84,6 +84,7 @@ let marketState = {
     pcr: null, atmPcr: null, pcrSignal: 'N/A', atmPcrSignal: 'N/A',
     pcrSource: 'pending', // 'auto' after first NSE fetch | 'manual' if user overrides
     pcrUnavailable: false, // true when NSE has never returned option chain data
+    pcrFromIndex: 'NIFTY', // 'NIFTY' or 'BANKNIFTY' when PCR is a BankNifty proxy fallback
     vix: null, vixChange: null, vixSignal: 'N/A', vixNote: '', strikeRange: 'ATM ±200',
     mtf: {
         signal: 'WAIT', strength: 'WEAK', confidence: 0,
@@ -1840,8 +1841,10 @@ async function refreshPCR() {
             await updateOpenTradesMTM();
         }
 
-        marketState.pcrSource = 'auto';
-        console.log(`✅ PCR auto-updated: ${pcrState.pcr} | ATM: ${pcrState.atmPcr} (source: NSE)`);
+        marketState.pcrSource  = 'auto';
+        marketState.pcrFromIndex = pcrState.fromIndex || 'NIFTY';
+        const srcLabel = pcrState.fromIndex === 'BANKNIFTY' ? `BankNifty proxy via ${pcrState.source}` : (pcrState.source || 'NSE');
+        console.log(`✅ PCR auto-updated: ${pcrState.pcr} | ATM: ${pcrState.atmPcr} (source: ${srcLabel})`);
 
         // ── Max pain ──────────────────────────────────────
         if (pcrState.maxPain?.strike) {
@@ -3122,7 +3125,7 @@ async function initializeLiveData() {
     initHistoricalData().catch(e => console.error('[HistData] Init error:', e.message));
 
     // NSE scheduler fires its own async fetches (non-blocking per nseData.js fix)
-    startNSEScheduler(() => marketState.nifty);
+    startNSEScheduler(() => marketState.nifty, () => marketState.global?.sectors?.bankNifty?.price ?? null);
 
     // Initial data load — staggered to avoid hammering NSE with simultaneous requests.
     // NSE blocks Railway IPs that send too many concurrent requests at startup.

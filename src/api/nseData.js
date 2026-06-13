@@ -92,9 +92,16 @@ if (!DHAN_CLIENT_ID || !DHAN_ACCESS_TOKEN) {
     console.error('[nseData] ⚠️  PCR DISABLED — DHAN_ACCESS_TOKEN + DHAN_CLIENT_ID dono Railway Variables mein set karo. PCR tab N/A dikhega jab tak fix nahi hota.');
 }
 
-// ── Dhan Token Auto-Renewal ────────────────────────────────────────────────────
-// Dhan token validity is set to 1 day. On each app startup, auto-renew it
-// so Railway redeploys always get a fresh token without manual intervention.
+// ── Dhan Token — MANUAL DAILY REFRESH REQUIRED ─────────────────────────────────
+// NOTE (Jun 13, 2026): Dhan's /v2/RenewToken endpoint does NOT support
+// programmatic refresh of access tokens — there is no API-based renewal flow.
+// Access tokens must be regenerated manually (~once every 24h) from the
+// Dhan web portal: Profile → DhanHQ Trading APIs → Generate Token, then
+// updated in Railway → Variables → DHAN_ACCESS_TOKEN.
+// This function attempts the call anyway (harmless if it 400s) in case Dhan
+// adds support later, but DO NOT rely on it — set a daily reminder to refresh
+// the token manually, or expect Dhan PCR to silently stop working ~24h after
+// the last manual token update.
 async function renewDhanToken() {
     if (!DHAN_ACCESS_TOKEN || !DHAN_CLIENT_ID) return;
     try {
@@ -117,8 +124,10 @@ async function renewDhanToken() {
             console.warn('[Dhan] Token renewal response unexpected:', JSON.stringify(res.data)?.slice(0,120));
         }
     } catch (e) {
-        // 400 = token already expired (cannot renew expired), 401 = invalid
-        console.warn(`[Dhan] Token renewal failed (${e.response?.status || e.message}) — using existing token`);
+        // Expected: Dhan has no public renewal API for this token type.
+        // A 400/404 here is NORMAL — it does NOT mean your token is invalid.
+        // ⚠️  REMINDER: Refresh DHAN_ACCESS_TOKEN manually once daily via Dhan web portal.
+        console.warn(`[Dhan] Auto-renewal not supported by Dhan API (${e.response?.status || e.message}) — using existing token. ⚠️ Remember to refresh DHAN_ACCESS_TOKEN manually once/day from Dhan web portal if Dhan PCR stops working.`);
     }
 }
 // Run renewal at startup (non-blocking)
@@ -1045,6 +1054,8 @@ const _pcr = {
     fetchedAt   : null,
     lastError   : null,
     fetchCount  : 0,
+    source      : null,   // 'fyers' | 'dhan' | 'angel' | 'nse' | 'banknifty-fyers' | 'banknifty-dhan'
+    fromIndex   : 'NIFTY', // 'NIFTY' | 'BANKNIFTY' — set to BANKNIFTY when used as fallback proxy
 };
 
 function parsePCR(data, spotPrice) {
@@ -1346,9 +1357,12 @@ async function fetchPCRFromAngel(spotPrice) {
 // ── Fyers API PCR ─────────────────────────────────────────────────────────────
 // Fetches Nifty option chain from Fyers API v3 → computes PCR, ATM PCR, walls.
 // No IP restriction, 365-day token. Primary PCR source replacing Dhan.
-async function fetchPCRFromFyers(spotPrice) {
+async function fetchPCRFromFyers(spotPrice, opts = {}) {
     if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return null;
     if (!spotPrice || spotPrice <= 0) return null;
+
+    const fyersSymbol = opts.fyersSymbol || 'NSE:NIFTY50-INDEX';
+    const strikeStep  = opts.strikeStep  || 50;
 
     try {
         // Fyers option chain — confirmed from official fyers-apiv3 SDK source:
@@ -1360,7 +1374,7 @@ async function fetchPCRFromFyers(spotPrice) {
             'https://api-t1.fyers.in/data/options-chain-v3',
             {
                 params: {
-                    symbol     : 'NSE:NIFTY50-INDEX',
+                    symbol     : fyersSymbol,
                     strikecount: 20,
                     timestamp  : '',
                 },
@@ -1403,7 +1417,7 @@ async function fetchPCRFromFyers(spotPrice) {
         // Compute PCR from grouped map
         let totalCeOI = 0, totalPeOI = 0;
         let ceWall = 0, ceWallStrike = 0, peWall = 0, peWallStrike = 0;
-        const atmStrike = Math.round(spotPrice / 50) * 50;
+        const atmStrike = Math.round(spotPrice / strikeStep) * strikeStep;
         let atmCeOI = 0, atmPeOI = 0;
         const records = [];
 
@@ -1451,7 +1465,7 @@ async function fetchPCRFromFyers(spotPrice) {
         }
 
         console.log(`[PCR-Fyers] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike} | PE Wall:${peWallStrike} | MaxPain:${maxPain} | Strikes:${records.length}`);
-        return { pcr, atmPcr, atm: atmStrike, ceWall: ceWallStrike, peWall: peWallStrike, maxPain, records };
+        return { pcr, atmPcr, atm: atmStrike, ceWall: ceWallStrike, peWall: peWallStrike, maxPain, records, source: 'fyers' };
 
     } catch (e) {
         const status = e.response?.status;
@@ -1470,15 +1484,19 @@ async function fetchPCRFromFyers(spotPrice) {
     }
 }
 
-async function fetchPCRFromDhan(spotPrice) {
+async function fetchPCRFromDhan(spotPrice, opts = {}) {
     if (!DHAN_ACCESS_TOKEN || !DHAN_CLIENT_ID) return null;
     if (!spotPrice || spotPrice <= 0) return null;
+
+    const underlyingScrip = opts.underlyingScrip ?? 13;   // NIFTY 50 = 13, BANKNIFTY = 25
+    const strikeStep       = opts.strikeStep ?? 50;
+    const logTag            = opts.logTag || 'PCR-Dhan';
 
     try {
         // Get current/upcoming Tuesday expiry (Nifty weekly — changed from Thursday to Tuesday)
         // If today IS Tuesday → use today (same-day expiry)
         // Otherwise → find next Tuesday
-        const getNextExpiry = () => {
+        const getNextWeeklyExpiry = () => {
             const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
             const day = now.getDay(); // 0=Sun, 2=Tue
             let daysAhead = (2 - day + 7) % 7; // 0 if today is Tuesday
@@ -1487,13 +1505,31 @@ async function fetchPCRFromDhan(spotPrice) {
             return `${expiry.getFullYear()}-${String(expiry.getMonth()+1).padStart(2,'0')}-${String(expiry.getDate()).padStart(2,'0')}`;
         };
 
-        const expiry = getNextExpiry();
-        console.log(`[PCR-Dhan] Fetching option chain for expiry ${expiry}...`);
+        // BankNifty options are now monthly — expiry = last Tuesday of current month
+        // (falls back to next month's last Tuesday if current month's has passed)
+        const getNextMonthlyExpiry = () => {
+            const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+            const lastTuesdayOf = (year, month) => {
+                const d = new Date(year, month + 1, 0); // last day of month
+                const offset = (d.getDay() - 2 + 7) % 7; // days to subtract to reach Tuesday
+                d.setDate(d.getDate() - offset);
+                return d;
+            };
+            let candidate = lastTuesdayOf(now.getFullYear(), now.getMonth());
+            const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            if (candidate < todayStart) {
+                candidate = lastTuesdayOf(now.getFullYear(), now.getMonth() + 1);
+            }
+            return `${candidate.getFullYear()}-${String(candidate.getMonth()+1).padStart(2,'0')}-${String(candidate.getDate()).padStart(2,'0')}`;
+        };
+
+        const expiry = underlyingScrip === 25 ? getNextMonthlyExpiry() : getNextWeeklyExpiry();
+        console.log(`[${logTag}] Fetching option chain for expiry ${expiry}...`);
 
         const res = await axios.post(
             'https://api.dhan.co/v2/optionchain',
             {
-                UnderlyingScrip : 13,          // NIFTY 50 scrip code
+                UnderlyingScrip : underlyingScrip,
                 UnderlyingType  : 'INDEX',
                 Expiry          : expiry,
             },
@@ -1509,7 +1545,7 @@ async function fetchPCRFromDhan(spotPrice) {
         );
 
         if (res.status !== 200) {
-            console.warn(`[PCR-Dhan] HTTP ${res.status}`);
+            console.warn(`[${logTag}] HTTP ${res.status}`);
             return null;
         }
 
@@ -1517,11 +1553,11 @@ async function fetchPCRFromDhan(spotPrice) {
         // Dhan response: { data: { oc: { [strikeStr]: { call_options: {...}, put_options: {...} } } } }
         const oc = body?.data?.oc || body?.oc || body?.data;
         if (!oc || typeof oc !== 'object') {
-            console.warn(`[PCR-Dhan] Unexpected response shape: ${JSON.stringify(body)?.slice(0,120)}`);
+            console.warn(`[${logTag}] Unexpected response shape: ${JSON.stringify(body)?.slice(0,120)}`);
             return null;
         }
 
-        const atmStrike = Math.round(spotPrice / 50) * 50;
+        const atmStrike = Math.round(spotPrice / strikeStep) * strikeStep;
         let totalCeOI = 0, totalPeOI = 0;
         let ceWall = 0, ceWallStrike = 0, peWall = 0, peWallStrike = 0;
         const records = [];
@@ -1549,17 +1585,17 @@ async function fetchPCRFromDhan(spotPrice) {
         }
 
         if (totalCeOI === 0 || totalPeOI === 0) {
-            console.warn('[PCR-Dhan] Zero OI — market closed or no data');
+            console.warn(`[${logTag}] Zero OI — market closed or no data`);
             return null;
         }
 
         const pcr    = parseFloat((totalPeOI / totalCeOI).toFixed(3));
-        const atmRange = records.filter(r => Math.abs(r.strikePrice - atmStrike) <= 150);
+        const atmRange = records.filter(r => Math.abs(r.strikePrice - atmStrike) <= strikeStep * 3);
         const atmCeOI  = atmRange.reduce((s, r) => s + (r.CE?.openInterest || 0), 0);
         const atmPeOI  = atmRange.reduce((s, r) => s + (r.PE?.openInterest || 0), 0);
         const atmPcr   = atmCeOI > 0 ? parseFloat((atmPeOI / atmCeOI).toFixed(3)) : null;
 
-        console.log(`[PCR-Dhan] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike}(${ceWall}) | PE Wall:${peWallStrike}(${peWall}) | Expiry:${expiry}`);
+        console.log(`[${logTag}] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike}(${ceWall}) | PE Wall:${peWallStrike}(${peWall}) | Expiry:${expiry}`);
 
         return {
             pcr, atmPcr, atm: atmStrike,
@@ -1570,9 +1606,35 @@ async function fetchPCRFromDhan(spotPrice) {
             source  : 'dhan',
         };
     } catch (e) {
-        console.warn(`[PCR-Dhan] Error: ${e.message}`);
+        console.warn(`[${logTag}] Error: ${e.message}`);
         return null;
     }
+}
+
+async function _fetchBankNiftyPCRFallback() {
+    const bnSpot = _getBankNiftySpot();
+    if (!bnSpot || bnSpot <= 0) {
+        console.warn('[PCR-BankNifty] No BankNifty spot price available — skipping fallback');
+        return null;
+    }
+
+    // Try Fyers first (same priority order as Nifty)
+    if (FYERS_ACCESS_TOKEN && FYERS_APP_ID) {
+        console.log('[PCR-BankNifty] Trying Fyers...');
+        const r = await fetchPCRFromFyers(bnSpot, { fyersSymbol: 'NSE:NIFTYBANK-INDEX', strikeStep: 100 });
+        if (r) return { ...r, source: 'banknifty-fyers' };
+        console.warn('[PCR-BankNifty] Fyers failed — trying Dhan');
+    }
+
+    // Then Dhan
+    if (DHAN_ACCESS_TOKEN && DHAN_CLIENT_ID) {
+        console.log('[PCR-BankNifty] Trying Dhan...');
+        const r = await fetchPCRFromDhan(bnSpot, { underlyingScrip: 25, strikeStep: 100, logTag: 'PCR-BankNifty-Dhan' });
+        if (r) return { ...r, source: 'banknifty-dhan' };
+        console.warn('[PCR-BankNifty] Dhan failed too');
+    }
+
+    return null;
 }
 
 async function _fetchPCR(spotPrice) {
@@ -1602,6 +1664,8 @@ async function _fetchPCR(spotPrice) {
                     fetchedAt : new Date(),
                     lastError : null,
                     fetchCount: _pcr.fetchCount + 1,
+                    source    : 'fyers',
+                    fromIndex : 'NIFTY',
                 });
                 try {
                     const oib = calcOIBuildup(fyersResult.records || [], fyersResult.pcr);
@@ -1652,6 +1716,8 @@ async function _fetchPCR(spotPrice) {
                     fetchedAt : new Date(),
                     lastError : null,
                     fetchCount: _pcr.fetchCount + 1,
+                    source    : 'dhan',
+                    fromIndex : 'NIFTY',
                 });
                 try {
                     const oib = calcOIBuildup(dhanResult.records || [], dhanResult.pcr);
@@ -1687,7 +1753,7 @@ async function _fetchPCR(spotPrice) {
         }
 
         // ── Path 0b: Angel One SmartAPI (DISABLED — HTML IP block on Railway) ─────────
-        if (false && _angelSession?.jwtToken) {  // DISABLED — Angel NFO IP blocked on Railway
+        if (_angelSession?.jwtToken) {  // RE-ENABLED Jun 13, 2026 — try Angel; falls through to NSE if blocked
             console.log('[PCR] Trying Angel Market Data...');
             const angelResult = await fetchPCRFromAngel(spotPrice);
             if (angelResult) {
@@ -1703,6 +1769,8 @@ async function _fetchPCR(spotPrice) {
                     fetchedAt : new Date(),
                     lastError : null,
                     fetchCount: _pcr.fetchCount + 1,
+                    source    : 'angel',
+                    fromIndex : 'NIFTY',
                 });
                 // Run OI buildup from Angel records too
                 try {
@@ -1815,8 +1883,28 @@ async function _fetchPCR(spotPrice) {
             }
 
             if (!pcrData) {
+                console.warn('[PCR] All Nifty PCR paths failed — trying BankNifty PCR as proxy...');
+                const bnResult = await _fetchBankNiftyPCRFallback();
+                if (bnResult) {
+                    Object.assign(_pcr, {
+                        pcr       : bnResult.pcr,
+                        atmPcr    : bnResult.atmPcr,
+                        atm       : bnResult.atm,
+                        ceWall    : bnResult.ceWall,
+                        peWall    : bnResult.peWall,
+                        maxPain   : bnResult.maxPain,
+                        expiryDay : isExpiryDay(),
+                        fetchedAt : new Date(),
+                        lastError : 'Nifty PCR unavailable — showing BankNifty PCR as proxy',
+                        fetchCount: _pcr.fetchCount + 1,
+                        source    : bnResult.source,
+                        fromIndex : 'BANKNIFTY',
+                    });
+                    console.log(`[PCR] ✅ BankNifty proxy PCR:${bnResult.pcr} | ATM PCR:${bnResult.atmPcr} (source: ${bnResult.source})`);
+                    return;
+                }
                 _pcr.lastError = 'All PCR URLs failed (NSE 404) — using last cached value';
-                console.error('[PCR] All paths failed for all URLs. NSE option chain endpoint may have changed.');
+                console.error('[PCR] All paths failed for all URLs (Nifty + BankNifty). NSE option chain endpoint may have changed.');
                 return;  // keep last good _pcr values
             }
         }
@@ -1833,6 +1921,8 @@ async function _fetchPCR(spotPrice) {
             fetchedAt : new Date(),
             lastError : null,
             fetchCount: _pcr.fetchCount + 1,
+            source    : 'nse-direct',
+            fromIndex : 'NIFTY',
         });
         console.log(`📊 [PCR] ${parsed.pcr} | ATM PCR: ${parsed.atmPcr} | ATM: ${parsed.atm} | MaxPain: ${parsed.maxPain?.strike ?? 'N/A'} [#${_pcr.fetchCount}]`);
 
@@ -2069,12 +2159,14 @@ async function _fetchFIIDII() {
  * This avoids a circular dependency between nseData and your price feed.
  */
 let _nseSchedulerStarted = false;
-function startNSEScheduler(getSpotPrice) {
+let _getBankNiftySpot = () => null;
+function startNSEScheduler(getSpotPrice, getBankNiftySpot) {
     if (_nseSchedulerStarted) {
         console.warn('[NSE] startNSEScheduler called more than once — skipping duplicate start');
         return;
     }
     _nseSchedulerStarted = true;
+    if (typeof getBankNiftySpot === 'function') _getBankNiftySpot = getBankNiftySpot;
     console.log('[NSE] 🚀 Starting NSE scheduler (PCR: 3 min | FII/DII: 15 min)');
 
     // Fire first fetches async — intentionally NOT awaited so the app never

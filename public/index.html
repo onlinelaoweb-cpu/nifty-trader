@@ -3335,8 +3335,10 @@ function renderDashboard(s) {
   // Show AUTO ✅, FETCHING… or NSE UNAVAILABLE based on pcrSource + pcrUnavailable
   const isAuto = s.pcrSource === 'auto';
   const nseUnavailable = s.pcrUnavailable === true;
-  const srcLbl = isAuto ? 'AUTO ✅' : nseUnavailable ? 'NSE UNAVAIL' : (s.pcr != null ? 'MANUAL' : 'FETCHING…');
-  const srcColor = isAuto ? 'var(--green)' : nseUnavailable ? 'var(--red)' : (s.pcr != null ? 'var(--amber)' : 'var(--dim)');
+  const isBNProxy = s.pcrFromIndex === 'BANKNIFTY';
+  let srcLbl = isAuto ? 'AUTO ✅' : nseUnavailable ? 'NSE UNAVAIL' : (s.pcr != null ? 'MANUAL' : 'FETCHING…');
+  let srcColor = isAuto ? 'var(--green)' : nseUnavailable ? 'var(--red)' : (s.pcr != null ? 'var(--amber)' : 'var(--dim)');
+  if (isAuto && isBNProxy) { srcLbl = 'BANKNIFTY PROXY'; srcColor = 'var(--amber)'; }
   // When NSE is unavailable, update the signal labels too so they don't stay on "FETCHING…"
   if (nseUnavailable && s.pcr == null) {
     document.getElementById('pcr-sig').textContent = 'NSE UNAVAIL';
@@ -3344,8 +3346,9 @@ function renderDashboard(s) {
   }
   const pcrSrcEl = document.getElementById('pcr-source-lbl');
   const atmSrcEl = document.getElementById('atm-pcr-source-lbl');
-  if (pcrSrcEl) { pcrSrcEl.textContent = srcLbl; pcrSrcEl.style.color = srcColor; }
-  if (atmSrcEl) { atmSrcEl.textContent = srcLbl; atmSrcEl.style.color = srcColor; }
+  const bnTitle = isBNProxy ? 'Nifty PCR sources unavailable — showing BankNifty option chain PCR as a sentiment proxy' : '';
+  if (pcrSrcEl) { pcrSrcEl.textContent = srcLbl; pcrSrcEl.style.color = srcColor; pcrSrcEl.title = bnTitle; }
+  if (atmSrcEl) { atmSrcEl.textContent = srcLbl; atmSrcEl.style.color = srcColor; atmSrcEl.title = bnTitle; }
 
   // Strike range
   document.getElementById('strike-range').textContent = s.strikeRange || 'ATM ±200';
