@@ -3083,8 +3083,8 @@ function startPollingIntervals() {
     // This prevents NSE from seeing a burst of 6 requests every 3 minutes.
     setTimeout(() => setInterval(refreshMarketData, 3*60*1000), 0);
     setTimeout(() => setInterval(pollYahooPrice,    60*1000),   15*1000); // 1-min price fix
-    setTimeout(() => setInterval(refreshMTF,            5*60*1000), 30*1000);
-    setTimeout(() => setInterval(refreshGlobal,         5*60*1000), 60*1000);
+    setTimeout(() => setInterval(refreshMTF,            2*60*1000), 30*1000);   // FIX: 5min→2min — RSI meters stay fresh
+    setTimeout(() => setInterval(refreshGlobal,         2*60*1000), 60*1000);   // FIX: 5min→2min — BankNifty lead actually leads
     setTimeout(() => setInterval(refreshBreadth,        2*60*1000), 90*1000);   // 2 min — breadth is fast-changing
     setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);

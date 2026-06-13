@@ -462,7 +462,7 @@ function getCandleSource() { return candleSource; }
 // Module-level cooldown state
 let _momLastFiredAt   = 0;   // epoch ms of last canTrade fire
 let _momLastSignal    = 'NONE'; // signal that last fired
-const MOM_COOLDOWN_MS = 5 * 60 * 1000;  // 5-minute cooldown
+const MOM_COOLDOWN_MS = 3 * 60 * 1000;  // FIX: 5min→3min — catches continuation candles of same impulse
 
 function calcMomentumBreakdown() {
     const result = { signal: 'NONE', strength: 0, velocity: 0, volumeRatio: 0, candleBody: 0, reason: '', canTrade: false };

@@ -89,57 +89,41 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .btab.active::before{content:'';position:absolute;top:-4px;left:20%;right:20%;height:2px;background:var(--green);border-radius:0 0 3px 3px;box-shadow:0 0 8px var(--green);}
 .panel{display:none;}.panel.active{display:block;}
 
-/* ── Murarka panel — responsive horizontal↔vertical ── */
+/* ── Murarka panel — MOBILE FIRST ── */
+/* Default = mobile: single column stack */
 .murarka-body {
   display: grid;
-  grid-template-columns: auto 1px auto 1px auto 1px 1fr;
-  align-items: stretch;
-  min-height: 80px;
+  grid-template-columns: 1fr;
+  min-height: unset;
 }
-.murarka-divider { background: var(--border); }
+.murarka-divider { display: none; }
+.murarka-col-pcr   { border-bottom: 1px solid var(--border); }
+.murarka-col-oi    { border-bottom: 1px solid var(--border); }
+.murarka-col-entry { border-bottom: 1px solid var(--border); }
+.murarka-col-pcr .mz-zone-pills { flex-direction: row !important; gap: 4px; }
+/* Mobile font boosts */
+#mz-imbalance-ratio { font-size: 28px; }
+#murarka-entry-label { font-size: 11px; }
+#mz-zone-label { font-size: 10px; }
 
-/* ═══════════════════════════════════════════════════════
-   TABLET  (600px – 899px)
-═══════════════════════════════════════════════════════ */
+/* Tablet (≥ 600px): 2×2 grid */
 @media (min-width: 600px) and (max-width: 899px) {
-  /* Murarka: 2×2 grid on tablet */
   .murarka-body {
     grid-template-columns: 1fr 1fr;
     grid-template-rows: auto auto;
-    min-height: unset;
   }
-  .murarka-divider { display: none; }
-  .murarka-col-pcr   { grid-column: 1; grid-row: 1; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); }
-  .murarka-col-oi    { grid-column: 2; grid-row: 1; border-bottom: 1px solid var(--border); }
-  .murarka-col-entry { grid-column: 1; grid-row: 2; border-right: 1px solid var(--border); }
-  .murarka-col-table { grid-column: 2; grid-row: 2; }
+  .murarka-col-pcr   { grid-column:1; grid-row:1; border-bottom:1px solid var(--border); border-right:1px solid var(--border); }
+  .murarka-col-oi    { grid-column:2; grid-row:1; border-bottom:1px solid var(--border); border-right:none; }
+  .murarka-col-entry { grid-column:1; grid-row:2; border-bottom:none; border-right:1px solid var(--border); }
+  .murarka-col-table { grid-column:2; grid-row:2; border-bottom:none; }
+  .murarka-divider   { display: none; }
+  .murarka-col-pcr .mz-zone-pills { flex-direction: column !important; }
 
-  /* Better spacing on tablet */
   .ind-grid { grid-template-columns: repeat(3, 1fr); }
   .mtf-grid { grid-template-columns: repeat(3, 1fr); }
   .pcr-row  { grid-template-columns: repeat(4, 1fr); }
   .pnl-grid { grid-template-columns: repeat(4, 1fr); }
   .suggest-grid { grid-template-columns: repeat(4, 1fr); }
-}
-
-/* ═══════════════════════════════════════════════════════
-   MOBILE  (< 600px)  — stack Murarka vertically
-═══════════════════════════════════════════════════════ */
-@media (max-width: 599px) {
-  .murarka-body {
-    grid-template-columns: 1fr;
-    grid-template-rows: unset;
-    min-height: unset;
-  }
-  .murarka-divider { display: none; }
-  .murarka-col-pcr   { border-bottom: 1px solid var(--border); }
-  .murarka-col-oi    { border-bottom: 1px solid var(--border); }
-  .murarka-col-entry { border-bottom: 1px solid var(--border); }
-  /* PCR zone pills horizontal on mobile */
-  .murarka-col-pcr .mz-zone-pills {
-    flex-direction: row !important;
-    gap: 4px;
-  }
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -263,16 +247,18 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
   .trade-form-grid { grid-template-columns: repeat(5, 1fr); }
   .result-grid-3 { grid-template-columns: repeat(4, 1fr); }
 
-  /* Murarka panel — force horizontal on desktop */
+  /* Murarka panel — force 4-column horizontal on desktop */
   .murarka-body {
-    grid-template-columns: auto 1px auto 1px auto 1px 1fr;
-    min-height: 80px;
+    grid-template-columns: 1fr 1px 1fr 1px 1fr 1px 1fr;
+    align-items: stretch;
+    min-height: 90px;
   }
-  .murarka-divider { display: block; }
+  .murarka-divider { display: block; background: var(--border); }
   .murarka-col-pcr, .murarka-col-oi, .murarka-col-entry, .murarka-col-table {
     border-bottom: none !important;
     border-right: none !important;
   }
+  .murarka-col-pcr .mz-zone-pills { flex-direction: column !important; }
 }
 
 @media (min-width: 1200px) {
@@ -424,18 +410,6 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 
   /* ── RSI dial bigger ── */
   .rsi-dial-val { font-size: 22px; }
-
-  /* ── Murarka panel on mobile — full width stacked columns ── */
-  #murarka-panel { margin: 0 8px 10px; }
-  .murarka-col-pcr, .murarka-col-oi, .murarka-col-entry, .murarka-col-table {
-    padding: 10px 12px !important;
-    min-width: unset !important;
-  }
-  .murarka-col-pcr .mz-zone-pills {
-    flex-direction: row !important;
-  }
-  #mz-imbalance-ratio { font-size: 28px !important; }
-  #murarka-entry-label { font-size: 11px !important; }
 }
 
 /* PRICE */
@@ -585,6 +559,12 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .rsi-dial-zone.ob{background:rgba(255,34,68,0.15);color:var(--red);border:1px solid rgba(255,34,68,0.3);}
 .rsi-dial-zone.os{background:rgba(0,170,255,0.15);color:var(--blue);border:1px solid rgba(0,170,255,0.3);}
 .rsi-dial-zone.neut{background:rgba(255,187,0,0.12);color:var(--amber);border:1px solid rgba(255,187,0,0.25);}
+/* ── RSI 3-meter row ── */
+.rsi-meters-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:2px;}
+.rsi-mini-card{display:flex;flex-direction:column;align-items:center;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:8px;padding:8px 4px 6px;}
+.rsi-mini-label{font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:2px;color:var(--dim);margin-bottom:4px;}
+.rsi-mini-val{font-size:14px !important;}
+.rsi-mini-zone{font-size:7px !important;padding:1px 6px !important;letter-spacing:1px !important;}
 /* MTF BADGE UPGRADE */
 .mtf-align-badge{padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;letter-spacing:0.5px;display:inline-flex;align-items:center;gap:4px;transition:all 0.3s;}
 .mtf-align-badge.full{background:rgba(0,255,136,0.12);color:var(--green);border:1px solid rgba(0,255,136,0.4);box-shadow:0 0 12px rgba(0,255,136,0.2);}
@@ -914,6 +894,33 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .an-tbl th{font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid rgba(0,200,255,0.1);text-align:left;background:rgba(10,37,64,0.5);position:sticky;top:0;z-index:1;}
 .an-tbl td{padding:6px 8px;border-bottom:1px solid rgba(0,200,255,0.05);font-family:var(--mono);font-size:9px;white-space:nowrap;}
 .an-tbl tr:hover td{background:rgba(0,200,255,0.04);}
+/* ── Analytics sticky header ─────────────────────────────────────────────── */
+.an-sticky-header{
+  position:sticky;
+  top:0;
+  z-index:50;
+  background:var(--bg1);
+  border-bottom:1px solid rgba(0,200,255,0.12);
+  backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);
+  box-shadow:0 4px 20px rgba(0,0,0,0.5);
+}
+.an-stats-row{
+  display:grid;
+  grid-template-columns:repeat(6,1fr);
+  gap:6px;
+  padding:0 10px 8px;
+}
+/* On mobile, stats wrap to 3+3 */
+@media(max-width:599px){
+  .an-stats-row{ grid-template-columns:repeat(3,1fr); gap:4px; padding:0 8px 8px; }
+  .an-sticky-header .an-val{ font-size:16px; }
+  .an-sticky-header .an-card{ padding:7px 8px; }
+}
+/* On tablet, 3 cols */
+@media(min-width:600px) and (max-width:899px){
+  .an-stats-row{ grid-template-columns:repeat(3,1fr); }
+}
 .an-badge{display:inline-block;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:700;}
 .an-badge.pass{background:rgba(0,255,136,0.12);color:var(--green);border:1px solid rgba(0,255,136,0.25);}
 .an-badge.fail{background:rgba(255,68,102,0.08);color:var(--red);border:1px solid rgba(255,68,102,0.15);}
@@ -1411,7 +1418,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div class="murarka-body">
 
         <!-- COL 1: PCR Zone -->
-        <div class="murarka-col-pcr" style="padding:8px 10px;display:flex;flex-direction:column;justify-content:space-between;min-width:100px;">
+        <div class="murarka-col-pcr" style="padding:10px 12px;display:flex;flex-direction:column;gap:6px;">
           <div style="font-size:7px;color:var(--dim);letter-spacing:1.2px;margin-bottom:5px;">PCR ZONE</div>
           <!-- 3 zone pills — vertical normally, horizontal on mobile via CSS -->
           <div class="mz-zone-pills" style="display:flex;flex-direction:column;gap:3px;flex:1;">
@@ -1435,7 +1442,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="murarka-divider"></div>
 
         <!-- COL 2: OI Imbalance -->
-        <div class="murarka-col-oi" style="padding:8px 10px;display:flex;flex-direction:column;justify-content:center;min-width:90px;">
+        <div class="murarka-col-oi" style="padding:10px 12px;display:flex;flex-direction:column;gap:4px;">
           <div style="font-size:7px;color:var(--dim);letter-spacing:1.2px;margin-bottom:4px;">OI IMBALANCE</div>
           <div style="font-size:7px;color:var(--dim);margin-bottom:6px;">ΔPuts ÷ ΔCalls</div>
           <div id="mz-imbalance-ratio" style="font-size:22px;font-weight:700;color:var(--amber);font-family:'Share Tech Mono',monospace;line-height:1;">--</div>
@@ -1449,7 +1456,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="murarka-divider"></div>
 
         <!-- COL 3: Murarka Entry Alert -->
-        <div class="murarka-col-entry" style="padding:8px 10px;display:flex;flex-direction:column;justify-content:center;min-width:110px;">
+        <div class="murarka-col-entry" style="padding:10px 12px;display:flex;flex-direction:column;gap:4px;">
           <div style="font-size:7px;color:var(--dim);letter-spacing:1.2px;margin-bottom:4px;">ENTRY SETUP</div>
           <div id="murarka-entry-wrap" style="flex:1;display:flex;flex-direction:column;justify-content:center;">
             <div id="murarka-entry-label" style="font-size:9px;font-weight:700;color:var(--dim);line-height:1.4;">No Murarka setup</div>
@@ -1461,7 +1468,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="murarka-divider"></div>
 
         <!-- COL 4: Strike ΔOI Table -->
-        <div class="murarka-col-table" style="padding:8px 10px;">
+        <div class="murarka-col-table" style="padding:10px 12px;">
           <div style="font-size:7px;color:var(--dim);letter-spacing:1.2px;margin-bottom:5px;">STRIKE ΔOI <span style="font-weight:400;">(Autotrender)</span></div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div>
@@ -1598,55 +1605,94 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 
   <div class="sec-label">INDICATORS</div>
   <div class="ind-grid">
-    <div class="ind-card" id="rsi-card" style="grid-column:1/-1;">
-      <div class="ind-label"><span>RSI (9)</span><span id="rsi-zone" style="font-size:8px;">--</span></div>
-      <div class="rsi-dial-wrap">
-        <svg class="rsi-dial-svg" width="130" height="72" viewBox="0 0 130 72">
-          <!-- Track -->
+    <!-- ── RSI Meters: 3 individual dials for 5m / 15m / 1h ── -->
+    <div class="ind-card rsi-multi-wrap" id="rsi-card" style="grid-column:1/-1;">
+      <div class="ind-label" style="margin-bottom:6px;">
+        <span>RSI (9)</span>
+        <span id="rsi-multi-signal" style="font-size:9px;font-weight:700;font-family:'Orbitron',monospace;">--</span>
+      </div>
+      <!-- hidden legacy element so JS that reads rsi-val / rsi-dial-zone / rsi-needle-g doesn't break -->
+      <div style="display:none;">
+        <div id="rsi-val">--</div>
+        <div id="rsi-dial-zone" class="rsi-dial-zone neut">NEUTRAL</div>
+        <g id="rsi-needle-g"></g>
+        <div id="rsi-zone">--</div>
+        <div id="candle-source-badge"></div>
+        <div id="rsi-1m-compare">--</div><div id="rsi-1m-zone">--</div>
+        <div id="rsi-5m-compare">--</div><div id="rsi-5m-zone">--</div>
+        <div id="rsi-15m-compare">--</div><div id="rsi-15m-zone">--</div>
+      </div>
+      <!-- 3 meters side by side -->
+      <div class="rsi-meters-row">
+
+        <!-- 5 MIN meter -->
+        <div class="rsi-mini-card" id="rsi-mini-5m">
+          <div class="rsi-mini-label">5 MIN</div>
+          <div class="rsi-dial-wrap" style="margin-top:0;">
+            <svg class="rsi-dial-svg" width="90" height="52" viewBox="0 0 130 72">
           <path d="M 10 65 A 55 55 0 0 1 120 65" fill="none" stroke="#1a3a5a" stroke-width="9" stroke-linecap="round"/>
-          <!-- Oversold zone 0-30 -->
           <path d="M 10 65 A 55 55 0 0 1 32.67 20.5" fill="none" stroke="#00aaff" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
-          <!-- Neutral zone 30-70 -->
           <path d="M 32.67 20.5 A 55 55 0 0 1 97.33 20.5" fill="none" stroke="#00ff88" stroke-width="9" stroke-linecap="round" opacity="0.35"/>
-          <!-- Overbought zone 70-100 -->
           <path d="M 97.33 20.5 A 55 55 0 0 1 120 65" fill="none" stroke="#ff2244" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
-          <!-- Tick at 30 -->
-          <line x1="37.4" y1="27" x2="28" y2="14" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
-          <!-- Tick at 70 -->
-          <line x1="92.6" y1="27" x2="102" y2="14" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
-          <!-- Needle group — rotate around center (65,65) -->
-          <g id="rsi-needle-g" class="rsi-needle" transform="rotate(-90, 65, 65)">
-            <line x1="65" y1="65" x2="65" y2="14" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+          <line x1="37.4" y1="27" x2="28" y2="14" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+          <line x1="92.6" y1="27" x2="102" y2="14" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+          <g id="rsi-needle-5m" class="rsi-needle" transform="rotate(-90, 65, 65)">
+            <line x1="65" y1="65" x2="65" y2="18" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
             <circle cx="65" cy="65" r="5" fill="white" opacity="0.9"/>
             <circle cx="65" cy="65" r="2.5" fill="#020508"/>
           </g>
         </svg>
-        <div class="rsi-dial-val" id="rsi-val" style="color:var(--amber);">--</div>
-        <div class="rsi-dial-zone neut" id="rsi-dial-zone">NEUTRAL</div>
-        <div id="candle-source-badge" style="font-size:9px;color:var(--dim);text-align:center;margin-top:3px;letter-spacing:0.5px;"></div>
-      </div>
-      <!-- Multi-TF RSI comparison row -->
-      <div style="display:flex;justify-content:space-around;margin-top:8px;padding-top:7px;border-top:1px solid var(--border);">
-        <div style="text-align:center;">
-          <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">1 MIN</div>
-          <div style="font-family:'Orbitron',monospace;font-size:13px;font-weight:700;" id="rsi-1m-compare">--</div>
-          <div style="font-size:8px;margin-top:1px;" id="rsi-1m-zone">--</div>
+            <div class="rsi-dial-val rsi-mini-val" id="rsi-mini-val-5m" style="color:var(--amber);">--</div>
+            <div class="rsi-dial-zone neut rsi-mini-zone" id="rsi-mini-zone-5m">NEUTRAL</div>
+          </div>
         </div>
-        <div style="text-align:center;">
-          <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">5 MIN</div>
-          <div style="font-family:'Orbitron',monospace;font-size:13px;font-weight:700;" id="rsi-5m-compare">--</div>
-          <div style="font-size:8px;margin-top:1px;" id="rsi-5m-zone">--</div>
+
+        <!-- 15 MIN meter -->
+        <div class="rsi-mini-card" id="rsi-mini-15m">
+          <div class="rsi-mini-label">15 MIN</div>
+          <div class="rsi-dial-wrap" style="margin-top:0;">
+            <svg class="rsi-dial-svg" width="90" height="52" viewBox="0 0 130 72">
+          <path d="M 10 65 A 55 55 0 0 1 120 65" fill="none" stroke="#1a3a5a" stroke-width="9" stroke-linecap="round"/>
+          <path d="M 10 65 A 55 55 0 0 1 32.67 20.5" fill="none" stroke="#00aaff" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
+          <path d="M 32.67 20.5 A 55 55 0 0 1 97.33 20.5" fill="none" stroke="#00ff88" stroke-width="9" stroke-linecap="round" opacity="0.35"/>
+          <path d="M 97.33 20.5 A 55 55 0 0 1 120 65" fill="none" stroke="#ff2244" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
+          <line x1="37.4" y1="27" x2="28" y2="14" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+          <line x1="92.6" y1="27" x2="102" y2="14" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+          <g id="rsi-needle-15m" class="rsi-needle" transform="rotate(-90, 65, 65)">
+            <line x1="65" y1="65" x2="65" y2="18" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+            <circle cx="65" cy="65" r="5" fill="white" opacity="0.9"/>
+            <circle cx="65" cy="65" r="2.5" fill="#020508"/>
+          </g>
+        </svg>
+            <div class="rsi-dial-val rsi-mini-val" id="rsi-mini-val-15m" style="color:var(--amber);">--</div>
+            <div class="rsi-dial-zone neut rsi-mini-zone" id="rsi-mini-zone-15m">NEUTRAL</div>
+          </div>
         </div>
-        <div style="text-align:center;">
-          <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">15 MIN</div>
-          <div style="font-family:'Orbitron',monospace;font-size:13px;font-weight:700;" id="rsi-15m-compare">--</div>
-          <div style="font-size:8px;margin-top:1px;" id="rsi-15m-zone">--</div>
+
+        <!-- 1 HR meter -->
+        <div class="rsi-mini-card" id="rsi-mini-1h">
+          <div class="rsi-mini-label">1 HR</div>
+          <div class="rsi-dial-wrap" style="margin-top:0;">
+            <svg class="rsi-dial-svg" width="90" height="52" viewBox="0 0 130 72">
+          <path d="M 10 65 A 55 55 0 0 1 120 65" fill="none" stroke="#1a3a5a" stroke-width="9" stroke-linecap="round"/>
+          <path d="M 10 65 A 55 55 0 0 1 32.67 20.5" fill="none" stroke="#00aaff" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
+          <path d="M 32.67 20.5 A 55 55 0 0 1 97.33 20.5" fill="none" stroke="#00ff88" stroke-width="9" stroke-linecap="round" opacity="0.35"/>
+          <path d="M 97.33 20.5 A 55 55 0 0 1 120 65" fill="none" stroke="#ff2244" stroke-width="9" stroke-linecap="round" opacity="0.65"/>
+          <line x1="37.4" y1="27" x2="28" y2="14" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+          <line x1="92.6" y1="27" x2="102" y2="14" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+          <g id="rsi-needle-1h" class="rsi-needle" transform="rotate(-90, 65, 65)">
+            <line x1="65" y1="65" x2="65" y2="18" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+            <circle cx="65" cy="65" r="5" fill="white" opacity="0.9"/>
+            <circle cx="65" cy="65" r="2.5" fill="#020508"/>
+          </g>
+        </svg>
+            <div class="rsi-dial-val rsi-mini-val" id="rsi-mini-val-1h" style="color:var(--amber);">--</div>
+            <div class="rsi-dial-zone neut rsi-mini-zone" id="rsi-mini-zone-1h">NEUTRAL</div>
+          </div>
         </div>
-        <div style="text-align:center;">
-          <div style="font-size:8px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">SIGNAL</div>
-          <div style="font-family:'Orbitron',monospace;font-size:9px;font-weight:700;margin-top:4px;" id="rsi-multi-signal">--</div>
-        </div>
-      </div>
+
+      </div><!-- end rsi-meters-row -->
+      <div id="candle-source-badge-vis" style="font-size:8px;color:var(--dim);text-align:center;margin-top:4px;letter-spacing:0.5px;"></div>
     </div>
     <div class="ind-card" id="vwap-card">
   <div class="ind-label"><span>VWAP</span><span id="vwap-pos" style="font-size:8px;">--</span></div>
@@ -2462,66 +2508,71 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 <!-- ═══════════════════════════════════ -->
 <div class="panel" id="panel-analytics">
 
-  <!-- Top bar: date filter + refresh -->
-  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px 0;flex-wrap:wrap;gap:6px;">
-    <div style="display:flex;gap:5px;align-items:center;">
-      <span style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;">DATE:</span>
-      <button class="an-pill active-date" id="and-today" onclick="anSetDate('today')">TODAY</button>
-      <button class="an-pill" id="and-week"  onclick="anSetDate('week')">THIS WEEK</button>
-      <button class="an-pill" id="and-all"   onclick="anSetDate('all')">ALL</button>
-      <span style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;margin-left:8px;">SIGNAL:</span>
-      <button class="an-pill active-all" id="anf-all"  onclick="anSetFilter('all')">ALL</button>
-      <button class="an-pill" id="anf-call" onclick="anSetFilter('call')">CALL</button>
-      <button class="an-pill" id="anf-put"  onclick="anSetFilter('put')">PUT</button>
-      <button class="an-pill" id="anf-gate" onclick="anSetFilter('gate')">GATE✓</button>
-      <select id="an-limit" onchange="loadAnalytics()" style="background:var(--bg3);border:1px solid rgba(0,200,255,0.15);color:#cde8ff;font-family:var(--mono);font-size:9px;padding:3px 6px;border-radius:4px;outline:none;">
-        <option value="50">50</option>
-        <option value="100" selected>100</option>
-        <option value="200">200</option>
-      </select>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;">
-      <span id="an-refresh-badge" style="font-family:var(--mono);font-size:8px;color:#5a7a8a;letter-spacing:1px;"></span>
-      <span id="an-status" style="font-family:var(--mono);font-size:8px;color:#5a7a8a;letter-spacing:1px;"></span>
-      <button onclick="loadAnalytics(true)" style="font-family:var(--mono);font-size:9px;padding:3px 10px;border:1px solid rgba(0,200,255,0.3);background:rgba(0,200,255,0.07);color:var(--blue);border-radius:4px;cursor:pointer;letter-spacing:1px;">⟳ REFRESH</button>
-    </div>
-  </div>
+  <!-- ── FROZEN HEADER — filters + stats always visible while scrolling ── -->
+  <div class="an-sticky-header">
 
-  <!-- Stats row -->
-  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;padding:8px 10px 0;">
-    <div class="an-card">
-      <div class="an-label">TOTAL SIGNALS</div>
-      <div class="an-val blue" id="an-v-total">—</div>
-      <div class="an-sub">logged in DB</div>
+    <!-- Filter bar -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px 6px;flex-wrap:wrap;gap:6px;">
+      <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+        <span style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;">DATE:</span>
+        <button class="an-pill active-date" id="and-today" onclick="anSetDate('today')">TODAY</button>
+        <button class="an-pill" id="and-week"  onclick="anSetDate('week')">THIS WEEK</button>
+        <button class="an-pill" id="and-all"   onclick="anSetDate('all')">ALL</button>
+        <span style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;margin-left:6px;">SIGNAL:</span>
+        <button class="an-pill active-all" id="anf-all"  onclick="anSetFilter('all')">ALL</button>
+        <button class="an-pill" id="anf-call" onclick="anSetFilter('call')">CALL</button>
+        <button class="an-pill" id="anf-put"  onclick="anSetFilter('put')">PUT</button>
+        <button class="an-pill" id="anf-gate" onclick="anSetFilter('gate')">GATE✓</button>
+        <select id="an-limit" onchange="loadAnalytics()" style="background:var(--bg3);border:1px solid rgba(0,200,255,0.15);color:#cde8ff;font-family:var(--mono);font-size:9px;padding:3px 6px;border-radius:4px;outline:none;">
+          <option value="50">50</option>
+          <option value="100" selected>100</option>
+          <option value="200">200</option>
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span id="an-refresh-badge" style="font-family:var(--mono);font-size:8px;color:#5a7a8a;letter-spacing:1px;"></span>
+        <span id="an-status" style="font-family:var(--mono);font-size:8px;color:#5a7a8a;letter-spacing:1px;"></span>
+        <button onclick="loadAnalytics(true)" style="font-family:var(--mono);font-size:9px;padding:3px 10px;border:1px solid rgba(0,200,255,0.3);background:rgba(0,200,255,0.07);color:var(--blue);border-radius:4px;cursor:pointer;letter-spacing:1px;">⟳ REFRESH</button>
+      </div>
     </div>
-    <div class="an-card good">
-      <div class="an-label">GATE PASSED</div>
-      <div class="an-val green" id="an-v-gate">—</div>
-      <div class="an-sub" id="an-v-gatepct">of total</div>
-    </div>
-    <div class="an-card">
-      <div class="an-label">BUY CALL</div>
-      <div class="an-val green" id="an-v-calls">—</div>
-      <div class="an-sub" id="an-v-callpct">signals</div>
-    </div>
-    <div class="an-card bad">
-      <div class="an-label">BUY PUT</div>
-      <div class="an-val red" id="an-v-puts">—</div>
-      <div class="an-sub" id="an-v-putpct">signals</div>
-    </div>
-    <div class="an-card warn2">
-      <div class="an-label">AVG CONFIDENCE</div>
-      <div class="an-val warn" id="an-v-conf">—</div>
-      <div class="an-sub">gated signals</div>
-    </div>
-    <div class="an-card">
-      <div class="an-label">MTF ALIGNED</div>
-      <div class="an-val blue" id="an-v-mtf">—</div>
-      <div class="an-sub">of gated</div>
-    </div>
-  </div>
 
-  <!-- Last Signal highlight -->
+    <!-- Stats row — always visible -->
+    <div class="an-stats-row">
+      <div class="an-card">
+        <div class="an-label">TOTAL</div>
+        <div class="an-val blue" id="an-v-total">—</div>
+        <div class="an-sub">signals</div>
+      </div>
+      <div class="an-card good">
+        <div class="an-label">GATE ✓</div>
+        <div class="an-val green" id="an-v-gate">—</div>
+        <div class="an-sub" id="an-v-gatepct">of total</div>
+      </div>
+      <div class="an-card">
+        <div class="an-label">BUY CALL</div>
+        <div class="an-val green" id="an-v-calls">—</div>
+        <div class="an-sub" id="an-v-callpct">signals</div>
+      </div>
+      <div class="an-card bad">
+        <div class="an-label">BUY PUT</div>
+        <div class="an-val red" id="an-v-puts">—</div>
+        <div class="an-sub" id="an-v-putpct">signals</div>
+      </div>
+      <div class="an-card warn2">
+        <div class="an-label">AVG CONF</div>
+        <div class="an-val warn" id="an-v-conf">—</div>
+        <div class="an-sub">gated</div>
+      </div>
+      <div class="an-card">
+        <div class="an-label">MTF ✓</div>
+        <div class="an-val blue" id="an-v-mtf">—</div>
+        <div class="an-sub">of gated</div>
+      </div>
+    </div>
+
+  </div><!-- end an-sticky-header -->
+
+  <!-- Last Signal highlight — scrolls with content -->
   <div style="padding:6px 10px 0;">
     <div id="an-last-signal" style="display:none;border-radius:8px;padding:8px 14px;border:1px solid rgba(0,255,136,0.2);background:rgba(0,255,136,0.05);font-family:var(--mono);font-size:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     </div>
@@ -3278,6 +3329,16 @@ function renderDashboard(s) {
         sigEl.style.color = bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--amber)';
       } else { sigEl.textContent = '--'; sigEl.style.color = 'var(--dim)'; }
     }
+
+    // ── Update the 3 individual RSI mini meters ───────────────────────────────
+    const rsi1hV = s.mtf?.tf1h?.rsi ?? null;
+    updateRsiMiniMeter('5m',  rsi5mV);
+    updateRsiMiniMeter('15m', rsi15mV);
+    updateRsiMiniMeter('1h',  rsi1hV);
+
+    // Candle source badge (visible version)
+    const srcVis = document.getElementById('candle-source-badge-vis');
+    if (srcVis && s.candleSource) srcVis.textContent = s.candleSource === 'yahoo' ? 'Yahoo Finance' : s.candleSource === 'angel' ? 'AngelOne WS ✓' : s.candleSource;
   }
 
   // VWAP
@@ -4515,6 +4576,37 @@ function updateMurarkaPanel(s) {
     }).join('');
   } else if (peTableEl) {
     peTableEl.innerHTML = '<div style="color:var(--dim);font-size:8px;">Awaiting data…</div>';
+  }
+}
+
+// ── RSI Mini Meter updater — drives 5m / 15m / 1h individual dials ──────────
+function updateRsiMiniMeter(tf, val) {
+  const needle = document.getElementById('rsi-needle-' + tf);
+  const valEl  = document.getElementById('rsi-mini-val-' + tf);
+  const zoneEl = document.getElementById('rsi-mini-zone-' + tf);
+  const card   = document.getElementById('rsi-mini-' + tf);
+
+  const zone  = val == null ? 'NEUTRAL' : val < 30 ? 'OVERSOLD' : val > 70 ? 'OVERBOUGHT' : val > 55 ? 'BULLISH' : val < 45 ? 'BEARISH' : 'NEUTRAL';
+  const color = val == null ? 'var(--dim)' : val < 30 ? 'var(--blue)' : val > 70 ? 'var(--red)' : val > 55 ? 'var(--green)' : val < 45 ? 'var(--red)' : 'var(--amber)';
+  const cls   = val == null ? 'neut' : val < 30 ? 'os' : val > 70 ? 'ob' : 'neut';
+
+  if (needle && val != null) {
+    const angle = ((val / 100) * 180) - 90;
+    needle.setAttribute('transform', `rotate(${angle}, 65, 65)`);
+  }
+  if (valEl) {
+    valEl.textContent  = val != null ? val.toFixed(1) : '--';
+    valEl.style.color  = color;
+  }
+  if (zoneEl) {
+    zoneEl.textContent = zone;
+    zoneEl.className   = 'rsi-dial-zone rsi-mini-zone ' + cls;
+  }
+  // Glow border on card based on zone
+  if (card) {
+    const borderCol = val == null ? 'var(--border)' : val < 30 ? 'rgba(0,170,255,0.4)' : val > 70 ? 'rgba(255,34,68,0.4)' : val > 55 ? 'rgba(0,255,136,0.3)' : val < 45 ? 'rgba(255,34,68,0.25)' : 'var(--border)';
+    card.style.borderColor  = borderCol;
+    card.style.boxShadow    = val != null && (val < 30 || val > 70) ? `0 0 10px ${borderCol}` : 'none';
   }
 }
 

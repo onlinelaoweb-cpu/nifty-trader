@@ -32,9 +32,9 @@ const { RSI, EMA, VWAP } = require('technicalindicators');
 const { getCandleHistory, getSessionCandles }    = require('./indicators');
 
 // ── Per-TF minimum candle thresholds ─────────────────────────────────────────
-// RSI(14) warmup = 15, EMA21 warmup = 22, ADX(14) warmup = 30
-// We use 30 as the universal minimum — if fewer bars are available after all
-// fallbacks, the TF signal is marked INSUFFICIENT and excluded from voting.
+// RSI(9) warmup = 10, EMA21 warmup = 22, ADX(14) warmup = 30
+// Switched RSI(14)→RSI(9): matches 1m indicator, less lag, more reactive on short TFs.
+// MIN_BARS driven by EMA21(22) and ADX(30) — RSI(9) needs fewer so no change needed.
 const MIN_BARS = {
     '5m' : 22,   // 5m: 22 bars = 110 min. Achievable from memory within ~2h of open.
     '15m': 30,   // 15m: 30 bars = 7.5h. Needs Yahoo fallback for most of the session.
@@ -247,11 +247,12 @@ function calcIndicators(candles, tfLabel) {
     const closes = candles.map(c => c.close);
     const close  = closes[closes.length - 1];
 
-    // RSI(14) — needs at least 15 closes
+    // RSI(9) — FIX: changed from RSI(14) to RSI(9) to match 1m indicator and reduce lag.
+    // RSI(9) needs at least 10 closes (9+1). Faster response to recent price action.
     let rsi = null;
-    if (closes.length >= 15) {
+    if (closes.length >= 10) {
         try {
-            const r = RSI.calculate({ values: closes, period: 14 });
+            const r = RSI.calculate({ values: closes, period: 9 });
             rsi = r.length > 0 ? parseFloat(r[r.length - 1].toFixed(2)) : null;
         } catch (_) {}
     }
@@ -305,7 +306,10 @@ function calcIndicators(candles, tfLabel) {
     // because the slow 1h ADX hasn't caught up yet.
     // For 5m and 15m TFs we keep the strict 20 threshold (short-TF ADX responds faster).
     // The tf label is passed as the second argument to calcIndicators().
-    const adxFloor = (tfLabel === '1h') ? 17 : 20;
+    // ADX floor thresholds — relaxed to reduce signal suppression on trending days:
+    //   1h  TF: 15 (was 17) — 1h ADX is very slow, even strong trends start at 12-15
+    //   5m/15m: 18 (was 20) — short TF ADX responds faster, 18 still filters pure chop
+    const adxFloor = (tfLabel === '1h') ? 15 : 18;
     const adxValid = adxVal === null || adxVal >= adxFloor;
 
     // ── Bull / bear vote ──────────────────────────────
@@ -430,8 +434,8 @@ async function analyzeMultiTimeframe() {
         const bars = tf.barCount ?? '?';
         if (tf.signal === 'INSUFFICIENT') {
             console.log(`⚠️ MTF ${tfLabels[i]}: INSUFFICIENT data (${bars} bars < ${MIN_BARS[tfLabels[i]]} min) — excluded from vote`);
-        } else if (tf.adx !== null && tf.adx < (tfLabels[i] === '1h' ? 17 : 20)) {
-            console.log(`⚠️ MTF ${tfLabels[i]}: ADX ${tf.adx} < ${tfLabels[i] === '1h' ? 17 : 20} → NEUTRAL override`);
+        } else if (tf.adx !== null && tf.adx < (tfLabels[i] === '1h' ? 15 : 18)) {
+            console.log(`⚠️ MTF ${tfLabels[i]}: ADX ${tf.adx} < ${tfLabels[i] === '1h' ? 15 : 18} → NEUTRAL override`);
         }
     });
 
