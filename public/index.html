@@ -19,13 +19,54 @@
   --amber:#ffbb00;--blue:#00aaff;--purple:#aa88ff;
   --accent:#aa88ff;
   --dim:#7a9ab8;--text:#c8e0f4;--bright:#ffffff;
-  --card-shadow:0 4px 24px rgba(0,0,0,0.65);
+  /* Layered shadow: tight dark base + wide soft halo = material lifts off screen */
+  --card-shadow:0 2px 4px rgba(0,0,0,0.8), 0 8px 24px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.05) inset;
   --card-radius:12px;
   --glow-green:0 0 20px rgba(0,255,136,0.25);
   --glow-red:0 0 20px rgba(255,34,68,0.25);
   --glow-amber:0 0 20px rgba(255,187,0,0.2);
+  /* Elevation tiers */
+  --elev1:0 1px 3px rgba(0,0,0,0.9), 0 4px 12px rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.04) inset;
+  --elev2:0 2px 6px rgba(0,0,0,0.85), 0 12px 32px rgba(0,0,0,0.55), 0 1px 0 rgba(255,255,255,0.06) inset;
+  --elev3:0 4px 10px rgba(0,0,0,0.9), 0 20px 48px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.08) inset;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
+/* ── DEPTH & ELEVATION ───────────────────────────────────────────────────────
+   Everything uses layered shadows + inner top-edge highlight to lift content
+   off the dark background. Background is recessed; cards float above it.
+─────────────────────────────────────────────────────────────────────────── */
+
+/* Cards float above background */
+.ind-card,.pv-card,.sr-card,.checklist-card,.mtf-header,.strike-banner{
+  box-shadow:var(--elev2);
+  position:relative;
+}
+/* Signal card gets highest elevation */
+.signal-card{
+  box-shadow:var(--elev3) !important;
+  transform:translateZ(0);
+}
+/* Price value — prominent text lift */
+.price-value{
+  text-shadow:0 0 30px rgba(255,255,255,0.15), 0 2px 8px rgba(0,0,0,0.9);
+  filter:drop-shadow(0 2px 6px rgba(0,0,0,0.7));
+}
+/* Signal label text */
+.signal-badge{
+  text-shadow:0 0 18px currentColor, 0 2px 8px rgba(0,0,0,0.9);
+}
+/* Section/panel titles */
+.section-title,.panel-title,.sec-label{
+  text-shadow:0 1px 4px rgba(0,0,0,0.8);
+}
+/* Indicator values */
+.ind-val,.ind-value{
+  text-shadow:0 0 10px currentColor, 0 1px 4px rgba(0,0,0,0.7);
+}
+/* Header floats above everything */
+.header{
+  box-shadow:0 4px 24px rgba(0,0,0,0.7), 0 1px 0 rgba(255,255,255,0.04) inset !important;
+}
 /* Jet shiny premium black: deep black base with a subtle glossy radial sheen */
 body{
   background:
@@ -40,6 +81,61 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;height:140px;backgrou
 /* ── Black & White mode: full-app grayscale filter ── */
 html.vn-bw{filter:grayscale(1) contrast(1.08);}
 html.vn-bw #vn-splash,html.vn-bw #vn-login{filter:none;}
+
+/* ═══════════════════════════════════════════════════
+   DAY THEME  (html.vn-day)
+   Only surfaces/borders/text change — all signal
+   colors (green/red/amber/blue/purple) stay intact.
+═══════════════════════════════════════════════════ */
+html.vn-day{
+  --bg0:#f0f2f5;--bg1:#ffffff;--bg2:#e8ecf0;--bg3:#dde2e8;
+  --border:#c0ccd8;--dim:#607080;--text:#1a2530;--bright:#000000;
+  /* Light-mode elevation: soft bottom shadow + tight top highlight */
+  --card-shadow:0 1px 0 rgba(255,255,255,0.9) inset, 0 2px 8px rgba(0,0,0,0.1), 0 8px 24px rgba(0,0,0,0.08);
+  --elev1:0 1px 0 rgba(255,255,255,0.8) inset, 0 2px 6px rgba(0,0,0,0.08), 0 4px 16px rgba(0,0,0,0.06);
+  --elev2:0 1px 0 rgba(255,255,255,0.9) inset, 0 2px 8px rgba(0,0,0,0.1), 0 8px 24px rgba(0,0,0,0.1);
+  --elev3:0 1px 0 rgba(255,255,255,1) inset, 0 4px 12px rgba(0,0,0,0.12), 0 16px 40px rgba(0,0,0,0.12);
+  --glow-green:0 0 12px rgba(0,200,100,0.2);
+  --glow-red:0 0 12px rgba(220,30,60,0.2);
+  --glow-amber:0 0 12px rgba(200,140,0,0.15);
+}
+/* Day body — clean white gradient */
+html.vn-day body{
+  background:
+    radial-gradient(ellipse 120% 60% at 50% -10%, rgba(0,0,0,0.03) 0%, transparent 45%),
+    linear-gradient(180deg,#e8ecf2 0%,#f4f6f9 100%);
+  background-color:#f0f2f5;
+}
+/* Kill the night scanline overlay and sheen strip in day mode */
+html.vn-day body::before{display:none;}
+html.vn-day body::after{display:none;}
+/* Header */
+html.vn-day .header{background:linear-gradient(180deg,#ffffff 0%,#f5f7fa 100%);border-bottom:1px solid #c8d4e0;box-shadow:0 2px 12px rgba(0,0,0,0.08);}
+/* Bottom tabs */
+html.vn-day .bottom-tabs{background:rgba(248,250,252,0.97);border-top:1px solid #c8d4e0;}
+html.vn-day .btab{color:#8090a0;}
+/* Desktop sidebar */
+html.vn-day #desktop-sidebar{background:linear-gradient(180deg,#ffffff 0%,#f0f4f8 100%);border-right:1px solid #c8d4e0;}
+html.vn-day #desktop-content{background:#f0f2f5;}
+/* Cards and sections */
+html.vn-day .signal-card,html.vn-day .ind-card,html.vn-day .card{background:#ffffff;border-color:#c8d4e0;}
+html.vn-day .price-section{background:linear-gradient(150deg,#ffffff 0%,#f0f4f8 60%,#e8ecf2 100%);}
+html.vn-day .price-section::before{background:radial-gradient(ellipse at 50% 0%,rgba(0,170,255,0.06) 0%,transparent 70%);}
+/* Icon buttons */
+html.vn-day .icon-btn{background:rgba(200,212,224,0.5);border-color:#b0c0d0;color:#607080;}
+html.vn-day .icon-btn.active{background:rgba(0,200,100,0.1);border-color:var(--green);}
+/* Section titles / panel text */
+html.vn-day .section-title,html.vn-day .panel-title{color:#2a3a4a;}
+/* Murarka dividers */
+html.vn-day .murarka-col-pcr,html.vn-day .murarka-col-oi,html.vn-day .murarka-col-entry{border-color:#c8d4e0;}
+html.vn-day .murarka-divider{background:#c8d4e0;}
+/* Splash/login always stay dark (brand identity) */
+html.vn-day #vn-splash,html.vn-day #vn-login{background:#020508 !important;}
+/* Day mode — remove dark-mode glows from text, use crisp drop shadows instead */
+html.vn-day .price-value{text-shadow:0 1px 3px rgba(0,0,0,0.2);filter:none;}
+html.vn-day .signal-badge{text-shadow:0 1px 2px rgba(0,0,0,0.15);}
+html.vn-day .ind-val,.vn-day .ind-value{text-shadow:0 1px 2px rgba(0,0,0,0.1);}
+html.vn-day .section-title,.vn-day .panel-title,.vn-day .sec-label{text-shadow:none;}
 body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.06) 2px,rgba(0,0,0,0.06) 4px);pointer-events:none;z-index:999;}
 /* ── Custom Splash Screen ── */
 #vn-splash{position:fixed;inset:0;background:#020508;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;transition:opacity 0.6s ease,visibility 0.6s ease;}
@@ -1156,7 +1252,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="logo"><div class="logo-dot"></div>VARDAAN NIFTY AI</div>
     <div class="header-controls">
       <span id="sse-dot" title="Connecting..." style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#ffcc00;margin-right:6px;vertical-align:middle;box-shadow:0 0 5px #ffcc00;transition:background 0.4s,box-shadow 0.4s;"></span><span id="live-clock">--:--:--</span>
-      <button class="icon-btn" id="bw-btn" onclick="toggleBW()" title="Black & White mode">🎨</button>
+      <button class="icon-btn" id="theme-btn" onclick="toggleDayNight()" title="Day / Night theme">🌙</button>
       <button class="icon-btn" id="sound-btn" onclick="toggleSound()">🔕</button>
     </div>
   </div>
@@ -5867,19 +5963,20 @@ function toggleSound() {
   }
 }
 
-// ─── BLACK & WHITE MODE ──────────────────────────────────
-function toggleBW() {
-  const isBW = document.documentElement.classList.toggle('vn-bw');
-  localStorage.setItem('vn_bw_mode', isBW ? '1' : '0');
-  const btn = document.getElementById('bw-btn');
-  if (btn) btn.classList.toggle('active', isBW);
+// ─── DAY / NIGHT THEME ───────────────────────────────
+function toggleDayNight() {
+  const isDay = document.documentElement.classList.toggle('vn-day');
+  localStorage.setItem('vn_theme', isDay ? 'day' : 'night');
+  const btn = document.getElementById('theme-btn');
+  if (btn) { btn.textContent = isDay ? '☀️' : '🌙'; btn.title = isDay ? 'Switch to Night' : 'Switch to Day'; }
 }
-(function initBW(){
-  if (localStorage.getItem('vn_bw_mode') === '1') {
-    document.documentElement.classList.add('vn-bw');
+(function initTheme(){
+  const saved = localStorage.getItem('vn_theme');
+  if (saved === 'day') {
+    document.documentElement.classList.add('vn-day');
     document.addEventListener('DOMContentLoaded', () => {
-      const btn = document.getElementById('bw-btn');
-      if (btn) btn.classList.add('active');
+      const btn = document.getElementById('theme-btn');
+      if (btn) { btn.textContent = '☀️'; btn.title = 'Switch to Night'; }
     });
   }
 })();
