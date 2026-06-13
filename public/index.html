@@ -136,6 +136,123 @@ html.vn-day .price-value{text-shadow:0 1px 3px rgba(0,0,0,0.2);filter:none;}
 html.vn-day .signal-badge{text-shadow:0 1px 2px rgba(0,0,0,0.15);}
 html.vn-day .ind-val,.vn-day .ind-value{text-shadow:0 1px 2px rgba(0,0,0,0.1);}
 html.vn-day .section-title,.vn-day .panel-title,.vn-day .sec-label{text-shadow:none;}
+
+/* ═══ DAY MODE: Comprehensive data visibility overrides ═══
+   All hardcoded dark-mode colors (#9ab8d0, #c8e0f4, #4a6a8a, etc.)
+   are invisible on white. These overrides enforce readable dark text. */
+
+/* --- Label & sublabel text (was #9ab8d0 / #a0c0d8) --- */
+html.vn-day .conf-label,
+html.vn-day .ind-label,
+html.vn-day .ind-sub,
+html.vn-day .mcb-sub,
+html.vn-day .wcard-label,
+html.vn-day .flow-field label,
+html.vn-day #flow-details,
+html.vn-day .fiidii-section label,
+html.vn-day .fiidii-row label,
+html.vn-day .fiidii-net-label,
+html.vn-day .sc-label,
+html.vn-day .fii-net-lbl,
+html.vn-day .fii-comb-lbl,
+html.vn-day .stock-wt,
+html.vn-day .global-bias-label,
+html.vn-day .gitem-name,
+html.vn-day #global-updated,
+html.vn-day .an-bar-label,
+html.vn-day .tool-field label,
+html.vn-day .res-sub,
+html.vn-day .greek-desc,
+html.vn-day .ps-note,
+html.vn-day .tool-note,
+html.vn-day .em-vote-reason,
+html.vn-day .suggest-reasoning,
+html.vn-day .suggest-rationale,
+html.vn-day .trade-item-row2,
+html.vn-day .guide-card p,
+html.vn-day .guide-rule-list li,
+html.vn-day .guide-checklist li.ok,
+html.vn-day .guide-checklist li.no,
+html.vn-day .money-mini-table td,
+html.vn-day .mtf-stats { color:#3a5060 !important; }
+
+/* --- Brighter data values (was #c8e0f4) --- */
+html.vn-day .status-pill,
+html.vn-day .cl-text,
+html.vn-day .mtf-rsi,
+html.vn-day .reason-row,
+html.vn-day .event-title-lbl,
+html.vn-day .ad-stats,
+html.vn-day .trend-row,
+html.vn-day .stock-header,
+html.vn-day .cal-title,
+html.vn-day .res-label { color:#1a2530 !important; }
+
+/* --- Tick/dim text (was #4a6a8a) --- */
+html.vn-day .conf-ticks,
+html.vn-day .dot-off,
+html.vn-day .chart-legend,
+html.vn-day .chart-btn { color:#607080 !important; }
+
+/* --- Placeholder text in inputs --- */
+html.vn-day .tf-input::placeholder,
+html.vn-day .exit-input::placeholder,
+html.vn-day .flow-input::placeholder,
+html.vn-day .tool-input::placeholder { color:#8090a0 !important; }
+
+/* --- Inline style overrides via attribute selector (JS-injected colors) --- */
+html.vn-day [style*="color:#9ab8d0"] { color:#3a5060 !important; }
+html.vn-day [style*="color:#c8e0f4"] { color:#1a2530 !important; }
+html.vn-day [style*="color:#a0c0d8"] { color:#3a5060 !important; }
+html.vn-day [style*="color:#4a6a8a"] { color:#607080 !important; }
+html.vn-day [style*="color:#7090a0"] { color:#3a5060 !important; }
+html.vn-day [style*="color:#6a8090"] { color:#3a5060 !important; }
+html.vn-day [style*="color:#8aa0b8"] { color:#3a5060 !important; }
+html.vn-day [style*="color:#b0c8d8"] { color:#3a5060 !important; }
+
+/* --- Cards: ensure border + shadow separation on white bg --- */
+html.vn-day .signal-card,
+html.vn-day .ind-card,
+html.vn-day .card,
+html.vn-day .add-trade-card {
+  background:#ffffff !important;
+  border:1px solid #c0ccd8 !important;
+  box-shadow:0 2px 8px rgba(0,0,0,0.08),0 1px 0 rgba(255,255,255,0.9) inset !important;
+}
+
+/* --- MTF cards (5MIN/15MIN/1HR) need visible borders --- */
+html.vn-day .mtf-card {
+  background:#f8fafc !important;
+  border:1px solid #b8c8d8 !important;
+  box-shadow:0 2px 6px rgba(0,0,0,0.07) !important;
+}
+
+/* --- RSI gauge / indicator cards --- */
+html.vn-day .rsi-card,
+html.vn-day .gauge-card {
+  background:#f5f8fb !important;
+  border:1px solid #b8c8d8 !important;
+}
+
+/* --- VWAP/EMA/VIX/ADX value display --- */
+html.vn-day .ind-val,
+html.vn-day .ind-value { color:#1a2530 !important; font-weight:700; }
+
+/* --- Price value — must be boldly visible --- */
+html.vn-day .price-value { color:#1a2530 !important; }
+
+/* --- Signal reasoning rows --- */
+html.vn-day .reason-icon { color:#3a5060 !important; }
+
+/* --- Dash/null placeholders ("--") --- */
+html.vn-day .price-value:empty::after,
+html.vn-day .ind-val:empty::after { color:#607080 !important; }
+
+/* --- Bottom tab active state readable in day --- */
+html.vn-day .btab.active { color:var(--green) !important; }
+html.vn-day .btab { color:#607080 !important; }
+
+/* ═══ End day visibility overrides ═══ */
 body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.06) 2px,rgba(0,0,0,0.06) 4px);pointer-events:none;z-index:999;}
 /* ── Custom Splash Screen ── */
 #vn-splash{position:fixed;inset:0;background:#020508;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;transition:opacity 0.6s ease,visibility 0.6s ease;}
