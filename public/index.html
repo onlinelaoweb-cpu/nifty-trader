@@ -14,19 +14,32 @@
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&family=Orbitron:wght@700;900&display=swap" rel="stylesheet"/>
 <style>
 :root{
-  --bg0:#010407;--bg1:#060d14;--bg2:#0a1520;--bg3:#0f1f30;
+  --bg0:#000000;--bg1:#050505;--bg2:#0a0a0c;--bg3:#101014;
   --border:#1a3a5a;--green:#00ff88;--red:#ff2244;
   --amber:#ffbb00;--blue:#00aaff;--purple:#aa88ff;
   --accent:#aa88ff;
   --dim:#7a9ab8;--text:#c8e0f4;--bright:#ffffff;
-  --card-shadow:0 4px 24px rgba(0,0,0,0.5);
+  --card-shadow:0 4px 24px rgba(0,0,0,0.65);
   --card-radius:12px;
   --glow-green:0 0 20px rgba(0,255,136,0.25);
   --glow-red:0 0 20px rgba(255,34,68,0.25);
   --glow-amber:0 0 20px rgba(255,187,0,0.2);
 }
 *{box-sizing:border-box;margin:0;padding:0;}
-body{background:var(--bg0);color:var(--text);font-family:'Rajdhani',sans-serif;min-height:100vh;padding-bottom:calc(80px + env(safe-area-inset-bottom, 0px));}
+/* Jet shiny premium black: deep black base with a subtle glossy radial sheen */
+body{
+  background:
+    radial-gradient(ellipse 120% 60% at 50% -10%, rgba(255,255,255,0.05) 0%, transparent 45%),
+    radial-gradient(ellipse 100% 50% at 80% 110%, rgba(0,255,136,0.04) 0%, transparent 50%),
+    linear-gradient(180deg,#020203 0%,#000000 45%,#000000 100%);
+  background-color:var(--bg0);
+  color:var(--text);font-family:'Rajdhani',sans-serif;min-height:100vh;padding-bottom:calc(80px + env(safe-area-inset-bottom, 0px));
+}
+/* Glossy top highlight strip for a premium piano-black sheen */
+body::after{content:'';position:fixed;top:0;left:0;right:0;height:140px;background:linear-gradient(180deg,rgba(255,255,255,0.045) 0%,rgba(255,255,255,0.015) 35%,transparent 100%);pointer-events:none;z-index:998;}
+/* ── Black & White mode: full-app grayscale filter ── */
+html.vn-bw{filter:grayscale(1) contrast(1.08);}
+html.vn-bw #vn-splash,html.vn-bw #vn-login{filter:none;}
 body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.06) 2px,rgba(0,0,0,0.06) 4px);pointer-events:none;z-index:999;}
 /* ── Custom Splash Screen ── */
 #vn-splash{position:fixed;inset:0;background:#020508;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;transition:opacity 0.6s ease,visibility 0.6s ease;}
@@ -1143,6 +1156,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="logo"><div class="logo-dot"></div>VARDAAN NIFTY AI</div>
     <div class="header-controls">
       <span id="sse-dot" title="Connecting..." style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#ffcc00;margin-right:6px;vertical-align:middle;box-shadow:0 0 5px #ffcc00;transition:background 0.4s,box-shadow 0.4s;"></span><span id="live-clock">--:--:--</span>
+      <button class="icon-btn" id="bw-btn" onclick="toggleBW()" title="Black & White mode">🎨</button>
       <button class="icon-btn" id="sound-btn" onclick="toggleSound()">🔕</button>
     </div>
   </div>
@@ -5852,6 +5866,23 @@ function toggleSound() {
     playAlert('warn');  // confirmation beep
   }
 }
+
+// ─── BLACK & WHITE MODE ──────────────────────────────────
+function toggleBW() {
+  const isBW = document.documentElement.classList.toggle('vn-bw');
+  localStorage.setItem('vn_bw_mode', isBW ? '1' : '0');
+  const btn = document.getElementById('bw-btn');
+  if (btn) btn.classList.toggle('active', isBW);
+}
+(function initBW(){
+  if (localStorage.getItem('vn_bw_mode') === '1') {
+    document.documentElement.classList.add('vn-bw');
+    document.addEventListener('DOMContentLoaded', () => {
+      const btn = document.getElementById('bw-btn');
+      if (btn) btn.classList.add('active');
+    });
+  }
+})();
 
 // ─── INIT ────────────────────────────────────────────────
 loadJournal();

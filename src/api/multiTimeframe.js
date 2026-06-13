@@ -4,7 +4,7 @@
 // ── Candle sourcing strategy (May 2026) ──────────────────────────────────────
 //
 //   Primary:  resample in-memory 1m candles from Angel WebSocket / Yahoo
-//             getCandleHistory(true) returns ALL stored candles (up to 300)
+//             getCandleHistory(true) returns ALL stored candles (up to 150)
 //             instead of the old slice(-60), giving:
 //               5m  → up to 60 bars   (was 12) ✅ reliable
 //               15m → up to 20 bars   (was  4) ✅ EMA21 and RSI14 now possible
@@ -157,9 +157,12 @@ async function fetchCandlesFromYahoo(intervalKey) {
             }
 
             if (candles.length > 0) {
-                console.log(`[MTF] Yahoo direct ${intervalKey}: ${candles.length} bars ✅`);
-                _yahooCache[intervalKey] = { ts: Date.now(), candles };
-                return candles;
+                // MEM FIX: only keep the most recent bars needed for indicators
+                // (RSI9/ADX14/EMA9 need ~30 bars; keep 80 for safety/resampling headroom)
+                const trimmed = candles.length > 80 ? candles.slice(-80) : candles;
+                console.log(`[MTF] Yahoo direct ${intervalKey}: ${candles.length} bars → cached ${trimmed.length} ✅`);
+                _yahooCache[intervalKey] = { ts: Date.now(), candles: trimmed };
+                return trimmed;
             }
         } catch (err) {
             console.warn(`[MTF Yahoo direct] ${intervalKey} ${url.includes('query1') ? 'q1' : 'q2'} failed: ${err.message}`);
@@ -347,12 +350,12 @@ function calcIndicators(candles, tfLabel) {
 async function analyzeMultiTimeframe() {
     console.log('📊 Fetching multi-timeframe data...');
 
-    // ── Step 1: Get full in-memory 1m candle buffer (up to 300) ──────────────
+    // ── Step 1: Get full in-memory 1m candle buffer (up to 150) ──────────────
     // getCandleHistory(true) returns all stored candles, not just last 60.
-    // This gives us 300 bars to resample, producing:
-    //   5m  → up to 60 bars  (was 12)
-    //   15m → up to 20 bars  (was  4)
-    //   1h  → up to 5 bars   (was  1)
+    // This gives us up to 150 bars to resample, producing:
+    //   5m  → up to 30 bars  (was 12)
+    //   15m → up to 10 bars  (was  4)
+    //   1h  → up to 2 bars   (was  1)
     const mem1m = getCandleHistory(true);
 
     let c5m, c15m, c1h;

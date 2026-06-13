@@ -95,7 +95,7 @@ function addTick(price) {
     if (!currentCandle || istMin !== lastMinute) {
         if (currentCandle) {
             candleHistory.push({ ...currentCandle });
-            if (candleHistory.length > 300) candleHistory.shift();
+            if (candleHistory.length > 150) candleHistory.shift();
             // Only add to sessionCandles during market hours (9:15–15:30)
             if (istMin >= 555 && istMin <= 930) {
                 sessionCandles.push({ ...currentCandle });
@@ -112,7 +112,7 @@ function addTick(price) {
     }
 
     priceHistory.push(price);
-    if (priceHistory.length > 300) priceHistory.shift();
+    if (priceHistory.length > 150) priceHistory.shift();
 }
 
 function calcRSI() {
@@ -316,9 +316,9 @@ function processIndicators(price, bnLeadSignal) {
 
 // ✅ Export candle history for chart (multi-day — used by /api/candles)
 // full=false  → last 60 candles  (default — used by server.js 1m indicators & ADX)
-// full=true   → all stored candles up to 300  (used by multiTimeframe.js for 15m/1h resampling)
+// full=true   → all stored candles up to 150  (used by multiTimeframe.js for 15m/1h resampling)
 // Why 60 default: server.js ADX uses session-only candles separately; the 1m RSI/EMA only
-// needs recent history. Returning 300 there would be wasteful and risk overnight-gap ADX bugs.
+// needs recent history. Returning 150 there would be wasteful and risk overnight-gap ADX bugs.
 // multiTimeframe.js needs the full buffer so resampling 1m→15m gives 20 bars instead of 4.
 function getCandleHistory(full = false) {
     const all = currentCandle

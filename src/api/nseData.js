@@ -1118,10 +1118,21 @@ async function getScripMaster() {
             'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json',
             { timeout: 20_000, responseType: 'json' }
         );
-        _scripMasterCache = res.data;
+        const total = Array.isArray(res.data) ? res.data.length : 0;
+        // MEM FIX: full ScripMaster is 50K-100K instruments (~50-100MB).
+        // We only ever use NIFTY NFO index options — filter immediately and
+        // discard everything else so it doesn't sit in memory all day.
+        const filtered = Array.isArray(res.data)
+            ? res.data.filter(s =>
+                s.exch_seg === 'NFO' &&
+                s.instrumenttype === 'OPTIDX' &&
+                s.name === 'NIFTY' &&
+                s.expiry)
+            : res.data;
+        _scripMasterCache = filtered;
         _scripMasterDate  = today;
-        console.log(`[ScripMaster] Loaded ${res.data.length} instruments`);
-        return res.data;
+        console.log(`[ScripMaster] Loaded ${total} instruments → filtered to ${Array.isArray(filtered) ? filtered.length : 0} NIFTY NFO options`);
+        return filtered;
     } catch (e) {
         console.warn('[ScripMaster] Fetch failed:', e.message);
         return _scripMasterCache;  // use stale if available
@@ -1141,13 +1152,8 @@ async function fetchPCRFromAngel(spotPrice) {
         const scrips = await getScripMaster();
         if (!scrips || !Array.isArray(scrips)) return null;
 
-        // Find nearest weekly expiry (look for OPTIDX NFO NIFTY entries)
-        const niftyOptions = scrips.filter(s =>
-            s.exch_seg === 'NFO' &&
-            s.instrumenttype === 'OPTIDX' &&
-            s.name === 'NIFTY' &&
-            s.expiry
-        );
+        // scrips is already pre-filtered to NIFTY NFO OPTIDX entries (see getScripMaster)
+        const niftyOptions = scrips;
         if (niftyOptions.length === 0) {
             console.warn('[PCR-Angel] No NIFTY option tokens in ScripMaster');
             return null;
