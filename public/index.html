@@ -252,7 +252,572 @@ html.vn-day .ind-val:empty::after { color:#607080 !important; }
 html.vn-day .btab.active { color:var(--green) !important; }
 html.vn-day .btab { color:#607080 !important; }
 
-/* ═══ End day visibility overrides ═══ */
+/* ─── RSI Dial SVG: dark track is invisible on white ─── */
+/* The track arc uses hardcoded #1a3a5a (near-black on dark = fine, invisible on light) */
+/* We override the SVG path strokes via CSS filter on the parent */
+html.vn-day .rsi-mini-card {
+  background: #f0f4f8 !important;
+  border: 1px solid #b8c8d8 !important;
+}
+html.vn-day .rsi-mini-label { color: #3a5060 !important; }
+html.vn-day .rsi-dial-val { color: #1a2530 !important; }
+/* Make needle visible on light: white needle → dark needle */
+html.vn-day .rsi-needle line { stroke: #1a2530 !important; }
+html.vn-day .rsi-needle circle:first-of-type { fill: #1a2530 !important; }
+html.vn-day .rsi-needle circle:last-of-type { fill: #ffffff !important; }
+/* RSI arc track (hardcoded dark #1a3a5a in SVG attributes → override via stroke) */
+/* Can't target SVG path by attribute in CSS easily, use brightness filter instead */
+html.vn-day .rsi-dial-svg path[stroke="#1a3a5a"] { stroke: #c8d8e8 !important; }
+/* Tick marks inside gauge */
+html.vn-day .rsi-dial-svg line[stroke="rgba(255,255,255,0.25)"] { stroke: rgba(0,0,0,0.2) !important; }
+
+/* ─── Murarka Strategy Panel: full day-mode fix ─── */
+html.vn-day #murarka-panel {
+  background: #ffffff !important;
+  border: 1px solid #b8c8d8 !important;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.08) !important;
+}
+/* Header row */
+html.vn-day #murarka-panel > div:first-child {
+  background: rgba(255,187,0,0.06) !important;
+  border-bottom: 1px solid #c0ccd8 !important;
+}
+/* Column separators */
+html.vn-day .murarka-col-pcr,
+html.vn-day .murarka-col-oi,
+html.vn-day .murarka-col-entry {
+  border-color: #c0ccd8 !important;
+}
+html.vn-day .murarka-divider { background: #c0ccd8 !important; }
+
+/* PCR zone pills */
+html.vn-day #mz-bull-btn { background: rgba(0,180,80,0.08) !important; border-color: rgba(0,180,80,0.3) !important; }
+html.vn-day #mz-avoid-btn { background: rgba(255,187,0,0.1) !important; }
+html.vn-day #mz-bear-btn { background: rgba(220,30,60,0.08) !important; border-color: rgba(220,30,60,0.3) !important; }
+
+/* Section header labels (tiny caps inside murarka cols) */
+html.vn-day #murarka-panel [style*="color:var(--dim)"] { color: #607080 !important; }
+html.vn-day #mz-zone-label { color: #b07800 !important; }
+html.vn-day #mz-imbalance-ratio { color: #b07800 !important; }
+html.vn-day #mz-imbalance-label { color: #607080 !important; }
+html.vn-day #murarka-entry-label { color: #1a2530 !important; }
+html.vn-day #murarka-entry-reason { color: #607080 !important; }
+/* OI imbalance bar track */
+html.vn-day #murarka-panel [style*="background:var(--border)"] { background: #d0dae4 !important; }
+
+/* CE/PE WRITE labels */
+html.vn-day #mz-ce-table,
+html.vn-day #mz-pe-table { color: #1a2530 !important; }
+html.vn-day #mz-ce-table [style*="color:var(--dim)"],
+html.vn-day #mz-pe-table [style*="color:var(--dim)"] { color: #607080 !important; }
+
+/* ─── VWAP / EMA card: sub-column labels ─── */
+html.vn-day #vwap-card [style*="color:var(--dim)"],
+html.vn-day #ema-card [style*="color:var(--dim)"] { color: #607080 !important; }
+html.vn-day #vwap-card [style*="border-top:1px solid var(--border)"],
+html.vn-day #ema-card [style*="border-top:1px solid var(--border)"] { border-top-color: #c8d4e0 !important; }
+
+/* ─── Signal Reasoning card ─── */
+html.vn-day .reasons-card {
+  background: #f5f8fb !important;
+  border: 1px solid #c0ccd8 !important;
+}
+html.vn-day .reasons-title { color: #607080 !important; }
+html.vn-day .reasons-title::after { background: #c8d4e0 !important; }
+html.vn-day .reason-row {
+  color: #1a2530 !important;
+  border-bottom-color: #dde4ec !important;
+}
+html.vn-day .reason-row::before { color: #607080 !important; }
+
+/* ─── ADX card track ─── */
+html.vn-day #adx-card .ind-label,
+html.vn-day #adx-card [style*="color:var(--dim)"] { color: #607080 !important; }
+
+/* ─── MTF cards: make them properly distinct ─── */
+html.vn-day .mtf-card {
+  background: #f0f4f8 !important;
+  border: 1px solid #b8c8d8 !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06) !important;
+}
+html.vn-day .mtf-tf { color: #3a5060 !important; font-weight: 700; }
+html.vn-day .mtf-stats { color: #3a5060 !important; }
+html.vn-day .mtf-rsi { color: #1a2530 !important; font-weight: 700; }
+
+/* ─── PCR / VIX data cards at top ─── */
+html.vn-day .pv-card {
+  background: #f5f8fb !important;
+  border: 1px solid #b8c8d8 !important;
+}
+html.vn-day .pv-label { color: #3a5060 !important; }
+html.vn-day .pv-val { color: #1a2530 !important; }
+html.vn-day .pv-sig { color: #607080 !important; }
+
+/* ─── Candle Pattern card ─── */
+html.vn-day #candle-card { background: #ffffff !important; border: 1px solid #b8c8d8 !important; }
+
+/* ─── VIX STATUS card ─── */
+html.vn-day #vwap-card,
+html.vn-day #ema-card,
+html.vn-day [id="rsi-card"] {
+  background: #ffffff !important;
+  border: 1px solid #b8c8d8 !important;
+}
+
+/* ════════════════════════════════════
+   MOBILE: Murarka Strategy layout fix
+   On small screens the panel renders
+   as a single-column stack — make
+   each section clearly bordered
+════════════════════════════════════ */
+@media (max-width: 599px) {
+  html.vn-day .murarka-col-pcr,
+  html.vn-day .murarka-col-oi,
+  html.vn-day .murarka-col-entry,
+  html.vn-day .murarka-col-table {
+    border-bottom: 1px solid #c0ccd8 !important;
+    padding: 12px 14px !important;
+  }
+  html.vn-day .murarka-col-table { border-bottom: none !important; }
+  /* Make PCR zone pills side-by-side and bigger on mobile */
+  html.vn-day .mz-zone-pills { gap: 6px !important; }
+  html.vn-day .mz-zone-pills > div { flex: 1; text-align: center; padding: 6px 4px !important; }
+  html.vn-day #mz-bull-btn div,
+  html.vn-day #mz-avoid-btn div,
+  html.vn-day #mz-bear-btn div { font-size: 9px !important; }
+  /* Bigger imbalance ratio on mobile */
+  html.vn-day #mz-imbalance-ratio { font-size: 32px !important; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   DAY MODE — PER-TAB COMPREHENSIVE FIXES
+   Covers: LIVE · JOURNAL · BREADTH · GLOBAL · CHART · TOOLS · ANALYTICS
+════════════════════════════════════════════════════════════════ */
+
+/* ── Shared: card backgrounds that use dark gradients ── */
+html.vn-day .tool-card,
+html.vn-day .add-trade-card,
+html.vn-day .trade-list-card,
+html.vn-day .pnl-hero,
+html.vn-day .em-card,
+html.vn-day .mom-card,
+html.vn-day .suggest-card,
+html.vn-day .flow-card,
+html.vn-day .fiidii-card,
+html.vn-day .pcr-trend-card,
+html.vn-day .sector-heatmap-card,
+html.vn-day .guide-card,
+html.vn-day .checklist-card {
+  background: #ffffff !important;
+  border-color: #c0ccd8 !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.07) !important;
+}
+/* Dark gradient bg0 cells used inside cards */
+html.vn-day .res-card,
+html.vn-day .greek-card,
+html.vn-day .btst-cell,
+html.vn-day .flow-result,
+html.vn-day .fiidii-net,
+html.vn-day .fii-live-preview,
+html.vn-day .wcard,
+html.vn-day .suggest-box,
+html.vn-day .mom-bar-track { background: #f0f4f8 !important; }
+html.vn-day .res-card,
+html.vn-day .greek-card { border: 1px solid #c8d4e0 !important; }
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TAB: JOURNAL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+/* Sub-tab bar */
+html.vn-day .j-stab {
+  background: #edf1f5 !important;
+  border-color: #c0ccd8 !important;
+  color: #607080 !important;
+}
+html.vn-day .j-stab.active {
+  background: rgba(0,180,80,0.08) !important;
+  border-color: var(--green) !important;
+  color: var(--green) !important;
+  box-shadow: none !important;
+}
+/* P&L Hero */
+html.vn-day .pnl-hero { background: linear-gradient(150deg,#ffffff,#f0f4f8) !important; }
+html.vn-day .pnl-hero-title { color: #8060c0 !important; }
+html.vn-day .pnl-stat-label,
+html.vn-day .pnl-big-label { color: #607080 !important; }
+html.vn-day .pnl-big { border-top-color: #d0dae4 !important; }
+
+/* Add trade card */
+html.vn-day .add-trade-title { color: #0066bb !important; }
+html.vn-day .tf-field label { color: #607080 !important; }
+html.vn-day .tf-input,
+html.vn-day .tf-select {
+  background: #f0f4f8 !important;
+  border-color: #b8c8d8 !important;
+  color: #1a2530 !important;
+}
+html.vn-day .tf-input:focus,
+html.vn-day .flow-input:focus { box-shadow: 0 0 0 2px rgba(0,120,200,0.15) !important; }
+
+/* Trade list */
+html.vn-day .trade-list-card { background: #ffffff !important; }
+html.vn-day .trade-list-header {
+  background: #edf1f5 !important;
+  color: #0066bb !important;
+}
+html.vn-day .trade-item { border-top-color: #dde4ec !important; }
+html.vn-day .trade-time { color: #607080 !important; }
+html.vn-day .trade-item-row2 { color: #3a5060 !important; }
+html.vn-day .clear-trades-btn {
+  border-color: #b8c8d8 !important;
+  color: #607080 !important;
+}
+html.vn-day .exit-input {
+  background: #f0f4f8 !important;
+  border-color: #b8c8d8 !important;
+  color: #1a2530 !important;
+}
+
+/* Events */
+html.vn-day .event-item,
+html.vn-day .event-row { border-bottom-color: #dde4ec !important; color: #1a2530 !important; }
+html.vn-day .event-time-lbl { color: #607080 !important; }
+html.vn-day .event-time-input,
+html.vn-day .event-title-input,
+html.vn-day .event-impact-select {
+  background: #f0f4f8 !important;
+  border-color: #b8c8d8 !important;
+  color: #1a2530 !important;
+}
+html.vn-day .event-del { color: #8090a0 !important; }
+
+/* Guide section */
+html.vn-day .guide-section-hdr { border-bottom-color: #c8d4e0 !important; }
+html.vn-day .guide-section-hdr span { color: #1a2530 !important; }
+html.vn-day .guide-card-title { color: #1a2530 !important; }
+html.vn-day .guide-card p strong { color: #1a2530 !important; }
+html.vn-day .guide-card.warn { background: linear-gradient(135deg,rgba(255,187,0,0.07),#ffffff) !important; }
+html.vn-day .guide-card.danger { background: linear-gradient(135deg,rgba(220,30,60,0.05),#ffffff) !important; }
+html.vn-day .guide-card.good { background: linear-gradient(135deg,rgba(0,200,100,0.05),#ffffff) !important; }
+html.vn-day .guide-rule-list li,
+html.vn-day .guide-step-list li,
+html.vn-day .guide-signal-row,
+html.vn-day .guide-checklist li { border-bottom-color: #dde4ec !important; }
+html.vn-day .guide-step-body span,
+html.vn-day .gsr-right { color: #3a5060 !important; }
+html.vn-day .gsr-action { color: #b07800 !important; }
+html.vn-day .guide-quote { border-left-color: #a0b0c0 !important; color: #607080 !important; }
+html.vn-day .guide-warn-inline p { color: #a07000 !important; }
+html.vn-day .money-mini-table th { border-bottom-color: #c8d4e0 !important; }
+html.vn-day .money-mini-table td { border-bottom-color: #e8edf2 !important; }
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TAB: BREADTH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+html.vn-day .ad-hero {
+  background: #ffffff !important;
+  border-color: #c0ccd8 !important;
+}
+html.vn-day .ad-title { color: #7050b0 !important; }
+html.vn-day .ad-sep { color: #8090a0 !important; }
+/* Remove dark text-shadow from A/D numbers on white */
+html.vn-day .ad-up { text-shadow: none !important; }
+html.vn-day .ad-dn { text-shadow: none !important; }
+
+/* Watcher cards */
+html.vn-day .wcard {
+  background: #f0f4f8 !important;
+  border-color: #c0ccd8 !important;
+}
+html.vn-day .wcard-label { color: #607080 !important; }
+html.vn-day .wcard-val { color: #1a2530 !important; }
+
+/* A/D Dial SVG */
+html.vn-day .ad-dial-svg { filter: none !important; }
+html.vn-day .ad-dial-stats { color: #3a5060 !important; }
+
+/* Flow card */
+html.vn-day .flow-title { color: #0066bb !important; }
+html.vn-day .flow-result { border: 1px solid #c0ccd8 !important; }
+html.vn-day .flow-dom { color: #1a2530 !important; }
+html.vn-day .flow-input {
+  background: #f0f4f8 !important;
+  border-color: #b8c8d8 !important;
+  color: #1a2530 !important;
+}
+
+/* PCR Trend */
+html.vn-day .trend-title { color: #b07800 !important; }
+html.vn-day .trend-row { border-bottom-color: #dde4ec !important; }
+html.vn-day .trend-list::-webkit-scrollbar-track { background: #e8edf2 !important; }
+
+/* FII/DII card */
+html.vn-day .fiidii-title { color: #7050b0 !important; }
+html.vn-day .fiidii-input {
+  background: #f0f4f8 !important;
+  border-color: #b8c8d8 !important;
+  color: #1a2530 !important;
+}
+html.vn-day .fiidii-submit {
+  background: rgba(140,100,220,0.08) !important;
+  border-color: #9060d0 !important;
+}
+html.vn-day .fiidii-net { border: 1px solid #c8d4e0 !important; }
+html.vn-day .fiidii-net-val { color: #1a2530 !important; }
+html.vn-day .fii-live-preview { border: 1px solid #c8d4e0 !important; }
+html.vn-day .fii-combined-row {
+  background: rgba(0,0,0,0.03) !important;
+  border-color: #c8d4e0 !important;
+}
+html.vn-day .fii-net-big { color: #1a2530 !important; }
+
+/* Sector heatmap */
+html.vn-day .sector-heatmap-title { color: #b07800 !important; }
+html.vn-day .sector-cell { border-color: #c8d4e0 !important; background: #f5f8fb !important; }
+html.vn-day .sc-label { color: #607080 !important; }
+
+/* Stock list */
+html.vn-day .stock-list { border-color: #c0ccd8 !important; }
+html.vn-day .stock-row { border-top-color: #e4eaf0 !important; }
+html.vn-day .stock-name { color: #1a2530 !important; }
+html.vn-day [style*="background:var(--bg3)"].stock-list,
+html.vn-day .stock-list > div:first-child { background: #edf1f5 !important; }
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TAB: GLOBAL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+html.vn-day .global-bias-card.bull { background: rgba(0,180,80,0.05) !important; }
+html.vn-day .global-bias-card.bear { background: rgba(220,30,60,0.05) !important; }
+html.vn-day .global-bias-card.neut { background: rgba(200,140,0,0.05) !important; }
+html.vn-day .global-bias-value { color: #1a2530 !important; }
+
+html.vn-day .global-section-title { color: #607080 !important; }
+html.vn-day .global-section-title::after { background: #c8d4e0 !important; }
+html.vn-day .global-score-badge { background: #f5f8fb !important; border-color: #c0ccd8 !important; }
+html.vn-day .global-score-label { color: #607080 !important; }
+html.vn-day .global-score-bar { background: #d8e2ec !important; }
+
+/* Global items */
+html.vn-day .gitem { background: #f5f8fb !important; border-color: #c0ccd8 !important; }
+html.vn-day .gitem-price { color: #1a2530 !important; }
+html.vn-day .gitem-chg.flat { color: #607080 !important; }
+
+/* Economic calendar */
+html.vn-day .cal-event { background: #f8fafc !important; border-color: #c0ccd8 !important; }
+html.vn-day .cal-event.impact-high { border-left-color: var(--red) !important; }
+html.vn-day .cal-event.impact-medium { border-left-color: var(--amber) !important; }
+html.vn-day .cal-today { background: rgba(255,187,0,0.04) !important; border-color: rgba(200,140,0,0.3) !important; }
+html.vn-day .cal-time { color: #607080 !important; }
+html.vn-day .cal-country {
+  background: rgba(0,0,0,0.05) !important;
+  color: #607080 !important;
+}
+html.vn-day .cal-date-sep { color: #607080 !important; }
+html.vn-day .reasons-card { background: #f5f8fb !important; border-color: #c0ccd8 !important; }
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TAB: CHART
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+html.vn-day .chart-box {
+  background: #f5f8fb !important;
+  border-color: #c0ccd8 !important;
+}
+html.vn-day .chart-btn {
+  background: #edf1f5 !important;
+  border-color: #c0ccd8 !important;
+  color: #3a5060 !important;
+}
+html.vn-day .chart-btn.active {
+  background: rgba(0,180,80,0.08) !important;
+  border-color: var(--green) !important;
+  color: var(--green) !important;
+}
+html.vn-day .chart-legend { color: #3a5060 !important; }
+/* Indicator value cards inside chart panel */
+html.vn-day .chart-wrap .ind-card { background: #ffffff !important; border-color: #c0ccd8 !important; }
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TAB: TOOLS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+html.vn-day .tool-title { color: #7050b0 !important; }
+html.vn-day .tool-btn {
+  background: rgba(0,120,200,0.08) !important;
+  border-color: var(--blue) !important;
+  color: var(--blue) !important;
+}
+html.vn-day .tool-input {
+  background: #f0f4f8 !important;
+  border-color: #b8c8d8 !important;
+  color: #1a2530 !important;
+}
+html.vn-day .tool-input[readonly] { color: #607080 !important; }
+html.vn-day .res-label { color: #607080 !important; }
+html.vn-day .res-val { color: #1a2530 !important; }
+html.vn-day .res-sub { color: #607080 !important; }
+
+/* Greeks */
+html.vn-day .greek-card { background: #f0f4f8 !important; border-color: #c0ccd8 !important; }
+html.vn-day .greek-desc { color: #607080 !important; }
+html.vn-day .greek-val { color: #1a2530 !important; }
+
+/* Position sizing result */
+html.vn-day .ps-result {
+  background: rgba(0,180,80,0.05) !important;
+  border-color: rgba(0,180,80,0.3) !important;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TAB: ANALYTICS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+html.vn-day .an-sticky-header {
+  background: #ffffff !important;
+  border-bottom-color: #c0ccd8 !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08) !important;
+}
+/* Filter label text */
+html.vn-day .an-sticky-header [style*="color:#5a7a8a"] { color: #607080 !important; }
+/* Filter pills */
+html.vn-day .an-pill {
+  border-color: #b8c8d8 !important;
+  color: #607080 !important;
+  background: #f0f4f8 !important;
+}
+html.vn-day .an-pill.active-all { border-color: var(--blue) !important; color: var(--blue) !important; background: rgba(0,120,200,0.08) !important; }
+html.vn-day .an-pill.active-call { border-color: var(--green) !important; color: var(--green) !important; background: rgba(0,180,80,0.07) !important; }
+html.vn-day .an-pill.active-put { border-color: var(--red) !important; color: var(--red) !important; background: rgba(220,30,60,0.06) !important; }
+html.vn-day .an-pill.active-gate { border-color: #c8a020 !important; color: #c8a020 !important; background: rgba(200,160,32,0.08) !important; }
+html.vn-day .an-pill.active-date { border-color: var(--blue) !important; color: var(--blue) !important; background: rgba(0,120,200,0.08) !important; }
+/* Dropdown */
+html.vn-day #an-limit {
+  background: #f0f4f8 !important;
+  border-color: #b8c8d8 !important;
+  color: #1a2530 !important;
+}
+/* Refresh button */
+html.vn-day [onclick="loadAnalytics(true)"] {
+  background: rgba(0,120,200,0.07) !important;
+  border-color: rgba(0,120,200,0.3) !important;
+  color: var(--blue) !important;
+}
+/* Stat cards in sticky header */
+html.vn-day .an-card {
+  background: #f5f8fb !important;
+  border-color: #c0ccd8 !important;
+}
+html.vn-day .an-label { color: #607080 !important; }
+html.vn-day .an-sub { color: #607080 !important; }
+html.vn-day .an-val { text-shadow: none !important; }
+/* Panel sections */
+html.vn-day .an-panel {
+  background: #ffffff !important;
+  border: 1px solid #c0ccd8 !important;
+}
+html.vn-day .an-ph {
+  background: #edf1f5 !important;
+  border-bottom-color: #c0ccd8 !important;
+}
+html.vn-day .an-pt { color: #0066bb !important; }
+html.vn-day [style*="color:#5a7a8a"] { color: #607080 !important; }
+html.vn-day .an-tbl th {
+  background: #edf1f5 !important;
+  color: #607080 !important;
+  border-bottom-color: #c8d4e0 !important;
+}
+html.vn-day .an-tbl td { border-bottom-color: #e8edf2 !important; color: #1a2530 !important; }
+html.vn-day .an-tbl tr:hover td { background: rgba(0,100,200,0.04) !important; }
+html.vn-day .an-bar-label { color: #3a5060 !important; }
+html.vn-day .an-bar-track { background: #dde4ec !important; }
+html.vn-day .an-tl-info { color: #607080 !important; }
+/* Status/refresh badge text */
+html.vn-day #an-refresh-badge,
+html.vn-day #an-status,
+html.vn-day #an-tl-info,
+html.vn-day #an-table-count { color: #607080 !important; }
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   LIVE TAB: AI Suggest + Momentum
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+html.vn-day .suggest-card {
+  background: #ffffff !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08) !important;
+}
+html.vn-day .suggest-card.bull { background: linear-gradient(150deg,rgba(0,200,80,0.06),#ffffff) !important; }
+html.vn-day .suggest-card.bear { background: linear-gradient(150deg,rgba(220,30,60,0.05),#ffffff) !important; }
+html.vn-day .suggest-card.wait { background: linear-gradient(150deg,rgba(200,140,0,0.05),#ffffff) !important; }
+html.vn-day .suggest-title { color: #7050b0 !important; }
+html.vn-day .suggest-refresh {
+  background: #edf1f5 !important;
+  border-color: #c0ccd8 !important;
+  color: #607080 !important;
+}
+html.vn-day .suggest-box { background: #f0f4f8 !important; border-color: #c8d4e0 !important; }
+html.vn-day .suggest-box-label { color: #607080 !important; }
+html.vn-day .suggest-box-val { color: #1a2530 !important; }
+html.vn-day .suggest-footer { color: #607080 !important; }
+
+/* Early Momentum / EM card */
+html.vn-day .em-card { background: #ffffff !important; box-shadow: 0 2px 8px rgba(0,0,0,0.07) !important; }
+html.vn-day .em-card.em-bull { background: rgba(0,200,80,0.04) !important; }
+html.vn-day .em-card.em-bear { background: rgba(220,30,60,0.04) !important; }
+html.vn-day .em-title { color: #7050b0 !important; }
+html.vn-day .em-score-track { background: #e0e8f0 !important; border-color: #c8d4e0 !important; }
+html.vn-day .em-score-center { background: rgba(0,0,0,0.15) !important; }
+html.vn-day .em-score-label { color: #607080 !important; }
+html.vn-day .em-vote-row { border-bottom-color: #dde4ec !important; }
+html.vn-day .em-vote-name { color: #607080 !important; }
+
+/* Momentum breakdown */
+html.vn-day .mom-card { background: #ffffff !important; border-color: #c0ccd8 !important; }
+html.vn-day .mom-title { color: #7050b0 !important; }
+html.vn-day .mom-badge { background: #f0f4f8 !important; border-color: #c0ccd8 !important; color: #607080 !important; }
+html.vn-day .mom-signal { color: #1a2530 !important; }
+html.vn-day .mom-bar-label { color: #607080 !important; }
+html.vn-day .mom-bar-track { background: #dde4ec !important; }
+html.vn-day .mom-bar-val { color: #607080 !important; }
+html.vn-day .mom-dot { border-color: rgba(0,0,0,0.1) !important; background: #e8edf2 !important; }
+
+/* OI Walls */
+html.vn-day .oi-wall-card {
+  background: #f5f8fb !important;
+  border: 1px solid #c0ccd8 !important;
+}
+html.vn-day .oi-wall-label { color: #3a5060 !important; }
+html.vn-day .oi-wall-delta { color: #607080 !important; }
+
+/* BTST/STBT card */
+html.vn-day .btst-card { background: #f8fafc !important; }
+html.vn-day .btst-card.btst { background: rgba(0,200,80,0.05) !important; }
+html.vn-day .btst-card.stbt { background: rgba(220,30,60,0.04) !important; }
+html.vn-day .btst-label { color: #7050b0 !important; }
+html.vn-day .btst-cell { background: #edf1f5 !important; }
+html.vn-day .btst-cell-label { color: #607080 !important; }
+html.vn-day .btst-cell-val { color: #1a2530 !important; }
+html.vn-day .btst-footer { color: #607080 !important; border-top-color: rgba(0,0,0,0.08) !important; }
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   SHARED: Remove dark glows in day
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+html.vn-day .an-val.green,
+html.vn-day .an-val.red,
+html.vn-day .an-val.blue,
+html.vn-day .an-val.warn { text-shadow: none !important; }
+html.vn-day .add-trade-btn { box-shadow: none !important; }
+html.vn-day .add-trade-btn:hover { box-shadow: 0 2px 8px rgba(0,180,80,0.15) !important; }
+html.vn-day .em-card.em-strong { animation: none !important; }
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   HEADER: badge readability
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+html.vn-day .hbadge.market-open { box-shadow: none !important; }
+html.vn-day #live-clock { color: #b07800 !important; }
+
+/* ─── Journal: date-group separator headers ─── */
+html.vn-day #trade-list-body > div[style*="background:var(--bg3)"] {
+  background: #edf1f5 !important;
+  border-top-color: #c8d4e0 !important;
+}
+
+/* ═══ End per-tab day visibility overrides ═══ */
 body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.06) 2px,rgba(0,0,0,0.06) 4px);pointer-events:none;z-index:999;}
 /* ── Custom Splash Screen ── */
 #vn-splash{position:fixed;inset:0;background:#020508;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;transition:opacity 0.6s ease,visibility 0.6s ease;}
@@ -5100,34 +5665,74 @@ function _renderJournal() {
     tbody.innerHTML = '<div style="text-align:center;padding:14px;font-size:11px;color:#7a9ab8;">No trades logged yet.</div>';
     return;
   }
-  tbody.innerHTML = _trades.slice().reverse().map(t => {
-    const d       = new Date(t.time);
-    const now     = new Date();
-    const isToday = d.toDateString() === now.toDateString();
-    const timeStr = isToday
-      ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
-      : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) + ' '
-        + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-    const isClosed = t.exit != null;
-    const pnlStr  = isClosed
-      ? (t.pnl >= 0 ? '+₹' : '₹') + t.pnl.toFixed(0)
-      : (t.currentPnl != null ? (t.currentPnl >= 0 ? '~+₹' : '~₹') + t.currentPnl.toFixed(0) : 'OPEN');
-    const pnlColor = isClosed
-      ? (t.pnl > 0 ? 'var(--green)' : t.pnl < 0 ? 'var(--red)' : 'var(--dim)')
-      : (t.currentPnl != null ? (t.currentPnl >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--blue)');
-    const slStr = t.sl ? '<span style="font-size:9px;color:var(--dim)">SL:' + t.sl + '</span>' : '';
-    const exitBtn  = isClosed
-      ? '<span style="font-size:9px;color:var(--dim)">✓ CLOSED</span>'
-      : '<span style="display:flex;align-items:center;gap:3px;" id="exit-wrap-' + t.id + '"><button data-exit-id="' + t.id + '" data-premium="' + t.premium + '" style="font-size:9px;padding:2px 5px;background:rgba(255,187,0,0.1);border:1px solid var(--amber);color:var(--amber);border-radius:3px;cursor:pointer">EXIT</button></span>';
-    return '<div class="trade-row">'
-      + '<span style="color:' + (t.type === 'CE' ? 'var(--green)' : 'var(--red)') + ';">' + t.type + '</span>'
-      + '<span>' + t.strike + ' @₹' + t.premium + '</span>'
-      + '<span>' + t.lots + 'L ' + slStr + '</span>'
-      + '<span style="color:' + pnlColor + ';">' + pnlStr + '</span>'
-      + '<span style="font-size:9px;color:var(--dim);">' + timeStr + '</span>'
-      + exitBtn
+
+  // ── Group trades by calendar date (newest date first) ──
+  const now = new Date();
+  const groups = {};
+  _trades.slice().reverse().forEach(t => {
+    const d = new Date(t.time);
+    const key = d.toDateString(); // e.g. "Mon Jun 09 2025"
+    if (!groups[key]) groups[key] = { date: d, trades: [] };
+    groups[key].trades.push(t);
+  });
+
+  let html = '';
+  for (const key of Object.keys(groups)) {
+    const { date, trades } = groups[key];
+    const isToday    = date.toDateString() === now.toDateString();
+    const isYesterday = (() => { const y = new Date(now); y.setDate(y.getDate()-1); return date.toDateString() === y.toDateString(); })();
+    const dayLabel   = isToday ? '📍 TODAY'
+      : isYesterday ? '⬅ YESTERDAY'
+      : date.toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: '2-digit' }).toUpperCase();
+
+    // Per-day P&L summary
+    const closed  = trades.filter(t => t.exit != null);
+    const dayPnl  = closed.reduce((s, t) => s + (t.pnl || 0), 0);
+    const wins    = closed.filter(t => (t.pnl || 0) > 0).length;
+    const pnlStr  = closed.length ? (dayPnl >= 0 ? '+₹' : '₹') + dayPnl.toFixed(0) : '';
+    const pnlCol  = dayPnl > 0 ? 'var(--green)' : dayPnl < 0 ? 'var(--red)' : 'var(--dim)';
+    const srStr   = closed.length ? wins + 'W/' + (closed.length - wins) + 'L' : trades.length + ' open';
+
+    // Date separator header
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;'
+      + 'padding:5px 14px 4px;background:var(--bg3);border-top:1px solid var(--border);'
+      + 'position:sticky;top:0;z-index:2;">'
+      + '<span style="font-family:\'Share Tech Mono\',monospace;font-size:9px;letter-spacing:1.5px;color:var(--amber);">'
+      + dayLabel + '</span>'
+      + '<span style="display:flex;gap:8px;align-items:center;">'
+      + (pnlStr ? '<span style="font-family:\'Share Tech Mono\',monospace;font-size:11px;font-weight:700;color:' + pnlCol + ';">' + pnlStr + '</span>' : '')
+      + '<span style="font-size:9px;color:var(--dim);">' + srStr + '</span>'
+      + '</span>'
       + '</div>';
-  }).join('');
+
+    // Trade rows for this date
+    trades.forEach(t => {
+      const d        = new Date(t.time);
+      const timeStr  = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+      const isClosed = t.exit != null;
+      const pnlRowStr = isClosed
+        ? (t.pnl >= 0 ? '+₹' : '₹') + t.pnl.toFixed(0)
+        : (t.currentPnl != null ? (t.currentPnl >= 0 ? '~+₹' : '~₹') + t.currentPnl.toFixed(0) : 'OPEN');
+      const pnlRowColor = isClosed
+        ? (t.pnl > 0 ? 'var(--green)' : t.pnl < 0 ? 'var(--red)' : 'var(--dim)')
+        : (t.currentPnl != null ? (t.currentPnl >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--blue)');
+      const slStr  = t.sl ? '<span style="font-size:9px;color:var(--dim)">SL:' + t.sl + '</span>' : '';
+      const exitBtn = isClosed
+        ? '<span style="font-size:9px;color:var(--dim)">✓ CLOSED</span>'
+        : '<span style="display:flex;align-items:center;gap:3px;" id="exit-wrap-' + t.id + '">'
+          + '<button data-exit-id="' + t.id + '" data-premium="' + t.premium + '" '
+          + 'style="font-size:9px;padding:2px 5px;background:rgba(255,187,0,0.1);border:1px solid var(--amber);color:var(--amber);border-radius:3px;cursor:pointer">EXIT</button></span>';
+      html += '<div class="trade-row">'
+        + '<span style="color:' + (t.type === 'CE' ? 'var(--green)' : 'var(--red)') + ';">' + t.type + '</span>'
+        + '<span>' + t.strike + ' @₹' + t.premium + '</span>'
+        + '<span>' + t.lots + 'L ' + slStr + '</span>'
+        + '<span style="color:' + pnlRowColor + ';">' + pnlRowStr + '</span>'
+        + '<span style="font-size:9px;color:var(--dim);">' + timeStr + '</span>'
+        + exitBtn
+        + '</div>';
+    });
+  }
+  tbody.innerHTML = html;
 }
 
 // ── Public API ────────────────────────────────────────────
@@ -6081,11 +6686,40 @@ function toggleSound() {
 }
 
 // ─── DAY / NIGHT THEME ───────────────────────────────
+function applyDaySvgFix(isDay) {
+  // RSI dial SVG: fix hardcoded dark track color & white tick/needle elements
+  document.querySelectorAll('.rsi-dial-svg').forEach(svg => {
+    // Track arc background (was #1a3a5a dark blue)
+    svg.querySelectorAll('path[stroke="#1a3a5a"]').forEach(el => {
+      el.setAttribute('data-orig-stroke', '#1a3a5a');
+      el.style.stroke = isDay ? '#c8d8e8' : '';
+    });
+    // White tick marks (were rgba(255,255,255,0.25))
+    svg.querySelectorAll('line').forEach(el => {
+      const s = el.getAttribute('stroke') || '';
+      if (s.includes('255,255,255')) {
+        el.style.stroke = isDay ? 'rgba(0,0,0,0.18)' : '';
+      }
+    });
+    // Needle line (white on dark → dark on light)
+    const needleG = svg.querySelector('.rsi-needle');
+    if (needleG) {
+      const nl = needleG.querySelector('line');
+      const nc1 = needleG.querySelectorAll('circle')[0];
+      const nc2 = needleG.querySelectorAll('circle')[1];
+      if (nl) nl.style.stroke = isDay ? '#1a2530' : '';
+      if (nc1) nc1.style.fill = isDay ? '#1a2530' : '';
+      if (nc2) nc2.style.fill = isDay ? '#f0f4f8' : '';
+    }
+  });
+}
+
 function toggleDayNight() {
   const isDay = document.documentElement.classList.toggle('vn-day');
   localStorage.setItem('vn_theme', isDay ? 'day' : 'night');
   const btn = document.getElementById('theme-btn');
   if (btn) { btn.textContent = isDay ? '☀️' : '🌙'; btn.title = isDay ? 'Switch to Night' : 'Switch to Day'; }
+  applyDaySvgFix(isDay);
 }
 (function initTheme(){
   const saved = localStorage.getItem('vn_theme');
@@ -6094,6 +6728,7 @@ function toggleDayNight() {
     document.addEventListener('DOMContentLoaded', () => {
       const btn = document.getElementById('theme-btn');
       if (btn) { btn.textContent = '☀️'; btn.title = 'Switch to Night'; }
+      applyDaySvgFix(true);
     });
   }
 })();
