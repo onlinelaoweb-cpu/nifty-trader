@@ -1020,7 +1020,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 <!-- ═══════════════════════════════════ -->
 <!-- LOGIN OVERLAY                       -->
 <!-- ═══════════════════════════════════ -->
-<div id="vn-login">
+<div id="vn-login" class="hide">
   <div class="login-box">
     <svg class="login-logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
       <polygon points="60,5 25,55 50,55 40,95 75,45 50,45" fill="#00ff88"/>
@@ -1240,6 +1240,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div class="cl-item auto-wait" id="cl-vix" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📊 India VIX — below 20? <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-vix-val" style="color:var(--dim);">Waiting for data…</div></div></div>
       <div class="cl-item auto-wait" id="cl-pcr" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📈 PCR Bias <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-pcr-val" style="color:var(--dim);">Waiting for data…</div></div></div>
       <div class="cl-item auto-wait" id="cl-bn" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🏦 Bank Nifty Lead <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-bn-val" style="color:var(--dim);">Waiting for data…</div></div></div>
+      <div class="cl-item auto-wait" id="cl-bn-corr" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📊 BN ↔ Nifty Corr <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-bn-corr-val" style="color:var(--dim);">Waiting for data…</div></div></div>
       <div class="cl-item auto-wait" id="cl-fii" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">💼 FII + DII Net Flow <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-fii-val" style="color:var(--dim);">Waiting for data…</div></div></div>
       <div class="cl-item auto-wait" id="cl-em" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">⚡ Early Momentum Score <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-em-val" style="color:var(--dim);">Waiting for first cycle…</div></div></div>
       <div class="cl-item auto-wait" id="cl-events" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📅 High-Impact Events Today <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-events-val" style="color:var(--dim);">Checking calendar…</div></div></div>
@@ -1312,19 +1313,61 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div id="manual-pcr-status" style="font-size:9px;color:var(--dim);margin-top:4px;display:none;"></div>
     </div>
 
-    <!-- Candle Pattern Card -->
+    <!-- Candle Pattern Card — Multi-Timeframe (5m / 15m / 1h / 1m) -->
     <div class="ind-card" id="candle-card" style="margin-bottom:8px;">
-      <div class="ind-label"><span>🕯️ CANDLE PATTERN</span><span id="cp-direction" style="font-size:8px;">--</span></div>
-      <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
-        <div style="font-family:'Orbitron',monospace;font-size:15px;font-weight:700;" id="cp-name">--</div>
+      <div class="ind-label" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>🕯️ CANDLE PATTERN</span>
+        <span id="cp-consensus-badge" style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--border);color:var(--dim);">--</span>
+      </div>
+      <!-- 5m row -->
+      <div style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-size:9px;color:var(--dim);min-width:22px;font-family:'Orbitron',monospace;">5m</span>
+          <div style="display:flex;gap:2px;">
+            <div style="width:7px;height:7px;border-radius:50%;background:var(--border);" id="cp5-dot1"></div>
+            <div style="width:7px;height:7px;border-radius:50%;background:var(--border);" id="cp5-dot2"></div>
+            <div style="width:7px;height:7px;border-radius:50%;background:var(--border);" id="cp5-dot3"></div>
+          </div>
+          <span style="font-size:11px;font-family:'Orbitron',monospace;font-weight:700;flex:1;" id="cp5-name">--</span>
+          <span style="font-size:9px;" id="cp5-dir"></span>
+        </div>
+        <!-- 15m row -->
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-size:9px;color:var(--dim);min-width:22px;font-family:'Orbitron',monospace;">15m</span>
+          <div style="display:flex;gap:2px;">
+            <div style="width:7px;height:7px;border-radius:50%;background:var(--border);" id="cp15-dot1"></div>
+            <div style="width:7px;height:7px;border-radius:50%;background:var(--border);" id="cp15-dot2"></div>
+            <div style="width:7px;height:7px;border-radius:50%;background:var(--border);" id="cp15-dot3"></div>
+          </div>
+          <span style="font-size:11px;font-family:'Orbitron',monospace;font-weight:700;flex:1;" id="cp15-name">--</span>
+          <span style="font-size:9px;" id="cp15-dir"></span>
+        </div>
+        <!-- 1h row -->
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-size:9px;color:var(--dim);min-width:22px;font-family:'Orbitron',monospace;">1h</span>
+          <div style="display:flex;gap:2px;">
+            <div style="width:7px;height:7px;border-radius:50%;background:var(--border);" id="cp1h-dot1"></div>
+            <div style="width:7px;height:7px;border-radius:50%;background:var(--border);" id="cp1h-dot2"></div>
+            <div style="width:7px;height:7px;border-radius:50%;background:var(--border);" id="cp1h-dot3"></div>
+          </div>
+          <span style="font-size:11px;font-family:'Orbitron',monospace;font-weight:700;flex:1;" id="cp1h-name">--</span>
+          <span style="font-size:9px;" id="cp1h-dir"></span>
+        </div>
+      </div>
+      <!-- 1m divider row (signal scoring uses this) -->
+      <div style="margin-top:5px;padding-top:4px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;">
+        <span style="font-size:9px;color:var(--dim);min-width:22px;font-family:'Orbitron',monospace;">1m</span>
+        <div style="font-family:'Orbitron',monospace;font-size:12px;font-weight:700;flex:1;" id="cp-name">--</div>
         <div style="display:flex;gap:3px;align-items:center;">
           <div style="width:8px;height:8px;border-radius:50%;background:var(--border);" id="cp-dot1"></div>
           <div style="width:8px;height:8px;border-radius:50%;background:var(--border);" id="cp-dot2"></div>
           <div style="width:8px;height:8px;border-radius:50%;background:var(--border);" id="cp-dot3"></div>
         </div>
+        <span style="font-size:9px;" id="cp-direction">--</span>
       </div>
       <div style="font-size:10px;color:var(--dim);margin-top:3px;" id="cp-reason">Waiting for candle data...</div>
     </div>
+
 
     <div class="pv-card" style="color:var(--amber)" id="vix-card"><div class="pv-label">VIX</div><div class="pv-val" id="vix-val">--</div><div class="pv-sig" id="vix-sig">AUTO ✅</div></div>
   </div>
@@ -3141,36 +3184,69 @@ function renderDashboard(s) {
     }
   }
 
-  // Candle Pattern
-  if (s.candlePattern) {
-    const cp = s.candlePattern;
+  // Candle Pattern — multi-timeframe (5m / 15m / 1h) + 1m
+  {
     const nameMap = {
       'HAMMER'            : '🔨 HAMMER',
-      'SHOOTING_STAR'     : '⭐ SHOOTING STAR',
-      'INVERTED_HAMMER'   : '🕯️ INV. HAMMER',
+      'SHOOTING_STAR'     : '⭐ SHOOT STAR',
+      'INVERTED_HAMMER'   : '🕯️ INV HAMMER',
       'DOJI'              : '➕ DOJI',
-      'BULLISH_ENGULFING' : '🟢 BULL ENGULFING',
-      'BEARISH_ENGULFING' : '🔴 BEAR ENGULFING',
+      'BULLISH_ENGULFING' : '🟢 BULL ENGULF',
+      'BEARISH_ENGULFING' : '🔴 BEAR ENGULF',
       'STRONG_BULL'       : '📈 STRONG BULL',
       'STRONG_BEAR'       : '📉 STRONG BEAR',
       'NONE'              : '--',
     };
-    const cpNameEl = document.getElementById('cp-name');
-    const cpDirEl  = document.getElementById('cp-direction');
-    const cpResEl  = document.getElementById('cp-reason');
-    if (cpNameEl) cpNameEl.textContent = nameMap[cp.pattern] || cp.pattern || '--';
-    if (cpDirEl) {
-      cpDirEl.textContent = cp.direction || '--';
-      cpDirEl.style.color = cp.direction === 'BULLISH' ? 'var(--green)' : cp.direction === 'BEARISH' ? 'var(--red)' : 'var(--amber)';
+    const dirCol = d => d === 'BULLISH' ? 'var(--green)' : d === 'BEARISH' ? 'var(--red)' : 'var(--dim)';
+
+    function paintTFRow(prefix, cp) {
+      if (!cp) return;
+      const nm  = document.getElementById(prefix + '-name');
+      const dr  = document.getElementById(prefix + '-dir');
+      const col = dirCol(cp.direction);
+      if (nm) { nm.textContent = nameMap[cp.pattern] || cp.pattern || '--'; nm.style.color = cp.pattern === 'NONE' ? 'var(--dim)' : col; }
+      if (dr) { dr.textContent = (cp.direction && cp.direction !== 'NEUTRAL') ? cp.direction : ''; dr.style.color = col; }
+      [1,2,3].forEach(i => {
+        const dot = document.getElementById(prefix + '-dot' + i);
+        if (dot) dot.style.background = i <= (cp.strength || 0) ? col : 'var(--border)';
+      });
     }
-    if (cpResEl) cpResEl.textContent = cp.reason || 'No pattern detected';
-    // Strength dots
-    const dotColor = cp.direction === 'BULLISH' ? 'var(--green)' : cp.direction === 'BEARISH' ? 'var(--red)' : 'var(--amber)';
-    [1,2,3].forEach(i => {
-      const dot = document.getElementById('cp-dot'+i);
-      if (dot) dot.style.background = i <= (cp.strength||0) ? dotColor : 'var(--border)';
-    });
+
+    // MTF rows (5m / 15m / 1h) from cpMTF
+    if (s.cpMTF) {
+      paintTFRow('cp5',  s.cpMTF.cp5m);
+      paintTFRow('cp15', s.cpMTF.cp15m);
+      paintTFRow('cp1h', s.cpMTF.cp1h);
+      const badge = document.getElementById('cp-consensus-badge');
+      if (badge) {
+        badge.textContent = s.cpMTF.cpConsensusLabel || '--';
+        badge.style.background = s.cpMTF.cpConsensus === 'BULLISH' ? 'rgba(0,255,136,0.15)'
+                                : s.cpMTF.cpConsensus === 'BEARISH' ? 'rgba(255,60,60,0.15)'
+                                : 'var(--border)';
+        badge.style.color = s.cpMTF.cpConsensus === 'BULLISH' ? 'var(--green)'
+                          : s.cpMTF.cpConsensus === 'BEARISH' ? 'var(--red)'
+                          : 'var(--dim)';
+      }
+    }
+
+    // 1m legacy row
+    if (s.candlePattern) {
+      const cp = s.candlePattern;
+      const col = dirCol(cp.direction);
+      const nm  = document.getElementById('cp-name');
+      const dr  = document.getElementById('cp-direction');
+      const rs  = document.getElementById('cp-reason');
+      if (nm) { nm.textContent = nameMap[cp.pattern] || cp.pattern || '--'; nm.style.color = cp.pattern === 'NONE' ? 'var(--dim)' : col; }
+      if (dr) { dr.textContent = cp.direction || '--'; dr.style.color = col; }
+      if (rs)   rs.textContent = cp.reason || 'No pattern detected';
+      [1,2,3].forEach(i => {
+        const dot = document.getElementById('cp-dot' + i);
+        if (dot) dot.style.background = i <= (cp.strength || 0) ? col : 'var(--border)';
+      });
+    }
   }
+
+
 
   // VIX
   if (s.vix != null) {
@@ -4647,7 +4723,20 @@ function updateChecklistAuto(s) {
     setItem('cl-bn', 'wait', 'Waiting for Bank Nifty…', 'var(--dim)');
   }
 
-  // 6. FII + DII Net Flow
+  // 5b. BankNifty ↔ Nifty Correlation
+  const bnCorr = s.global?.bnCorrelation;
+  if (bnCorr && bnCorr.status !== 'UNAVAILABLE') {
+    const col  = bnCorr.status === 'BN_LEADING' ? 'var(--green)'
+               : bnCorr.status === 'DIVERGE'    ? 'var(--red)'
+               : bnCorr.status === 'BN_LAGGING' ? 'var(--amber)'
+               : 'var(--dim)';
+    const state = bnCorr.status === 'DIVERGE'    ? 'fail'
+                : bnCorr.status === 'ALIGNED' || bnCorr.status === 'BN_LEADING' ? 'pass'
+                : 'wait';
+    setItem('cl-bn-corr', state, `${bnCorr.label} · ${bnCorr.detail}`, col);
+  }
+
+
   if (s.fii || s.dii) {
     const fNet = s.fii?.net || 0;
     const dNet = s.dii?.net || 0;
