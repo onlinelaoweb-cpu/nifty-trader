@@ -1313,6 +1313,94 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div id="manual-pcr-status" style="font-size:9px;color:var(--dim);margin-top:4px;display:none;"></div>
     </div>
 
+    <!-- ══════════════════════════════════════════════════════════════════════
+         MURARKA STRATEGY PANEL — CA Nitin Murarka (SMC Global) method
+         PCR Zone + OI Imbalance + Strike ΔOI Table + Entry Alert
+         ══════════════════════════════════════════════════════════════════════ -->
+    <div id="murarka-panel" style="margin:0 12px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+      <!-- Header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border);background:rgba(255,187,0,0.04);">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-size:13px;">🎯</span>
+          <span style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--amber);">MURARKA STRATEGY</span>
+        </div>
+        <span style="font-size:8px;color:var(--dim);letter-spacing:1px;">CA Nitin Murarka • SMC Global</span>
+      </div>
+
+      <!-- PCR Zone Meter -->
+      <div style="padding:10px 12px 6px;">
+        <div style="font-size:8px;color:var(--dim);letter-spacing:1.5px;margin-bottom:6px;">PCR ZONE (Murarka Threshold)</div>
+        <!-- Zone bar: BEAR | AVOID | BULL -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;margin-bottom:6px;">
+          <div id="mz-bear-btn" style="padding:6px 4px;border-radius:6px;text-align:center;border:2px solid transparent;transition:all 0.3s;background:rgba(255,34,68,0.08);">
+            <div style="font-size:9px;font-weight:700;color:var(--red);">BUY PE</div>
+            <div style="font-size:8px;color:var(--dim);margin-top:1px;">PCR &lt; 0.75</div>
+          </div>
+          <div id="mz-avoid-btn" style="padding:6px 4px;border-radius:6px;text-align:center;border:2px solid var(--amber);background:rgba(255,187,0,0.08);">
+            <div style="font-size:9px;font-weight:700;color:var(--amber);">AVOID ⚠️</div>
+            <div style="font-size:8px;color:var(--dim);margin-top:1px;">0.75 – 1.15</div>
+          </div>
+          <div id="mz-bull-btn" style="padding:6px 4px;border-radius:6px;text-align:center;border:2px solid transparent;background:rgba(0,255,136,0.06);">
+            <div style="font-size:9px;font-weight:700;color:var(--green);">BUY CE</div>
+            <div style="font-size:8px;color:var(--dim);margin-top:1px;">PCR &gt; 1.15</div>
+          </div>
+        </div>
+        <div id="mz-zone-label" style="font-size:10px;color:var(--amber);text-align:center;padding:4px 8px;background:rgba(255,187,0,0.06);border-radius:5px;">Awaiting PCR data…</div>
+      </div>
+
+      <!-- OI Imbalance Ratio -->
+      <div style="padding:4px 12px 8px;border-top:1px solid rgba(255,255,255,0.04);">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-size:8px;color:var(--dim);letter-spacing:1.2px;">OI IMBALANCE RATIO</div>
+            <div style="font-size:8px;color:var(--dim);margin-top:1px;">ΔPuts OI ÷ ΔCalls OI</div>
+          </div>
+          <div style="text-align:right;">
+            <div id="mz-imbalance-ratio" style="font-size:18px;font-weight:700;color:var(--amber);font-family:'Share Tech Mono',monospace;">--</div>
+            <div id="mz-imbalance-label" style="font-size:8px;color:var(--dim);">Awaiting data</div>
+          </div>
+        </div>
+        <!-- Imbalance bar -->
+        <div style="margin-top:5px;height:4px;background:var(--border);border-radius:2px;overflow:hidden;">
+          <div id="mz-imbalance-bar" style="height:100%;width:50%;background:var(--amber);border-radius:2px;transition:width 0.5s,background 0.3s;"></div>
+        </div>
+      </div>
+
+      <!-- Murarka Entry Alert -->
+      <div id="murarka-entry-wrap" style="margin:0 12px 10px;padding:8px 10px;border-radius:7px;border:1px solid var(--border);background:rgba(0,0,0,0.2);display:none;">
+        <div style="font-size:8px;color:var(--dim);letter-spacing:1.2px;margin-bottom:4px;">MURARKA ENTRY SETUP</div>
+        <div id="murarka-entry-label" style="font-size:11px;font-weight:700;color:var(--amber);">—</div>
+        <div id="murarka-entry-reason" style="font-size:9px;color:var(--dim);margin-top:3px;">—</div>
+      </div>
+
+      <!-- Strike ΔOI Table — Autotrender style -->
+      <div style="padding:0 12px 10px;">
+        <div style="font-size:8px;color:var(--dim);letter-spacing:1.5px;margin-bottom:6px;">STRIKE-WISE ΔOI TODAY <span style="color:var(--dim);font-weight:400;">(Murarka's Autotrender view)</span></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+          <!-- CE buildup -->
+          <div>
+            <div style="font-size:8px;color:var(--red);letter-spacing:1px;font-weight:700;margin-bottom:4px;">📞 CE WRITING (Resistance)</div>
+            <div id="mz-ce-table" style="font-size:9px;font-family:'Share Tech Mono',monospace;">
+              <div style="color:var(--dim);font-size:8px;">Fetching…</div>
+            </div>
+          </div>
+          <!-- PE buildup -->
+          <div>
+            <div style="font-size:8px;color:var(--green);letter-spacing:1px;font-weight:700;margin-bottom:4px;">📤 PE WRITING (Support)</div>
+            <div id="mz-pe-table" style="font-size:9px;font-family:'Share Tech Mono',monospace;">
+              <div style="color:var(--dim);font-size:8px;">Fetching…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Expiry Mode badge -->
+      <div id="mz-expiry-badge" style="display:none;margin:0 12px 8px;padding:4px 8px;background:rgba(255,34,68,0.1);border:1px solid var(--red);border-radius:5px;text-align:center;">
+        <span style="font-size:9px;color:var(--red);font-weight:700;letter-spacing:1px;">⚡ EXPIRY MODE — Tighter thresholds (1.10 / 0.80) active</span>
+      </div>
+    </div>
+    <!-- END MURARKA PANEL -->
+
     <!-- Candle Pattern Card — Multi-Timeframe (5m / 15m / 1h / 1m) -->
     <div class="ind-card" id="candle-card" style="margin-bottom:8px;">
       <div class="ind-label" style="display:flex;justify-content:space-between;align-items:center;">
@@ -3624,6 +3712,9 @@ function renderDashboard(s) {
     if (peDelta && oi.totalPEoiChange != null) peDelta.textContent = 'PE OI Δ ' + (oi.totalPEoiChange > 0 ? '+' : '') + Math.round(oi.totalPEoiChange);
   }
 
+  // ── Murarka Strategy Panel update ────────────────────────────────────────────
+  updateMurarkaPanel(s);
+
   // Header P&L from trades
   const summary = getTradeSummaryLocal();
   const pnlEl = document.getElementById('header-pnl');
@@ -4199,6 +4290,154 @@ function renderMomentum(mom) {
     d.className = i < mom.strength ? `mom-dot ${dotCls}` : 'mom-dot inactive';
   });
   if (strengthLabel) strengthLabel.textContent = `Strength: ${mom.strength}/5`;
+}
+
+// ─── MURARKA STRATEGY PANEL ──────────────────────────────────────────────────
+// Updates PCR Zone display, OI Imbalance Ratio, Murarka Entry Alert, Strike ΔOI table
+function updateMurarkaPanel(s) {
+  // ── PCR Zone ──────────────────────────────────────────────────────────────
+  const zone = s.pcrZone;
+  if (zone) {
+    const bearBtn  = document.getElementById('mz-bear-btn');
+    const avoidBtn = document.getElementById('mz-avoid-btn');
+    const bullBtn  = document.getElementById('mz-bull-btn');
+    const lbl      = document.getElementById('mz-zone-label');
+
+    // Reset all
+    if (bearBtn)  { bearBtn.style.border  = '2px solid transparent'; bearBtn.style.opacity  = '0.5'; }
+    if (avoidBtn) { avoidBtn.style.border = '2px solid transparent'; avoidBtn.style.opacity = '0.5'; }
+    if (bullBtn)  { bullBtn.style.border  = '2px solid transparent'; bullBtn.style.opacity  = '0.5'; }
+
+    // Highlight active zone
+    if (zone.zone === 'BEAR' && bearBtn) {
+      bearBtn.style.border   = '2px solid var(--red)';
+      bearBtn.style.opacity  = '1';
+      bearBtn.style.boxShadow = '0 0 8px rgba(255,34,68,0.3)';
+    } else if (zone.zone === 'BULL' && bullBtn) {
+      bullBtn.style.border   = '2px solid var(--green)';
+      bullBtn.style.opacity  = '1';
+      bullBtn.style.boxShadow = '0 0 8px rgba(0,255,136,0.3)';
+    } else if (avoidBtn) {
+      avoidBtn.style.border  = '2px solid var(--amber)';
+      avoidBtn.style.opacity = '1';
+    }
+
+    if (lbl) {
+      const col = zone.zone === 'BULL' ? 'var(--green)' : zone.zone === 'BEAR' ? 'var(--red)' : 'var(--amber)';
+      const bg  = zone.zone === 'BULL' ? 'rgba(0,255,136,0.06)' : zone.zone === 'BEAR' ? 'rgba(255,34,68,0.06)' : 'rgba(255,187,0,0.06)';
+      lbl.textContent   = zone.label || '--';
+      lbl.style.color   = col;
+      lbl.style.background = bg;
+    }
+  }
+
+  // ── Expiry Mode badge ──────────────────────────────────────────────────────
+  const expiryBadge = document.getElementById('mz-expiry-badge');
+  if (expiryBadge) {
+    // Show if today is Tuesday (expiry day) based on server data
+    const ist = new Date(new Date().toLocaleString('en-US', {timeZone:'Asia/Kolkata'}));
+    expiryBadge.style.display = (ist.getDay() === 2) ? 'block' : 'none';
+  }
+
+  // ── OI Imbalance Ratio ─────────────────────────────────────────────────────
+  const ratioEl    = document.getElementById('mz-imbalance-ratio');
+  const ratioLbl   = document.getElementById('mz-imbalance-label');
+  const ratioBar   = document.getElementById('mz-imbalance-bar');
+  const ratio = s.oiImbalanceRatio;
+  if (ratioEl && ratio !== null && ratio !== undefined) {
+    ratioEl.textContent = ratio.toFixed(2);
+    const bull = ratio > 1.15;
+    const bear = ratio < 0.75;
+    ratioEl.style.color = bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--amber)';
+    if (ratioLbl) {
+      ratioLbl.textContent = bull ? '🐂 Put writers dominating (bullish)' :
+                             bear ? '🐻 Call writers dominating (bearish)' :
+                                    'Mixed — no clear edge';
+      ratioLbl.style.color = bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--dim)';
+    }
+    // Bar: ratio 0=left(bear), 1.0=center, 2.0+=right(bull). Clamp 0–100%
+    if (ratioBar) {
+      const pct = Math.min(100, Math.max(0, (ratio / 2.0) * 100));
+      ratioBar.style.width = pct + '%';
+      ratioBar.style.background = bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--amber)';
+    }
+  } else if (ratioEl) {
+    ratioEl.textContent = '--';
+    if (ratioLbl) ratioLbl.textContent = 'Awaiting OI data';
+  }
+
+  // ── Murarka Entry Alert ────────────────────────────────────────────────────
+  const me    = s.murarkaEntry;
+  const wrap  = document.getElementById('murarka-entry-wrap');
+  const meLbl = document.getElementById('murarka-entry-label');
+  const meRsn = document.getElementById('murarka-entry-reason');
+  if (wrap && me) {
+    if (me.active) {
+      wrap.style.display = 'block';
+      const entryCol = me.side === 'CE' ? 'var(--green)' : 'var(--red)';
+      const entryBg  = me.side === 'CE' ? 'rgba(0,255,136,0.08)' : 'rgba(255,34,68,0.08)';
+      wrap.style.background   = entryBg;
+      wrap.style.borderColor  = entryCol;
+      if (meLbl) { meLbl.textContent = me.label; meLbl.style.color = entryCol; }
+      if (meRsn) meRsn.textContent = me.reason;
+      // Pulse effect on active entry
+      wrap.style.animation = 'none';
+      setTimeout(() => { if(wrap) wrap.style.animation = 'signalPulse 2s ease-in-out 3'; }, 50);
+    } else if (me.label && me.side) {
+      // Zone active but not at VWAP yet — show dimmed
+      wrap.style.display = 'block';
+      wrap.style.background  = 'rgba(0,0,0,0.2)';
+      wrap.style.borderColor = 'var(--border)';
+      if (meLbl) { meLbl.textContent = me.label; meLbl.style.color = 'var(--amber)'; }
+      if (meRsn) meRsn.textContent = me.reason;
+    } else {
+      wrap.style.display = 'none';
+    }
+  }
+
+  // ── Strike ΔOI Table — Murarka's Autotrender view ─────────────────────────
+  const oi = s.oiBuildup;
+  if (!oi) return;
+
+  const fmtK = v => {
+    if (!v && v !== 0) return '--';
+    const k = Math.round(v / 1000);
+    return (k >= 0 ? '+' : '') + k + 'K';
+  };
+
+  // CE Table (call writing = resistance building)
+  const ceTableEl = document.getElementById('mz-ce-table');
+  if (ceTableEl && Array.isArray(oi.topCEbuildup) && oi.topCEbuildup.length > 0) {
+    ceTableEl.innerHTML = oi.topCEbuildup.map((row, i) => {
+      const isTop = i === 0;
+      const delta = row.ceOIChange;
+      const isBuilding = delta > 0;
+      const col = isBuilding ? 'var(--red)' : 'var(--dim)';
+      return `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04);${isTop ? 'font-weight:700;' : ''}">
+        <span style="color:${isBuilding ? 'var(--text)' : 'var(--dim)'};">${row.strike}</span>
+        <span style="color:${col};">${fmtK(delta)}</span>
+      </div>`;
+    }).join('');
+  } else if (ceTableEl) {
+    ceTableEl.innerHTML = '<div style="color:var(--dim);font-size:8px;">Awaiting data…</div>';
+  }
+
+  // PE Table (put writing = support building)
+  const peTableEl = document.getElementById('mz-pe-table');
+  if (peTableEl && Array.isArray(oi.topPEbuildup) && oi.topPEbuildup.length > 0) {
+    peTableEl.innerHTML = oi.topPEbuildup.map((row, i) => {
+      const isTop = i === 0;
+      const delta = row.peOIChange;
+      const isBuilding = delta > 0;
+      const col = isBuilding ? 'var(--green)' : 'var(--dim)';
+      return `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04);${isTop ? 'font-weight:700;' : ''}">
+        <span style="color:${isBuilding ? 'var(--text)' : 'var(--dim)'};">${row.strike}</span>
+        <span style="color:${col};">${fmtK(delta)}</span>
+      </div>`;
+    }).join('');
+  } else if (peTableEl) {
+    peTableEl.innerHTML = '<div style="color:var(--dim);font-size:8px;">Awaiting data…</div>';
+  }
 }
 
 // ─── PCR TREND ───────────────────────────────────────────

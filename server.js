@@ -113,6 +113,13 @@ let marketState = {
     adx: null,
     earlyMom: { score: null, signal: 'NEUTRAL', strength: 0, label: 'Early Momentum — awaiting data', votes: [] },
     oiBuildup: { signal: 'NEUTRAL', strength: 0, label: 'OI Buildup — awaiting data', maxCEoiStrike: null, maxPEoiStrike: null, totalCEoiChange: null, totalPEoiChange: null },
+    // ── Murarka Strategy fields ───────────────────────────────────────────────
+    // PCR Zone: 'BULL' (>1.15) | 'AVOID' (0.75–1.15) | 'BEAR' (<0.75)
+    pcrZone: { zone: 'AVOID', label: 'Awaiting PCR…', color: 'amber', pcr: null },
+    // OI Imbalance Ratio = ΔPuts OI / ΔCalls OI (Murarka's key metric)
+    oiImbalanceRatio: null,
+    // Murarka Entry Alert: fires when PCR zone is active + price near VWAP
+    murarkaEntry: { active: false, side: null, label: 'No setup yet', reason: '' },
     entryWindow: { status:'closed', label:'Market Closed', safe:false },
     qualityGate: { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, srClear:true, passed:false },
     calendarEvents: [],
@@ -261,6 +268,46 @@ function pcrScore(v) {
     if (v >= 0.7) return -1;
     if (v >= 0.5) return -2;
     return -3;                  // extreme put build-up → very bearish
+}
+
+// ── Murarka PCR Zone + Entry Alert ────────────────────────────────────────────
+// Based on CA Nitin Murarka (SMC Global) methodology:
+//   PCR > 1.15 → Buy CE zone (bullish imbalance — put writers dominating)
+//   PCR < 0.75 → Buy PE zone (bearish imbalance — call writers dominating)
+//   0.75–1.15  → Avoid (market indecision — Murarka says don't trade)
+// Entry trigger: PCR in zone AND spot within ±0.15% of VWAP (VWAP dip/bounce)
+// On expiry days (Tuesday): tighten thresholds (1.1 / 0.8) — less noise
+function computeMurarkaZone(pcr, spot, vwap, isExpiry) {
+    const bullThr = isExpiry ? 1.10 : 1.15;
+    const bearThr = isExpiry ? 0.80 : 0.75;
+    let zone, label, color;
+    if (pcr === null) { zone = 'AVOID'; label = 'PCR N/A — Awaiting data'; color = 'amber'; }
+    else if (pcr > bullThr)  { zone = 'BULL'; label = `PCR ${pcr.toFixed(2)} > ${bullThr} — BUY CE Zone ✅`; color = 'green'; }
+    else if (pcr < bearThr)  { zone = 'BEAR'; label = `PCR ${pcr.toFixed(2)} < ${bearThr} — BUY PE Zone 🔻`; color = 'red'; }
+    else                     { zone = 'AVOID'; label = `PCR ${pcr !== null ? pcr.toFixed(2) : '--'} in ${bearThr}–${bullThr} — AVOID ⚠️`; color = 'amber'; }
+
+    // Murarka Entry Alert: PCR in actionable zone + spot within ±0.2% of VWAP
+    let murarkaEntry = { active: false, side: null, label: 'No Murarka setup', reason: '' };
+    if (zone !== 'AVOID' && spot && vwap && vwap > 0) {
+        const vwapDist = Math.abs((spot - vwap) / vwap) * 100;
+        if (vwapDist <= 0.2) {
+            const side = zone === 'BULL' ? 'CE' : 'PE';
+            murarkaEntry = {
+                active: true,
+                side,
+                label: `🎯 Murarka Entry! Buy ${side} — PCR ${zone} + Near VWAP (${vwapDist.toFixed(2)}% away)`,
+                reason: `PCR=${pcr?.toFixed(2)} | VWAP=₹${vwap?.toFixed(0)} | Spot=₹${spot?.toFixed(0)}`
+            };
+        } else {
+            murarkaEntry = {
+                active: false, side: zone === 'BULL' ? 'CE' : 'PE',
+                label: `PCR Zone ${zone} ✅ — Wait for VWAP touch (${vwapDist.toFixed(2)}% away)`,
+                reason: `Need spot ≤0.2% from VWAP for Murarka entry`
+            };
+        }
+    }
+
+    return { pcrZone: { zone, label, color, pcr }, murarkaEntry };
 }
 
 // ── ADX Calculator — Wilder's smoothing, period=14 ───────────────────────────
@@ -1905,7 +1952,29 @@ async function refreshPCR() {
                 topPEbuildup   : oiState.topPEbuildup,
                 fetchedAt      : oiState.fetchedAt,
             };
+
+            // ── Murarka OI Imbalance Ratio: ΔPuts OI / ΔCalls OI ─────────────
+            // The key metric Murarka reads from the option chain each morning.
+            // > 1.0 = more puts being written (bullish bias)
+            // < 1.0 = more calls being written (bearish bias)
+            const pOI = oiState.totalPEoiChange;
+            const cOI = oiState.totalCEoiChange;
+            if (pOI !== null && cOI !== null && cOI !== 0) {
+                marketState.oiImbalanceRatio = parseFloat((pOI / Math.abs(cOI)).toFixed(2));
+            } else {
+                marketState.oiImbalanceRatio = null;
+            }
         }
+
+        // ── Murarka PCR Zone + Entry Alert ────────────────────────────────────
+        const { pcrZone, murarkaEntry } = computeMurarkaZone(
+            marketState.pcr,
+            marketState.nifty,
+            marketState.vwap,
+            isExpiryDay()
+        );
+        marketState.pcrZone     = pcrZone;
+        marketState.murarkaEntry = murarkaEntry;
 
         // ── FII/DII — sync from nseData auto-fetch ────────────────────────────
         // nseData fetches FII/DII every 15 min on its own; we read it here.
