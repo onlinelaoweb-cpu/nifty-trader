@@ -117,8 +117,7 @@ html.vn-day .btab{color:#8090a0;}
 /* Desktop sidebar */
 html.vn-day #desktop-sidebar{background:linear-gradient(180deg,#ffffff 0%,#f0f4f8 100%);border-right:1px solid #c8d4e0;}
 html.vn-day #desktop-content{background:#f0f2f5;}
-/* Cards and sections */
-html.vn-day .signal-card,html.vn-day .ind-card,html.vn-day .card{background:#ffffff;border-color:#c8d4e0;}
+/* Price section */
 html.vn-day .price-section{background:linear-gradient(150deg,#ffffff 0%,#f0f4f8 60%,#e8ecf2 100%);}
 html.vn-day .price-section::before{background:radial-gradient(ellipse at 50% 0%,rgba(0,170,255,0.06) 0%,transparent 70%);}
 /* Icon buttons */
@@ -126,9 +125,6 @@ html.vn-day .icon-btn{background:rgba(200,212,224,0.5);border-color:#b0c0d0;colo
 html.vn-day .icon-btn.active{background:rgba(0,200,100,0.1);border-color:var(--green);}
 /* Section titles / panel text */
 html.vn-day .section-title,html.vn-day .panel-title{color:#2a3a4a;}
-/* Murarka dividers */
-html.vn-day .murarka-col-pcr,html.vn-day .murarka-col-oi,html.vn-day .murarka-col-entry{border-color:#c8d4e0;}
-html.vn-day .murarka-divider{background:#c8d4e0;}
 /* Splash/login always stay dark (brand identity) */
 html.vn-day #vn-splash,html.vn-day #vn-login{background:#020508 !important;}
 /* Day mode — remove dark-mode glows from text, use crisp drop shadows instead */
@@ -203,12 +199,6 @@ html.vn-day .tool-input::placeholder { color:#8090a0 !important; }
 /* --- Inline style overrides via attribute selector (JS-injected colors) --- */
 html.vn-day [style*="color:var(--dim)"] { color:#3a5060 !important; }
 html.vn-day [style*="color:var(--text)"] { color:#1a2530 !important; }
-html.vn-day [style*="color:var(--dim)"] { color:#3a5060 !important; }
-html.vn-day [style*="color:var(--dim)"] { color:#607080 !important; }
-html.vn-day [style*="color:var(--dim)"] { color:#3a5060 !important; }
-html.vn-day [style*="color:var(--dim)"] { color:#3a5060 !important; }
-html.vn-day [style*="color:var(--dim)"] { color:#3a5060 !important; }
-html.vn-day [style*="color:var(--dim)"] { color:#3a5060 !important; }
 
 /* --- Cards: ensure border + shadow separation on white bg --- */
 html.vn-day .signal-card,
@@ -218,13 +208,6 @@ html.vn-day .add-trade-card {
   background:#ffffff !important;
   border:1px solid #c0ccd8 !important;
   box-shadow:0 2px 8px rgba(0,0,0,0.08),0 1px 0 rgba(255,255,255,0.9) inset !important;
-}
-
-/* --- MTF cards (5MIN/15MIN/1HR) need visible borders --- */
-html.vn-day .mtf-card {
-  background:#f8fafc !important;
-  border:1px solid #b8c8d8 !important;
-  box-shadow:0 2px 6px rgba(0,0,0,0.07) !important;
 }
 
 /* --- RSI gauge / indicator cards --- */
