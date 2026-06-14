@@ -201,14 +201,14 @@ html.vn-day .flow-input::placeholder,
 html.vn-day .tool-input::placeholder { color:#8090a0 !important; }
 
 /* --- Inline style overrides via attribute selector (JS-injected colors) --- */
-html.vn-day [style*="color:#9ab8d0"] { color:#3a5060 !important; }
-html.vn-day [style*="color:#c8e0f4"] { color:#1a2530 !important; }
-html.vn-day [style*="color:#a0c0d8"] { color:#3a5060 !important; }
-html.vn-day [style*="color:#4a6a8a"] { color:#607080 !important; }
-html.vn-day [style*="color:#7090a0"] { color:#3a5060 !important; }
-html.vn-day [style*="color:#6a8090"] { color:#3a5060 !important; }
-html.vn-day [style*="color:#8aa0b8"] { color:#3a5060 !important; }
-html.vn-day [style*="color:#b0c8d8"] { color:#3a5060 !important; }
+html.vn-day [style*="color:var(--dim)"] { color:#3a5060 !important; }
+html.vn-day [style*="color:var(--text)"] { color:#1a2530 !important; }
+html.vn-day [style*="color:var(--dim)"] { color:#3a5060 !important; }
+html.vn-day [style*="color:var(--dim)"] { color:#607080 !important; }
+html.vn-day [style*="color:var(--dim)"] { color:#3a5060 !important; }
+html.vn-day [style*="color:var(--dim)"] { color:#3a5060 !important; }
+html.vn-day [style*="color:var(--dim)"] { color:#3a5060 !important; }
+html.vn-day [style*="color:var(--dim)"] { color:#3a5060 !important; }
 
 /* --- Cards: ensure border + shadow separation on white bg --- */
 html.vn-day .signal-card,
@@ -675,7 +675,7 @@ html.vn-day .an-sticky-header {
   box-shadow: 0 2px 12px rgba(0,0,0,0.08) !important;
 }
 /* Filter label text */
-html.vn-day .an-sticky-header [style*="color:#5a7a8a"] { color: #607080 !important; }
+html.vn-day .an-sticky-header [style*="color:var(--dim)"] { color: #607080 !important; }
 /* Filter pills */
 html.vn-day .an-pill {
   border-color: #b8c8d8 !important;
@@ -717,7 +717,7 @@ html.vn-day .an-ph {
   border-bottom-color: #c0ccd8 !important;
 }
 html.vn-day .an-pt { color: #0066bb !important; }
-html.vn-day [style*="color:#5a7a8a"] { color: #607080 !important; }
+html.vn-day [style*="color:var(--dim)"] { color: #607080 !important; }
 html.vn-day .an-tbl th {
   background: #edf1f5 !important;
   color: #607080 !important;
@@ -873,7 +873,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 
 /* TABS */
 .bottom-tabs{position:fixed;bottom:0;left:0;right:0;background:rgba(6,13,20,0.96);border-top:1px solid rgba(26,58,90,0.8);display:flex;z-index:200;backdrop-filter:blur(12px);padding:4px 4px calc(6px + env(safe-area-inset-bottom, 0px));}
-.btab{flex:1;padding:5px 2px 3px;text-align:center;cursor:pointer;font-size:9px;letter-spacing:0.8px;color:#5a7a8a;border:none;background:transparent;font-family:'Rajdhani',sans-serif;font-weight:700;border-radius:10px;transition:all 0.25s;position:relative;}
+.btab{flex:1;padding:5px 2px 3px;text-align:center;cursor:pointer;font-size:9px;letter-spacing:0.8px;color:var(--dim);border:none;background:transparent;font-family:'Rajdhani',sans-serif;font-weight:700;border-radius:10px;transition:all 0.25s;position:relative;}
 .btab .bi{font-size:18px;display:block;margin-bottom:2px;transition:all 0.25s;}
 .btab.active{color:var(--green);background:rgba(0,255,136,0.07);box-shadow:0 0 16px rgba(0,255,136,0.08);}
 .btab.active .bi{text-shadow:0 0 12px rgba(0,255,136,0.7);filter:drop-shadow(0 0 4px rgba(0,255,136,0.5));}
@@ -884,32 +884,38 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 /* Default = mobile: single column stack */
 .murarka-body {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr 1fr;   /* 2-col on mobile so all 4 sections visible */
+  grid-template-rows: auto auto;
   min-height: unset;
 }
 .murarka-divider { display: none; }
-.murarka-col-pcr   { border-bottom: 1px solid var(--border); }
-.murarka-col-oi    { border-bottom: 1px solid var(--border); }
-.murarka-col-entry { border-bottom: 1px solid var(--border); }
-.murarka-col-pcr .mz-zone-pills { flex-direction: row !important; gap: 4px; }
+/* Mobile 2×2 grid placement */
+.murarka-col-pcr   { grid-column:1; grid-row:1; border-bottom:1px solid var(--border); border-right:1px solid var(--border); padding:10px !important; }
+.murarka-col-oi    { grid-column:2; grid-row:1; border-bottom:1px solid var(--border); padding:10px !important; }
+.murarka-col-entry { grid-column:1; grid-row:2; border-right:1px solid var(--border); padding:10px !important; }
+.murarka-col-table { grid-column:2; grid-row:2; padding:10px !important; }
+/* Pills horizontal on mobile */
+.murarka-col-pcr .mz-zone-pills { flex-direction: column !important; gap: 3px; }
 /* Mobile font boosts */
-#mz-imbalance-ratio { font-size: 28px; }
-#murarka-entry-label { font-size: 11px; }
-#mz-zone-label { font-size: 10px; }
+#mz-imbalance-ratio { font-size: 24px; }
+#murarka-entry-label { font-size: 10px; }
+#mz-zone-label { font-size: 9px; }
+/* Strike table compact on mobile */
+.murarka-col-table .mz-ce-row,
+.murarka-col-table .mz-pe-row { font-size: 8px; }
 
-/* Tablet (≥ 600px): 2×2 grid */
-@media (min-width: 600px) and (max-width: 899px) {
+/* Tablet (≥ 600px): full 4-col horizontal */
+@media (min-width: 600px) {
   .murarka-body {
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    grid-template-rows: auto;
   }
-  .murarka-col-pcr   { grid-column:1; grid-row:1; border-bottom:1px solid var(--border); border-right:1px solid var(--border); }
-  .murarka-col-oi    { grid-column:2; grid-row:1; border-bottom:1px solid var(--border); border-right:none; }
-  .murarka-col-entry { grid-column:1; grid-row:2; border-bottom:none; border-right:1px solid var(--border); }
-  .murarka-col-table { grid-column:2; grid-row:2; border-bottom:none; }
-  .murarka-divider   { display: none; }
+  .murarka-col-pcr   { grid-column:1; grid-row:1; border-bottom:none; border-right:1px solid var(--border); padding:12px !important; }
+  .murarka-col-oi    { grid-column:2; grid-row:1; border-bottom:none; border-right:1px solid var(--border); padding:12px !important; }
+  .murarka-col-entry { grid-column:3; grid-row:1; border-bottom:none; border-right:1px solid var(--border); padding:12px !important; }
+  .murarka-col-table { grid-column:4; grid-row:1; border-bottom:none; padding:12px !important; }
   .murarka-col-pcr .mz-zone-pills { flex-direction: column !important; }
-
+  #mz-imbalance-ratio { font-size: 28px; }
   .ind-grid { grid-template-columns: repeat(3, 1fr); }
   .mtf-grid { grid-template-columns: repeat(3, 1fr); }
   .pcr-row  { grid-template-columns: repeat(4, 1fr); }
@@ -1230,17 +1236,17 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .wait .conf-bar{background:linear-gradient(90deg,#cc9900,var(--amber));}
 .conf-bar.strong-bull{animation:confGlowGreen 1.5s ease-in-out infinite;}
 .conf-bar.strong-bear{animation:confGlowRed 1.5s ease-in-out infinite;}
-.conf-label{font-size:11px;color:#a0c0d8;font-family:'Share Tech Mono',monospace;}
+.conf-label{font-size:11px;color:var(--dim);font-family:'Share Tech Mono',monospace;}
 .conf-strength{font-size:10px;font-weight:700;letter-spacing:1px;padding:2px 8px;border-radius:99px;display:inline-block;margin-left:6px;}
 .conf-strength.bull{background:rgba(0,255,136,0.15);color:var(--green);border:1px solid rgba(0,255,136,0.3);}
 .conf-strength.bear{background:rgba(255,34,68,0.15);color:var(--red);border:1px solid rgba(255,34,68,0.3);}
-.conf-ticks{display:flex;justify-content:space-between;font-size:9px;color:#4a6a8a;margin-top:3px;padding:0 1px;font-family:'Share Tech Mono',monospace;}
+.conf-ticks{display:flex;justify-content:space-between;font-size:9px;color:var(--dim);margin-top:3px;padding:0 1px;font-family:'Share Tech Mono',monospace;}
 
 /* COMMON */
 .strike-banner{margin:0 12px 8px;background:linear-gradient(135deg,var(--bg2),var(--bg3));border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:10px;padding:8px 14px;display:flex;align-items:center;justify-content:space-between;box-shadow:var(--card-shadow);}
 .strike-left{font-size:10px;color:var(--dim);letter-spacing:2px;}
 .strike-val{font-family:'Share Tech Mono',monospace;font-size:14px;color:var(--blue);}
-.status-pill{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:#c8e0f4;}
+.status-pill{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--text);}
 .sec-label{padding:0 14px;margin-bottom:6px;font-size:10px;letter-spacing:3px;color:var(--dim);text-transform:uppercase;font-family:'Share Tech Mono',monospace;display:flex;align-items:center;gap:8px;}
 .sec-label::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--border),transparent);}
 
@@ -1285,7 +1291,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .cl-item.auto-wait .cl-box{background:rgba(255,187,0,0.08);border-color:var(--amber);}
 .cl-item.auto-wait .cl-box::after{content:'…';color:var(--amber);font-size:10px;}
 .cl-text-wrap{flex:1;min-width:0;}
-.cl-text{font-size:12px;color:#c8e0f4;}
+.cl-text{font-size:12px;color:var(--text);}
 .cl-auto-val{font-family:'Share Tech Mono',monospace;font-size:10px;margin-top:1px;transition:color 0.3s;}
 .cl-auto-tag{font-size:9px;font-family:'Orbitron',monospace;font-weight:700;padding:1px 5px;border-radius:99px;margin-left:4px;letter-spacing:0.5px;vertical-align:middle;}
 .cl-auto-tag.auto{background:rgba(0,170,255,0.12);color:var(--blue);border:1px solid rgba(0,170,255,0.25);}
@@ -1313,8 +1319,8 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .mtf-card{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 6px;text-align:center;transition:border-color 0.3s;}
 .mtf-tf{font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:4px;font-family:'Share Tech Mono',monospace;}
 .mtf-sig{font-family:'Orbitron',monospace;font-size:9px;font-weight:700;margin-bottom:4px;}
-.mtf-stats{font-size:10px;color:#9ab8d0;line-height:1.6;}
-.mtf-rsi{font-family:'Share Tech Mono',monospace;color:#c8e0f4;}
+.mtf-stats{font-size:10px;color:var(--dim);line-height:1.6;}
+.mtf-rsi{font-family:'Share Tech Mono',monospace;color:var(--text);}
 .align-bar{display:flex;gap:4px;margin-top:8px;height:5px;}
 .align-seg{flex:1;border-radius:3px;background:var(--border);transition:background 0.5s;}
 .align-seg.bull{background:var(--green);box-shadow:0 0 8px var(--green);}
@@ -1334,9 +1340,9 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 /* INDICATORS */
 .ind-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0 12px;margin-bottom:8px;}
 .ind-card{background:linear-gradient(150deg,var(--bg2),#0c1a28);border:1px solid var(--border);border-radius:10px;padding:10px;transition:border-color 0.3s;box-shadow:var(--card-shadow);}
-.ind-label{font-size:10px;letter-spacing:1.5px;color:#9ab8d0;text-transform:uppercase;margin-bottom:4px;display:flex;align-items:center;justify-content:space-between;}
+.ind-label{font-size:10px;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase;margin-bottom:4px;display:flex;align-items:center;justify-content:space-between;}
 .ind-val{font-family:'Share Tech Mono',monospace;font-size:20px;font-weight:700;line-height:1;color:#ffffff;}
-.ind-sub{font-size:11px;color:#9ab8d0;margin-top:3px;}
+.ind-sub{font-size:11px;color:var(--dim);margin-top:3px;}
 .rsi-bar-wrap{height:3px;background:var(--border);border-radius:2px;margin-top:4px;}
 .rsi-bar{height:100%;border-radius:2px;transition:width 0.5s;}
 .rsi-zones{display:flex;justify-content:space-between;font-size:9px;color:#6a8a9a;margin-top:2px;}
@@ -1369,7 +1375,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .reasons-card{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 11px;}
 .reasons-title{font-size:9px;letter-spacing:3px;color:var(--dim);margin-bottom:6px;display:flex;align-items:center;gap:6px;}
 .reasons-title::after{content:'';flex:1;height:1px;background:var(--border);}
-.reason-row{display:flex;align-items:flex-start;gap:7px;padding:3px 0;border-bottom:1px solid var(--border);font-size:11px;color:#c8e0f4;line-height:1.5;}
+.reason-row{display:flex;align-items:flex-start;gap:7px;padding:3px 0;border-bottom:1px solid var(--border);font-size:11px;color:var(--text);line-height:1.5;}
 .reason-row:last-child{border-bottom:none;}
 .reason-row::before{content:'›';color:var(--dim);font-size:13px;}
 
@@ -1378,7 +1384,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .tg-btn{width:100%;padding:7px;background:rgba(170,136,255,0.08);border:1px solid var(--purple);color:var(--purple);border-radius:8px;font-family:'Orbitron',monospace;font-size:10px;font-weight:700;letter-spacing:2px;cursor:pointer;}
 #tg-msg{text-align:center;font-size:11px;font-family:'Share Tech Mono',monospace;margin-top:3px;height:15px;}
 .dot-live{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 1.5s infinite;flex-shrink:0;}
-.dot-off{width:7px;height:7px;border-radius:50%;background:#4a6a8a;flex-shrink:0;}
+.dot-off{width:7px;height:7px;border-radius:50%;background:var(--dim);flex-shrink:0;}
 .footer{text-align:center;font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);padding:5px 12px 0;display:flex;align-items:center;justify-content:center;gap:6px;}
 @keyframes flashG{0%{background:rgba(0,255,136,0.22);box-shadow:0 0 30px rgba(0,255,136,0.35) inset}60%{background:rgba(0,255,136,0.10);box-shadow:0 0 20px rgba(0,255,136,0.2) inset}100%{background:rgba(0,255,136,0.05);box-shadow:none}}
 @keyframes flashR{0%{background:rgba(255,34,68,0.22);box-shadow:0 0 30px rgba(255,34,68,0.35) inset}60%{background:rgba(255,34,68,0.10);box-shadow:0 0 20px rgba(255,34,68,0.2) inset}100%{background:rgba(255,34,68,0.05);box-shadow:none}}
@@ -1394,7 +1400,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .mcb-icon{font-size:16px;line-height:1;}
 .mcb-text{display:flex;flex-direction:column;gap:1px;}
 .mcb-title{font-family:'Orbitron',monospace;font-size:9px;font-weight:700;letter-spacing:1px;color:var(--amber);}
-.mcb-sub{font-family:'Share Tech Mono',monospace;font-size:10px;color:#9ab8d0;}
+.mcb-sub{font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);}
 .mcb-countdown{font-family:'Share Tech Mono',monospace;font-size:13px;font-weight:700;color:var(--amber);letter-spacing:1px;white-space:nowrap;}
 .mkt-closed-banner.weekend .mcb-title,.mkt-closed-banner.weekend .mcb-countdown{color:var(--purple);}
 .install-txt{font-size:11px;color:var(--blue);}
@@ -1424,11 +1430,11 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .guide-card.danger{border-color:rgba(255,34,68,0.4);background:linear-gradient(135deg,rgba(255,34,68,0.05),var(--bg2));}
 .guide-card.good{border-color:rgba(0,255,136,0.3);background:linear-gradient(135deg,rgba(0,255,136,0.04),var(--bg2));}
 .guide-card-title{font-family:'Orbitron',monospace;font-size:9px;font-weight:700;letter-spacing:1.5px;color:var(--text);margin-bottom:7px;}
-.guide-card p{font-size:12px;color:#9ab8d0;line-height:1.6;margin-bottom:5px;}
+.guide-card p{font-size:12px;color:var(--dim);line-height:1.6;margin-bottom:5px;}
 .guide-card p:last-child{margin-bottom:0;}
 .guide-card p strong{color:var(--text);}
 .guide-rule-list{list-style:none;padding:0;margin:0;}
-.guide-rule-list li{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid rgba(26,58,90,0.6);font-size:12px;color:#9ab8d0;line-height:1.5;}
+.guide-rule-list li{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid rgba(26,58,90,0.6);font-size:12px;color:var(--dim);line-height:1.5;}
 .guide-rule-list li:last-child{border-bottom:none;}
 .guide-rule-list li::before{content:'→';color:var(--amber);flex-shrink:0;font-family:'Share Tech Mono',monospace;}
 .guide-step-list{list-style:none;padding:0;margin:0;}
@@ -1451,11 +1457,11 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .guide-checklist{list-style:none;padding:0;margin:0;}
 .guide-checklist li{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid rgba(26,58,90,0.4);font-size:12px;line-height:1.5;}
 .guide-checklist li:last-child{border-bottom:none;}
-.guide-checklist li.ok{color:#9ab8d0;}.guide-checklist li.ok::before{content:'✓';color:var(--green);flex-shrink:0;}
-.guide-checklist li.no{color:#9ab8d0;}.guide-checklist li.no::before{content:'✗';color:var(--red);flex-shrink:0;}
+.guide-checklist li.ok{color:var(--dim);}.guide-checklist li.ok::before{content:'✓';color:var(--green);flex-shrink:0;}
+.guide-checklist li.no{color:var(--dim);}.guide-checklist li.no::before{content:'✗';color:var(--red);flex-shrink:0;}
 .money-mini-table{width:100%;border-collapse:collapse;font-size:11px;font-family:'Share Tech Mono',monospace;margin-top:8px;}
 .money-mini-table th{color:var(--dim);font-size:9px;letter-spacing:1px;padding:4px 6px;border-bottom:1px solid var(--border);text-align:left;}
-.money-mini-table td{padding:6px 6px;border-bottom:1px solid rgba(26,58,90,0.3);color:#9ab8d0;}
+.money-mini-table td{padding:6px 6px;border-bottom:1px solid rgba(26,58,90,0.3);color:var(--dim);}
 .money-mini-table td.g{color:var(--green);}.money-mini-table td.r{color:var(--red);}.money-mini-table td.w{color:var(--text);}
 .guide-quote{border-left:2px solid var(--dim);padding:8px 12px;margin:10px 0;font-size:12px;color:var(--dim);font-style:italic;line-height:1.6;}
 .guide-warn-inline{background:rgba(255,187,0,0.06);border:1px solid rgba(255,187,0,0.25);border-radius:7px;padding:8px 12px;display:flex;gap:8px;align-items:flex-start;margin:8px 0;}
@@ -1482,7 +1488,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .tf-field label{display:block;font-size:9px;color:var(--dim);letter-spacing:1px;margin-bottom:4px;font-family:'Share Tech Mono',monospace;}
 .tf-input{width:100%;background:var(--bg3);border:1px solid var(--border);color:#fff;padding:7px 7px;border-radius:6px;font-family:'Share Tech Mono',monospace;font-size:13px;outline:none;text-align:center;transition:border-color 0.2s;}
 .tf-input:focus{border-color:var(--blue);box-shadow:0 0 0 2px rgba(0,170,255,0.1);}
-.tf-input::placeholder{color:#4a6a8a;}
+.tf-input::placeholder{color:var(--dim);}
 .tf-select{width:100%;background:var(--bg3);border:1px solid var(--border);color:#fff;padding:7px 7px;border-radius:6px;font-family:'Share Tech Mono',monospace;font-size:13px;outline:none;}
 .add-trade-btn{width:100%;padding:10px;background:rgba(0,255,136,0.1);border:1px solid var(--green);color:var(--green);border-radius:8px;font-family:'Orbitron',monospace;font-size:11px;font-weight:700;letter-spacing:2px;cursor:pointer;transition:all 0.2s;}
 .add-trade-btn:hover{background:rgba(0,255,136,0.18);box-shadow:0 0 12px rgba(0,255,136,0.2);}
@@ -1498,10 +1504,10 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .trade-type-badge.pe{background:rgba(255,34,68,0.15);color:var(--red);border:1px solid rgba(255,34,68,0.4);}
 .trade-time{font-size:11px;color:var(--dim);font-family:'Share Tech Mono',monospace;}
 .trade-pnl{font-family:'Share Tech Mono',monospace;font-size:15px;font-weight:700;}
-.trade-item-row2{display:flex;align-items:center;gap:8px;font-size:11px;color:#9ab8d0;}
+.trade-item-row2{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);}
 .trade-exit-row{display:flex;gap:6px;margin-top:6px;}
 .exit-input{flex:1;background:var(--bg3);border:1px solid var(--border);color:#fff;padding:5px 7px;border-radius:5px;font-family:'Share Tech Mono',monospace;font-size:13px;outline:none;text-align:center;}
-.exit-input::placeholder{color:#4a6a8a;}
+.exit-input::placeholder{color:var(--dim);}
 .exit-btn{padding:5px 12px;background:rgba(0,255,136,0.1);border:1px solid var(--green);color:var(--green);border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;font-family:'Rajdhani',sans-serif;}
 .del-btn{padding:5px 9px;background:rgba(255,34,68,0.1);border:1px solid rgba(255,34,68,0.3);color:var(--red);border-radius:5px;font-size:12px;cursor:pointer;}
 
@@ -1519,7 +1525,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .event-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
 .event-dot.high{background:var(--red);box-shadow:0 0 6px var(--red);}.event-dot.medium{background:var(--amber);}.event-dot.low{background:var(--green);}
 .event-time-lbl{font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--dim);min-width:35px;}
-.event-title-lbl{font-size:12px;color:#c8e0f4;flex:1;}
+.event-title-lbl{font-size:12px;color:var(--text);flex:1;}
 .event-del{background:transparent;border:none;color:var(--dim);font-size:13px;cursor:pointer;padding:0 4px;}
 
 /* ═══ BREADTH ═══ */
@@ -1530,37 +1536,37 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .ad-up{font-family:'Share Tech Mono',monospace;font-size:34px;font-weight:700;color:var(--green);text-shadow:0 0 20px rgba(0,255,136,0.4);}
 .ad-dn{font-family:'Share Tech Mono',monospace;font-size:34px;font-weight:700;color:var(--red);text-shadow:0 0 20px rgba(255,34,68,0.4);}
 .ad-sep{font-size:20px;color:var(--dim);}
-.ad-stats{display:flex;justify-content:space-between;font-size:10px;font-family:'Share Tech Mono',monospace;color:#c8e0f4;}
+.ad-stats{display:flex;justify-content:space-between;font-size:10px;font-family:'Share Tech Mono',monospace;color:var(--text);}
 .ad-signal{display:inline-block;padding:3px 10px;border-radius:10px;font-family:'Orbitron',monospace;font-size:10px;font-weight:700;letter-spacing:2px;margin-top:5px;}
 .weight-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px;}
 .wcard{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:7px;text-align:center;}
-.wcard-label{font-size:9px;color:#9ab8d0;letter-spacing:1px;margin-bottom:2px;}
+.wcard-label{font-size:9px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;}
 .wcard-val{font-family:'Share Tech Mono',monospace;font-size:17px;font-weight:700;}
 .flow-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;}
 .flow-title{font-family:'Orbitron',monospace;font-size:10px;color:var(--blue);letter-spacing:2px;margin-bottom:7px;}
 .flow-inputs{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:7px;}
-.flow-field label{display:block;font-size:9px;color:#9ab8d0;letter-spacing:1px;margin-bottom:3px;}
+.flow-field label{display:block;font-size:9px;color:var(--dim);letter-spacing:1px;margin-bottom:3px;}
 .flow-input{width:100%;background:var(--bg3);border:1px solid var(--border);color:#fff;padding:5px 7px;border-radius:5px;font-family:'Share Tech Mono',monospace;font-size:13px;outline:none;text-align:center;}
-.flow-input::placeholder{color:#4a6a8a;}.flow-input:focus{border-color:var(--blue);}
+.flow-input::placeholder{color:var(--dim);}.flow-input:focus{border-color:var(--blue);}
 .flow-result{background:var(--bg3);border-radius:8px;padding:7px;text-align:center;margin-top:5px;}
 .flow-dom{font-family:'Orbitron',monospace;font-size:13px;font-weight:700;letter-spacing:2px;}
-#flow-details{font-size:10px;color:#9ab8d0;margin-top:3px;}
+#flow-details{font-size:10px;color:var(--dim);margin-top:3px;}
 .pcr-trend-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;}
 .trend-title{font-family:'Orbitron',monospace;font-size:10px;color:var(--amber);letter-spacing:2px;margin-bottom:7px;}
 .trend-list{max-height:130px;overflow-y:auto;}
-.trend-row{display:flex;align-items:center;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border);font-size:11px;font-family:'Share Tech Mono',monospace;color:#c8e0f4;}
+.trend-row{display:flex;align-items:center;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border);font-size:11px;font-family:'Share Tech Mono',monospace;color:var(--text);}
 .trend-row:last-child{border-bottom:none;}
 .fiidii-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;}
 .fiidii-title{font-family:'Orbitron',monospace;font-size:10px;color:var(--purple);letter-spacing:2px;margin-bottom:7px;}
 .fiidii-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:7px;}
-.fiidii-section label{display:block;font-size:9px;color:#9ab8d0;letter-spacing:1px;margin-bottom:3px;font-weight:700;}
+.fiidii-section label{display:block;font-size:9px;color:var(--dim);letter-spacing:1px;margin-bottom:3px;font-weight:700;}
 .fiidii-row{display:flex;gap:5px;margin-bottom:4px;}
-.fiidii-row label{font-size:9px;color:#9ab8d0;width:30px;flex-shrink:0;padding-top:5px;}
+.fiidii-row label{font-size:9px;color:var(--dim);width:30px;flex-shrink:0;padding-top:5px;}
 .fiidii-input{flex:1;background:var(--bg3);border:1px solid var(--border);color:#fff;padding:4px 5px;border-radius:5px;font-family:'Share Tech Mono',monospace;font-size:12px;outline:none;text-align:center;}
 .fiidii-submit{width:100%;padding:6px;background:rgba(170,136,255,0.1);border:1px solid var(--purple);color:var(--purple);border-radius:6px;font-family:'Orbitron',monospace;font-size:10px;font-weight:700;letter-spacing:1px;cursor:pointer;}
 .fiidii-result{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:5px;}
 .fiidii-net{background:var(--bg3);border-radius:7px;padding:7px;text-align:center;}
-.fiidii-net-label{font-size:9px;color:#9ab8d0;letter-spacing:1px;margin-bottom:2px;}
+.fiidii-net-label{font-size:9px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;}
 .fiidii-net-val{font-family:'Share Tech Mono',monospace;font-size:15px;font-weight:700;}
 /* ── A/D DIAL ── */
 .ad-dial-wrap{display:flex;flex-direction:column;align-items:center;margin:4px 0 2px;}
@@ -1572,22 +1578,22 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .sector-heatmap-title{font-family:'Orbitron',monospace;font-size:10px;color:var(--amber);letter-spacing:2px;margin-bottom:7px;}
 .sector-heatmap{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;}
 .sector-cell{border:1px solid;border-radius:6px;padding:5px 3px;text-align:center;transition:all 0.5s;}
-.sc-label{font-size:8px;font-weight:700;letter-spacing:1px;color:#9ab8d0;margin-bottom:2px;}
+.sc-label{font-size:8px;font-weight:700;letter-spacing:1px;color:var(--dim);margin-bottom:2px;}
 .sc-chg{font-family:'Share Tech Mono',monospace;font-size:11px;font-weight:700;}
 /* ── FII LIVE NET ── */
 .fii-live-preview{background:var(--bg3);border-radius:8px;padding:8px 8px 6px;margin-bottom:7px;}
 .fii-nets-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:5px;}
 .fii-net-box{text-align:center;}
-.fii-net-lbl{font-size:9px;color:#9ab8d0;letter-spacing:1px;margin-bottom:2px;}
+.fii-net-lbl{font-size:9px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;}
 .fii-net-big{font-family:'Share Tech Mono',monospace;font-size:16px;font-weight:700;letter-spacing:1px;}
 .fii-combined-row{display:flex;align-items:center;justify-content:space-between;padding:5px 6px;background:rgba(255,255,255,0.03);border-radius:5px;border:1px solid var(--border);}
-.fii-comb-lbl{font-size:9px;color:#9ab8d0;letter-spacing:2px;}
+.fii-comb-lbl{font-size:9px;color:var(--dim);letter-spacing:2px;}
 .fii-comb-val{font-family:'Share Tech Mono',monospace;font-size:14px;font-weight:700;}
 .fii-bias-tag{font-family:'Orbitron',monospace;font-size:9px;font-weight:700;padding:1px 7px;border-radius:99px;letter-spacing:1px;}
 .stock-list{background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:8px;}
-.stock-header{display:grid;grid-template-columns:1fr 2fr 1fr;padding:5px 10px;background:var(--bg3);font-size:9px;letter-spacing:2px;color:#9ab8d0;}
+.stock-header{display:grid;grid-template-columns:1fr 2fr 1fr;padding:5px 10px;background:var(--bg3);font-size:9px;letter-spacing:2px;color:var(--dim);}
 .stock-row{display:grid;grid-template-columns:1fr 2fr 1fr;padding:4px 10px;border-top:1px solid var(--border);align-items:center;}
-.stock-wt{font-size:9px;color:#9ab8d0;font-family:'Share Tech Mono',monospace;}
+.stock-wt{font-size:9px;color:var(--dim);font-family:'Share Tech Mono',monospace;}
 .stock-name{font-size:11px;font-weight:700;}
 .stock-chg{font-family:'Share Tech Mono',monospace;font-size:11px;font-weight:700;text-align:right;}
 
@@ -1597,7 +1603,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .global-bias-card.bull{background:rgba(0,255,136,0.05);border-color:var(--green);}
 .global-bias-card.bear{background:rgba(255,34,68,0.05);border-color:var(--red);}
 .global-bias-card.neut{background:rgba(255,187,0,0.05);border-color:var(--amber);}
-.global-bias-label{font-size:10px;color:#9ab8d0;letter-spacing:3px;margin-bottom:4px;}
+.global-bias-label{font-size:10px;color:var(--dim);letter-spacing:3px;margin-bottom:4px;}
 .global-bias-value{font-family:'Orbitron',monospace;font-size:20px;font-weight:900;letter-spacing:3px;}
 .global-section{margin-bottom:8px;}
 .global-section-title{font-size:9px;letter-spacing:3px;color:var(--dim);margin-bottom:5px;display:flex;align-items:center;gap:6px;}
@@ -1606,12 +1612,12 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .global-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;}
 .gitem{background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:6px 8px;display:flex;align-items:center;justify-content:space-between;transition:border-color 0.3s;}
 .gitem.hi{border-left:3px solid;}
-.gitem-name{font-size:9px;color:#9ab8d0;letter-spacing:1px;}
+.gitem-name{font-size:9px;color:var(--dim);letter-spacing:1px;}
 .gitem-right{text-align:right;}
 .gitem-price{font-family:'Share Tech Mono',monospace;font-size:12px;font-weight:700;color:#ffffff;}
 .gitem-chg{font-family:'Share Tech Mono',monospace;font-size:10px;margin-top:1px;}
 .gitem-chg.up{color:var(--green);}.gitem-chg.down{color:var(--red);}.gitem-chg.flat{color:#8ab0c8;}
-#global-updated{font-size:10px;color:#9ab8d0;margin-top:3px;}
+#global-updated{font-size:10px;color:var(--dim);margin-top:3px;}
 /* ── Global Score Badge ── */
 .global-score-badge{display:flex;align-items:center;justify-content:space-between;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:7px 12px;margin-bottom:8px;}
 .global-score-label{font-size:9px;letter-spacing:3px;color:var(--dim);}
@@ -1627,7 +1633,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .cal-impact.high{background:rgba(255,34,68,0.15);color:var(--red);}
 .cal-impact.medium{background:rgba(255,187,0,0.15);color:var(--amber);}
 .cal-impact.low{background:rgba(122,154,184,0.15);color:var(--dim);}
-.cal-title{font-size:11px;color:#c8e0f4;flex:1;line-height:1.4;}
+.cal-title{font-size:11px;color:var(--text);flex:1;line-height:1.4;}
 .cal-time{font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--dim);text-align:right;flex-shrink:0;}
 .cal-country{font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(26,58,90,0.5);color:#7a9ab8;flex-shrink:0;}
 .cal-today{background:rgba(255,187,0,0.05);border-color:rgba(255,187,0,0.3);}
@@ -1642,11 +1648,22 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 /* ═══ CHART ═══ */
 .chart-wrap{padding:12px;}
 .chart-controls{display:flex;gap:6px;margin-bottom:8px;}
-.chart-btn{background:var(--bg3);border:1px solid var(--border);color:#9ab8d0;border-radius:5px;padding:4px 11px;font-size:11px;font-family:'Rajdhani',sans-serif;font-weight:700;cursor:pointer;}
+.chart-btn{background:var(--bg3);border:1px solid var(--border);color:var(--dim);border-radius:5px;padding:4px 11px;font-size:11px;font-family:'Rajdhani',sans-serif;font-weight:700;cursor:pointer;}
 .chart-btn.active{border-color:var(--green);color:var(--green);background:rgba(0,255,136,0.08);}
 .chart-box{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;}
 #chart-canvas{width:100%;height:200px;display:block;}
-.chart-legend{display:flex;gap:10px;margin-top:5px;font-size:10px;color:#9ab8d0;flex-wrap:wrap;}
+.chart-legend{display:flex;gap:10px;margin-top:5px;font-size:10px;color:var(--dim);flex-wrap:wrap;}
+/* Overlay toggle buttons (VOL / RSI / SIG / S/R) */
+.chart-overlay-btn{
+  background:var(--bg3);border:1px solid var(--border);color:var(--dim);
+  border-radius:4px;padding:3px 8px;font-size:9px;font-family:'Share Tech Mono',monospace;
+  font-weight:700;cursor:pointer;letter-spacing:1px;transition:all 0.15s;
+}
+.chart-overlay-btn.active{border-color:var(--blue);color:var(--blue);background:rgba(0,120,200,0.1);}
+/* Day mode chart box */
+html.vn-day .chart-box{background:#f5f8fb !important;border-color:#b8c8d8 !important;}
+html.vn-day .chart-overlay-btn{background:#edf1f5 !important;border-color:#c0ccd8 !important;color:#607080 !important;}
+html.vn-day .chart-overlay-btn.active{border-color:var(--blue) !important;color:var(--blue) !important;background:rgba(0,120,200,0.08) !important;}
 .legend-item{display:flex;align-items:center;gap:4px;}
 .legend-dot{width:8px;height:3px;border-radius:2px;}
 
@@ -1657,32 +1674,32 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .an-card.good::before{background:linear-gradient(90deg,transparent,var(--green),transparent);}
 .an-card.bad::before{background:linear-gradient(90deg,transparent,var(--red),transparent);}
 .an-card.warn2::before{background:linear-gradient(90deg,transparent,#ffcc00,transparent);}
-.an-label{font-family:var(--mono);font-size:8px;letter-spacing:2px;color:#5a7a8a;text-transform:uppercase;margin-bottom:4px;}
+.an-label{font-family:var(--mono);font-size:8px;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin-bottom:4px;}
 .an-val{font-family:var(--mono);font-size:22px;font-weight:700;line-height:1;}
 .an-val.green{color:var(--green);text-shadow:0 0 12px rgba(0,255,136,0.4);}
 .an-val.red{color:var(--red);text-shadow:0 0 12px rgba(255,68,102,0.4);}
 .an-val.blue{color:var(--blue);text-shadow:0 0 12px rgba(0,200,255,0.3);}
 .an-val.warn{color:#ffcc00;text-shadow:0 0 12px rgba(255,204,0,0.4);}
-.an-sub{font-size:9px;color:#5a7a8a;margin-top:3px;font-family:var(--mono);}
+.an-sub{font-size:9px;color:var(--dim);margin-top:3px;font-family:var(--mono);}
 .an-panel{background:var(--bg2);border:1px solid rgba(0,200,255,0.1);border-radius:8px;overflow:hidden;}
 .an-ph{padding:8px 12px;border-bottom:1px solid rgba(0,200,255,0.1);background:rgba(10,37,64,0.5);display:flex;align-items:center;justify-content:space-between;}
 .an-pt{font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--blue);text-transform:uppercase;}
 .an-bar-item{margin-bottom:8px;}
-.an-bar-label{display:flex;justify-content:space-between;font-size:9px;color:#9ab8d0;font-family:var(--mono);margin-bottom:3px;}
+.an-bar-label{display:flex;justify-content:space-between;font-size:9px;color:var(--dim);font-family:var(--mono);margin-bottom:3px;}
 .an-bar-track{height:4px;background:rgba(0,200,255,0.08);border-radius:2px;overflow:hidden;}
 .an-bar-fill{height:100%;border-radius:2px;transition:width 0.8s cubic-bezier(0.4,0,0.2,1);}
 .an-bar-fill.g{background:linear-gradient(90deg,var(--green),rgba(0,255,136,0.5));}
 .an-bar-fill.r{background:linear-gradient(90deg,var(--red),rgba(255,68,102,0.5));}
 .an-bar-fill.b{background:linear-gradient(90deg,var(--blue),rgba(0,200,255,0.5));}
 .an-bar-fill.w{background:linear-gradient(90deg,#ffcc00,rgba(255,204,0,0.5));}
-.an-pill{padding:3px 10px;border-radius:20px;font-size:9px;font-family:var(--mono);cursor:pointer;border:1px solid rgba(0,200,255,0.2);color:#5a7a8a;background:transparent;transition:all 0.15s;letter-spacing:0.5px;}
+.an-pill{padding:3px 10px;border-radius:20px;font-size:9px;font-family:var(--mono);cursor:pointer;border:1px solid rgba(0,200,255,0.2);color:var(--dim);background:transparent;transition:all 0.15s;letter-spacing:0.5px;}
 .an-pill.active-all{border-color:var(--blue);color:var(--blue);background:rgba(0,200,255,0.1);}
 .an-pill.active-call{border-color:var(--green);color:var(--green);background:rgba(0,255,136,0.1);}
 .an-pill.active-put{border-color:var(--red);color:var(--red);background:rgba(255,68,102,0.1);}
 .an-pill.active-gate{border-color:#ffcc00;color:#ffcc00;background:rgba(255,204,0,0.1);}
 .an-pill.active-date{border-color:var(--blue);color:var(--blue);background:rgba(0,200,255,0.1);}
 .an-tbl{width:100%;border-collapse:collapse;font-size:10px;}
-.an-tbl th{font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid rgba(0,200,255,0.1);text-align:left;background:rgba(10,37,64,0.5);position:sticky;top:0;z-index:1;}
+.an-tbl th{font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase;padding:6px 8px;border-bottom:1px solid rgba(0,200,255,0.1);text-align:left;background:rgba(10,37,64,0.5);position:sticky;top:0;z-index:1;}
 .an-tbl td{padding:6px 8px;border-bottom:1px solid rgba(0,200,255,0.05);font-family:var(--mono);font-size:9px;white-space:nowrap;}
 .an-tbl tr:hover td{background:rgba(0,200,255,0.04);}
 /* ── Analytics sticky header ─────────────────────────────────────────────── */
@@ -1729,18 +1746,18 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .tool-title{font-family:'Orbitron',monospace;font-size:11px;color:var(--purple);letter-spacing:2px;margin-bottom:12px;}
 .tool-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;}
 .tool-field{display:flex;flex-direction:column;}
-.tool-field label{display:block;font-size:9px;color:#9ab8d0;letter-spacing:2px;margin-bottom:5px;font-family:'Share Tech Mono',monospace;}
+.tool-field label{display:block;font-size:9px;color:var(--dim);letter-spacing:2px;margin-bottom:5px;font-family:'Share Tech Mono',monospace;}
 .tool-input{width:100%;background:var(--bg3);border:1px solid var(--border);color:#fff;padding:8px 10px;border-radius:7px;font-family:'Share Tech Mono',monospace;font-size:14px;outline:none;text-align:center;transition:border-color 0.2s;}
-.tool-input::placeholder{color:#4a6a8a;}.tool-input:focus{border-color:var(--blue);box-shadow:0 0 0 2px rgba(0,170,255,0.1);}
+.tool-input::placeholder{color:var(--dim);}.tool-input:focus{border-color:var(--blue);box-shadow:0 0 0 2px rgba(0,170,255,0.1);}
 .tool-input[readonly]{color:var(--dim);}
 .tool-btn{width:100%;padding:10px;background:rgba(0,170,255,0.1);border:1px solid var(--blue);color:var(--blue);border-radius:8px;font-family:'Orbitron',monospace;font-size:11px;font-weight:700;letter-spacing:2px;cursor:pointer;margin-bottom:10px;transition:all 0.2s;}
 .result-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;}
 .result-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
 .result-grid-4{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
 .res-card{background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:9px;text-align:center;}
-.res-label{font-size:10px;color:#9ab8d0;letter-spacing:1px;margin-bottom:4px;font-family:'Share Tech Mono',monospace;}
+.res-label{font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:4px;font-family:'Share Tech Mono',monospace;}
 .res-val{font-family:'Share Tech Mono',monospace;font-size:17px;font-weight:700;}
-.res-sub{font-size:10px;color:#9ab8d0;margin-top:3px;}
+.res-sub{font-size:10px;color:var(--dim);margin-top:3px;}
 
 /* Theta alert */
 .theta-alert{background:rgba(255,34,68,0.08);border:1px solid rgba(255,34,68,0.3);border-radius:8px;padding:8px 12px;margin-top:8px;font-size:11px;color:#ff8888;text-align:center;}
@@ -1750,14 +1767,14 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .greek-card{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;text-align:center;}
 .greek-name{font-family:'Orbitron',monospace;font-size:11px;letter-spacing:1px;margin-bottom:2px;}
 .greek-val{font-family:'Share Tech Mono',monospace;font-size:18px;font-weight:700;margin-bottom:2px;}
-.greek-desc{font-size:9px;color:#9ab8d0;}
+.greek-desc{font-size:9px;color:var(--dim);}
 
 /* Position sizing result */
 .ps-result{background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:10px;text-align:center;margin-top:8px;}
 .ps-lots{font-family:'Orbitron',monospace;font-size:24px;font-weight:700;color:var(--green);}
-.ps-note{font-size:11px;color:#9ab8d0;margin-top:4px;}
+.ps-note{font-size:11px;color:var(--dim);margin-top:4px;}
 
-.tool-note{font-size:10px;color:#9ab8d0;text-align:center;margin-top:6px;}
+.tool-note{font-size:10px;color:var(--dim);text-align:center;margin-top:6px;}
 
 /* ═══ MOMENTUM RADAR ═══ */
 .em-card{background:linear-gradient(150deg,var(--bg2),#0c1a28);border:1px solid var(--border);border-radius:var(--card-radius);padding:12px 14px;margin-bottom:7px;transition:border-color 0.5s,background 0.5s;box-shadow:var(--card-shadow);}
@@ -1776,7 +1793,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .em-vote-row:last-child{border-bottom:none;}
 .em-vote-icon{font-family:'Share Tech Mono',monospace;font-size:12px;min-width:10px;font-weight:700;}
 .em-vote-name{color:var(--dim);min-width:90px;font-size:10px;letter-spacing:0.5px;}
-.em-vote-reason{color:#c8e0f4;flex:1;}
+.em-vote-reason{color:var(--text);flex:1;}
 .oi-walls{display:grid;grid-template-columns:1fr 1fr;gap:7px;}
 .oi-wall-card{border-radius:9px;padding:9px;text-align:center;}
 .oi-wall-label{font-size:9px;letter-spacing:2px;margin-bottom:3px;font-weight:700;font-family:'Share Tech Mono',monospace;}
@@ -1801,10 +1818,10 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .suggest-box{background:var(--bg3);border-radius:7px;padding:7px 5px;text-align:center;border:1px solid var(--border);}
 .suggest-box-label{font-size:9px;color:var(--dim);letter-spacing:1px;margin-bottom:3px;font-family:'Share Tech Mono',monospace;}
 .suggest-box-val{font-family:'Share Tech Mono',monospace;font-size:14px;font-weight:700;}
-.suggest-reasoning{font-size:12px;color:#9ab8d0;line-height:1.6;padding:8px 0 4px;border-top:1px solid var(--border);}
+.suggest-reasoning{font-size:12px;color:var(--dim);line-height:1.6;padding:8px 0 4px;border-top:1px solid var(--border);}
 .suggest-detail{font-family:'Share Tech Mono',monospace;font-size:12px;color:var(--text);line-height:1.8;letter-spacing:0.3px;}
 .suggest-detail b{color:var(--blue);font-weight:700;}
-.suggest-rationale{font-size:11px;color:#9ab8d0;line-height:1.6;padding:7px 0 3px;border-top:1px solid var(--border);font-style:italic;}
+.suggest-rationale{font-size:11px;color:var(--dim);line-height:1.6;padding:7px 0 3px;border-top:1px solid var(--border);font-style:italic;}
 .suggest-conf{display:inline-block;margin-top:7px;padding:3px 10px;border-radius:99px;font-size:10px;font-weight:700;font-family:'Share Tech Mono',monospace;letter-spacing:1px;background:rgba(155,100,255,0.12);border:1px solid rgba(155,100,255,0.35);color:var(--purple);}
 .suggest-footer{display:flex;align-items:center;justify-content:space-between;margin-top:7px;font-size:10px;color:var(--dim);font-family:'Share Tech Mono',monospace;}
 .suggest-countdown{font-size:9px;color:var(--dim);font-family:'Share Tech Mono',monospace;transition:color 0.3s;}
@@ -1982,7 +1999,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="conf-label" id="conf-text">CONFIDENCE: 0%</div>
         <span class="conf-strength" id="conf-strength" style="display:none"></span>
       </div>
-      <div class="conf-ticks"><span>0</span><span>25</span><span style="color:var(--amber)">50</span><span id="conf-tick65" style="color:#4a6a8a">65</span><span>100</span></div>
+      <div class="conf-ticks"><span>0</span><span>25</span><span style="color:var(--amber)">50</span><span id="conf-tick65" style="color:var(--dim)">65</span><span>100</span></div>
       <div id="signal-streak" style="display:none;margin-top:5px;font-size:10px;font-family:'Orbitron',monospace;letter-spacing:1px;text-align:center;"></div>
     </div>
   </div>
@@ -2085,12 +2102,12 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div style="background:rgba(255,34,68,0.07);border:1px solid rgba(255,34,68,0.3);border-radius:8px;padding:7px 10px;text-align:center;">
           <div style="font-size:8px;color:var(--dim);letter-spacing:2px;margin-bottom:2px;">📞 CALL WALL (CE OI)</div>
           <div id="call-wall-val" style="font-family:'Share Tech Mono',monospace;font-size:15px;font-weight:700;color:var(--red);">--</div>
-          <div id="call-wall-dist" style="font-size:9px;color:#9ab8d0;margin-top:1px;">-- pts away</div>
+          <div id="call-wall-dist" style="font-size:9px;color:var(--dim);margin-top:1px;">-- pts away</div>
         </div>
         <div style="background:rgba(0,255,136,0.06);border:1px solid rgba(0,255,136,0.25);border-radius:8px;padding:7px 10px;text-align:center;">
           <div style="font-size:8px;color:var(--dim);letter-spacing:2px;margin-bottom:2px;">📝 PUT WALL (PE OI)</div>
           <div id="put-wall-val" style="font-family:'Share Tech Mono',monospace;font-size:15px;font-weight:700;color:var(--green);">--</div>
-          <div id="put-wall-dist" style="font-size:9px;color:#9ab8d0;margin-top:1px;">-- pts away</div>
+          <div id="put-wall-dist" style="font-size:9px;color:var(--dim);margin-top:1px;">-- pts away</div>
         </div>
       </div>
       <div id="sr-levels-list"></div>
@@ -2188,99 +2205,6 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div id="manual-pcr-status" style="font-size:9px;color:var(--dim);margin-top:4px;display:none;"></div>
     </div>
 
-    <!-- ══════════════════════════════════════════════════════════════════════
-         MURARKA STRATEGY PANEL — CA Nitin Murarka (SMC Global) method
-         HORIZONTAL layout: all 4 sections side by side in one row
-         ══════════════════════════════════════════════════════════════════════ -->
-    <div id="murarka-panel" style="margin:0 12px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-
-      <!-- Header row -->
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--border);background:rgba(255,187,0,0.04);">
-        <div style="display:flex;align-items:center;gap:6px;">
-          <span style="font-size:12px;">🎯</span>
-          <span style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--amber);">MURARKA STRATEGY</span>
-          <div id="mz-expiry-badge" style="display:none;padding:2px 6px;background:rgba(255,34,68,0.12);border:1px solid var(--red);border-radius:4px;">
-            <span style="font-size:7px;color:var(--red);font-weight:700;letter-spacing:0.8px;">⚡ EXPIRY</span>
-          </div>
-        </div>
-        <span style="font-size:8px;color:var(--dim);letter-spacing:1px;">CA Nitin Murarka • SMC Global</span>
-      </div>
-
-      <!-- ── HORIZONTAL BODY — 4 columns (auto-stacks on mobile) ── -->
-      <div class="murarka-body">
-
-        <!-- COL 1: PCR Zone -->
-        <div class="murarka-col-pcr" style="padding:10px 12px;display:flex;flex-direction:column;gap:6px;">
-          <div style="font-size:7px;color:var(--dim);letter-spacing:1.2px;margin-bottom:5px;">PCR ZONE</div>
-          <!-- 3 zone pills — vertical normally, horizontal on mobile via CSS -->
-          <div class="mz-zone-pills" style="display:flex;flex-direction:column;gap:3px;flex:1;">
-            <div id="mz-bull-btn" style="padding:4px 6px;border-radius:5px;border:2px solid transparent;background:rgba(0,255,136,0.06);transition:all 0.3s;opacity:0.45;">
-              <div style="font-size:8px;font-weight:700;color:var(--green);">BUY CE</div>
-              <div style="font-size:7px;color:var(--dim);">PCR &gt; 1.15</div>
-            </div>
-            <div id="mz-avoid-btn" style="padding:4px 6px;border-radius:5px;border:2px solid var(--amber);background:rgba(255,187,0,0.08);transition:all 0.3s;">
-              <div style="font-size:8px;font-weight:700;color:var(--amber);">AVOID ⚠️</div>
-              <div style="font-size:7px;color:var(--dim);">0.75 – 1.15</div>
-            </div>
-            <div id="mz-bear-btn" style="padding:4px 6px;border-radius:5px;border:2px solid transparent;background:rgba(255,34,68,0.06);transition:all 0.3s;opacity:0.45;">
-              <div style="font-size:8px;font-weight:700;color:var(--red);">BUY PE</div>
-              <div style="font-size:7px;color:var(--dim);">PCR &lt; 0.75</div>
-            </div>
-          </div>
-          <div id="mz-zone-label" style="font-size:8px;color:var(--amber);margin-top:4px;line-height:1.3;">Awaiting…</div>
-        </div>
-
-        <!-- Divider -->
-        <div class="murarka-divider"></div>
-
-        <!-- COL 2: OI Imbalance -->
-        <div class="murarka-col-oi" style="padding:10px 12px;display:flex;flex-direction:column;gap:4px;">
-          <div style="font-size:7px;color:var(--dim);letter-spacing:1.2px;margin-bottom:4px;">OI IMBALANCE</div>
-          <div style="font-size:7px;color:var(--dim);margin-bottom:6px;">ΔPuts ÷ ΔCalls</div>
-          <div id="mz-imbalance-ratio" style="font-size:22px;font-weight:700;color:var(--amber);font-family:'Share Tech Mono',monospace;line-height:1;">--</div>
-          <div id="mz-imbalance-label" style="font-size:7px;color:var(--dim);margin-top:3px;line-height:1.3;">Awaiting data</div>
-          <div style="margin-top:6px;height:3px;background:var(--border);border-radius:2px;overflow:hidden;">
-            <div id="mz-imbalance-bar" style="height:100%;width:50%;background:var(--amber);border-radius:2px;transition:width 0.5s,background 0.3s;"></div>
-          </div>
-        </div>
-
-        <!-- Divider -->
-        <div class="murarka-divider"></div>
-
-        <!-- COL 3: Murarka Entry Alert -->
-        <div class="murarka-col-entry" style="padding:10px 12px;display:flex;flex-direction:column;gap:4px;">
-          <div style="font-size:7px;color:var(--dim);letter-spacing:1.2px;margin-bottom:4px;">ENTRY SETUP</div>
-          <div id="murarka-entry-wrap" style="flex:1;display:flex;flex-direction:column;justify-content:center;">
-            <div id="murarka-entry-label" style="font-size:9px;font-weight:700;color:var(--dim);line-height:1.4;">No Murarka setup</div>
-            <div id="murarka-entry-reason" style="font-size:7px;color:var(--dim);margin-top:3px;line-height:1.3;">—</div>
-          </div>
-        </div>
-
-        <!-- Divider -->
-        <div class="murarka-divider"></div>
-
-        <!-- COL 4: Strike ΔOI Table -->
-        <div class="murarka-col-table" style="padding:10px 12px;">
-          <div style="font-size:7px;color:var(--dim);letter-spacing:1.2px;margin-bottom:5px;">STRIKE ΔOI <span style="font-weight:400;">(Autotrender)</span></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div>
-              <div style="font-size:7px;color:var(--red);font-weight:700;margin-bottom:3px;">📞 CE WRITE</div>
-              <div id="mz-ce-table" style="font-size:8px;font-family:'Share Tech Mono',monospace;">
-                <div style="color:var(--dim);font-size:7px;">Fetching…</div>
-              </div>
-            </div>
-            <div>
-              <div style="font-size:7px;color:var(--green);font-weight:700;margin-bottom:3px;">📤 PE WRITE</div>
-              <div id="mz-pe-table" style="font-size:8px;font-family:'Share Tech Mono',monospace;">
-                <div style="color:var(--dim);font-size:7px;">Fetching…</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-      </div><!-- end murarka-body -->
-    </div>
-    <!-- END MURARKA PANEL -->
 
     <!-- Candle Pattern Card — Multi-Timeframe (5m / 15m / 1h / 1m) -->
     <div class="ind-card" id="candle-card" style="margin-bottom:8px;">
@@ -2341,7 +2265,8 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="pv-card" style="color:var(--amber)" id="vix-card"><div class="pv-label">VIX</div><div class="pv-val" id="vix-val">--</div><div class="pv-sig" id="vix-sig">AUTO ✅</div></div>
   </div>
 
-  <!-- ═══ MOMENTUM RADAR ═══ -->
+
+    <!-- ═══ MOMENTUM RADAR ═══ -->
   <div class="sec-label">MOMENTUM RADAR — EARLY CE/PE SIGNAL</div>
   <div style="padding:0 12px;margin-bottom:7px;">
 
@@ -2365,18 +2290,18 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="em-score-num" id="em-score-num" style="color:var(--amber);">0</div>
       </div>
       <!-- Signal description label -->
-      <div class="em-desc" id="em-desc" style="color:#9ab8d0;">Waiting for first NSE option-chain cycle (~3 min after open)...</div>
+      <div class="em-desc" id="em-desc" style="color:var(--dim);">Waiting for first NSE option-chain cycle (~3 min after open)...</div>
       <!-- 9-vote breakdown (votes 1-7 always possible; 8-9 conditional on OI buildup) -->
       <div class="em-votes" id="em-votes">
-        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">CHAIN OI Δ</span><span class="em-vote-reason" style="color:#4a6a8a;">Intraday CE vs PE change</span></div>
-        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">ATM CLUSTER OI</span><span class="em-vote-reason" style="color:#4a6a8a;">±100pt around ATM (5 strikes)</span></div>
-        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">CE VELOCITY</span><span class="em-vote-reason" style="color:#4a6a8a;">ATM CE premium %/cycle (leads OI)</span></div>
-        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">PE VELOCITY</span><span class="em-vote-reason" style="color:#4a6a8a;">ATM PE premium %/cycle (leads OI)</span></div>
-        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">CE BUY PRESSURE</span><span class="em-vote-reason" style="color:#4a6a8a;">Order-book buy% at ATM CE</span></div>
-        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">PE BUY PRESSURE</span><span class="em-vote-reason" style="color:#4a6a8a;">Order-book buy% at ATM PE</span></div>
-        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">IV SKEW</span><span class="em-vote-reason" style="color:#4a6a8a;">PE IV vs CE IV demand skew</span></div>
-        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">STRIKE OI SHIFT</span><span class="em-vote-reason" style="color:#4a6a8a;">Call/put writing at single strike</span></div>
-        <div class="em-vote-row" style="border-bottom:none;"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">WALL ALIGNMENT</span><span class="em-vote-reason" style="color:#4a6a8a;">Top-3 CE vs PE buildup dominance</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">CHAIN OI Δ</span><span class="em-vote-reason" style="color:var(--dim);">Intraday CE vs PE change</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">ATM CLUSTER OI</span><span class="em-vote-reason" style="color:var(--dim);">±100pt around ATM (5 strikes)</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">CE VELOCITY</span><span class="em-vote-reason" style="color:var(--dim);">ATM CE premium %/cycle (leads OI)</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">PE VELOCITY</span><span class="em-vote-reason" style="color:var(--dim);">ATM PE premium %/cycle (leads OI)</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">CE BUY PRESSURE</span><span class="em-vote-reason" style="color:var(--dim);">Order-book buy% at ATM CE</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">PE BUY PRESSURE</span><span class="em-vote-reason" style="color:var(--dim);">Order-book buy% at ATM PE</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">IV SKEW</span><span class="em-vote-reason" style="color:var(--dim);">PE IV vs CE IV demand skew</span></div>
+        <div class="em-vote-row"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">STRIKE OI SHIFT</span><span class="em-vote-reason" style="color:var(--dim);">Call/put writing at single strike</span></div>
+        <div class="em-vote-row" style="border-bottom:none;"><span class="em-vote-icon" style="color:var(--dim);">○</span><span class="em-vote-name">WALL ALIGNMENT</span><span class="em-vote-reason" style="color:var(--dim);">Top-3 CE vs PE buildup dominance</span></div>
       </div>
     </div>
 
@@ -2572,6 +2497,101 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     </div>
   </div>
 
+  <!-- ═══ MURARKA STRATEGY (moved: below indicators) ═══ -->
+<!-- ══════════════════════════════════════════════════════════════════════
+         MURARKA STRATEGY PANEL — CA Nitin Murarka (SMC Global) method
+         HORIZONTAL layout: all 4 sections side by side in one row
+         ══════════════════════════════════════════════════════════════════════ -->
+    <div id="murarka-panel" style="margin:0 12px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+
+      <!-- Header row -->
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--border);background:rgba(255,187,0,0.04);">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-size:12px;">🎯</span>
+          <span style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--amber);">MURARKA STRATEGY</span>
+          <div id="mz-expiry-badge" style="display:none;padding:2px 6px;background:rgba(255,34,68,0.12);border:1px solid var(--red);border-radius:4px;">
+            <span style="font-size:7px;color:var(--red);font-weight:700;letter-spacing:0.8px;">⚡ EXPIRY</span>
+          </div>
+        </div>
+        <span style="font-size:8px;color:var(--dim);letter-spacing:1px;">CA Nitin Murarka • SMC Global</span>
+      </div>
+
+      <!-- ── HORIZONTAL BODY — 4 columns (auto-stacks on mobile) ── -->
+      <div class="murarka-body">
+
+        <!-- COL 1: PCR Zone -->
+        <div class="murarka-col-pcr" style="padding:10px 12px;display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:7px;color:var(--dim);letter-spacing:1.2px;margin-bottom:5px;">PCR ZONE</div>
+          <!-- 3 zone pills — vertical normally, horizontal on mobile via CSS -->
+          <div class="mz-zone-pills" style="display:flex;flex-direction:column;gap:3px;flex:1;">
+            <div id="mz-bull-btn" style="padding:4px 6px;border-radius:5px;border:2px solid transparent;background:rgba(0,255,136,0.06);transition:all 0.3s;opacity:0.45;">
+              <div style="font-size:8px;font-weight:700;color:var(--green);">BUY CE</div>
+              <div style="font-size:7px;color:var(--dim);">PCR &gt; 1.15</div>
+            </div>
+            <div id="mz-avoid-btn" style="padding:4px 6px;border-radius:5px;border:2px solid var(--amber);background:rgba(255,187,0,0.08);transition:all 0.3s;">
+              <div style="font-size:8px;font-weight:700;color:var(--amber);">AVOID ⚠️</div>
+              <div style="font-size:7px;color:var(--dim);">0.75 – 1.15</div>
+            </div>
+            <div id="mz-bear-btn" style="padding:4px 6px;border-radius:5px;border:2px solid transparent;background:rgba(255,34,68,0.06);transition:all 0.3s;opacity:0.45;">
+              <div style="font-size:8px;font-weight:700;color:var(--red);">BUY PE</div>
+              <div style="font-size:7px;color:var(--dim);">PCR &lt; 0.75</div>
+            </div>
+          </div>
+          <div id="mz-zone-label" style="font-size:8px;color:var(--amber);margin-top:4px;line-height:1.3;">Awaiting…</div>
+        </div>
+
+        <!-- Divider -->
+        <div class="murarka-divider"></div>
+
+        <!-- COL 2: OI Imbalance -->
+        <div class="murarka-col-oi" style="padding:10px 12px;display:flex;flex-direction:column;gap:4px;">
+          <div style="font-size:7px;color:var(--dim);letter-spacing:1.2px;margin-bottom:4px;">OI IMBALANCE</div>
+          <div style="font-size:7px;color:var(--dim);margin-bottom:6px;">ΔPuts ÷ ΔCalls</div>
+          <div id="mz-imbalance-ratio" style="font-size:22px;font-weight:700;color:var(--amber);font-family:'Share Tech Mono',monospace;line-height:1;">--</div>
+          <div id="mz-imbalance-label" style="font-size:7px;color:var(--dim);margin-top:3px;line-height:1.3;">Awaiting data</div>
+          <div style="margin-top:6px;height:3px;background:var(--border);border-radius:2px;overflow:hidden;">
+            <div id="mz-imbalance-bar" style="height:100%;width:50%;background:var(--amber);border-radius:2px;transition:width 0.5s,background 0.3s;"></div>
+          </div>
+        </div>
+
+        <!-- Divider -->
+        <div class="murarka-divider"></div>
+
+        <!-- COL 3: Murarka Entry Alert -->
+        <div class="murarka-col-entry" style="padding:10px 12px;display:flex;flex-direction:column;gap:4px;">
+          <div style="font-size:7px;color:var(--dim);letter-spacing:1.2px;margin-bottom:4px;">ENTRY SETUP</div>
+          <div id="murarka-entry-wrap" style="flex:1;display:flex;flex-direction:column;justify-content:center;">
+            <div id="murarka-entry-label" style="font-size:9px;font-weight:700;color:var(--dim);line-height:1.4;">No Murarka setup</div>
+            <div id="murarka-entry-reason" style="font-size:7px;color:var(--dim);margin-top:3px;line-height:1.3;">—</div>
+          </div>
+        </div>
+
+        <!-- Divider -->
+        <div class="murarka-divider"></div>
+
+        <!-- COL 4: Strike ΔOI Table -->
+        <div class="murarka-col-table" style="padding:10px 12px;">
+          <div style="font-size:7px;color:var(--dim);letter-spacing:1.2px;margin-bottom:5px;">STRIKE ΔOI <span style="font-weight:400;">(Autotrender)</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div>
+              <div style="font-size:7px;color:var(--red);font-weight:700;margin-bottom:3px;">📞 CE WRITE</div>
+              <div id="mz-ce-table" style="font-size:8px;font-family:'Share Tech Mono',monospace;">
+                <div style="color:var(--dim);font-size:7px;">Fetching…</div>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:7px;color:var(--green);font-weight:700;margin-bottom:3px;">📤 PE WRITE</div>
+              <div id="mz-pe-table" style="font-size:8px;font-family:'Share Tech Mono',monospace;">
+                <div style="color:var(--dim);font-size:7px;">Fetching…</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- end murarka-body -->
+    </div>
+    <!-- END MURARKA PANEL -->
+
   <div class="reasons-wrap"><div class="reasons-card"><div class="reasons-title">SIGNAL REASONING</div><div id="reasons"><div class="reason-row">Waiting for market data...</div></div></div></div>
 
   <!-- ═══ MOMENTUM BREAKDOWN CARD ═══ -->
@@ -2652,7 +2672,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div class="pnl-grid">
         <div class="pnl-stat">
           <div class="pnl-stat-label">TRADES</div>
-          <div class="pnl-stat-val" id="j-total" style="color:#c8e0f4;">0</div>
+          <div class="pnl-stat-val" id="j-total" style="color:var(--text);">0</div>
         </div>
         <div class="pnl-stat">
           <div class="pnl-stat-label">WIN RATE</div>
@@ -2929,14 +2949,14 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div><div style="font-size:9px;color:var(--green);letter-spacing:2px;">ADV</div><div class="ad-up" id="ad-up">--</div></div>
         <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
           <div class="ad-sep">vs</div>
-          <div id="ad-unch-small" style="font-size:9px;color:#9ab8d0;letter-spacing:1px;">-- UNCH</div>
+          <div id="ad-unch-small" style="font-size:9px;color:var(--dim);letter-spacing:1px;">-- UNCH</div>
         </div>
         <div><div style="font-size:9px;color:var(--red);letter-spacing:2px;">DEC</div><div class="ad-dn" id="ad-dn">--</div></div>
       </div>
       <!-- Stacked breadth bar -->
       <div style="height:6px;border-radius:3px;overflow:hidden;display:flex;margin:4px 0 6px;gap:1px;">
         <div id="ad-bar-adv" style="background:var(--green);height:100%;width:50%;transition:width 0.8s;"></div>
-        <div id="ad-bar-unc" style="background:#4a6a8a;height:100%;width:0%;transition:width 0.8s;"></div>
+        <div id="ad-bar-unc" style="background:var(--dim);height:100%;width:0%;transition:width 0.8s;"></div>
         <div id="ad-bar-dec" style="background:var(--red);height:100%;width:50%;transition:width 0.8s;"></div>
       </div>
       <div class="ad-dial-wrap">
@@ -2965,7 +2985,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         </svg>
         <div class="ad-dial-stats">
           <span style="color:var(--red);" id="ad-bear-pct">50%</span>
-          <span id="ad-ratio" style="color:#9ab8d0;font-size:9px;">A/D: --</span>
+          <span id="ad-ratio" style="color:var(--dim);font-size:9px;">A/D: --</span>
           <span style="color:var(--green);" id="ad-bull-pct">50%</span>
         </div>
       </div>
@@ -2978,7 +2998,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="weight-row">
       <div class="wcard"><div class="wcard-label">BULL WEIGHT</div><div class="wcard-val" id="bull-weight" style="color:var(--green);">--%</div></div>
       <div class="wcard"><div class="wcard-label">A/D RATIO</div><div class="wcard-val" id="ad-ratio-big" style="color:var(--amber);">--</div></div>
-      <div class="wcard"><div class="wcard-label">UNCHANGED</div><div class="wcard-val" id="ad-unch" style="color:#9ab8d0;">--</div></div>
+      <div class="wcard"><div class="wcard-label">UNCHANGED</div><div class="wcard-val" id="ad-unch" style="color:var(--dim);">--</div></div>
     </div>
 
     <!-- SECTOR HEATMAP -->
@@ -2986,17 +3006,17 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div class="sector-heatmap-title">🔥 SECTOR HEATMAP</div>
       <div class="sector-heatmap" id="sector-heatmap">
         <!-- populated by updateSectorHeatmap() -->
-        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">BANK</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
-        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">IT</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
-        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">AUTO</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
-        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">METAL</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
-        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">PHARMA</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
-        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">FMCG</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
-        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">REALTY</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
-        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">MEDIA</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
-        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">ENERGY</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
-        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">INFRA</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
-        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">PSU BNK</div><div class="sc-chg" style="color:#4a6a8a;">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">BANK</div><div class="sc-chg" style="color:var(--dim);">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">IT</div><div class="sc-chg" style="color:var(--dim);">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">AUTO</div><div class="sc-chg" style="color:var(--dim);">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">METAL</div><div class="sc-chg" style="color:var(--dim);">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">PHARMA</div><div class="sc-chg" style="color:var(--dim);">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">FMCG</div><div class="sc-chg" style="color:var(--dim);">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">REALTY</div><div class="sc-chg" style="color:var(--dim);">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">MEDIA</div><div class="sc-chg" style="color:var(--dim);">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">ENERGY</div><div class="sc-chg" style="color:var(--dim);">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">INFRA</div><div class="sc-chg" style="color:var(--dim);">--</div></div>
+        <div class="sector-cell" style="background:var(--bg3);border-color:var(--border);"><div class="sc-label">PSU BNK</div><div class="sc-chg" style="color:var(--dim);">--</div></div>
       </div>
     </div>
 
@@ -3007,29 +3027,29 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div style="background:var(--bg3);border-radius:8px;padding:8px;text-align:center;border:1px solid rgba(0,170,255,0.2);">
           <div style="font-size:9px;color:var(--blue);letter-spacing:2px;margin-bottom:4px;">ATM CE ₹</div>
           <div id="flow-ce-live" style="font-family:'Orbitron',monospace;font-size:16px;font-weight:700;color:var(--blue);">--</div>
-          <div id="flow-ce-chg" style="font-size:9px;color:#9ab8d0;margin-top:2px;">-- %</div>
+          <div id="flow-ce-chg" style="font-size:9px;color:var(--dim);margin-top:2px;">-- %</div>
         </div>
         <div style="background:var(--bg3);border-radius:8px;padding:8px;text-align:center;border:1px solid rgba(255,34,68,0.2);">
           <div style="font-size:9px;color:var(--red);letter-spacing:2px;margin-bottom:4px;">ATM PE ₹</div>
           <div id="flow-pe-live" style="font-family:'Orbitron',monospace;font-size:16px;font-weight:700;color:var(--red);">--</div>
-          <div id="flow-pe-chg" style="font-size:9px;color:#9ab8d0;margin-top:2px;">-- %</div>
+          <div id="flow-pe-chg" style="font-size:9px;color:var(--dim);margin-top:2px;">-- %</div>
         </div>
       </div>
       <div class="flow-result">
-        <div style="font-size:9px;color:#9ab8d0;letter-spacing:2px;margin-bottom:4px;">DOMINANCE</div>
+        <div style="font-size:9px;color:var(--dim);letter-spacing:2px;margin-bottom:4px;">DOMINANCE</div>
         <div class="flow-dom" id="flow-dominance" style="color:var(--amber);">NEUTRAL</div>
-        <div id="flow-details" style="font-size:10px;color:#9ab8d0;margin-top:3px;">Waiting for NSE data...</div>
+        <div id="flow-details" style="font-size:10px;color:var(--dim);margin-top:3px;">Waiting for NSE data...</div>
       </div>
       <div style="margin-top:8px;">
-        <div style="font-size:9px;color:#9ab8d0;letter-spacing:2px;margin-bottom:5px;">FLOW HISTORY</div>
-        <div id="flow-history" style="font-size:10px;color:#9ab8d0;font-family:'Share Tech Mono',monospace;">No flow recorded yet</div>
+        <div style="font-size:9px;color:var(--dim);letter-spacing:2px;margin-bottom:5px;">FLOW HISTORY</div>
+        <div id="flow-history" style="font-size:10px;color:var(--dim);font-family:'Share Tech Mono',monospace;">No flow recorded yet</div>
       </div>
     </div>
 
     <div class="pcr-trend-card">
       <div class="trend-title">📈 PCR TREND TODAY</div>
       <div class="trend-list" id="pcr-trend-list">
-        <div style="font-size:10px;color:#9ab8d0;text-align:center;padding:8px;">Waiting for NSE option-chain data...</div>
+        <div style="font-size:10px;color:var(--dim);text-align:center;padding:8px;">Waiting for NSE option-chain data...</div>
       </div>
     </div>
 
@@ -3039,7 +3059,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <!-- Buy / Sell breakdown row -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
         <div style="background:var(--bg3);border-radius:7px;padding:7px;">
-          <div style="font-size:9px;color:#9ab8d0;letter-spacing:1px;margin-bottom:4px;text-align:center;">FII (₹ Cr)</div>
+          <div style="font-size:9px;color:var(--dim);letter-spacing:1px;margin-bottom:4px;text-align:center;">FII (₹ Cr)</div>
           <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-bottom:2px;">
             <span>BUY</span><span id="fii-buy-val" style="color:var(--green);">--</span>
           </div>
@@ -3047,12 +3067,12 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
             <span>SELL</span><span id="fii-sell-val" style="color:var(--red);">--</span>
           </div>
           <div style="border-top:1px solid var(--border);padding-top:4px;text-align:center;">
-            <div style="font-size:9px;color:#9ab8d0;letter-spacing:1px;">NET</div>
-            <div class="fii-net-big" id="fii-net" style="color:#9ab8d0;">--</div>
+            <div style="font-size:9px;color:var(--dim);letter-spacing:1px;">NET</div>
+            <div class="fii-net-big" id="fii-net" style="color:var(--dim);">--</div>
           </div>
         </div>
         <div style="background:var(--bg3);border-radius:7px;padding:7px;">
-          <div style="font-size:9px;color:#9ab8d0;letter-spacing:1px;margin-bottom:4px;text-align:center;">DII (₹ Cr)</div>
+          <div style="font-size:9px;color:var(--dim);letter-spacing:1px;margin-bottom:4px;text-align:center;">DII (₹ Cr)</div>
           <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-bottom:2px;">
             <span>BUY</span><span id="dii-buy-val" style="color:var(--green);">--</span>
           </div>
@@ -3060,15 +3080,15 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
             <span>SELL</span><span id="dii-sell-val" style="color:var(--red);">--</span>
           </div>
           <div style="border-top:1px solid var(--border);padding-top:4px;text-align:center;">
-            <div style="font-size:9px;color:#9ab8d0;letter-spacing:1px;">NET</div>
-            <div class="fii-net-big" id="dii-net" style="color:#9ab8d0;">--</div>
+            <div style="font-size:9px;color:var(--dim);letter-spacing:1px;">NET</div>
+            <div class="fii-net-big" id="dii-net" style="color:var(--dim);">--</div>
           </div>
         </div>
       </div>
       <!-- Combined institutional row — always visible -->
       <div class="fii-combined-row" id="fii-combined-row">
         <span style="font-size:9px;color:var(--dim);letter-spacing:1px;">INST. COMBINED</span>
-        <span class="fii-comb-val" id="fii-combined" style="color:#9ab8d0;">--</span>
+        <span class="fii-comb-val" id="fii-combined" style="color:var(--dim);">--</span>
         <span class="fii-bias-tag" id="fii-bias-tag" style="background:rgba(255,187,0,0.1);color:var(--amber);border:1px solid var(--amber);">--</span>
       </div>
       <div style="text-align:center;font-size:9px;color:var(--dim);margin-top:6px;" id="fii-updated-at">Auto-fetched from NSE</div>
@@ -3077,7 +3097,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div style="font-size:9px;letter-spacing:3px;color:var(--dim);margin-bottom:5px;">TOP 20 NIFTY STOCKS</div>
     <div class="stock-list">
       <div class="stock-header"><span>WT%</span><span>STOCK</span><span style="text-align:right;">% CHG</span></div>
-      <div id="stock-list-body"><div style="text-align:center;padding:12px;font-size:11px;color:#9ab8d0;">Loading...</div></div>
+      <div id="stock-list-body"><div style="text-align:center;padding:12px;font-size:11px;color:var(--dim);">Loading...</div></div>
     </div>
     <div style="text-align:center;font-size:10px;color:var(--dim);font-family:'Share Tech Mono',monospace;padding:4px 0 8px;">Auto-refresh every 3 min</div>
   </div>
@@ -3164,34 +3184,68 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 <div class="panel" id="panel-chart">
   <div class="chart-wrap">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-      <div style="font-family:'Orbitron',monospace;font-size:11px;color:var(--blue);letter-spacing:2px;">📊 CHART</div>
-      <div style="font-family:'Share Tech Mono',monospace;font-size:11px;color:#9ab8d0;" id="chart-nifty-label">--</div>
+      <div style="font-family:'Orbitron',monospace;font-size:11px;color:var(--blue);letter-spacing:2px;">📊 NIFTY CHART</div>
+      <div style="font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--text);" id="chart-nifty-label">--</div>
     </div>
-    <div class="chart-controls">
-      <button class="chart-btn" onclick="setChartTF('1m',this)">1m</button>
-      <button class="chart-btn active" onclick="setChartTF('5m',this)">5m</button>
-      <button class="chart-btn" onclick="setChartTF('15m',this)">15m</button>
-      <button class="chart-btn" onclick="setChartTF('1h',this)">1h</button>
-      <button class="chart-btn" onclick="setChartTF('1D',this)">1D</button>
+    <!-- TF buttons + overlay toggles on same row -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:6px;flex-wrap:wrap;">
+      <div class="chart-controls" style="margin-bottom:0;">
+        <button class="chart-btn" onclick="setChartTF('1m',this)">1m</button>
+        <button class="chart-btn active" onclick="setChartTF('5m',this)">5m</button>
+        <button class="chart-btn" onclick="setChartTF('15m',this)">15m</button>
+        <button class="chart-btn" onclick="setChartTF('1h',this)">1h</button>
+        <button class="chart-btn" onclick="setChartTF('1D',this)">1D</button>
+      </div>
+      <div style="display:flex;gap:4px;">
+        <button class="chart-overlay-btn active" id="chart-tog-vol" onclick="chartToggle('vol',this)" title="Volume bars">VOL</button>
+        <button class="chart-overlay-btn active" id="chart-tog-rsi" onclick="chartToggle('rsi',this)" title="RSI sub-pane">RSI</button>
+        <button class="chart-overlay-btn active" id="chart-tog-sig" onclick="chartToggle('sig',this)" title="AI signal markers">SIG</button>
+        <button class="chart-overlay-btn"        id="chart-tog-sr"  onclick="chartToggle('sr',this)"  title="Support/Resistance">S/R</button>
+      </div>
     </div>
     <div class="chart-box" style="position:relative;">
       <canvas id="chart-canvas"></canvas>
-      <div id="chart-loading" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:#060d14;font-size:11px;color:var(--blue);letter-spacing:1px;">⏳ LOADING…</div>
-      <div id="chart-empty" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:#060d14;font-size:11px;color:var(--dim);letter-spacing:1px;">📭 NO DATA FOR THIS TIMEFRAME</div>
+      <div id="chart-loading" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:var(--bg2);font-size:11px;color:var(--blue);letter-spacing:1px;">⏳ LOADING…</div>
+      <div id="chart-empty"   style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:var(--bg2);font-size:11px;color:var(--dim);letter-spacing:1px;">📭 NO DATA FOR THIS TIMEFRAME</div>
     </div>
     <div style="text-align:right;font-size:9px;color:var(--dim);margin-top:3px;" id="chart-updated"></div>
-    <div class="chart-legend">
+    <div class="chart-legend" style="margin-top:5px;">
       <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div><span>Bull</span></div>
       <div class="legend-item"><div class="legend-dot" style="background:var(--red)"></div><span>Bear</span></div>
       <div class="legend-item"><div class="legend-dot" style="background:#3399ff"></div><span>VWAP</span></div>
       <div class="legend-item"><div class="legend-dot" style="background:#ffcc00"></div><span>EMA9</span></div>
       <div class="legend-item"><div class="legend-dot" style="background:#ff8c00"></div><span>EMA21</span></div>
+      <div class="legend-item"><div class="legend-dot" style="background:#aa55ff"></div><span>RSI</span></div>
     </div>
+    <!-- OHLC cards -->
     <div class="ind-grid" style="margin-top:8px;">
-      <div class="ind-card"><div class="ind-label"><span>OPEN</span></div><div class="ind-val" id="chart-open" style="font-size:14px;">--</div></div>
+      <div class="ind-card"><div class="ind-label"><span>OPEN</span></div><div class="ind-val" id="chart-open"  style="font-size:14px;">--</div></div>
       <div class="ind-card"><div class="ind-label"><span>CLOSE</span></div><div class="ind-val" id="chart-close" style="font-size:14px;">--</div></div>
-      <div class="ind-card"><div class="ind-label"><span>HIGH</span></div><div class="ind-val" id="chart-high" style="font-size:14px;color:var(--green);">--</div></div>
-      <div class="ind-card"><div class="ind-label"><span>LOW</span></div><div class="ind-val" id="chart-low" style="font-size:14px;color:var(--red);">--</div></div>
+      <div class="ind-card"><div class="ind-label"><span>HIGH</span></div><div class="ind-val"  id="chart-high"  style="font-size:14px;color:var(--green);">--</div></div>
+      <div class="ind-card"><div class="ind-label"><span>LOW</span></div><div class="ind-val"   id="chart-low"   style="font-size:14px;color:var(--red);">--</div></div>
+    </div>
+    <!-- Session stats bar -->
+    <div id="chart-session-bar" style="margin-top:8px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
+      <div style="text-align:center;">
+        <div style="font-size:8px;color:var(--dim);letter-spacing:1px;">RANGE</div>
+        <div style="font-family:'Share Tech Mono',monospace;font-size:12px;font-weight:700;" id="chart-stat-range">--</div>
+      </div>
+      <div style="text-align:center;">
+        <div style="font-size:8px;color:var(--dim);letter-spacing:1px;">RANGE %</div>
+        <div style="font-family:'Share Tech Mono',monospace;font-size:12px;font-weight:700;" id="chart-stat-rangepct">--</div>
+      </div>
+      <div style="text-align:center;">
+        <div style="font-size:8px;color:var(--dim);letter-spacing:1px;">BARS</div>
+        <div style="font-family:'Share Tech Mono',monospace;font-size:12px;" id="chart-stat-candles">--</div>
+      </div>
+      <div style="text-align:center;">
+        <div style="font-size:8px;color:var(--dim);letter-spacing:1px;">BULL/BEAR</div>
+        <div style="font-family:'Share Tech Mono',monospace;font-size:12px;" id="chart-stat-ratio">--</div>
+      </div>
+      <div style="text-align:center;">
+        <div style="font-size:8px;color:var(--dim);letter-spacing:1px;">TREND</div>
+        <div style="font-family:'Share Tech Mono',monospace;font-size:11px;font-weight:700;" id="chart-stat-trend">--</div>
+      </div>
     </div>
   </div>
 </div>
@@ -3218,10 +3272,10 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
       <div class="result-grid-3" id="premium-result" style="display:none;margin-bottom:10px;">
         <div class="res-card"><div class="res-label">ITM CE</div><div class="res-val" id="calc-itm-ce" style="color:var(--green);">--</div><div class="res-sub" id="calc-itm-ce-s">--</div></div>
         <div class="res-card" style="border-color:var(--blue);"><div class="res-label">ATM CE</div><div class="res-val" id="calc-atm-ce" style="color:var(--blue);">--</div><div class="res-sub" id="calc-atm-s">--</div></div>
-        <div class="res-card"><div class="res-label">OTM CE</div><div class="res-val" id="calc-otm-ce" style="color:#9ab8d0;">--</div><div class="res-sub" id="calc-otm-ce-s">--</div></div>
+        <div class="res-card"><div class="res-label">OTM CE</div><div class="res-val" id="calc-otm-ce" style="color:var(--dim);">--</div><div class="res-sub" id="calc-otm-ce-s">--</div></div>
         <div class="res-card"><div class="res-label">ITM PE</div><div class="res-val" id="calc-itm-pe" style="color:var(--green);">--</div><div class="res-sub" id="calc-itm-pe-s">--</div></div>
         <div class="res-card" style="border-color:var(--red);"><div class="res-label">ATM PE</div><div class="res-val" id="calc-atm-pe" style="color:var(--red);">--</div><div class="res-sub"></div></div>
-        <div class="res-card"><div class="res-label">OTM PE</div><div class="res-val" id="calc-otm-pe" style="color:#9ab8d0;">--</div><div class="res-sub" id="calc-otm-pe-s">--</div></div>
+        <div class="res-card"><div class="res-label">OTM PE</div><div class="res-val" id="calc-otm-pe" style="color:var(--dim);">--</div><div class="res-sub" id="calc-otm-pe-s">--</div></div>
       </div>
 
       <!-- Greeks -->
@@ -3261,7 +3315,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         <div class="tool-field"><label>STOP-LOSS (₹)</label><input class="tool-input" id="ps-sl" type="number" placeholder="60" step="1" oninput="calcPositionSize()"/></div>
       </div>
       <div class="ps-result" id="ps-result" style="display:none;">
-        <div style="font-size:9px;color:#9ab8d0;letter-spacing:2px;margin-bottom:4px;">MAX LOTS TO BUY</div>
+        <div style="font-size:9px;color:var(--dim);letter-spacing:2px;margin-bottom:4px;">MAX LOTS TO BUY</div>
         <div class="ps-lots" id="ps-lots">0</div>
         <div class="ps-note" id="ps-note">--</div>
       </div>
@@ -3306,11 +3360,11 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <!-- Filter bar -->
     <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px 6px;flex-wrap:wrap;gap:6px;">
       <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
-        <span style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;">DATE:</span>
+        <span style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:var(--dim);">DATE:</span>
         <button class="an-pill active-date" id="and-today" onclick="anSetDate('today')">TODAY</button>
         <button class="an-pill" id="and-week"  onclick="anSetDate('week')">THIS WEEK</button>
         <button class="an-pill" id="and-all"   onclick="anSetDate('all')">ALL</button>
-        <span style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;margin-left:6px;">SIGNAL:</span>
+        <span style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:var(--dim);margin-left:6px;">SIGNAL:</span>
         <button class="an-pill active-all" id="anf-all"  onclick="anSetFilter('all')">ALL</button>
         <button class="an-pill" id="anf-call" onclick="anSetFilter('call')">CALL</button>
         <button class="an-pill" id="anf-put"  onclick="anSetFilter('put')">PUT</button>
@@ -3322,8 +3376,8 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
         </select>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
-        <span id="an-refresh-badge" style="font-family:var(--mono);font-size:8px;color:#5a7a8a;letter-spacing:1px;"></span>
-        <span id="an-status" style="font-family:var(--mono);font-size:8px;color:#5a7a8a;letter-spacing:1px;"></span>
+        <span id="an-refresh-badge" style="font-family:var(--mono);font-size:8px;color:var(--dim);letter-spacing:1px;"></span>
+        <span id="an-status" style="font-family:var(--mono);font-size:8px;color:var(--dim);letter-spacing:1px;"></span>
         <button onclick="loadAnalytics(true)" style="font-family:var(--mono);font-size:9px;padding:3px 10px;border:1px solid rgba(0,200,255,0.3);background:rgba(0,200,255,0.07);color:var(--blue);border-radius:4px;cursor:pointer;letter-spacing:1px;">⟳ REFRESH</button>
       </div>
     </div>
@@ -3375,10 +3429,10 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="an-panel">
       <div class="an-ph">
         <span class="an-pt">⬡ SIGNAL TIMELINE — TODAY</span>
-        <span id="an-tl-info" style="font-family:var(--mono);font-size:8px;color:#5a7a8a;"></span>
+        <span id="an-tl-info" style="font-family:var(--mono);font-size:8px;color:var(--dim);"></span>
       </div>
       <div style="padding:10px 12px;" id="an-timeline">
-        <div style="font-family:var(--mono);font-size:9px;color:#5a7a8a;text-align:center;padding:10px;">No signals today</div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--dim);text-align:center;padding:10px;">No signals today</div>
       </div>
     </div>
   </div>
@@ -3388,13 +3442,13 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
     <div class="an-panel">
       <div class="an-ph"><span class="an-pt">◈ QUALITY BREAKDOWN</span></div>
       <div style="padding:12px;" id="an-accuracy-bars">
-        <div style="text-align:center;padding:20px;font-family:var(--mono);font-size:9px;color:#5a7a8a;">Loading...</div>
+        <div style="text-align:center;padding:20px;font-family:var(--mono);font-size:9px;color:var(--dim);">Loading...</div>
       </div>
     </div>
     <div class="an-panel">
       <div class="an-ph"><span class="an-pt">◎ CONFIDENCE + INDICATORS</span></div>
       <div style="padding:12px;" id="an-conf-dist">
-        <div style="text-align:center;padding:20px;font-family:var(--mono);font-size:9px;color:#5a7a8a;">Loading...</div>
+        <div style="text-align:center;padding:20px;font-family:var(--mono);font-size:9px;color:var(--dim);">Loading...</div>
       </div>
     </div>
   </div>
@@ -3403,10 +3457,10 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
   <div class="an-panel" style="margin:0 10px 10px;">
     <div class="an-ph">
       <span class="an-pt">◎ SIGNAL LOG — POSTGRESQL</span>
-      <span id="an-table-count" style="font-family:var(--mono);font-size:9px;color:#5a7a8a;letter-spacing:1px;">—</span>
+      <span id="an-table-count" style="font-family:var(--mono);font-size:9px;color:var(--dim);letter-spacing:1px;">—</span>
     </div>
     <div id="an-table-wrap" style="max-height:300px;overflow-y:auto;">
-      <div style="text-align:center;padding:30px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">Switch to this tab to load...</div>
+      <div style="text-align:center;padding:30px;font-family:var(--mono);font-size:10px;color:var(--dim);">Switch to this tab to load...</div>
     </div>
   </div>
 
@@ -4070,7 +4124,7 @@ function renderDashboard(s) {
     _prevSignalForSuggest = sig;
   }
   const tick65 = document.getElementById('conf-tick65');
-  if (tick65) tick65.style.color = conf >= 65 ? 'var(--green)' : '#4a6a8a';
+  if (tick65) tick65.style.color = conf >= 65 ? 'var(--green)' : 'var(--dim)';
 
   // RSI
   if (s.rsi != null) {
@@ -4628,7 +4682,7 @@ function renderDashboard(s) {
         return `<div class="em-vote-row"${isLast?' style="border-bottom:none;"':''}>`
           + `<span class="em-vote-icon" style="color:${color};">${icon}</span>`
           + `<span class="em-vote-name">${name}</span>`
-          + `<span class="em-vote-reason" style="color:#4a6a8a;">${reason}</span>`
+          + `<span class="em-vote-reason" style="color:var(--dim);">${reason}</span>`
           + `</div>`;
       }).join('');
     }
@@ -4692,7 +4746,7 @@ function renderDashboard(s) {
       if (ceChgEl) {
         const chg = s.optionFlow.ceChange || 0;
         ceChgEl.textContent = (chg >= 0 ? '▲ +' : '▼ ') + chg + '%';
-        ceChgEl.style.color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : '#9ab8d0';
+        ceChgEl.style.color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : 'var(--dim)';
       }
     }
     // Live PE premium
@@ -4703,7 +4757,7 @@ function renderDashboard(s) {
       if (peChgEl) {
         const chg = s.optionFlow.peChange || 0;
         peChgEl.textContent = (chg >= 0 ? '▲ +' : '▼ ') + chg + '%';
-        peChgEl.style.color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : '#9ab8d0';
+        peChgEl.style.color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : 'var(--dim)';
       }
     }
     // Details line
@@ -4813,12 +4867,12 @@ function updateBreadthUI(b) {
     if (b.stocks && b.stocks.length) {
       tbody.innerHTML = b.stocks.slice(0,50).map(s => {
         const chg = s.changePct != null ? s.changePct : (s.change || 0);
-        const color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : '#9ab8d0';
+        const color = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : 'var(--dim)';
         const label = s.name || s.symbol || '--';
         const wt = s.weight != null ? s.weight.toFixed(1) : '--';
         const arrow = chg > 0 ? '▲' : chg < 0 ? '▼' : '—';
         return `<div class="stock-row">
-          <span style="color:#9ab8d0;font-size:9px;">${wt}</span>
+          <span style="color:var(--dim);font-size:9px;">${wt}</span>
           <span style="font-size:11px;">${label}</span>
           <span style="color:${color};text-align:right;font-size:10px;">${arrow} ${chg >= 0 ? '+' : ''}${parseFloat(chg).toFixed(2)}%</span>
         </div>`;
@@ -4831,7 +4885,7 @@ function updateBreadthUI(b) {
         : src === '' || !src
         ? '⏳ Stock data loading... open Breadth tab again in 10s'
         : `⚠️ Source: ${src} — stock list not available`;
-      tbody.innerHTML = `<div style="text-align:center;padding:16px;font-size:10px;color:#9ab8d0;font-family:var(--mono);">${msg}</div>`;
+      tbody.innerHTML = `<div style="text-align:center;padding:16px;font-size:10px;color:var(--dim);font-family:var(--mono);">${msg}</div>`;
     }
   }
 }
@@ -4929,7 +4983,7 @@ function updateSectorHeatmap(sectors) {
     const s = sectors[k] || sectors[k.toLowerCase()] || {};
     // FIX: use changePct (%) — change is absolute price delta, not a percentage
     const chg = s.changePct != null ? s.changePct : s.change;
-    const color = chg == null ? '#4a6a8a' : chg > 1 ? 'var(--green)' : chg > 0 ? '#88cc88' : chg < -1 ? 'var(--red)' : '#cc8888';
+    const color = chg == null ? 'var(--dim)' : chg > 1 ? 'var(--green)' : chg > 0 ? '#88cc88' : chg < -1 ? 'var(--red)' : '#cc8888';
     const bg = chg == null ? 'var(--bg3)' : chg > 0 ? 'rgba(0,255,136,0.07)' : 'rgba(255,34,68,0.07)';
     const border = chg == null ? 'var(--border)' : chg > 0 ? 'rgba(0,255,136,0.3)' : 'rgba(255,34,68,0.3)';
     return `<div class="sector-cell" style="background:${bg};border-color:${border};"><div class="sc-label">${lbl}</div><div class="sc-chg" style="color:${color};">${chg == null ? '--' : (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%'}</div></div>`;
@@ -5418,7 +5472,7 @@ function updatePCRTrend(history) {
     // FIX: PCR value color was always amber — should be green/red/amber
     const pcrColor = h.pcr > 1.2 ? 'var(--green)' : h.pcr < 0.8 ? 'var(--red)' : 'var(--amber)';
     const sig = h.signal || (h.pcr > 1.2 ? 'BULLISH' : h.pcr < 0.8 ? 'BEARISH' : 'NEUTRAL');
-    return `<div class="trend-row">${trend} <span style="color:#9ab8d0;">${timeStr}</span> <span style="color:${pcrColor};">PCR: ${parseFloat(h.pcr).toFixed(2)}</span> <span style="color:var(--dim);font-size:9px;">${sig}</span></div>`;
+    return `<div class="trend-row">${trend} <span style="color:var(--dim);">${timeStr}</span> <span style="color:${pcrColor};">PCR: ${parseFloat(h.pcr).toFixed(2)}</span> <span style="color:var(--dim);font-size:9px;">${sig}</span></div>`;
   }).join('');
 }
 
@@ -5517,7 +5571,7 @@ function updateFIIDIIDisplay(fii, dii) {
   }
   // FIX: add thousand separators for large Cr values (was showing 12345Cr not 12,345Cr)
   const fmtCr = v => v == null ? '--' : Math.abs(v).toLocaleString('en-IN', {maximumFractionDigits:0}) + 'Cr';
-  const col = v => v == null ? '#9ab8d0' : v >= 0 ? 'var(--green)' : 'var(--red)';
+  const col = v => v == null ? 'var(--dim)' : v >= 0 ? 'var(--green)' : 'var(--red)';
 
   // FII buy/sell/net
   const fbv = document.getElementById('fii-buy-val');
@@ -6267,12 +6321,92 @@ function renderCandlestickChart(canvas, candles) {
   }, interval);
 }
 
+// ── Overlay toggle state ──────────────────────────────────────────────────
+const _chartOverlay = { vol: true, rsi: true, sig: true, sr: false };
+function chartToggle(key, btn) {
+  _chartOverlay[key] = !_chartOverlay[key];
+  btn.classList.toggle('active', _chartOverlay[key]);
+  const canvas = document.getElementById('chart-canvas');
+  if (canvas) _drawChart(canvas);
+}
+
+// ── RSI calculator (period 9) ─────────────────────────────────────────────
+function _calcRSI(closes, period) {
+  if (closes.length < period + 1) return closes.map(() => null);
+  const out = new Array(closes.length).fill(null);
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i-1];
+    if (d >= 0) gains += d; else losses -= d;
+  }
+  let avgG = gains / period, avgL = losses / period;
+  out[period] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL);
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i-1];
+    avgG = (avgG * (period-1) + (d>0?d:0)) / period;
+    avgL = (avgL * (period-1) + (d<0?-d:0)) / period;
+    out[i] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL);
+  }
+  return out;
+}
+
+// ── Support/Resistance via pivot clustering ───────────────────────────────
+function _calcSR(candles) {
+  const pivots = [];
+  for (let i = 2; i < candles.length - 2; i++) {
+    const h = candles[i].high, l = candles[i].low;
+    if (h > candles[i-1].high && h > candles[i+1].high &&
+        h > candles[i-2].high && h > candles[i+2].high) pivots.push(h);
+    if (l < candles[i-1].low  && l < candles[i+1].low  &&
+        l < candles[i-2].low  && l < candles[i+2].low)  pivots.push(l);
+  }
+  // Cluster nearby pivots (within 0.15%)
+  const clusters = [];
+  pivots.sort((a,b) => a-b);
+  for (const p of pivots) {
+    const existing = clusters.find(c => Math.abs(c.val - p) / p < 0.0015);
+    if (existing) { existing.count++; existing.val = (existing.val + p) / 2; }
+    else clusters.push({ val: p, count: 1 });
+  }
+  return clusters.filter(c => c.count >= 2).sort((a,b) => b.count - a.count).slice(0, 5);
+}
+
 // ── Core draw function — uses _chartViewOffset + _chartZoomBars ────────────
 function _drawChart(canvas) {
   const candles = _chartAllCandles;
   if (!candles || !candles.length) return;
 
-  const W = canvas.parentElement.clientWidth || 360, H = 260;
+  // ── Day mode color palette ──────────────────────────────────────────────
+  const isDay = document.documentElement.classList.contains('vn-day');
+  const C = {
+    bg:        isDay ? '#f5f8fb'             : '#060d14',
+    grid:      isDay ? 'rgba(0,0,0,0.07)'   : '#0d2035',
+    gridV:     isDay ? 'rgba(0,0,0,0.05)'   : '#0a1a28',
+    axisText:  isDay ? '#607080'             : '#4a6a8a',
+    timeText:  isDay ? '#7a9090'             : '#3a5a7a',
+    crosshair: isDay ? 'rgba(0,60,120,0.35)': 'rgba(180,220,255,0.4)',
+    tooltip:   isDay ? 'rgba(240,244,248,0.97)' : 'rgba(6,20,34,0.93)',
+    tooltipBorder: isDay ? '#b8c8d8' : null,
+    tooltipText: isDay ? '#3a5060' : '#9ab8d0',
+    priceLabelBg: isDay ? 'rgba(200,215,230,0.95)' : 'rgba(20,60,90,0.95)',
+    priceLabelText: isDay ? '#1a2530' : '#9ab8d0',
+    cursorPriceBg: isDay ? '#1a2530' : null,
+    volUp:     isDay ? 'rgba(0,180,80,0.25)' : 'rgba(0,255,136,0.2)',
+    volDn:     isDay ? 'rgba(200,30,50,0.2)' : 'rgba(255,34,68,0.15)',
+    rsiLine:   '#aa55ff',
+    rsiOB:     isDay ? 'rgba(200,30,50,0.15)' : 'rgba(255,34,68,0.1)',
+    rsiOS:     isDay ? 'rgba(0,150,80,0.12)'  : 'rgba(0,255,136,0.08)',
+    rsiText:   isDay ? '#8060b0' : '#aa55ff',
+    srLine:    isDay ? 'rgba(255,140,0,0.5)' : 'rgba(255,180,0,0.4)',
+  };
+
+  // ── Show RSI sub-pane? Adjust heights ─────────────────────────────────
+  const showRsi = _chartOverlay.rsi;
+  const showVol = _chartOverlay.vol;
+  const rsiH = showRsi ? 60 : 0;
+  const totalH = 280 + rsiH;
+
+  const W = canvas.parentElement.clientWidth || 360, H = totalH;
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
@@ -6288,6 +6422,8 @@ function _drawChart(canvas) {
   const ema9   = _calcEMA(closes, 9);
   const ema21  = _calcEMA(closes, 21);
   const vwap   = _chartTF !== '1D' ? _calcVWAP(slice) : [];
+  const rsi9   = _calcRSI(closes, 9);
+  const srLevels = _chartOverlay.sr ? _calcSR(slice) : [];
 
   const allPrices = [...slice.map(c=>c.high), ...slice.map(c=>c.low),
                      ...ema9.filter(Boolean), ...ema21.filter(Boolean), ...vwap];
@@ -6295,7 +6431,10 @@ function _drawChart(canvas) {
   const maxP = Math.max(...allPrices) * 1.0005;
   const range = maxP - minP || 1;
 
-  const padL = 4, padR = 48, padT = 12, padB = 20;
+  // Volume row height
+  const volH  = showVol ? 36 : 0;
+  const padL = 4, padR = 48, padT = 12;
+  const padB = 20 + volH + rsiH;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
   const bw = Math.max(2, Math.floor(chartW / n) - 1);
@@ -6303,37 +6442,66 @@ function _drawChart(canvas) {
   const toY = p => padT + chartH - ((p - minP) / range) * chartH;
 
   // ── Background ──────────────────────────────────────────────────────────
-  ctx.fillStyle = '#060d14';
+  ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, W, H);
 
-  // ── Grid ────────────────────────────────────────────────────────────────
+  // ── S/R levels (behind candles) ──────────────────────────────────────────
+  if (_chartOverlay.sr) {
+    srLevels.forEach(sr => {
+      const y = toY(sr.val);
+      if (y < padT || y > padT + chartH) return;
+      ctx.save();
+      ctx.strokeStyle = C.srLine; ctx.lineWidth = 1; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W-padR, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = C.srLine; ctx.font = '6px monospace'; ctx.textAlign = 'left';
+      ctx.fillText('S/R '+sr.val.toFixed(0), W-padR+2, y-1);
+      ctx.restore();
+    });
+  }
+
+  // ── Grid ─────────────────────────────────────────────────────────────────
   const gridLines = 6;
   for (let i = 0; i <= gridLines; i++) {
     const y = padT + (i / gridLines) * chartH;
-    ctx.strokeStyle = '#0d2035'; ctx.setLineDash([2, 4]); ctx.lineWidth = 1;
+    ctx.strokeStyle = C.grid; ctx.setLineDash([2, 4]); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
     ctx.setLineDash([]);
     const price = maxP - (i / gridLines) * range;
-    ctx.fillStyle = '#4a6a8a'; ctx.font = '7px monospace'; ctx.textAlign = 'left';
+    ctx.fillStyle = C.axisText; ctx.font = '7px monospace'; ctx.textAlign = 'left';
     ctx.fillText(price.toFixed(0), W - padR + 4, y + 3);
   }
-  // Vertical grid — time labels
   const vStep = Math.max(1, Math.floor(n / 5));
   for (let i = 0; i < n; i += vStep) {
     const x = toX(i) + bw / 2;
-    ctx.strokeStyle = '#0a1a28'; ctx.setLineDash([1,4]); ctx.lineWidth=1;
+    ctx.strokeStyle = C.gridV; ctx.setLineDash([1,4]); ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + chartH); ctx.stroke();
     ctx.setLineDash([]);
     const c = slice[i];
     if (c) {
       const label = c.date ? String(c.date).slice(5,10) :
                     (c.ts ? new Date(c.ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}) : '');
-      ctx.fillStyle = '#3a5a7a'; ctx.font = '6px monospace'; ctx.textAlign = 'center';
+      ctx.fillStyle = C.timeText; ctx.font = '6px monospace'; ctx.textAlign = 'center';
       ctx.fillText(label, x, padT + chartH + 12);
     }
   }
 
-  // ── Candles ─────────────────────────────────────────────────────────────
+  // ── Volume bars ───────────────────────────────────────────────────────────
+  if (showVol) {
+    const maxVol = Math.max(...slice.map(c => c.volume || 1));
+    const volTop = padT + chartH + 2;
+    slice.forEach((c, i) => {
+      const x = toX(i);
+      const isUp = c.close >= c.open;
+      const vh = Math.max(1, ((c.volume || 1) / maxVol) * (volH - 4));
+      ctx.fillStyle = isUp ? C.volUp : C.volDn;
+      ctx.fillRect(x, volTop + (volH - 4 - vh), bw, vh);
+    });
+    ctx.fillStyle = C.axisText; ctx.font='6px monospace'; ctx.textAlign='left';
+    ctx.fillText('VOL', W-padR+4, volTop + 8);
+  }
+
+  // ── Candles ───────────────────────────────────────────────────────────────
   slice.forEach((c, i) => {
     const x    = toX(i);
     const isUp = c.close >= c.open;
@@ -6348,7 +6516,28 @@ function _drawChart(canvas) {
     ctx.strokeRect(x, bodyTop, bw, bodyH);
   });
 
-  // ── EMA 9 ───────────────────────────────────────────────────────────────
+  // ── Signal markers (▲/▼ arrows on candles from _signalLog) ───────────────
+  if (_chartOverlay.sig && window._signalLog && window._signalLog.length) {
+    window._signalLog.forEach(sig => {
+      const sigTime = new Date(sig.time).getTime();
+      const idx = slice.findIndex(c => {
+        const ct = c.ts ? new Date(c.ts).getTime() : (c.date ? new Date(c.date).getTime() : 0);
+        return Math.abs(ct - sigTime) < 5 * 60 * 1000; // within 5 min
+      });
+      if (idx < 0) return;
+      const x = toX(idx) + bw/2;
+      const isBull = sig.dir === 'bull' || sig.type === 'BUY CALL';
+      const y = isBull ? toY(slice[idx].low) + 8 : toY(slice[idx].high) - 8;
+      ctx.save();
+      ctx.fillStyle = isBull ? '#00ff88' : '#ff2244';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(isBull ? '▲' : '▼', x, y);
+      ctx.restore();
+    });
+  }
+
+  // ── EMA 9 ────────────────────────────────────────────────────────────────
   ctx.save(); ctx.strokeStyle='#ffcc00'; ctx.lineWidth=1.5; ctx.setLineDash([]);
   let started=false; ctx.beginPath();
   ema9.forEach((v,i)=>{ if(!v)return; if(!started){ctx.moveTo(toX(i)+bw/2,toY(v));started=true;}else ctx.lineTo(toX(i)+bw/2,toY(v)); });
@@ -6357,7 +6546,7 @@ function _drawChart(canvas) {
   if(lastE9){ctx.fillStyle='#ffcc00';ctx.font='7px monospace';ctx.textAlign='left';ctx.fillText('E9 '+lastE9.toFixed(0),W-padR+4,toY(lastE9)+3);}
   ctx.restore();
 
-  // ── EMA 21 ──────────────────────────────────────────────────────────────
+  // ── EMA 21 ───────────────────────────────────────────────────────────────
   ctx.save(); ctx.strokeStyle='#ff8c00'; ctx.lineWidth=1.5; ctx.setLineDash([]);
   started=false; ctx.beginPath();
   ema21.forEach((v,i)=>{ if(!v)return; if(!started){ctx.moveTo(toX(i)+bw/2,toY(v));started=true;}else ctx.lineTo(toX(i)+bw/2,toY(v)); });
@@ -6366,7 +6555,7 @@ function _drawChart(canvas) {
   if(lastE21){ctx.fillStyle='#ff8c00';ctx.font='7px monospace';ctx.textAlign='left';ctx.fillText('E21 '+lastE21.toFixed(0),W-padR+4,toY(lastE21)+3);}
   ctx.restore();
 
-  // ── VWAP ────────────────────────────────────────────────────────────────
+  // ── VWAP ─────────────────────────────────────────────────────────────────
   if (_chartTF !== '1D' && vwap.length) {
     ctx.save(); ctx.strokeStyle='#3399ff'; ctx.lineWidth=1.5; ctx.setLineDash([5,3]);
     ctx.beginPath();
@@ -6377,36 +6566,77 @@ function _drawChart(canvas) {
     ctx.restore();
   }
 
-  // ── Current price line ───────────────────────────────────────────────────
+  // ── Current price line ────────────────────────────────────────────────────
   const curPrice = slice[slice.length-1]?.close;
   if (curPrice) {
     const cy = toY(curPrice);
     ctx.save();
-    ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1; ctx.setLineDash([3,5]);
+    ctx.strokeStyle= isDay ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.2)';
+    ctx.lineWidth=1; ctx.setLineDash([3,5]);
     ctx.beginPath(); ctx.moveTo(padL,cy); ctx.lineTo(W-padR,cy); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = curPrice>=slice[0]?.open?'#00ff88':'#ff2244';
+    ctx.fillStyle = curPrice>=slice[0]?.open?'#00bb66':'#dd2244';
     ctx.fillRect(W-padR+1,cy-7,padR-2,13);
-    ctx.fillStyle='#000'; ctx.font='bold 8px monospace'; ctx.textAlign='center';
+    ctx.fillStyle='#fff'; ctx.font='bold 8px monospace'; ctx.textAlign='center';
     ctx.fillText(curPrice.toFixed(0),W-padR/2+1,cy+3);
     ctx.restore();
   }
 
-  // ── Crosshair ────────────────────────────────────────────────────────────
+  // ── RSI sub-pane ──────────────────────────────────────────────────────────
+  if (showRsi && rsi9.length) {
+    const rsiTop = H - rsiH - 2;
+    const rsiBot = H - 2;
+    const toRY = v => rsiTop + (rsiBot - rsiTop) * (1 - (v - 0) / 100);
+
+    // Background
+    ctx.fillStyle = isDay ? 'rgba(240,244,248,0.8)' : 'rgba(6,13,20,0.8)';
+    ctx.fillRect(0, rsiTop, W - padR, rsiH);
+    // OB/OS zones
+    ctx.fillStyle = C.rsiOB;
+    ctx.fillRect(0, toRY(70), W-padR, toRY(100) - toRY(70));
+    ctx.fillStyle = C.rsiOS;
+    ctx.fillRect(0, toRY(30), W-padR, toRY(0) - toRY(30));
+    // 70/30 lines
+    [70, 50, 30].forEach(lvl => {
+      ctx.strokeStyle = lvl===50 ? (isDay?'rgba(0,0,0,0.1)':'rgba(255,255,255,0.08)') : (isDay?'rgba(200,30,50,0.2)':'rgba(180,60,80,0.3)');
+      ctx.lineWidth=0.5; ctx.setLineDash([2,3]);
+      ctx.beginPath(); ctx.moveTo(0,toRY(lvl)); ctx.lineTo(W-padR,toRY(lvl)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle=C.rsiText; ctx.font='6px monospace'; ctx.textAlign='left';
+      ctx.fillText(lvl, W-padR+3, toRY(lvl)+2);
+    });
+    // RSI line
+    ctx.save(); ctx.strokeStyle=C.rsiLine; ctx.lineWidth=1.5;
+    started=false; ctx.beginPath();
+    rsi9.forEach((v,i)=>{ if(v==null)return; if(!started){ctx.moveTo(toX(i)+bw/2,toRY(v));started=true;}else ctx.lineTo(toX(i)+bw/2,toRY(v)); });
+    ctx.stroke();
+    // RSI label
+    const lastRsi = rsi9.filter(v=>v!=null).pop();
+    if (lastRsi) {
+      ctx.fillStyle=C.rsiLine; ctx.font='bold 7px monospace'; ctx.textAlign='left';
+      ctx.fillText('RSI '+lastRsi.toFixed(1), W-padR+3, toRY(lastRsi));
+    }
+    ctx.restore();
+    // Separator line
+    ctx.strokeStyle = isDay ? '#b8c8d8' : '#1a3050';
+    ctx.lineWidth=1; ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(0,rsiTop); ctx.lineTo(W-padR,rsiTop); ctx.stroke();
+    ctx.fillStyle=C.axisText; ctx.font='6px monospace'; ctx.textAlign='left';
+    ctx.fillText('RSI(9)', 4, rsiTop+8);
+  }
+
+  // ── Crosshair ──────────────────────────────────────────────────────────────
   if (_chartCrosshairX >= 0 && _chartCrosshairX <= W) {
     const mx = _chartCrosshairX, my = _chartCrosshairY;
-    // Vertical line
     ctx.save();
-    ctx.strokeStyle='rgba(180,220,255,0.4)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+    ctx.strokeStyle=C.crosshair; ctx.lineWidth=1; ctx.setLineDash([3,3]);
     ctx.beginPath(); ctx.moveTo(mx,padT); ctx.lineTo(mx,padT+chartH); ctx.stroke();
-    // Horizontal line
     ctx.beginPath(); ctx.moveTo(padL,my); ctx.lineTo(W-padR,my); ctx.stroke();
     ctx.setLineDash([]);
-    // Price label on right axis
     const hoverPrice = maxP - ((my - padT) / chartH) * range;
     if (hoverPrice > minP && hoverPrice < maxP) {
-      ctx.fillStyle='rgba(20,60,90,0.95)'; ctx.fillRect(W-padR+1,my-7,padR-2,13);
-      ctx.fillStyle='#9ab8d0'; ctx.font='bold 7px monospace'; ctx.textAlign='center';
+      ctx.fillStyle=C.priceLabelBg; ctx.fillRect(W-padR+1,my-7,padR-2,13);
+      ctx.fillStyle=C.priceLabelText; ctx.font='bold 7px monospace'; ctx.textAlign='center';
       ctx.fillText(hoverPrice.toFixed(0),W-padR/2+1,my+3);
     }
     // Candle tooltip
@@ -6433,7 +6663,7 @@ function _drawChart(canvas) {
       ctx.beginPath(); ctx.roundRect?ctx.roundRect(tx,ty,tw,th,4):ctx.rect(tx,ty,tw,th); ctx.fill(); ctx.stroke();
       ctx.font='7.5px monospace'; ctx.textAlign='left';
       lines.forEach((l,i)=>{
-        ctx.fillStyle = i===3?(isUp?'#00ff88':'#ff2244'):'#9ab8d0';
+        ctx.fillStyle = i===3?(isUp?'#00ff88':'#ff2244'):C.tooltipText;
         ctx.fillText(l, tx+6, ty+13+i*11);
       });
     }
@@ -6447,6 +6677,30 @@ function _drawChart(canvas) {
   }
 
   canvas.style.display = 'block';
+
+  // ── Update session stats bar ──────────────────────────────────────────────
+  if (slice.length) {
+    const dayH = Math.max(...slice.map(c=>c.high));
+    const dayL = Math.min(...slice.map(c=>c.low));
+    const rng  = (dayH - dayL).toFixed(0);
+    const rngP = ((dayH - dayL) / dayL * 100).toFixed(2);
+    const bulls = slice.filter(c=>c.close>=c.open).length;
+    const bears = slice.length - bulls;
+    const ema9last  = ema9.filter(Boolean).pop();
+    const ema21last = ema21.filter(Boolean).pop();
+    const trend = ema9last && ema21last
+      ? (ema9last > ema21last ? '↑ BULL' : '↓ BEAR') : '--';
+    const trendCol = trend.includes('BULL') ? '#00bb66' : trend.includes('BEAR') ? '#dd2244' : 'var(--dim)';
+    const setS = (id, val, color) => {
+      const el = document.getElementById(id);
+      if (el) { el.textContent = val; if (color) el.style.color = color; }
+    };
+    setS('chart-stat-range',   '₹'+rng);
+    setS('chart-stat-rangepct', rngP+'%');
+    setS('chart-stat-candles', slice.length);
+    setS('chart-stat-ratio',   bulls+'▲/'+bears+'▼', bulls>bears?'#00bb66':'#dd2244');
+    setS('chart-stat-trend',   trend, trendCol);
+  }
 }
 
 // ── Interaction setup — wheel zoom, mouse/touch pan, crosshair ────────────
@@ -7064,13 +7318,13 @@ function anRenderLastSignal(rows) {
   el.style.borderColor = isCall ? 'rgba(0,255,136,0.25)' : 'rgba(255,68,102,0.25)';
   el.style.background  = isCall ? 'rgba(0,255,136,0.04)' : 'rgba(255,68,102,0.04)';
   el.innerHTML = `
-    <span style="font-size:8px;color:#5a7a8a;letter-spacing:1.5px;">LAST SIGNAL</span>
+    <span style="font-size:8px;color:var(--dim);letter-spacing:1.5px;">LAST SIGNAL</span>
     <span style="color:${col};font-weight:700;letter-spacing:1px;">${last.signal}</span>
-    <span style="color:#5a7a8a;">@${ts}</span>
+    <span style="color:var(--dim);">@${ts}</span>
     <span style="color:#cde8ff;">Nifty <b>${Number(last.nifty||0).toFixed(0)}</b></span>
-    <span style="color:#9ab8d0;">RSI <b style="color:${last.rsi>60?'var(--red)':last.rsi<40?'var(--green)':'#cde8ff'}">${Number(last.rsi||0).toFixed(1)}</b></span>
-    <span style="color:#9ab8d0;">ATM PCR <b style="color:${col}">${pcrVal}</b></span>
-    <span style="color:#9ab8d0;">ADX <b style="color:${last.adx>=25?'#ffcc00':'#9ab8d0'}">${adxVal}</b></span>
+    <span style="color:var(--dim);">RSI <b style="color:${last.rsi>60?'var(--red)':last.rsi<40?'var(--green)':'#cde8ff'}">${Number(last.rsi||0).toFixed(1)}</b></span>
+    <span style="color:var(--dim);">ATM PCR <b style="color:${col}">${pcrVal}</b></span>
+    <span style="color:var(--dim);">ADX <b style="color:${last.adx>=25?'#ffcc00':'var(--dim)'}">${adxVal}</b></span>
     <span class="an-badge ${last.quality_gate?'pass':'fail'}" style="margin-left:auto;">${last.quality_gate?'✓ GATE PASSED':'✗ GATE FAILED'}</span>
   `;
 }
@@ -7088,7 +7342,7 @@ function anRenderTimeline(rows) {
   if (infoEl) infoEl.textContent = todayRows.length + ' signals';
 
   if (!todayRows.length) {
-    el.innerHTML = '<div style="font-family:var(--mono);font-size:9px;color:#5a7a8a;text-align:center;padding:10px;">No signals today yet</div>';
+    el.innerHTML = '<div style="font-family:var(--mono);font-size:9px;color:var(--dim);text-align:center;padding:10px;">No signals today yet</div>';
     return;
   }
 
@@ -7113,9 +7367,9 @@ function anRenderTimeline(rows) {
       <!-- Track -->
       <div style="position:absolute;top:20px;left:0;right:0;height:2px;background:rgba(0,200,255,0.15);border-radius:1px;"></div>
       <!-- Time labels -->
-      <div style="position:absolute;top:28px;left:0;font-family:var(--mono);font-size:7px;color:#5a7a8a;">9:15</div>
-      <div style="position:absolute;top:28px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:#5a7a8a;">12:22</div>
-      <div style="position:absolute;top:28px;right:0;font-family:var(--mono);font-size:7px;color:#5a7a8a;">15:30</div>
+      <div style="position:absolute;top:28px;left:0;font-family:var(--mono);font-size:7px;color:var(--dim);">9:15</div>
+      <div style="position:absolute;top:28px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--dim);">12:22</div>
+      <div style="position:absolute;top:28px;right:0;font-family:var(--mono);font-size:7px;color:var(--dim);">15:30</div>
       <!-- Signal dots -->
       ${dots.map(d => `
         <div title="${d.ts} | ${d.r.signal} | RSI:${Number(d.r.rsi||0).toFixed(1)} | PCR:${d.pcrV} | Conf:${d.r.confidence}%"
@@ -7177,7 +7431,7 @@ function anRenderBars(rows) {
     bar('RSI Confirms Signal', rsiRate, 'w') +
     (winRows.length ? `
     <div style="margin-top:10px;border-top:1px solid rgba(0,200,255,0.08);padding-top:8px;">
-      <div style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;margin-bottom:6px;">TOP ENTRY WINDOWS</div>
+      <div style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:var(--dim);margin-bottom:6px;">TOP ENTRY WINDOWS</div>
       ${winRows.map(([w,c]) =>
         bar(w, ((c/maxWin)*100).toFixed(0), 'b', ' ('+c+')')
       ).join('')}
@@ -7212,7 +7466,7 @@ function anRenderConfDist(rows) {
   const box = (val, pct, label, col) =>
     `<div style="text-align:center;background:rgba(${col},0.07);border-radius:6px;padding:7px 4px;border:1px solid rgba(${col},0.12);">
       <div style="font-family:var(--mono);font-size:18px;color:rgba(${col},1);font-weight:700;">${val}</div>
-      <div style="font-size:7px;color:#5a7a8a;margin-top:1px;">${label}</div>
+      <div style="font-size:7px;color:var(--dim);margin-top:1px;">${label}</div>
       <div style="font-size:8px;color:rgba(${col},0.9);margin-top:1px;">${pct}%</div>
     </div>`;
 
@@ -7220,7 +7474,7 @@ function anRenderConfDist(rows) {
     `<div class="an-bar-item">
       <div class="an-bar-label">
         <span>${label}</span>
-        <span style="color:${col}">${val}%${note?` <span style="color:#5a7a8a;font-size:7px;">${note}</span>`:''}</span>
+        <span style="color:${col}">${val}%${note?` <span style="color:var(--dim);font-size:7px;">${note}</span>`:''}</span>
       </div>
       <div class="an-bar-track"><div class="an-bar-fill b" style="width:${val}%;background:linear-gradient(90deg,${col},rgba(0,200,255,0.4));"></div></div>
     </div>`;
@@ -7232,7 +7486,7 @@ function anRenderConfDist(rows) {
       ${box(low,  ((low/total)*100).toFixed(0),  '<45% LOW', '255,68,102')}
     </div>
     <div style="border-top:1px solid rgba(0,200,255,0.08);padding-top:8px;">
-      <div style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:#5a7a8a;margin-bottom:7px;">INDICATOR QUALITY</div>
+      <div style="font-family:var(--mono);font-size:8px;letter-spacing:1.5px;color:var(--dim);margin-bottom:7px;">INDICATOR QUALITY</div>
       ${bar2('PCR Available', pcrRate, 'var(--blue)', pcrAvail+'/'+rows.length)}
       ${bar2('PCR Confirms Direction', pcrAlRate, 'var(--blue)')}
       ${bar2('ADX Trending (≥25)', adxRate, '#ffcc00')}
@@ -7247,7 +7501,7 @@ function anRenderTable(rows) {
   if (!wrap) return;
 
   if (!rows.length) {
-    wrap.innerHTML = '<div style="text-align:center;padding:30px;font-family:var(--mono);font-size:10px;color:#5a7a8a;">No signals found for selected filter/date</div>';
+    wrap.innerHTML = '<div style="text-align:center;padding:30px;font-family:var(--mono);font-size:10px;color:var(--dim);">No signals found for selected filter/date</div>';
     return;
   }
 
@@ -7263,27 +7517,27 @@ function anRenderTable(rows) {
         const isC = r.signal==='BUY CALL';
         const conf= Math.min(100,r.confidence||0);
         const mtfCls = (r.mtf_signal||'').includes('BULL') ? 'color:var(--green)'
-                     : (r.mtf_signal||'').includes('BEAR') ? 'color:var(--red)' : 'color:#5a7a8a';
+                     : (r.mtf_signal||'').includes('BEAR') ? 'color:var(--red)' : 'color:var(--dim)';
         // PCR: show N/A when 0
-        const pcrShow = (r.atm_pcr>0||r.pcr>0) ? Number(r.atm_pcr||r.pcr).toFixed(2) : '<span style="color:#5a7a8a">N/A</span>';
-        const pcrCol  = r.atm_pcr>1.2?'var(--green)':r.atm_pcr>0&&r.atm_pcr<0.8?'var(--red)':'#9ab8d0';
+        const pcrShow = (r.atm_pcr>0||r.pcr>0) ? Number(r.atm_pcr||r.pcr).toFixed(2) : '<span style="color:var(--dim)">N/A</span>';
+        const pcrCol  = r.atm_pcr>1.2?'var(--green)':r.atm_pcr>0&&r.atm_pcr<0.8?'var(--red)':'var(--dim)';
         const reasons = (r.reasons||[]).slice(0,2).map(x => String(x).slice(0,24)).join(' · ');
         return `<tr>
-          <td style="color:#5a7a8a">${ts}</td>
+          <td style="color:var(--dim)">${ts}</td>
           <td><span class="an-badge ${isC?'call':'put'}">${r.signal}</span></td>
           <td>
             <span style="color:${conf>=65?'var(--green)':conf>=45?'#ffcc00':'var(--red)'}">${conf}%</span>
             <span class="an-conf-bar"><span class="an-conf-fill" style="width:${conf}%"></span></span>
           </td>
           <td style="color:#cde8ff">${Number(r.nifty||0).toFixed(0)}</td>
-          <td style="color:${r.rsi>60?'var(--red)':r.rsi<40?'var(--green)':'#9ab8d0'}">${Number(r.rsi||0).toFixed(1)}</td>
+          <td style="color:${r.rsi>60?'var(--red)':r.rsi<40?'var(--green)':'var(--dim)'}">${Number(r.rsi||0).toFixed(1)}</td>
           <td style="color:${pcrCol}">${pcrShow}</td>
-          <td style="color:${r.adx>=25?'#ffcc00':'#5a7a8a'}">${Number(r.adx||0).toFixed(1)}</td>
-          <td style="color:${r.vix>20?'var(--red)':'#5a7a8a'}">${Number(r.vix||0).toFixed(1)}</td>
+          <td style="color:${r.adx>=25?'#ffcc00':'var(--dim)'}">${Number(r.adx||0).toFixed(1)}</td>
+          <td style="color:${r.vix>20?'var(--red)':'var(--dim)'}">${Number(r.vix||0).toFixed(1)}</td>
           <td><span style="font-size:8px;${mtfCls}">${(r.mtf_signal||'—').slice(0,8)}</span></td>
           <td><span class="an-badge ${r.quality_gate?'pass':'fail'}">${r.quality_gate?'✓':'✗'}</span></td>
-          <td style="color:#5a7a8a;font-size:8px">${r.entry_window||'—'}</td>
-          <td style="color:#5a7a8a;font-size:8px;max-width:160px;overflow:hidden;text-overflow:ellipsis" title="${(r.reasons||[]).join(' | ')}">${reasons||'—'}</td>
+          <td style="color:var(--dim);font-size:8px">${r.entry_window||'—'}</td>
+          <td style="color:var(--dim);font-size:8px;max-width:160px;overflow:hidden;text-overflow:ellipsis" title="${(r.reasons||[]).join(' | ')}">${reasons||'—'}</td>
         </tr>`;
       }).join('')}
     </tbody>
