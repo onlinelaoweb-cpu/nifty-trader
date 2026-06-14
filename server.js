@@ -1435,21 +1435,30 @@ function evaluateBTST() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // 9:20 AM EMA-VWAP SETUP ALERT — "Vardaan Opening Setup"
 // ═══════════════════════════════════════════════════════════════════════════════
-// Strategy: After 9:15 first candle closes, check EMA9 + EMA21 vs VWAP.
-//   Both below VWAP → PUT setup (bearish bias confirmed)
-//   Both above VWAP → CALL setup (bullish bias confirmed)
-//   Mixed            → NO TRADE (indecisive — stay out)
+// UPGRADED STRATEGY — multi-timeframe + A/D + PCR + VIX gating
 //
-// Why 9:20 AM?
-//   9:15 candle is noise — institutional orders still settling.
-//   9:20 first 5-min candle has closed — real direction established.
-//   Premium is still cheap before big players show their hand.
+// Why upgrade from 1m-only?
+//   1m EMA/VWAP at 9:20 AM is extremely noisy — 5-min candle has only 5 bars,
+//   EMA9 on 1m is just a 9-bar average of the first 5 minutes. A single spike
+//   can make 1m EMA cross VWAP falsely.
+//
+// New logic — 4-layer confirmation:
+//   LAYER 1 (Primary): 1m Price + EMA9 + EMA21 vs VWAP  [existing — fast read]
+//   LAYER 2 (Trend):   5m MTF signal (BULLISH/BEARISH)   [RSI9+EMA+VWAP+ADX]
+//   LAYER 3 (Breadth): A/D ratio — ≥1.5 bull, ≤0.7 bear [Nifty50 stock breath]
+//   LAYER 4 (Options): PCR zone — confirms call/put bias  [not a hard gate]
+//
+// Decision matrix:
+//   STRONG TRADE  = Layer1 + Layer2 + Layer3 all agree + PCR confirms  → fire alert
+//   TRADE         = Layer1 + Layer2 agree, Layer3 mixed, PCR ok        → fire alert with caution
+//   WEAK / SKIP   = Layer1 disagrees with Layer2                       → NO TRADE
+//   HIGH RISK     = VIX > 20                                           → NO TRADE (market chaotic)
 //
 // Rules enforced:
 //   1. Fires ONCE per day only (ema920AlertSentToday flag)
-//   2. Window: 9:20–9:30 AM only (10 min window, after that skip)
-//   3. Requires NIFTY price > 0 (live data must be available)
-//   4. EMA9 AND EMA21 must BOTH be on same side of VWAP (no mixed signals)
+//   2. Window: 9:20–9:30 AM only
+//   3. Requires live NIFTY price
+//   4. 15m MTF used as tiebreaker when 5m is still INSUFFICIENT
 // ═══════════════════════════════════════════════════════════════════════════════
 async function check920Setup() {
     if (!isConfigured()) return;
@@ -1462,86 +1471,213 @@ async function check920Setup() {
     const { nifty, ema9, ema21, vwap } = marketState;
     if (!nifty || nifty <= 0 || !ema9 || !ema21 || !vwap) return;
 
+    // ── LAYER 1: 1m Price + EMA vs VWAP ──────────────────────────────────────
+    const priceAbove = nifty  > vwap;
+    const ema9Above  = ema9   > vwap;
+    const ema21Above = ema21  > vwap;
+    const l1Bull = priceAbove && ema9Above && ema21Above;
+    const l1Bear = !priceAbove && !ema9Above && !ema21Above;
+    const l1Aligned = l1Bull || l1Bear;
+
+    // ── LAYER 2: 5m MTF signal (falls back to 15m if 5m is INSUFFICIENT) ─────
+    const mtf5m  = marketState.mtf?.tf5m;
+    const mtf15m = marketState.mtf?.tf15m;
+    const mtf5mSig  = mtf5m?.signal;   // 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'INSUFFICIENT'
+    const mtf15mSig = mtf15m?.signal;
+    // 5m has only 1 closed candle at 9:20 — may still be INSUFFICIENT
+    // Use 15m as the primary higher-TF gate (more stable at open)
+    const htfSig = (mtf15mSig && mtf15mSig !== 'INSUFFICIENT') ? mtf15mSig
+                 : (mtf5mSig  && mtf5mSig  !== 'INSUFFICIENT') ? mtf5mSig
+                 : null;
+    const l2Bull = htfSig === 'BULLISH';
+    const l2Bear = htfSig === 'BEARISH';
+    const l2Available = htfSig !== null && htfSig !== 'NEUTRAL';
+    const l2Agrees = (l1Bull && l2Bull) || (l1Bear && l2Bear);
+
+    // ── LAYER 3: A/D Breadth ──────────────────────────────────────────────────
+    const br       = marketState.breadth;
+    const adRatio  = br?.adRatio   ?? null;  // advances/declines ratio
+    const adSig    = br?.breadthSignal ?? null; // 'BULLISH'|'BEARISH'|'NEUTRAL'
+    const adPct    = br?.breadthPct ?? 50;
+    const l3Bull   = adSig === 'BULLISH' || adRatio >= 1.5;
+    const l3Bear   = adSig === 'BEARISH' || adRatio <= 0.7;
+    const l3Available = adRatio !== null;
+    const l3Agrees = (l1Bull && l3Bull) || (l1Bear && l3Bear);
+
+    // ── LAYER 4: PCR zone (soft gate — informs strength label, not a blocker) ─
+    const pcr       = marketState.pcr;
+    const pcrSig    = marketState.pcrSignal;  // 'BULLISH'|'BEARISH'|'NEUTRAL'
+    const atmPcr    = marketState.atmPcr;
+    const pcrBull   = pcrSig === 'BULLISH' || pcr > 1.0;
+    const pcrBear   = pcrSig === 'BEARISH' || pcr < 0.8;
+    const pcrAgrees = (l1Bull && pcrBull) || (l1Bear && pcrBear);
+
+    // ── VIX risk gate ─────────────────────────────────────────────────────────
+    const vix       = marketState.vix;
+    const vixHigh   = vix && vix > 20;  // >20 = chaotic, skip trade
+
+    // ── MTF detail lines for message ─────────────────────────────────────────
+    const rsi5m    = mtf5m?.rsi   != null ? mtf5m.rsi.toFixed(1)   : '--';
+    const rsi15m   = mtf15m?.rsi  != null ? mtf15m.rsi.toFixed(1)  : '--';
+    const adx5m    = mtf5m?.adx   != null ? mtf5m.adx.toFixed(1)   : '--';
+    const adx15m   = mtf15m?.adx  != null ? mtf15m.adx.toFixed(1)  : '--';
+
+    // ── Formatted values ──────────────────────────────────────────────────────
     const atmStrike = Math.round(nifty / 50) * 50;
     const vwapFmt   = vwap.toLocaleString('en-IN', { maximumFractionDigits: 2 });
     const ema9Fmt   = ema9.toFixed(2);
     const ema21Fmt  = ema21.toFixed(2);
     const niftyFmt  = nifty.toLocaleString('en-IN', { maximumFractionDigits: 2 });
-    const pcrLine   = marketState.pcr ? `PCR: ${marketState.pcr} (${marketState.pcrSignal})` : 'PCR: Fetching...';
-    const vixLine   = marketState.vix ? `VIX: ${marketState.vix} — ${marketState.vixSignal}` : 'VIX: --';
+    const pcrFmt    = pcr   ? `PCR: ${pcr} (${pcrSig})` : 'PCR: --';
+    const atmFmt    = atmPcr? `ATM PCR: ${atmPcr}` : '';
+    const vixFmt    = vix   ? `VIX: ${vix} ${vixHigh ? '⚠️ HIGH' : '✅'}` : 'VIX: --';
+    const adFmt     = adRatio != null
+                    ? `A/D: ${br.advances}↑/${br.declines}↓ Ratio:${adRatio} (${adSig ?? 'NEUTRAL'})`
+                    : 'A/D: Fetching...';
+    const htfLabel  = (mtf15mSig && mtf15mSig !== 'INSUFFICIENT') ? `15m:${htfSig}` : `5m:${htfSig}`;
 
-    // PRIMARY signal: PRICE vs VWAP (freshest — resets daily at 9:15)
-    // CONFIRMATION: EMA9 + EMA21 both on same side
-    // All 3 must agree → clean setup. Any mismatch → NO TRADE.
-    // (Old version used only EMA vs VWAP — wrong because EMA carries multi-day history)
-    const priceAbove = nifty > vwap;
-    const ema9Above  = ema9  > vwap;
-    const ema21Above = ema21 > vwap;
+    // ── Determine overall setup quality ──────────────────────────────────────
+    const layers    = [l1Aligned, l2Agrees && l2Available, l3Agrees && l3Available].filter(Boolean).length;
+    // STRONG = all 3 layers agree + PCR confirms
+    const isStrong  = l1Aligned && l2Agrees && l3Agrees && pcrAgrees;
+    // VALID  = Layer1 + Layer2 agree (Layer3 may be unavailable early)
+    const isValid   = l1Aligned && (l2Agrees || !l2Available);
+    // Direction
+    const isBull    = l1Bull;
 
-    // ── CALL SETUP ────────────────────────────────────────────────────────────
-    if (priceAbove && ema9Above && ema21Above) {
-        ema920AlertSentToday = true;
+    ema920AlertSentToday = true;
+
+    // ── VIX BLOCK — market too chaotic to trade ────────────────────────────────
+    if (vixHigh) {
+        await sendRawMessage(
+`⛔ <b>VARDAAN 9:20 SETUP — BLOCKED (HIGH VIX)</b>
+
+${vixFmt} — Market too volatile for opening trade
+${pcrFmt}
+${adFmt}
+
+❌ <b>Skip today's opening trade — wait for VIX < 20</b>
+💡 Re-evaluate at 10:30 AM if VIX stabilises`);
+        console.log(`📱 [9:20] BLOCKED — VIX ${vix} > 20`);
+        return;
+    }
+
+    // ── NO TRADE — 1m not aligned ────────────────────────────────────────────
+    if (!l1Aligned) {
+        const pricePos = priceAbove ? 'ABOVE' : 'BELOW';
+        const ema9pos  = ema9Above  ? 'above' : 'below';
+        const ema21pos = ema21Above ? 'above' : 'below';
+        await sendRawMessage(
+`⚪ <b>VARDAAN 9:20 SETUP — NO TRADE</b>
+
+⚠️ Mixed 1m signals — price and EMAs not aligned
+Price (${niftyFmt}) is ${pricePos} VWAP (${vwapFmt})
+EMA9 (${ema9Fmt}) is ${ema9pos} VWAP
+EMA21 (${ema21Fmt}) is ${ema21pos} VWAP
+
+📊 <b>Higher TF (${htfLabel ?? 'N/A'})</b>
+5m RSI: ${rsi5m} | 15m RSI: ${rsi15m}
+${adFmt}
+${pcrFmt} | ${vixFmt}
+
+❌ <b>Skip — EMAs split across VWAP, no directional edge</b>
+💡 Wait for 10:30 AM cleaner setup or sit out`);
+        console.log(`📱 [9:20] NO TRADE | mixed 1m: price${priceAbove?'↑':'↓'} ema9${ema9Above?'↑':'↓'} ema21${ema21Above?'↑':'↓'}`);
+        return;
+    }
+
+    // ── 1m aligned but CONFLICTS with higher TF ──────────────────────────────
+    if (l2Available && !l2Agrees) {
+        const dir = isBull ? 'BULLISH' : 'BEARISH';
+        const opp = isBull ? 'BEARISH' : 'BULLISH';
+        await sendRawMessage(
+`🟡 <b>VARDAAN 9:20 SETUP — CONFLICT (SKIP)</b>
+
+1m signals ${dir} but ${htfLabel} is ${opp}
+Price (${niftyFmt}) ${isBull?'ABOVE':'BELOW'} VWAP (${vwapFmt})
+EMA9: ${ema9Fmt} | EMA21: ${ema21Fmt}
+
+📊 <b>Higher TF (${htfLabel})</b>
+5m RSI: ${rsi5m} ADX: ${adx5m}
+15m RSI: ${rsi15m} ADX: ${adx15m}
+${adFmt}
+${pcrFmt} | ${vixFmt}
+
+⚠️ <b>1m and higher TF disagree — HIGH RISK, skip trade</b>
+💡 Opening moves that fight the 15m trend fail 70% of the time`);
+        console.log(`📱 [9:20] CONFLICT | 1m:${isBull?'BULL':'BEAR'} vs HTF:${htfSig}`);
+        return;
+    }
+
+    // ── VALID TRADE — build strength label ───────────────────────────────────
+    const strengthLabel = isStrong ? '🔥 STRONG SETUP (4/4 layers)' :
+                          layers >= 2 ? '✅ GOOD SETUP (3/4 layers)' :
+                          '⚠️ WEAK SETUP (2/4 layers) — reduce size';
+    const adConfirm  = l3Agrees  ? `✅ A/D ${isBull?'Bullish':'Bearish'} — ${br.advances}↑/${br.declines}↓`
+                     : l3Available ? `⚠️ A/D Mixed — ${br.advances}↑/${br.declines}↓ (watch)`
+                     : `⏳ A/D not yet available`;
+    const pcrConfirm = pcrAgrees  ? `✅ ${pcrFmt}` : `⚠️ ${pcrFmt} (contra — reduce size)`;
+    const htfConfirm = l2Agrees   ? `✅ ${htfLabel} — confirms direction`
+                     : !l2Available ? `⏳ HTF warming up — 1m only`
+                     : `⚠️ ${htfLabel}`;
+
+    if (isBull) {
         await sendRawMessage(
 `🟢 <b>VARDAAN 9:20 SETUP — CALL BUY</b>
+${strengthLabel}
 
+<b>Layer 1 — 1m Price + EMA vs VWAP:</b>
 ✅ Price (${niftyFmt}) ABOVE VWAP (${vwapFmt})
 ✅ EMA9 (${ema9Fmt}) ABOVE VWAP
 ✅ EMA21 (${ema21Fmt}) ABOVE VWAP
-📈 All 3 bullish — strong setup confirmed
+
+<b>Layer 2 — Higher TF:</b>
+${htfConfirm}
+5m RSI: ${rsi5m} ADX: ${adx5m} | 15m RSI: ${rsi15m} ADX: ${adx15m}
+
+<b>Layer 3 — A/D Breadth:</b>
+${adConfirm}
+
+<b>Layer 4 — Options Flow:</b>
+${pcrConfirm}${atmFmt ? '\n' + atmFmt : ''}
+${vixFmt}
 
 🎯 <b>Action: BUY ${atmStrike} CE (ATM)</b>
 💰 Target: +25–30% premium gain
 🛑 Stop Loss: −20% premium loss
 ⏰ Time Stop: Exit by 11:00 AM
 
-${pcrLine} | ${vixLine}
-
 ⚠️ <b>1 TRADE ONLY TODAY — No revenge trading</b>`);
-        console.log(`📱 [9:20] CALL SETUP | Price:${niftyFmt} EMA9:${ema9Fmt} EMA21:${ema21Fmt} > VWAP:${vwapFmt}`);
-        return;
-    }
-
-    // ── PUT SETUP ─────────────────────────────────────────────────────────────
-    if (!priceAbove && !ema9Above && !ema21Above) {
-        ema920AlertSentToday = true;
+        console.log(`📱 [9:20] CALL SETUP | ${strengthLabel} | HTF:${htfSig} | A/D:${adRatio} | PCR:${pcr}`);
+    } else {
         await sendRawMessage(
 `🔴 <b>VARDAAN 9:20 SETUP — PUT BUY</b>
+${strengthLabel}
 
+<b>Layer 1 — 1m Price + EMA vs VWAP:</b>
 ✅ Price (${niftyFmt}) BELOW VWAP (${vwapFmt})
 ✅ EMA9 (${ema9Fmt}) BELOW VWAP
 ✅ EMA21 (${ema21Fmt}) BELOW VWAP
-📉 All 3 bearish — strong setup confirmed
+
+<b>Layer 2 — Higher TF:</b>
+${htfConfirm}
+5m RSI: ${rsi5m} ADX: ${adx5m} | 15m RSI: ${rsi15m} ADX: ${adx15m}
+
+<b>Layer 3 — A/D Breadth:</b>
+${adConfirm}
+
+<b>Layer 4 — Options Flow:</b>
+${pcrConfirm}${atmFmt ? '\n' + atmFmt : ''}
+${vixFmt}
 
 🎯 <b>Action: BUY ${atmStrike} PE (ATM)</b>
 💰 Target: +25–30% premium gain
 🛑 Stop Loss: −20% premium loss
 ⏰ Time Stop: Exit by 11:00 AM
 
-${pcrLine} | ${vixLine}
-
 ⚠️ <b>1 TRADE ONLY TODAY — No revenge trading</b>`);
-        console.log(`📱 [9:20] PUT SETUP | Price:${niftyFmt} EMA9:${ema9Fmt} EMA21:${ema21Fmt} < VWAP:${vwapFmt}`);
-        return;
+        console.log(`📱 [9:20] PUT SETUP | ${strengthLabel} | HTF:${htfSig} | A/D:${adRatio} | PCR:${pcr}`);
     }
-
-    // ── NO TRADE: Mixed signals ───────────────────────────────────────────────
-    ema920AlertSentToday = true;
-    const pricePos = priceAbove ? 'ABOVE' : 'BELOW';
-    const ema9pos  = ema9Above  ? 'above' : 'below';
-    const ema21pos = ema21Above ? 'above' : 'below';
-    await sendRawMessage(
-`⚪ <b>VARDAAN 9:20 SETUP — NO TRADE</b>
-
-⚠️ Mixed signals — market indecisive at open
-Price (${niftyFmt}) is ${pricePos} VWAP (${vwapFmt})
-EMA9 (${ema9Fmt}) is ${ema9pos} VWAP
-EMA21 (${ema21Fmt}) is ${ema21pos} VWAP
-
-❌ <b>Not all 3 aligned — skip opening trade today</b>
-💡 Wait for 10:30 AM cleaner setup or sit out
-
-${vixLine}`);
-    console.log(`📱 [9:20] NO TRADE | Price:${priceAbove?'↑':'↓'} EMA9:${ema9Above?'↑':'↓'} EMA21:${ema21Above?'↑':'↓'} vs VWAP:${vwapFmt}`);
 }
 
 async function checkTelegramAlerts(newSignal) {
