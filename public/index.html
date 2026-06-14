@@ -1647,6 +1647,35 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 html.vn-day .chart-box{background:#f5f8fb !important;border-color:#b8c8d8 !important;}
 html.vn-day .chart-overlay-btn{background:#edf1f5 !important;border-color:#c0ccd8 !important;color:#607080 !important;}
 html.vn-day .chart-overlay-btn.active{border-color:var(--blue) !important;color:var(--blue) !important;background:rgba(0,120,200,0.08) !important;}
+
+/* ── DAY THEME: Final gap fixes ─────────────────────────────────────────── */
+/* Checklist auto-val rows (inline style="color:var(--dim)") */
+html.vn-day .cl-auto-val { color: #607080 !important; }
+html.vn-day .cl-auto-tag.auto { background: rgba(0,150,80,0.1) !important; color: #007040 !important; }
+html.vn-day .cl-auto-tag.manual { background: rgba(100,100,100,0.1) !important; color: #506070 !important; }
+/* em-desc / early momentum description text */
+html.vn-day #em-desc { color: #3a5060 !important; }
+html.vn-day .em-vote-icon { color: #607080 !important; }
+html.vn-day .em-vote-name { color: #1a2530 !important; }
+/* Analytics cards */
+html.vn-day .an-card { background: #f5f8fb !important; border-color: #c0ccd8 !important; }
+html.vn-day .an-card::before { opacity: 0.4; }
+html.vn-day .an-label { color: #405060 !important; }
+html.vn-day .an-val { color: #1a2530; }
+/* Market Closed Banner */
+html.vn-day .market-closed-banner { background: rgba(220,228,240,0.97) !important; color: #1a2530 !important; border-color: #b8c8d8 !important; }
+html.vn-day #mcb-next { color: #3a5060 !important; }
+/* Search/input borders */
+html.vn-day input[type="text"], html.vn-day input[type="number"], html.vn-day select {
+  background: #ffffff !important;
+  border-color: #c0ccd8 !important;
+  color: #1a2530 !important;
+}
+/* Global section items already covered; ensure .global-updated is visible */
+html.vn-day #global-updated { color: #607080 !important; }
+/* Suggestions card inner text */
+html.vn-day .sug-card { background: #f5f8fb !important; border-color: #c0ccd8 !important; }
+html.vn-day .sug-card [style*="color:var(--dim)"] { color: #607080 !important; }
 .legend-item{display:flex;align-items:center;gap:4px;}
 .legend-dot{width:8px;height:3px;border-radius:2px;}
 
@@ -6924,31 +6953,54 @@ function toggleSound() {
 
 // ─── DAY / NIGHT THEME ───────────────────────────────
 function applyDaySvgFix(isDay) {
-  // RSI dial SVG: fix hardcoded dark track color & white tick/needle elements
+  // ── RSI dial SVGs (3× — 5m, 15m, 1h) ──────────────────────────────────
   document.querySelectorAll('.rsi-dial-svg').forEach(svg => {
-    // Track arc background (was #1a3a5a dark blue)
+    // Track arc background (dark #1a3a5a → light grey)
     svg.querySelectorAll('path[stroke="#1a3a5a"]').forEach(el => {
-      el.setAttribute('data-orig-stroke', '#1a3a5a');
       el.style.stroke = isDay ? '#c8d8e8' : '';
     });
-    // White tick marks (were rgba(255,255,255,0.25))
+    // White tick marks → subtle dark
     svg.querySelectorAll('line').forEach(el => {
       const s = el.getAttribute('stroke') || '';
       if (s.includes('255,255,255')) {
         el.style.stroke = isDay ? 'rgba(0,0,0,0.18)' : '';
       }
     });
-    // Needle line (white on dark → dark on light)
+    // Needle: white line + white hub → dark
     const needleG = svg.querySelector('.rsi-needle');
     if (needleG) {
       const nl = needleG.querySelector('line');
-      const nc1 = needleG.querySelectorAll('circle')[0];
-      const nc2 = needleG.querySelectorAll('circle')[1];
+      const circles = needleG.querySelectorAll('circle');
       if (nl) nl.style.stroke = isDay ? '#1a2530' : '';
-      if (nc1) nc1.style.fill = isDay ? '#1a2530' : '';
-      if (nc2) nc2.style.fill = isDay ? '#f0f4f8' : '';
+      if (circles[0]) circles[0].style.fill = isDay ? '#1a2530' : '';
+      if (circles[1]) circles[1].style.fill = isDay ? '#f0f4f8' : '';
     }
   });
+
+  // ── A/D Breadth Dial SVG ───────────────────────────────────────────────
+  const adSvg = document.querySelector('.ad-dial-svg');
+  if (adSvg) {
+    // Track arc (dark #1a3a5a → light grey)
+    adSvg.querySelectorAll('path[stroke="#1a3a5a"]').forEach(el => {
+      el.style.stroke = isDay ? '#c8d8e8' : '';
+    });
+    // White tick marks → subtle dark
+    adSvg.querySelectorAll('line').forEach(el => {
+      const s = el.getAttribute('stroke') || '';
+      if (s.includes('255,255,255')) {
+        el.style.stroke = isDay ? 'rgba(0,0,0,0.2)' : '';
+      }
+    });
+    // Needle group
+    const adNeedle = document.getElementById('ad-needle-g');
+    if (adNeedle) {
+      const nl = adNeedle.querySelector('line');
+      const circles = adNeedle.querySelectorAll('circle');
+      if (nl) nl.style.stroke = isDay ? '#1a2530' : '';           // white → dark
+      if (circles[0]) circles[0].style.fill = isDay ? '#1a2530' : '';  // white hub → dark
+      if (circles[1]) circles[1].style.fill = isDay ? '#f0f4f8' : '';  // dark dot → light
+    }
+  }
 }
 
 function toggleDayNight() {
