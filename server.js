@@ -908,11 +908,13 @@ function combineSignals(indicators) {
     // bull/bear breakdown even when the gate blocks the final call.
     const rsi = indicators.rsi;
 
-    // ── ADX — trend strength filter ──────────────────────────────────────────
-    // ADX < 20 = choppy/sideways = worst environment for option buyers.
-    // In a ranging market, premiums decay fast (theta) with no directional move.
-    // ADX >= 20 but < 25 = weak trend forming — allow signal but cap confidence.
-    // ADX >= 25 = confirmed trend — full signal strength.
+    // ── ADX — trend strength filter (VIX-dynamic floor) ─────────────────────
+    // ADX floor is adjusted by VIX regime — low vol days (VIX < 14) have naturally
+    // compressed ADX. Using a flat 20 threshold in low-vol kills every signal.
+    //   VIX < 14  → floor = 13  (low vol regime, ADX 13+ is directional enough)
+    //   VIX 14-18 → floor = 16  (normal regime)
+    //   VIX >= 18 → floor = 20  (high vol / choppy, original strict threshold)
+    // ADX >= floor+5 = confirmed trend — full signal strength.
     // ADX >= 40 = explosive move — warn about wide premiums.
     // Use session-only candles (9:15 IST onwards, no overnight gaps).
     // getCandleHistory() contains multi-day data — overnight price gaps cause
@@ -936,30 +938,31 @@ function combineSignals(indicators) {
 
     const adxVal      = adxData?.adx ?? null;
 
+    // ── VIX-dynamic ADX floor ─────────────────────────────────────────────────
+    const currentVix = marketState.vix ?? null;
+    const adxFloor1m = currentVix !== null && currentVix < 14 ? 13
+                     : currentVix !== null && currentVix < 18 ? 16
+                     : 20;
+
     // ── ADX Breakout Override — catches trending days where 1h ADX lags ──────
-    // Problem (observed June 12): Nifty rallied 400pts but 1h ADX stayed <20 until
-    // 14:22 IST because Wilder's smoothing takes 30-45 mins to respond to a breakout.
-    // The signal fired late (14:22) after most of the move was done.
-    // Fix: If 15m ADX >= 22 AND 5m ADX >= 25, the short-term trend is clearly strong
+    // Fix: If 15m ADX >= 22 AND 5m ADX >= 25, short-term trend is clearly strong
     // enough to trade even if 1h ADX hasn't caught up yet.
-    // This is the "breakout exception" — we still require BOTH shorter TFs to confirm
-    // strongly, so it doesn't fire on random noise.
     const adx5m  = marketState.mtf?.tf5m?.adx  ?? null;
     const adx15m = marketState.mtf?.tf15m?.adx ?? null;
     const shortTfBreakout = (adx15m !== null && adx15m >= 22) && (adx5m !== null && adx5m >= 25);
 
-    // adxTooWeak: block when 1m ADX < 20 UNLESS short-TF breakout exception fires
-    const adxTooWeak  = adxVal !== null && adxVal < 20 && !shortTfBreakout;
+    // adxTooWeak: block when ADX < dynamic floor UNLESS short-TF breakout fires
+    const adxTooWeak  = adxVal !== null && adxVal < adxFloor1m && !shortTfBreakout;
 
-    if (shortTfBreakout && adxVal !== null && adxVal < 20) {
-        reasons.push(`⚡ Breakout exception: 5m ADX ${adx5m?.toFixed(1)} + 15m ADX ${adx15m?.toFixed(1)} strong — 1h ADX lag waived`);
+    if (shortTfBreakout && adxVal !== null && adxVal < adxFloor1m) {
+        reasons.push(`⚡ Breakout exception: 5m ADX ${adx5m?.toFixed(1)} + 15m ADX ${adx15m?.toFixed(1)} strong — ADX lag waived`);
     }
 
     if (adxVal !== null) {
-        if      (adxVal >= 40) reasons.push(`🔥 ADX ${adxVal} — Explosive trend (wider SL advised)`);
-        else if (adxVal >= 25) reasons.push(`📈 ADX ${adxVal} — Strong trend confirmed ✅`);
-        else if (adxVal >= 20) reasons.push(`⚠️ ADX ${adxVal} — Trend forming (weak, confidence capped 60%)`);
-        // <20 handled in gate reason below — no need to add here
+        if      (adxVal >= 40)             reasons.push(`🔥 ADX ${adxVal} — Explosive trend (wider SL advised)`);
+        else if (adxVal >= adxFloor1m + 5) reasons.push(`📈 ADX ${adxVal} — Strong trend confirmed ✅`);
+        else if (adxVal >= adxFloor1m)     reasons.push(`⚠️ ADX ${adxVal} — Trend forming (weak, confidence capped 60%)`);
+        // below floor handled in gate reason below
     }
 
     const qualityGate = {
@@ -1025,7 +1028,7 @@ function combineSignals(indicators) {
     if (rawSignal !== 'WAIT') {
         if (!qualityGate.adxTrend) {
             signal = 'WAIT'; confidence = 0;
-            reasons.push(`⛔ ADX ${adxVal} < 20 — Sideways/choppy market. No trend = theta decay kills option buyers. Wait for ADX ≥ 20`);
+            reasons.push(`⛔ ADX ${adxVal} < ${adxFloor1m} (VIX ${currentVix?.toFixed(1) ?? '?'}) — Choppy/sideways market. Wait for ADX ≥ ${adxFloor1m}`);
         } else if (!qualityGate.mtfAligned) {
             signal = 'WAIT'; confidence = 0;
             reasons.push(`⛔ MTF not aligned (${marketState.mtf.bullCount}/3 bull, ${marketState.mtf.bearCount}/3 bear) — wait for all-3 agreement`);
@@ -1147,12 +1150,12 @@ function combineSignals(indicators) {
     marketState.qualityGate = qualityGate;
 
     // ── ADX weak-trend confidence cap ────────────────────────────────────────
-    // Signal passes gate (ADX 20–25) but trend is not fully confirmed.
+    // Signal passes gate but trend is not fully confirmed (ADX near floor).
     // Cap confidence at 60% so the UI doesn't show a strong conviction call.
-    if (signal !== 'WAIT' && adxVal !== null && adxVal < 25) {
+    if (signal !== 'WAIT' && adxVal !== null && adxVal < adxFloor1m + 5) {
         const before = confidence;
         confidence = Math.min(confidence, 60);
-        if (confidence < before) reasons.push(`⚠️ Confidence capped at 60% — ADX ${adxVal} < 25 (trend weak, full size risky)`);
+        if (confidence < before) reasons.push(`⚠️ Confidence capped at 60% — ADX ${adxVal} < ${adxFloor1m + 5} (trend weak, full signal needs ADX ≥ ${adxFloor1m + 5})`);
     }
 
     // ── Caution zone confidence cap (14:00–14:30) ─────────────────────────────
@@ -1918,7 +1921,7 @@ async function refreshMTF() {
             loadCandlesFromYahoo().catch(e => console.warn('[Yahoo MTF refresh]', e.message));
         }
 
-        const d = await analyzeMultiTimeframe();
+        const d = await analyzeMultiTimeframe(marketState.vix ?? null);
         if (!d) return;
 
         // ── Pre-market gate ────────────────────────────

@@ -233,7 +233,7 @@ function calculateADX(candles, period = 14) {
 // ── Compute indicators + signal for one timeframe ────────────────────────────
 // Returns signal:'INSUFFICIENT' (not 'NEUTRAL') when candle count is below
 // MIN_BARS so the caller can exclude this TF from the voting tally.
-function calcIndicators(candles, tfLabel) {
+function calcIndicators(candles, tfLabel, vix = null) {
     const minBars = MIN_BARS[tfLabel] || 22;
 
     // INSUFFICIENT guard — not enough candles for meaningful indicators
@@ -309,10 +309,24 @@ function calcIndicators(candles, tfLabel) {
     // because the slow 1h ADX hasn't caught up yet.
     // For 5m and 15m TFs we keep the strict 20 threshold (short-TF ADX responds faster).
     // The tf label is passed as the second argument to calcIndicators().
-    // ADX floor thresholds — relaxed to reduce signal suppression on trending days:
-    //   1h  TF: 15 (was 17) — 1h ADX is very slow, even strong trends start at 12-15
-    //   5m/15m: 18 (was 20) — short TF ADX responds faster, 18 still filters pure chop
-    const adxFloor = (tfLabel === '1h') ? 15 : 18;
+    // ADX floor thresholds — dynamic based on VIX regime:
+    //   Low vol  (VIX < 14): ADX naturally stays 8-15 even on directional moves.
+    //                        Raising the floor here kills every signal on calm days.
+    //   Normal   (VIX 14-18): moderate floor.
+    //   High vol (VIX >= 18): elevated chop risk, keep strict floor.
+    //   1h TF always gets a lower floor (Wilder's smoothing is very slow on 1h).
+    //
+    //   5m/15m floors: VIX < 14 → 12 | VIX 14-18 → 15 | VIX >= 18 or unknown → 18
+    let adxFloor;
+    if (tfLabel === '1h') {
+        adxFloor = 12; // 1h ADX lags badly; keep low regardless of VIX
+    } else if (vix !== null && vix < 14) {
+        adxFloor = 12; // Low-vol regime: ADX 12+ is sufficient trend evidence
+    } else if (vix !== null && vix < 18) {
+        adxFloor = 15; // Normal regime
+    } else {
+        adxFloor = 18; // High-vol or VIX unknown: original strict threshold
+    }
     const adxValid = adxVal === null || adxVal >= adxFloor;
 
     // ── Bull / bear vote ──────────────────────────────
@@ -347,7 +361,7 @@ function calcIndicators(candles, tfLabel) {
 }
 
 // ── Main entry point ─────────────────────────────────────────────────────────
-async function analyzeMultiTimeframe() {
+async function analyzeMultiTimeframe(vix = null) {
     console.log('📊 Fetching multi-timeframe data...');
 
     // ── Step 1: Get full in-memory 1m candle buffer (up to 150) ──────────────
@@ -422,9 +436,16 @@ async function analyzeMultiTimeframe() {
     }
 
     // ── Step 3: Compute indicators per TF ────────────────────────────────────
-    const tf5m  = calcIndicators(c5m,  '5m');
-    const tf15m = calcIndicators(c15m, '15m');
-    const tf1h  = calcIndicators(c1h,  '1h');
+    // Pass VIX to each TF so calcIndicators uses the right dynamic ADX floor.
+    // vix param is passed in from server.js (marketState.vix). Defaults to null → floor=18.
+    const adxFloors  = [
+        vix !== null && vix < 14 ? 12 : vix !== null && vix < 18 ? 15 : 18, // 5m
+        vix !== null && vix < 14 ? 12 : vix !== null && vix < 18 ? 15 : 18, // 15m
+        12  // 1h always 12
+    ];
+    const tf5m  = calcIndicators(c5m,  '5m',  vix);
+    const tf15m = calcIndicators(c15m, '15m', vix);
+    const tf1h  = calcIndicators(c1h,  '1h',  vix);
 
     // ── Step 4: Build MTF composite signal ───────────────────────────────────
     // INSUFFICIENT TFs are excluded from voting — they don't count as NEUTRAL
@@ -437,8 +458,8 @@ async function analyzeMultiTimeframe() {
         const bars = tf.barCount ?? '?';
         if (tf.signal === 'INSUFFICIENT') {
             console.log(`⚠️ MTF ${tfLabels[i]}: INSUFFICIENT data (${bars} bars < ${MIN_BARS[tfLabels[i]]} min) — excluded from vote`);
-        } else if (tf.adx !== null && tf.adx < (tfLabels[i] === '1h' ? 15 : 18)) {
-            console.log(`⚠️ MTF ${tfLabels[i]}: ADX ${tf.adx} < ${tfLabels[i] === '1h' ? 15 : 18} → NEUTRAL override`);
+        } else if (tf.adx !== null && tf.adx < adxFloors[i]) {
+            console.log(`⚠️ MTF ${tfLabels[i]}: ADX ${tf.adx} < ${adxFloors[i]} → NEUTRAL override (VIX-adjusted floor)`);
         }
     });
 
