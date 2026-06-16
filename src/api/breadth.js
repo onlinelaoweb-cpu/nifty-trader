@@ -22,6 +22,11 @@ const axios = require('axios');
 // ── Angel One session holder ──────────────────────────────────────────────────
 let _angelSession = null;
 
+// Backoff for Angel IP block — after 3 consecutive HTML blocks, skip for 30 min.
+// Angel getMarketData returns HTML from Railway IPs. Logging it as warn every cycle
+// pollutes logs. This suppresses retry spam while still attempting periodically.
+const _angelAD = { failStreak: 0, backoffUntil: 0 };
+
 /**
  * injectAngelSession({ jwtToken, apiKey })
  * Call this right after Angel One login succeeds in server.js / angelOne.js.
@@ -197,7 +202,13 @@ async function fetchBreadthFromAngel() {
 
         // Detect WAF/firewall HTML block (Angel One blocks Railway IPs sometimes)
         if (typeof res.data === 'string' && res.data.includes('<html')) {
-            console.warn('[A/D Tier1] HTML response (IP block) from Angel getMarketData');
+            _angelAD.failStreak++;
+            if (_angelAD.failStreak >= 3) {
+                _angelAD.backoffUntil = Date.now() + 30 * 60 * 1000; // 30 min
+                console.log(`[A/D Tier1] Angel IP-blocked — backing off 30 min (streak ${_angelAD.failStreak}). Yahoo fallback active.`);
+            } else {
+                console.log(`[A/D Tier1] Angel HTML block (streak ${_angelAD.failStreak}/3) — falling back to Yahoo`);
+            }
             return null;
         }
 
@@ -262,6 +273,8 @@ async function fetchBreadthFromAngel() {
             console.warn(`[A/D Tier1] Too few valid stocks (${advances+declines+unchanged}) — check field names above`);
             return null;
         }
+        _angelAD.failStreak  = 0;  // reset on successful Angel response
+        _angelAD.backoffUntil = 0;
         return buildResult(advances, declines, unchanged, bullWeight, bearWeight, stockList, 'angel-nifty50');
 
     } catch (err) {
@@ -387,8 +400,8 @@ async function fetchAdvanceDecline() {
     try {
         console.log('📊 Fetching A/D data...');
 
-        // Tier 1: Angel One (fastest, no IP block, 50 real stocks)
-        const tier1 = await fetchBreadthFromAngel();
+        // Tier 1: Angel One — skip if backed off due to repeated IP blocks
+        const tier1 = Date.now() < _angelAD.backoffUntil ? null : await fetchBreadthFromAngel();
         if (tier1) return tier1;
 
         // Tier 2: NSE equity-stockIndices — 404 on Railway IPs as of May 2026.
@@ -397,7 +410,7 @@ async function fetchAdvanceDecline() {
         // if (tier2) return tier2;
 
         // Tier 2.5: Yahoo Finance batch quote (Railway-compatible, 20 weighted stocks)
-        console.log('📊 Angel A/D unavailable — trying Yahoo Finance batch...');
+        if (Date.now() >= _angelAD.backoffUntil) console.log('📊 Angel A/D unavailable — trying Yahoo Finance batch...');
         const tier25 = await fetchBreadthFromYahoo();
         if (tier25) return tier25;
 
