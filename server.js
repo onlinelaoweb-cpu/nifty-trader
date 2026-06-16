@@ -126,6 +126,9 @@ let marketState = {
     btst: null,
     momentum: { signal: 'NONE', strength: 0, velocity: 0, volumeRatio: 0, candleBody: 0, reason: '', canTrade: false },
     smartMoney: { bias: 'NEUTRAL', score: 0, label: 'Smart Money — awaiting data', components: [] },
+    // ── Candle pattern — initialized so frontend never stays on "Waiting for candle data..." ──
+    candlePattern: { pattern: 'NONE', direction: 'NEUTRAL', strength: 0, reason: 'Waiting for session candles...' },
+    cpMTF: { cp5m: null, cp15m: null, cp1h: null, cpBull: 0, cpBear: 0, cpConsensus: 'NEUTRAL', cpConsensusLabel: 'Waiting...' },
 };
 
 // ── Trade Journal ─────────────────────────────────────
