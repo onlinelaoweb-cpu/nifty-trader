@@ -588,6 +588,45 @@ async function nseNiftyDaily(days = 10) {
                 console.warn('[NSE] historical API failed:', e.message);
             }
 
+            // ── Strategy 3: Yahoo Finance ^NSEI daily candles (Railway-safe) ──
+            // NSE chart & historical APIs both timeout from Railway's US IPs.
+            // Yahoo Finance never blocks Railway — use as primary fallback.
+            try {
+                const yhRes = await axios.get('https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI', {
+                    params  : { interval: '1d', range: '3mo', includePrePost: false },
+                    headers : {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+                        'Accept'    : 'application/json',
+                    },
+                    timeout : 12000,
+                    validateStatus: s => s < 500,
+                });
+                const result     = yhRes.data?.chart?.result?.[0];
+                const timestamps = result?.timestamp;
+                const quote      = result?.indicators?.quote?.[0];
+                if (Array.isArray(timestamps) && timestamps.length > 3 && quote?.close) {
+                    const yhBars = [];
+                    for (let i = 0; i < timestamps.length; i++) {
+                        const c = quote.close[i];
+                        if (c == null) continue;
+                        const o = quote.open[i]   || c;
+                        const h = quote.high[i]   || c;
+                        const l = quote.low[i]    || c;
+                        const date = new Date(timestamps[i] * 1000).toISOString().slice(0, 10);
+                        yhBars.push({ date, open: parseFloat(o.toFixed(2)), high: parseFloat(h.toFixed(2)), low: parseFloat(l.toFixed(2)), close: parseFloat(c.toFixed(2)) });
+                    }
+                    const sliced = yhBars.filter(b => b.close > 0).slice(-days);
+                    if (sliced.length > 0) {
+                        console.log(`[NSE] daily Yahoo fallback ✅ — ${sliced.length} days`);
+                        _dailyCache   = sliced;
+                        _dailyCacheAt = Date.now();
+                        return _dailyCache;
+                    }
+                }
+            } catch (yhErr) {
+                console.warn('[NSE] daily Yahoo fallback failed:', yhErr.message);
+            }
+
             // ── All strategies failed — return stale cache if usable ───────────
             if (_dailyCache.length > 0 && age < DAILY_STALE_TTL) {
                 console.warn(`[NSE] daily: all sources failed — returning stale cache (${Math.round(age / 60000)}m old)`);

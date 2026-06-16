@@ -2032,6 +2032,11 @@ const _fii = {
     fetchedAt : null,
     lastError : null,
     fetchCount: 0,
+    // Backoff: after 3 consecutive timeouts, skip for 60 min before retrying.
+    // NSE FII/DII endpoint is reliably blocked from Railway IPs during market hours.
+    // Retrying every 15 min just wastes 20s timeout each cycle for no gain.
+    _failStreak : 0,
+    _backoffUntil: 0,
 };
 
 function parseFIIDII(data) {
@@ -2107,6 +2112,15 @@ async function _fetchFIIDII() {
         console.log('[FII/DII] Outside fetch window — skipping');
         return;
     }
+
+    // Backoff guard: NSE FII/DII endpoint times out from Railway IPs during market hours.
+    // After 3 consecutive failures, back off for 60 min to avoid wasting 20s per cycle.
+    if (Date.now() < _fii._backoffUntil) {
+        const minsLeft = Math.ceil((_fii._backoffUntil - Date.now()) / 60000);
+        console.log(`[FII/DII] Backing off — ${minsLeft}m remaining (${_fii._failStreak} consecutive timeouts)`);
+        return;
+    }
+
     try {
         // -- Path A: Direct NSE --
         // Use dedicated longer timeout for FII/DII
@@ -2147,10 +2161,19 @@ async function _fetchFIIDII() {
         });
 
         const fmt = v => v === null ? 'N/A' : `₹${v >= 0 ? '+' : ''}${v.toFixed(0)}Cr`;
+        _fii._failStreak  = 0;   // reset backoff on success
+        _fii._backoffUntil = 0;
         console.log(`💰 [FII/DII] ${parsed.date} | FII Net: ${fmt(parsed.fiiNet)} | DII Net: ${fmt(parsed.diiNet)} [#${_fii.fetchCount}]`);
     } catch (e) {
         _fii.lastError = e.message;
-        console.error('[FII/DII] Fetch error:', e.message);
+        _fii._failStreak++;
+        if (_fii._failStreak >= 3) {
+            const backoffMs = 60 * 60 * 1000; // 60 min
+            _fii._backoffUntil = Date.now() + backoffMs;
+            console.warn(`[FII/DII] ${_fii._failStreak} consecutive failures — backing off 60 min (NSE IP block on Railway)`);
+        } else {
+            console.error(`[FII/DII] Fetch error (streak ${_fii._failStreak}/3):`, e.message);
+        }
     }
 }
 
