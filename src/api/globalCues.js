@@ -47,18 +47,44 @@ async function bankNiftyVWAPLead() {
     // Uses allIndices quote only — no intraday NSE call (which times out from Railway).
     // Without tick data we can't compute a true VWAP cross, so we use the
     // day's changePct as a directional proxy: >0.3% = above-VWAP-equivalent.
+    //
+    // FIX (Jun 2026): fetchAllIndices() can silently replay a stale cached row for
+    // up to 15 min during a Railway NSE rate-limit backoff (it returns the last good
+    // array, not empty, so the BankNifty row is always "found" even when ancient).
+    // That made this signal freeze on the same changePct for over an hour.
+    // Fix: if the allIndices cache is older than its normal 4-min refresh window,
+    // skip it and pull a fresh quote directly from Yahoo instead.
     const empty = { signal: 0, label: 'NEUTRAL', crossedAt: null, bnPrice: null, vwap: null, distancePct: null, reason: 'BankNifty intraday unavailable — using day change proxy' };
+    const STALE_AFTER_MS = 4 * 60 * 1000; // matches ALL_INDICES_OK_TTL in yahooFetch.js
     try {
-        const { fetchAllIndices } = require('./yahooFetch');
-        const indices = await fetchAllIndices();
-        const row = indices.find(r => r.index === 'NIFTY BANK' || r.indexSymbol === 'NIFTY BANK');
-        if (!row) return empty;
-        const bnPrice   = parseFloat(row.last || row.previousClose);
-        const prevClose = parseFloat(row.previousClose || bnPrice);
+        const { fetchAllIndices, getAllIndicesCacheAge, yahooDirectQuote } = require('./yahooFetch');
+
+        let bnPrice, prevClose, stale = false;
+
+        const cacheAge = getAllIndicesCacheAge();
+        if (cacheAge <= STALE_AFTER_MS) {
+            const indices = await fetchAllIndices();
+            const row = indices.find(r => r.index === 'NIFTY BANK' || r.indexSymbol === 'NIFTY BANK');
+            if (row) {
+                bnPrice   = parseFloat(row.last || row.previousClose);
+                prevClose = parseFloat(row.previousClose || bnPrice);
+            }
+        }
+
+        // No fresh NSE row (either stale cache or row missing) — go straight to Yahoo.
+        if (bnPrice == null || isNaN(bnPrice)) {
+            const q = await yahooDirectQuote('%5ENSEBANK');
+            if (!q) return empty;
+            bnPrice   = q.price;
+            prevClose = q.prevClose;
+            stale     = true; // means "served via Yahoo fallback", not "data is old"
+        }
+
         const changePct = prevClose > 0 ? parseFloat(((bnPrice - prevClose) / prevClose * 100).toFixed(3)) : 0;
-        if (changePct > 0.3)  return { signal:  1, label: 'ABOVE_VWAP', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty up ${changePct}% today — Bullish lead for Nifty ✅` };
-        if (changePct < -0.3) return { signal: -1, label: 'BELOW_VWAP', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty down ${changePct}% today — Bearish lead for Nifty ⚠️` };
-        return { signal: 0, label: 'NEUTRAL', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty flat ${changePct}% — no directional lead` };
+        const sourceTag = stale ? ' (yahoo)' : '';
+        if (changePct > 0.3)  return { signal:  1, label: 'ABOVE_VWAP', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty up ${changePct}% today — Bullish lead for Nifty ✅${sourceTag}` };
+        if (changePct < -0.3) return { signal: -1, label: 'BELOW_VWAP', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty down ${changePct}% today — Bearish lead for Nifty ⚠️${sourceTag}` };
+        return { signal: 0, label: 'NEUTRAL', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty flat ${changePct}% — no directional lead${sourceTag}` };
     } catch (e) { return empty; }
 }
 

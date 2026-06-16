@@ -175,6 +175,14 @@ async function fetchAllIndices() {
     return _allIndicesFetch;
 }
 
+// Returns how many ms old the allIndices cache is — Infinity if never fetched.
+// Used by callers (e.g. bankNiftyVWAPLead) that need to know if a "successful"
+// lookup is actually a stale value being replayed during a Railway NSE backoff.
+function getAllIndicesCacheAge() {
+    if (!_allIndicesAt) return Infinity;
+    return Date.now() - _allIndicesAt;
+}
+
 // ── Bulk NSE Nifty 50 stocks cache ───────────────────────────────────────────
 let _nifty50Cache   = null;
 let _nifty50CacheAt = 0;
@@ -818,4 +826,4 @@ async function fetchNifty50FromYahoo() {
     return null;
 }
 
-module.exports = { yahooGet, fetchYahooMeta, fetchYahooChart, fetchNifty50Stocks, fetchAllIndices, fetchNifty50FromYahoo, nseNiftyDaily };
+module.exports = { yahooGet, fetchYahooMeta, fetchYahooChart, fetchNifty50Stocks, fetchAllIndices, fetchNifty50FromYahoo, nseNiftyDaily, getAllIndicesCacheAge, yahooDirectQuote };
