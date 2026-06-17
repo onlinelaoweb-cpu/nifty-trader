@@ -10,10 +10,13 @@ function isConfigured() {
 
 // ── Send message ──────────────────────────────────────
 async function sendMessage(text) {
-    if (!isConfigured()) return;
+    if (!isConfigured()) {
+        console.warn('⚠️  Telegram not configured — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing. Message NOT sent:', text.substring(0, 50));
+        return;
+    }
 
     try {
-        await axios.post(
+        const res = await axios.post(
             `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
             {
                 chat_id   : CHAT_ID,
@@ -22,9 +25,20 @@ async function sendMessage(text) {
             },
             { timeout: 8000 }
         );
-        console.log('📱 Telegram sent:', text.substring(0, 50) + '...');
+
+        // Telegram can return HTTP 200 with { ok: false } on bad chat_id, blocked bot,
+        // bad HTML markup, etc — axios won't throw on that, so check the body explicitly.
+        if (res.data && res.data.ok === true) {
+            const chatTitle = res.data.result?.chat?.title || res.data.result?.chat?.username || res.data.result?.chat?.id;
+            console.log(`📱 Telegram sent → chat:${chatTitle} msgId:${res.data.result?.message_id} | ${text.substring(0, 50)}...`);
+        } else {
+            console.error('❌ Telegram rejected message (ok:false):', JSON.stringify(res.data), '| chat_id used:', CHAT_ID, '| text:', text.substring(0, 80));
+        }
     } catch (err) {
-        console.error('Telegram error:', err.message);
+        // err.response.data carries Telegram's actual error description (e.g. "chat not found",
+        // "bot was blocked by the user", "Bad Request: can't parse entities") — log it explicitly.
+        const tgError = err.response?.data;
+        console.error('❌ Telegram send failed:', err.message, tgError ? '| Telegram says: ' + JSON.stringify(tgError) : '', '| chat_id used:', CHAT_ID);
     }
 }
 
