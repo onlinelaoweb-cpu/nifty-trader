@@ -462,7 +462,7 @@ function getCandleSource() { return candleSource; }
 // Module-level cooldown state
 let _momLastFiredAt   = 0;   // epoch ms of last canTrade fire
 let _momLastSignal    = 'NONE'; // signal that last fired
-const MOM_COOLDOWN_MS = 3 * 60 * 1000;  // FIX: 5min→3min — catches continuation candles of same impulse
+const MOM_COOLDOWN_MS = 5 * 60 * 1000;  // 5-min cooldown — prevents re-voting on same momentum wave
 
 function calcMomentumBreakdown() {
     const result = { signal: 'NONE', strength: 0, velocity: 0, volumeRatio: 0, candleBody: 0, reason: '', canTrade: false };
@@ -483,12 +483,18 @@ function calcMomentumBreakdown() {
     if (!price || price <= 0) return result;
 
     // ── Layer 1: Velocity — 3-candle 1m price move ───────────────────────────
-    // Threshold raised 0.35% → 0.40% to cut false fires on 1m noise.
-    // On Nifty ~24000: 0.40% ≈ 96 pts in 3 minutes = genuine impulse.
+    // Base threshold: 0.40% (96 pts on Nifty 24000) = genuine 3-min impulse.
+    // Opening 30 min (9:15–9:45): raise to 0.55% — gap opens and volatility spikes
+    // cause large 1m candles that aren't real trends, just mean-reversion noise.
+    const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istMinNow = nowIST.getHours() * 60 + nowIST.getMinutes();
+    const isOpeningWindow = istMinNow >= 555 && istMinNow < 585; // 9:15–9:45
+    const velThreshold = isOpeningWindow ? 0.55 : 0.40;
+
     const velocity = ((last.close - prev3.close) / prev3.close) * 100;
     result.velocity = parseFloat(velocity.toFixed(3));
-    const velDown = velocity <= -0.40;
-    const velUp   = velocity >=  0.40;
+    const velDown = velocity <= -velThreshold;
+    const velUp   = velocity >=  velThreshold;
     const velFire = velDown || velUp;
 
     // ── Layer 2: Candle body — impulsive vs indecisive ────────────────────────

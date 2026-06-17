@@ -138,6 +138,7 @@ let events       = [];
 
 // ── Helpers ───────────────────────────────────────────
 let historyLoaded=false, prevSignal='WAIT', prevMTFAligned=false;
+let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-direction MTF alerts
 let morningSummarySent=false, closeSummarySent=false, vixAlertSent=false;
 let nishanebaazAlertSent=false;  // one-shot: fired once at 14:00 per day
 let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:15
@@ -877,10 +878,15 @@ function combineSignals(indicators) {
         }
     }
 
-    // ── Candle Pattern ────────────────────────────────────────────────────────
-    // Adds 1-3 votes depending on pattern strength.
-    // Strong patterns (Engulfing str=3) = 2 votes, moderate (Hammer str=2) = 1 vote.
-    const cp = detectCandlePattern();
+    // ── Candle Pattern (5m TF — more reliable than 1m for signal voting) ───────
+    // 1m candle patterns at open are too noisy (5 bars = 5 mins, any spike qualifies).
+    // 5m candles are much more meaningful — each candle represents 5 real minutes.
+    // Use cp5m from marketState.cpMTF (computed in refreshMTF every 2 min).
+    // Fall back to 1m pattern only if 5m data isn't ready yet.
+    const cp5mFromMTF = marketState.cpMTF?.cp5m;
+    const cp = (cp5mFromMTF && cp5mFromMTF.pattern !== 'NONE')
+        ? cp5mFromMTF
+        : detectCandlePattern();  // 1m fallback only when 5m not ready
     marketState.candlePattern = cp;
     if (cp.strength >= 2 && cp.direction !== 'NEUTRAL') {
         const cpVotes = cp.strength - 1;  // str2=1 vote, str3=2 votes
@@ -1485,6 +1491,18 @@ async function check920Setup() {
     const l1Bear = !priceAbove && !ema9Above && !ema21Above;
     const l1Aligned = l1Bull || l1Bear;
 
+    // ── LAYER 1b: 5m EMA/VWAP cross-check (noise filter for 1m at open) ────────
+    // At 9:20, 1m EMA has only 5 bars — a single spike can flip it.
+    // If 5m EMA/VWAP direction contradicts 1m, we treat Layer 1 as WEAK (not hard fail).
+    const mtf5mEma  = marketState.mtf?.tf5m?.ema9  ?? null;
+    const mtf5mVwap = marketState.mtf?.tf5m?.vwap  ?? null;
+    let l1Confirmed = true;  // true = 5m agrees or unavailable; false = 5m contradicts
+    if (mtf5mEma !== null && mtf5mVwap !== null) {
+        const fiveAbove = mtf5mEma > mtf5mVwap;
+        if (l1Bull && !fiveAbove)  l1Confirmed = false;  // 1m bull but 5m EMA below VWAP
+        if (l1Bear && fiveAbove)   l1Confirmed = false;  // 1m bear but 5m EMA above VWAP
+    }
+
     // ── LAYER 2: 5m MTF signal (falls back to 15m if 5m is INSUFFICIENT) ─────
     const mtf5m  = marketState.mtf?.tf5m;
     const mtf15m = marketState.mtf?.tf15m;
@@ -1543,9 +1561,9 @@ async function check920Setup() {
     const htfLabel  = (mtf15mSig && mtf15mSig !== 'INSUFFICIENT') ? `15m:${htfSig}` : `5m:${htfSig}`;
 
     // ── Determine overall setup quality ──────────────────────────────────────
-    const layers    = [l1Aligned, l2Agrees && l2Available, l3Agrees && l3Available].filter(Boolean).length;
-    // STRONG = all 3 layers agree + PCR confirms
-    const isStrong  = l1Aligned && l2Agrees && l3Agrees && pcrAgrees;
+    const layers    = [l1Aligned && l1Confirmed, l2Agrees && l2Available, l3Agrees && l3Available].filter(Boolean).length;
+    // STRONG = all 3 layers agree + PCR confirms + 5m EMA confirms 1m
+    const isStrong  = l1Aligned && l1Confirmed && l2Agrees && l3Agrees && pcrAgrees;
     // VALID  = Layer1 + Layer2 agree (Layer3 may be unavailable early)
     const isValid   = l1Aligned && (l2Agrees || !l2Available);
     // Direction
@@ -1616,9 +1634,10 @@ ${pcrFmt} | ${vixFmt}
     }
 
     // ── VALID TRADE — build strength label ───────────────────────────────────
+    const l1ConfirmNote = !l1Confirmed ? '\n⚠️ 5m EMA/VWAP contradicts 1m — reduce size' : '';
     const strengthLabel = isStrong ? '🔥 STRONG SETUP (4/4 layers)' :
-                          layers >= 2 ? '✅ GOOD SETUP (3/4 layers)' :
-                          '⚠️ WEAK SETUP (2/4 layers) — reduce size';
+                          layers >= 2 ? `✅ GOOD SETUP (${layers}/4 layers)${l1ConfirmNote}` :
+                          `⚠️ WEAK SETUP (${layers}/4 layers) — reduce size${l1ConfirmNote}`;
     const adConfirm  = l3Agrees  ? `✅ A/D ${isBull?'Bullish':'Bearish'} — ${br.advances}↑/${br.declines}↓`
                      : l3Available ? `⚠️ A/D Mixed — ${br.advances}↑/${br.declines}↓ (watch)`
                      : `⏳ A/D not yet available`;
@@ -1750,8 +1769,17 @@ async function checkTelegramAlerts(newSignal) {
             } catch(e) { console.error('AI on signal trigger:', e.message); }
         }
     }
-    if (marketState.mtf.aligned&&!prevMTFAligned) await sendMTFAlert(marketState);
-    prevMTFAligned=marketState.mtf.aligned;
+    // MTF alert cooldown: 30 min between same-direction alerts.
+    // Prevents spam when aligned toggles on/off due to minor ADX fluctuations.
+    const MTF_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
+    const mtfSignalNow = marketState.mtf?.signal || '';
+    const mtfCooldownOk = (Date.now() - lastMTFAlertAt) > MTF_ALERT_COOLDOWN_MS || mtfSignalNow !== lastMTFAlertSignal;
+    if (marketState.mtf.aligned && (!prevMTFAligned || mtfCooldownOk)) {
+        await sendMTFAlert(marketState);
+        lastMTFAlertAt     = Date.now();
+        lastMTFAlertSignal = mtfSignalNow;
+    }
+    prevMTFAligned = marketState.mtf.aligned;
     if (marketState.vix>20&&!vixAlertSent) { vixAlertSent=true; await sendVIXAlert(marketState.vix,marketState.vixNote); }
     if (marketState.vix<=20) vixAlertSent=false;
     } finally {
@@ -1936,10 +1964,25 @@ async function refreshMTF() {
         const mins = ist.getHours() * 60 + ist.getMinutes();
         const preMarket = mins < 555;   // 09:15 = 555 minutes from midnight
 
+        // PCR contra cap: if PCR direction contradicts MTF signal, cap confidence at 60%.
+        // e.g. PCR 0.828 (bearish/neutral) but MTF = BUY CALL → reduce conviction.
+        let adjConfidence = d.mtfConfidence;
+        if (!preMarket && d.mtfSignal !== 'WAIT' && marketState.pcrSignal) {
+            const pcrBull = ['STRONG_BULL', 'MILD_BULL'].includes(marketState.pcrSignal);
+            const pcrBear = ['STRONG_BEAR', 'MILD_BEAR'].includes(marketState.pcrSignal);
+            const isBullCall = d.mtfSignal === 'BUY CALL';
+            const isBearPut  = d.mtfSignal === 'BUY PUT';
+            const contra = (isBullCall && pcrBear) || (isBearPut && pcrBull);
+            if (contra) {
+                adjConfidence = Math.min(adjConfidence, 60);
+                console.log(`⚠️ PCR contra (${marketState.pcrSignal}) vs MTF ${d.mtfSignal} — confidence capped at 60%`);
+            }
+        }
+
         marketState.mtf = {
             signal        : preMarket ? 'NEUTRAL' : d.mtfSignal,
             strength      : preMarket ? 'WEAK'    : d.mtfStrength,
-            confidence    : preMarket ? 0         : d.mtfConfidence,
+            confidence    : preMarket ? 0         : adjConfidence,
             aligned       : preMarket ? false      : d.aligned,
             bullCount     : preMarket ? 0          : d.bullCount,
             bearCount     : preMarket ? 0          : d.bearCount,

@@ -90,7 +90,7 @@ async function sendMTFAlert(state) {
 ━━━━━━━━━━━━━━━━━━
 ${emoji} <b>${state.mtf.signal}</b> — ${state.mtf.strength}
 📊 NIFTY: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}
-🎯 Strike: ${state.strikeRange}
+🎯 Strike: ${state.nifty > 0 ? (Math.round(state.nifty / 50) * 50) + (state.mtf.signal === 'BUY PUT' ? ' PE' : ' CE') : 'ATM'} (ATM)
 📈 Confidence: ${state.mtf.confidence}%
 ━━━━━━━━━━━━━━━━━━
 5 MIN  : ${state.mtf.tf5m?.signal  || '--'}
