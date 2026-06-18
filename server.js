@@ -1782,6 +1782,12 @@ async function checkTelegramAlerts(newSignal) {
     prevMTFAligned = marketState.mtf.aligned;
     if (marketState.vix>20&&!vixAlertSent) { vixAlertSent=true; await sendVIXAlert(marketState.vix,marketState.vixNote); }
     if (marketState.vix<=20) vixAlertSent=false;
+    } catch(e) {
+        // Without this catch, any thrown error here (e.g. accessing a property on an
+        // undefined marketState field inside one of the message templates) propagated
+        // silently all the way up through updatePrice() with ZERO console output —
+        // looked exactly like "nothing happened" even though a signal change occurred.
+        console.error('❌ checkTelegramAlerts crashed:', e.message, '| newSignal:', newSignal, '\n', e.stack);
     } finally {
         telegramAlertInFlight = false;
     }
