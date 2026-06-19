@@ -3186,9 +3186,14 @@ app.delete('/api/event/:id', (req,res) => {
 
 // Telegram test
 app.post('/api/telegram/test', requireToken, async (req,res) => {
-    if(!isConfigured()) return res.json({success:false,msg:'Not configured'});
-    await sendMorningSummary(marketState);
-    res.json({success:true,msg:'Test sent!'});
+    if(!isConfigured()) return res.json({success:false,msg:'Not configured — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing'});
+    try {
+        await sendMorningSummary(marketState);
+        res.json({success:true,msg:'Test sent!'});
+    } catch (e) {
+        console.error('❌ /api/telegram/test failed:', e.message, e.stack);
+        res.status(500).json({success:false, msg: e.message || 'Unknown server error'});
+    }
 });
 
 app.get('/', (req, res) => {

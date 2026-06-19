@@ -5632,10 +5632,27 @@ function updateFIIDIIDisplay(fii, dii) {
 
 // ─── TELEGRAM TEST ───────────────────────────────────────
 function testTG(btn) {
-  fetch('/api/telegram/test',{method:'POST'}).then(r=>r.json()).then(d=>{
-    const el = document.getElementById('tg-msg');
-    if (el) { el.textContent = d.success ? '✅ Sent!' : '❌ Failed: ' + (d.error||'unknown'); setTimeout(()=>el.textContent='',4000); }
-  }).catch(e=>{ const el=document.getElementById('tg-msg'); if(el) el.textContent='❌ Error'; });
+  const el = document.getElementById('tg-msg');
+  if (el) el.textContent = '⏳ Sending...';
+  const token = window._appToken || localStorage.getItem('vn_app_token') || '';
+  fetch('/api/telegram/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { 'x-app-token': token } : {}) }
+  })
+  .then(r => {
+    if (!r.ok && r.status === 401) throw new Error('Unauthorized — APP_TOKEN mismatch');
+    return r.json();
+  })
+  .then(d => {
+    if (el) {
+      // server returns { success, msg } — not { success, error }
+      el.textContent = d.success ? '✅ Sent! Check Telegram.' : '❌ Failed: ' + (d.msg || d.error || 'unknown');
+      setTimeout(() => el.textContent = '', 5000);
+    }
+  })
+  .catch(e => {
+    if (el) { el.textContent = '❌ Error: ' + e.message; setTimeout(() => el.textContent = '', 5000); }
+  });
 }
 
 // ─── JOURNAL / TRADES ────────────────────────────────────
