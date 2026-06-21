@@ -1024,13 +1024,21 @@ function combineSignals(indicators) {
     // Persist gate state so the UI can show which checks are passing / failing
     marketState.qualityGate = qualityGate;
 
-    // FIX 2: Hard cap confidence at 85%.
-    // The vote tally has many inputs (PCR, ATM PCR, breadth, global, MTF, FII,
-    // max pain, BankNifty lead…) so in extreme conditions all vote the same way
-    // and rawConfidence can reach 100%. 100% is epistemically wrong — no intraday
-    // signal has 100% certainty. Capped at 85 to keep the UI honest and prevent
-    // traders from over-sizing positions on "perfect" setups.
-    rawConfidence = Math.min(rawConfidence, 85);
+    // FIX 2 (updated): Soft-compress confidence above 75% into a 75–85 band,
+    // instead of hard-clipping everything above 85 down to a flat 85.
+    // Why: the vote tally has many correlated inputs (PCR, ATM PCR, breadth,
+    // global, MTF, FII, max pain, BankNifty lead…) so on a genuinely strong
+    // day they mostly agree and rawConfidence can reach 95-100+. A flat
+    // Math.min(rawConfidence, 85) made every strong setup display the exact
+    // same "85%" — a 9-vote-to-1 day and a 6-vote-to-1 day looked identical.
+    // 100% is still epistemically wrong (no intraday signal is certain), so
+    // the ceiling stays at 85 — but now a 90% raw tally lands at 81%, a 100%
+    // raw tally lands at 85%, preserving relative conviction instead of
+    // flattening it. Below 75% raw, nothing changes (already granular there).
+    if (rawConfidence > 75) {
+        rawConfidence = Math.round(75 + (rawConfidence - 75) * 0.4);
+    }
+    rawConfidence = Math.min(rawConfidence, 85); // safety ceiling, should be a no-op now
 
     // Gate decision — check in priority order.
     // ADX is checked FIRST because a choppy market invalidates everything else.

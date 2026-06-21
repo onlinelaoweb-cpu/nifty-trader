@@ -470,6 +470,28 @@ async function analyzeMultiTimeframe(vix = null) {
     // aligned = all valid TFs agree (minimum 2 valid TFs required to claim alignment)
     const aligned = validCount >= 2 && (bullCount === validCount || bearCount === validCount);
 
+    // ── Granular MTF confidence (replaces old flat 85/65 constants) ──────────
+    // BUG FIX: mtfConfidence used to be a hardcoded 85 whenever all 3 TFs
+    // aligned, and 65 for 2/3 — same number whether the trend was barely
+    // scraping past its ADX floor or running explosively strong. Every
+    // "STRONG SIGNAL — ALL 3 ALIGNED!" Telegram alert therefore showed the
+    // exact same 85% regardless of actual conviction, making the number
+    // undifferentiating and not actionable for sizing.
+    //
+    // Fix: derive confidence from how far each aligned TF's ADX sits above
+    // its own VIX-adjusted floor (adxFloors[i], same floors already used for
+    // the NEUTRAL-override check above). 0 pts above floor → weak edge of the
+    // band; 15+ pts above floor → full strength, top of the band.
+    //   3/3 aligned ("STRONG")   → spread across 75–85
+    //   2/3 aligned ("MODERATE") → spread across 55–65
+    // This keeps the same ceiling/tiers as before (so nothing downstream that
+    // expects "STRONG ≈ 80s, MODERATE ≈ 60s" breaks) but now the number
+    // actually moves with trend strength instead of being a fixed label.
+    function tfStrengthScore(tf, floor) {
+        if (tf.adx == null || tf.signal === 'INSUFFICIENT') return 0.5; // unknown → midpoint, don't drag the average down
+        return Math.max(0, Math.min(1, (tf.adx - floor) / 15));
+    }
+
     let mtfSignal = 'WAIT', mtfStrength = 'WEAK', mtfConfidence = 0;
 
     if (validCount === 0) {
@@ -478,11 +500,17 @@ async function analyzeMultiTimeframe(vix = null) {
     } else if (aligned && bullCount === validCount) {
         mtfStrength   = validCount === 3 ? 'STRONG' : 'MODERATE';
         mtfSignal     = 'BUY CALL';
-        mtfConfidence = validCount === 3 ? 85 : 65;
+        const avgStrength = allTFs.reduce((s, tf, i) => s + tfStrengthScore(tf, adxFloors[i]), 0) / allTFs.length;
+        mtfConfidence = validCount === 3
+            ? Math.round(75 + avgStrength * 10)   // 75–85
+            : Math.round(55 + avgStrength * 10);  // 55–65
     } else if (aligned && bearCount === validCount) {
         mtfStrength   = validCount === 3 ? 'STRONG' : 'MODERATE';
         mtfSignal     = 'BUY PUT';
-        mtfConfidence = validCount === 3 ? 85 : 65;
+        const avgStrength = allTFs.reduce((s, tf, i) => s + tfStrengthScore(tf, adxFloors[i]), 0) / allTFs.length;
+        mtfConfidence = validCount === 3
+            ? Math.round(75 + avgStrength * 10)   // 75–85
+            : Math.round(55 + avgStrength * 10);  // 55–65
     } else if (bullCount > bearCount) {
         mtfSignal = 'WAIT'; mtfStrength = 'WEAK'; mtfConfidence = 25;
     } else if (bearCount > bullCount) {

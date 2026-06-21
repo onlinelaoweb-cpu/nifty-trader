@@ -101,6 +101,25 @@ function addTick(price) {
                 sessionCandles.push({ ...currentCandle });
                 if (sessionCandles.length > 390) sessionCandles.shift(); // full 375-min session + buffer
             }
+
+            // BUG FIX (granularity): priceHistory must hold ONE value per CLOSED
+            // 1-minute candle, not one value per tick. Previously this pushed the
+            // raw incoming tick price on every call to addTick() — and addTick()
+            // runs on every websocket tick, throttled to ~once/sec by onTick()'s
+            // runIndicators gate. With the 150-slot cap that meant priceHistory
+            // held ~150 SECONDS (2.5 min) of tick noise instead of ~150 MINUTES
+            // of candle closes. calcRSI()'s "RSI(9)" was therefore computed on
+            // the last ~9 SECONDS of ticks, and calcEMA(21) on the last ~21
+            // SECONDS — not minutes as the code comments intended. This produced
+            // RSI swings of 30+ points within 2-3 minutes on essentially flat
+            // price, EMA9≈EMA21 (both built from nearly the same few seconds of
+            // data, making the "EMA cross" meaningless), and frequent false
+            // "1m signals BEARISH but 15m BULLISH" conflicts in the 9:20 setup
+            // check — the "1m" reading was sub-minute noise, not real momentum.
+            // Fix: push the just-closed candle's close price, once per minute,
+            // matching candleHistory's cadence and the RSI(9)/EMA(21) docstring.
+            priceHistory.push(currentCandle.close);
+            if (priceHistory.length > 150) priceHistory.shift();
         }
         currentCandle = { open: price, high: price, low: price, close: price, volume: 1 };
         lastMinute    = istMin;
@@ -110,9 +129,6 @@ function addTick(price) {
         currentCandle.close  = price;
         currentCandle.volume += 1;
     }
-
-    priceHistory.push(price);
-    if (priceHistory.length > 150) priceHistory.shift();
 }
 
 function calcRSI() {
