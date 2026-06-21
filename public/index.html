@@ -5634,7 +5634,7 @@ function updateFIIDIIDisplay(fii, dii) {
 function testTG(btn) {
   const el = document.getElementById('tg-msg');
   if (el) el.textContent = '⏳ Sending...';
-  const token = window._appToken || localStorage.getItem('vn_app_token') || '';
+  const token = window._appToken || localStorage.getItem('vn_token') || '';
   fetch('/api/telegram/test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(token ? { 'x-app-token': token } : {}) }
