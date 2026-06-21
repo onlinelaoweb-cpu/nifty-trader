@@ -42,6 +42,7 @@ const {
     getCurrentFIINet, getCurrentDIINet,
     interpretEarlyMomentum, interpretOIBuildup,
     isExpiryDay,
+    isNSEHoliday,
     injectAngelSession: injectAngelSessionNSE,   // nseData Angel session for PCR
     triggerInitialPCR,                            // fire first PCR after Angel login
 } = require('./src/api/nseData');
@@ -158,10 +159,7 @@ function isMarketOpen() {
     const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
     const day = ist.getDay();
     if (day === 0 || day === 6) return false;  // weekend
-    const yyyy = ist.getFullYear(), mm = String(ist.getMonth()+1).padStart(2,'0'), dd = String(ist.getDate()).padStart(2,'0');
-    // NSE holidays — keep in sync with nseData.js NSE_HOLIDAYS set
-    const NSE_HOLIDAYS_SRV = new Set(['2026-01-26','2026-02-19','2026-03-25','2026-04-01','2026-04-10','2026-04-14','2026-05-01','2026-08-15','2026-10-02','2026-10-20','2026-10-24','2026-11-04','2026-11-05','2026-12-25']);
-    if (NSE_HOLIDAYS_SRV.has(`${yyyy}-${mm}-${dd}`)) return false;
+    if (isNSEHoliday(ist)) return false;       // NSE holiday — sourced from nseData.js
     const m = ist.getHours()*60 + ist.getMinutes();
     return m >= 555 && m <= 930;
 }
@@ -181,75 +179,10 @@ function isSafeEntryWindow() {
 // Used to skip heavy processing (PCR, MTF, breadth, SR) on weekends and outside market hours
 // The app stays online but conserves Railway CPU/memory — fits within 500 hrs/month hobby plan
 
-// NSE 2026 official market holidays (exchange closed)
-// Source: NSE circular + verified against official NSE website
-const NSE_HOLIDAYS_2026 = new Set([
-    '2026-01-26',  // Republic Day
-    '2026-03-02',  // Holi
-    '2026-03-20',  // Ram Navami (Shri Ram Navami)  ← some sources say Mar 26; verify
-    '2026-04-02',  // Mahavir Jayanti
-    '2026-04-03',  // Good Friday
-    '2026-04-14',  // Dr. Baba Saheb Ambedkar Jayanti
-    '2026-05-01',  // Maharashtra Day
-    '2026-05-28',  // Bakri Id (Eid ul-Adha)
-    '2026-06-26',  // Muharram
-    '2026-08-15',  // Independence Day (Saturday — already weekend, no extra closure)
-    '2026-09-14',  // Ganesh Chaturthi
-    '2026-10-02',  // Mahatma Gandhi Jayanti
-    '2026-10-20',  // Dussehra
-    '2026-11-10',  // Diwali Balipratipada
-    '2026-11-24',  // Guru Nanak Jayanti
-    '2026-12-25',  // Christmas
-]);
-
-// NSE 2027 PROJECTED holidays — based on fixed national holidays + calculated religious dates.
-// ⚠️  NSE publishes the official list in Nov/Dec of the preceding year.
-//     VERIFY and update this list once the official NSE circular is released (expected Nov 2026).
-// Fixed holidays confirmed: Republic Day (Jan 26), Independence Day (Aug 15),
-//   Gandhi Jayanti (Oct 2), Christmas (Dec 25).
-// Religious dates are calculated from the Islamic/Hindu calendar and match
-//   the Drik Panchang / calendarlabs.com 2027 projections — subject to moon sighting.
-const NSE_HOLIDAYS_2027 = new Set([
-    '2027-01-26',  // Republic Day (Tuesday)
-    '2027-02-17',  // Maha Shivratri (Wednesday) — projected
-    '2027-03-05',  // Holi (Friday) — projected
-    '2027-03-19',  // Id-ul-Fitr / Eid (Friday) — projected (moon-sighting dependent)
-    '2027-03-26',  // Good Friday (Friday)
-    '2027-03-29',  // Mahavir Jayanti (Monday) — projected
-    '2027-04-14',  // Dr. Baba Saheb Ambedkar Jayanti (Wednesday)
-    '2027-05-01',  // Maharashtra Day (Saturday — already weekend, kept for completeness)
-    '2027-05-17',  // Bakri Id / Eid ul-Adha (Monday) — projected
-    '2027-06-06',  // Muharram (Sunday — likely no extra closure if on weekend)
-    '2027-08-15',  // Independence Day (Sunday — already weekend)
-    '2027-09-02',  // Ganesh Chaturthi (Thursday) — projected
-    '2027-10-02',  // Mahatma Gandhi Jayanti (Saturday — already weekend)
-    '2027-10-08',  // Dussehra (Friday) — projected
-    '2027-10-29',  // Diwali Laxmi Pujan (Friday) — projected
-    '2027-10-30',  // Diwali Balipratipada (Saturday — already weekend)
-    '2027-11-13',  // Guru Nanak Jayanti (Saturday — already weekend)
-    '2027-12-24',  // Christmas observed (Friday, as Dec 25 is Saturday) — TBC
-    '2027-12-25',  // Christmas Day (Saturday)
-]);
-
-function isNSEHoliday(date) {
-    const ist = date || new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    const yyyy = ist.getFullYear();
-    const mm   = String(ist.getMonth() + 1).padStart(2, '0');
-    const dd   = String(ist.getDate()).padStart(2, '0');
-    const key  = `${yyyy}-${mm}-${dd}`;
-    if (yyyy === 2026) return NSE_HOLIDAYS_2026.has(key);
-    if (yyyy === 2027) {
-        // Using projected list — warn once per day if running in 2027 without official update
-        if (mm === '01' && dd === '01') {
-            console.warn('[isNSEHoliday] Using PROJECTED 2027 holidays — verify against official NSE circular!');
-        }
-        return NSE_HOLIDAYS_2027.has(key);
-    }
-    // Beyond 2027: log warning, treat every weekday as trading day (conservative fallback)
-    console.warn(`[isNSEHoliday] No holiday data for ${yyyy} — update NSE_HOLIDAYS_${yyyy} before year start.`);
-    return false;
-
-}
+// NSE holiday data (NSE_HOLIDAYS_2026/2027) and isNSEHoliday() now live in
+// src/api/nseData.js as the single source of truth, imported above — this
+// avoids three separate (and previously inconsistent) holiday lists drifting
+// out of sync with each other and with the official NSE circular.
 
 function isNSEMarketDay() {
     const ist = getIST();
