@@ -28,7 +28,7 @@ const { fetchGlobalCues }           = require('./src/api/globalCues');
 const { fetchAdvanceDecline,
         injectAngelSession }        = require('./src/api/breadth');
 const { calculateSRLevels }         = require('./src/api/levels');
-const { getSwingTrend, getReactionZoneGate, calcForceLabel } = require('./src/api/physicsOfTrading');
+const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo } = require('./src/api/physicsOfTrading');
 const {
     injectDBPool      : injectHistDBPool,
     initHistoricalData,
@@ -107,6 +107,11 @@ let marketState = {
     srLevels: null,
     maxPain: { strike: null, expiryDay: false, totalPain: null, updatedAt: null },
     pcrHistory: [],
+    // PCR Slope — rate of change of PCR across the session (morning → close)
+    pcrSlope: { slopePerHour: null, recentSlopePerHour: null, trend: 'FLAT', label: 'PCR Slope — awaiting data', sessionHigh: null, sessionLow: null, sessionOpen: null },
+    // Standalone Fibonacci Retracement card — computed every cycle (independent of
+    // active BUY signal) so the UI always shows the latest swing's fib levels.
+    fiboCard: null,
     fii: { buy:null, sell:null, net:null },
     dii: { buy:null, sell:null, net:null },
     optionFlow: { atmCEpremium:null, atmPEpremium:null, ceChange:0, peChange:0, dominance:'NEUTRAL', history:[] },
@@ -143,6 +148,7 @@ let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-d
 let morningSummarySent=false, closeSummarySent=false, vixAlertSent=false;
 let nishanebaazAlertSent=false;  // one-shot: fired once at 14:00 per day
 let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:15
+let _pcrHistoryDate = null;  // IST date-string of the session pcrHistory currently belongs to
 let signalStreak = { signal: 'WAIT', count: 0 }; // consecutive same-signal counter
 let btstSentToday=false;     // one-shot: BTST/STBT Telegram alert per day
 let telegramAlertInFlight=false; // race-condition guard — prevents duplicate sends when onTick fires concurrently
@@ -391,9 +397,90 @@ function calculateADX(candles, period = 14) {
 function trackPCRHistory(pcr) {
     if (!pcr) return;
     const ist  = getIST();
+    const dateStr = `${ist.getFullYear()}-${ist.getMonth()}-${ist.getDate()}`;
+    // Hard reset at the first tick of a new IST calendar day — without this,
+    // raising the cap to 200 means yesterday's tail-end ticks would linger
+    // into this morning's array (the old 50-cap masked this by self-purging
+    // fast; the manual-PCR guard elsewhere only fires conditionally, not
+    // every day), corrupting the slope regression with mixed-day timestamps.
+    if (_pcrHistoryDate !== dateStr) {
+        marketState.pcrHistory = [];
+        _pcrHistoryDate = dateStr;
+    }
     const time = `${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
     marketState.pcrHistory.push({ time, pcr: parseFloat(pcr.toFixed(2)), signal: pcrLabel(pcr) });
-    if (marketState.pcrHistory.length > 50) marketState.pcrHistory.shift();
+    // Cap at 200 — PCR refetches every 3 min, so a full 9:15→15:30 session is
+    // ~125 ticks. 200 leaves headroom for manual entries / pre-post market.
+    if (marketState.pcrHistory.length > 200) marketState.pcrHistory.shift();
+    marketState.pcrSlope = calcPCRSlope(marketState.pcrHistory);
+    savePCRTick(pcr, marketState.atmPcr, marketState.nifty, pcrLabel(pcr)).catch(()=>{});
+}
+
+// ── PCR Slope ──────────────────────────────────────────────────────────────
+// "Slope" = rate of change of PCR across the session, in PCR-points-per-hour.
+// Computed two ways:
+//   1. slopePerHour       — least-squares regression over the WHOLE day's
+//                            ticks (9:15 → now). Tells you the day's broad
+//                            drift: are option writers building puts (bullish
+//                            drift) or calls (bearish drift) as the day wears on.
+//   2. recentSlopePerHour — same regression but only the last 10 ticks
+//                            (~30 min). Tells you current/short-term momentum,
+//                            which can diverge from the day's broad drift
+//                            (e.g. day was bullish-drifting but last 30 min
+//                            is reversing — useful early-warning signal).
+// `time` is "HH:MM" IST — converted to minutes-since-market-open (9:15) for
+// the regression x-axis so slope is denominated cleanly per hour.
+function _pcrTimeToMinutes(hhmm) {
+    const [h, m] = hhmm.split(':').map(Number);
+    return (h * 60 + m) - (9 * 60 + 15); // minutes since 09:15 IST open
+}
+
+function _linRegSlope(points) {
+    // points: [{x, y}] — returns slope (y per unit x) via least squares, or null if <2 distinct x
+    const n = points.length;
+    if (n < 2) return null;
+    const sumX = points.reduce((a, p) => a + p.x, 0);
+    const sumY = points.reduce((a, p) => a + p.y, 0);
+    const sumXY = points.reduce((a, p) => a + p.x * p.y, 0);
+    const sumXX = points.reduce((a, p) => a + p.x * p.x, 0);
+    const denom = (n * sumXX - sumX * sumX);
+    if (denom === 0) return null; // all same x (no time spread yet)
+    return (n * sumXY - sumX * sumY) / denom;
+}
+
+function calcPCRSlope(history) {
+    if (!history || history.length < 2) {
+        return { slopePerHour: null, recentSlopePerHour: null, trend: 'FLAT', label: 'PCR Slope — collecting data…', sessionHigh: null, sessionLow: null, sessionOpen: null };
+    }
+    const pts = history.map(h => ({ x: _pcrTimeToMinutes(h.time), y: h.pcr }));
+
+    const slopePerMin = _linRegSlope(pts);
+    const slopePerHour = slopePerMin !== null ? parseFloat((slopePerMin * 60).toFixed(3)) : null;
+
+    const recentPts = pts.slice(-10);
+    const recentSlopePerMin = _linRegSlope(recentPts);
+    const recentSlopePerHour = recentSlopePerMin !== null ? parseFloat((recentSlopePerMin * 60).toFixed(3)) : null;
+
+    const pcrVals = history.map(h => h.pcr);
+    const sessionHigh = Math.max(...pcrVals);
+    const sessionLow  = Math.min(...pcrVals);
+    const sessionOpen = history[0].pcr;
+
+    // Trend label driven by the RECENT slope (more actionable than the full-day
+    // drift) — threshold tuned so small noise doesn't flip-flop the label.
+    const s = recentSlopePerHour ?? slopePerHour;
+    let trend, emoji;
+    if (s === null)        { trend = 'FLAT';    emoji = '➖'; }
+    else if (s > 0.15)     { trend = 'RISING';  emoji = '📈'; }   // PCR climbing → put writers piling in → bullish drift
+    else if (s < -0.15)    { trend = 'FALLING'; emoji = '📉'; }   // PCR falling → call writers piling in → bearish drift
+    else                    { trend = 'FLAT';    emoji = '➖'; }
+
+    const dirNote = trend === 'RISING'  ? 'put writers building (bullish drift)'
+                  : trend === 'FALLING' ? 'call writers building (bearish drift)'
+                  : 'no clear directional build-up';
+    const label = `${emoji} PCR Slope ${s !== null ? (s > 0 ? '+' : '') + s.toFixed(2) : '--'}/hr — ${dirNote}`;
+
+    return { slopePerHour, recentSlopePerHour, trend, label, sessionHigh, sessionLow, sessionOpen };
 }
 
 function updateOptionFlow(atmCE, atmPE) {
@@ -1351,6 +1438,59 @@ function combineSignals(indicators) {
         reasons.push(`${gradeColor} Entry Quality: ${qs}/100 (${grade}) — ${scoreBreakdown.slice(0,3).join(' | ')}`);
     } else {
         marketState.entryQuality = { score: 0, grade: '-', gradeColor: '⚪', breakdown: [] };
+    }
+
+    // ── Standalone Fibonacci Retracement Card ────────────────────────────────
+    // Unlike the Law-3 reaction gate above (which only computes when a
+    // BUY signal is live), this runs every cycle regardless of signal so the
+    // UI card always shows the latest swing's fib levels + where price sits.
+    try {
+        const fiboCandles = getSessionCandles();
+        const impulse = fiboCandles ? getLatestImpulseFibo(fiboCandles) : null;
+        if (impulse) {
+            const { direction, swingLow, swingHigh, fib } = impulse;
+            const price = marketState.nifty;
+            const range = fib.level100 - fib.level0; // signed; 0%=start, 100%=end of impulse
+            const retracePct = range !== 0 ? ((price - fib.level0) / range) * 100 : null;
+
+            const lo = Math.min(fib.level382, fib.level618);
+            const hi = Math.max(fib.level382, fib.level618);
+            const inReactionZone = price >= lo && price <= hi;
+            const beyondLo = Math.min(fib.level786, fib.level100);
+            const beyondHi = Math.max(fib.level786, fib.level100);
+            const beyondReversal = price >= beyondLo && price <= beyondHi;
+
+            let zoneLabel, zoneColor;
+            if (beyondReversal)      { zoneLabel = '⚠️ Beyond 78.6% — trend-change risk'; zoneColor = 'amber'; }
+            else if (inReactionZone) { zoneLabel = '✅ In 38.2%–61.8% reaction zone'; zoneColor = 'green'; }
+            else if (retracePct !== null && retracePct < 23.6 && retracePct > -23.6) { zoneLabel = '🏃 Near the action (shallow pullback)'; zoneColor = 'blue'; }
+            else                      { zoneLabel = '— Outside key fib zones'; zoneColor = 'dim'; }
+
+            marketState.fiboCard = {
+                direction,                                  // 'UP' (retrace down) | 'DOWN' (retrace up)
+                swingLow: parseFloat(swingLow.toFixed(1)),
+                swingHigh: parseFloat(swingHigh.toFixed(1)),
+                levels: {
+                    l0:    parseFloat(fib.level0.toFixed(1)),
+                    l236:  parseFloat(fib.level236.toFixed(1)),
+                    l382:  parseFloat(fib.level382.toFixed(1)),
+                    l50:   parseFloat(fib.level500.toFixed(1)),
+                    l618:  parseFloat(fib.level618.toFixed(1)),
+                    l786:  parseFloat(fib.level786.toFixed(1)),
+                    l100:  parseFloat(fib.level100.toFixed(1))
+                },
+                price,
+                retracePct: retracePct !== null ? parseFloat(retracePct.toFixed(1)) : null,
+                zoneLabel, zoneColor,
+                updatedAt: new Date().toISOString()
+            };
+        } else {
+            // No valid impulse swing yet (start of day / candle gap) — clear
+            // rather than leave a stale card showing a previous swing's levels.
+            marketState.fiboCard = null;
+        }
+    } catch (e) {
+        console.warn('[Fibo Card] failed:', e.message);
     }
 
     return { signal, confidence, reasons };
@@ -2556,13 +2696,73 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL journal_trades table ready');
 
+        // ── pcr_intraday_history table — every PCR tick of the day, persisted ──
+        // In-memory marketState.pcrHistory is capped/reset on Railway restarts.
+        // This table lets the PCR-slope chart survive a redeploy/restart and
+        // also lets you query past sessions later if needed.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS pcr_intraday_history (
+                id          SERIAL PRIMARY KEY,
+                ts          TIMESTAMPTZ DEFAULT NOW(),
+                trade_date  DATE DEFAULT (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE,
+                time_ist    TEXT,           -- "HH:MM" IST, matches pcrHistory.time
+                pcr         NUMERIC,
+                atm_pcr     NUMERIC,
+                nifty       NUMERIC,
+                signal      TEXT
+            )
+        `);
+        await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_pcr_intraday_date ON pcr_intraday_history(trade_date)`);
+        console.log('✅ PostgreSQL pcr_intraday_history table ready');
+
         // ── Inject DB pool into historical data module ────────────────────────
         injectHistDBPool(dbPool);
         console.log('✅ Historical data module connected to DB');
+
+        // ── Hydrate today's PCR history from DB ────────────────────────────────
+        // On a mid-day Railway restart, in-memory marketState.pcrHistory starts
+        // empty — without this, the live dashboard's PCR slope chart would look
+        // like the day just started even though DB has the full session.
+        try {
+            const todayRows = await getTodayPCRHistory();
+            if (todayRows && todayRows.length) {
+                const ist = getIST();
+                _pcrHistoryDate = `${ist.getFullYear()}-${ist.getMonth()}-${ist.getDate()}`;
+                marketState.pcrHistory = todayRows.slice(-200).map(r => ({ time: r.time, pcr: r.pcr, signal: pcrLabel(r.pcr) }));
+                marketState.pcrSlope = calcPCRSlope(marketState.pcrHistory);
+                console.log(`✅ Hydrated ${marketState.pcrHistory.length} PCR ticks from DB (restart recovery)`);
+            }
+        } catch (e) { console.error('PCR history hydration error:', e.message); }
     } catch (e) {
         console.error('DB init error:', e.message);
         dbPool = null;
     }
+}
+
+// Persist one PCR tick to the DB (fire-and-forget — never blocks the poll cycle).
+async function savePCRTick(pcr, atmPcr, nifty, signal) {
+    if (!dbPool) return;
+    try {
+        const ist  = getIST();
+        const time = `${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
+        await dbPool.query(
+            `INSERT INTO pcr_intraday_history (time_ist, pcr, atm_pcr, nifty, signal) VALUES ($1,$2,$3,$4,$5)`,
+            [time, pcr, atmPcr ?? null, nifty ?? null, signal ?? null]
+        );
+    } catch (e) { console.error('PCR tick save error:', e.message); }
+}
+
+// Today's full PCR series from DB — used by the slope chart to survive
+// Railway restarts (in-memory marketState.pcrHistory resets on redeploy).
+async function getTodayPCRHistory() {
+    if (!dbPool) return null;
+    try {
+        const r = await dbPool.query(
+            `SELECT time_ist AS time, pcr, atm_pcr, nifty, signal FROM pcr_intraday_history
+             WHERE trade_date = (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE ORDER BY ts ASC`
+        );
+        return r.rows.map(row => ({ time: row.time, pcr: parseFloat(row.pcr), atmPcr: row.atm_pcr ? parseFloat(row.atm_pcr) : null, nifty: row.nifty ? parseFloat(row.nifty) : null, signal: row.signal }));
+    } catch (e) { console.error('getTodayPCRHistory error:', e.message); return null; }
 }
 
 async function saveTradeToHistory(tradeData) {
@@ -3115,6 +3315,18 @@ app.post('/api/pcr', requireToken, (req,res) => {
 app.get('/api/early-momentum', (req,res) => res.json(getEarlyMomState()));
 app.get('/api/oi-buildup',     (req,res) => res.json(getOIBuildupState()));
 app.get('/api/pcr-state',      (req,res) => res.json(getPCRState()));
+// Full day's PCR series (DB-backed, survives restarts) — used by the PCR
+// Slope chart so "morning till closing" history isn't lost on a redeploy.
+// Falls back to in-memory marketState.pcrHistory if DB isn't configured.
+app.get('/api/pcr-history-today', async (req, res) => {
+    const dbHistory = await getTodayPCRHistory();
+    const history = (dbHistory && dbHistory.length) ? dbHistory : marketState.pcrHistory;
+    // Recompute slope from whichever series is actually being returned —
+    // marketState.pcrSlope can lag behind a longer DB-sourced series after
+    // a mid-day restart (in-memory history resets to empty on every deploy).
+    const slope = calcPCRSlope(history);
+    res.json({ history, slope, source: (dbHistory && dbHistory.length) ? 'db' : 'memory' });
+});
 app.get('/api/fii-state',      (req,res) => res.json(getFIIState()));   // debug: raw FII/DII snapshot
 
 // FII DII

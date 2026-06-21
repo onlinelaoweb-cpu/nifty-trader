@@ -3060,9 +3060,18 @@ html.vn-day .sug-card [style*="color:var(--dim)"] { color: #607080 !important; }
 
     <div class="pcr-trend-card">
       <div class="trend-title">📈 PCR TREND TODAY</div>
+      <canvas id="pcr-slope-chart" width="300" height="80" style="width:100%;height:80px;display:block;margin-bottom:5px;border-radius:6px;background:var(--bg3);"></canvas>
+      <div id="pcr-slope-label" style="font-size:9px;color:var(--dim);text-align:center;margin-bottom:7px;letter-spacing:0.3px;">PCR Slope — collecting data…</div>
       <div class="trend-list" id="pcr-trend-list">
         <div style="font-size:10px;color:var(--dim);text-align:center;padding:8px;">Waiting for NSE option-chain data...</div>
       </div>
+    </div>
+
+    <!-- Physics of Trading — Law 3: Fibonacci Reaction Zone card -->
+    <div class="pcr-trend-card" id="fibo-card">
+      <div class="trend-title">🌀 FIBONACCI REACTION ZONE <span style="font-size:8px;color:var(--dim);letter-spacing:1px;font-weight:400;">LAW 3</span></div>
+      <div id="fibo-zone-label" style="font-size:10px;color:var(--dim);text-align:center;padding:4px;margin-bottom:6px;border-radius:6px;background:var(--bg3);">Awaiting swing data…</div>
+      <div id="fibo-ladder" style="font-size:10px;font-family:'Share Tech Mono',monospace;"></div>
     </div>
 
     <!-- FII/DII auto-fetched display card -->
@@ -3672,7 +3681,9 @@ function switchTab(name,btn){
       if(_lastState.breadth)updateBreadthUI(_lastState.breadth);
       if(_lastState.global){updateGlobalUI(_lastState.global);updateSectorHeatmap(_lastState.global.sectors);}
       if(_lastState.optionFlow){updateState(_lastState);}
-      if(_lastState.pcrHistory)updatePCRTrend(_lastState.pcrHistory);
+      if(_lastState.pcrHistory){updatePCRTrend(_lastState.pcrHistory);drawPCRSlopeChart(_lastState.pcrHistory);}
+      if(_lastState.pcrSlope)updatePCRSlopeLabel(_lastState.pcrSlope);
+      if(_lastState.fiboCard)updateFiboCard(_lastState.fiboCard);
       if(_lastState.fii||_lastState.dii) updateFIIDIIDisplay(_lastState.fii,_lastState.dii);
     } else {
       // No cache yet — do a single fetch to populate
@@ -4728,6 +4739,11 @@ function renderDashboard(s) {
 
   // PCR History
   if (s.pcrHistory) updatePCRTrend(s.pcrHistory);
+  if (s.pcrHistory) drawPCRSlopeChart(s.pcrHistory);
+  if (s.pcrSlope) updatePCRSlopeLabel(s.pcrSlope);
+
+  // Fibonacci Retracement card (Physics of Trading — Law 3)
+  updateFiboCard(s.fiboCard);
 
   // Breadth UI — always update so data is fresh when user switches to tab
   if (s.breadth) updateBreadthUI(s.breadth);
@@ -5485,6 +5501,124 @@ function updatePCRTrend(history) {
     const pcrColor = h.pcr > 1.2 ? 'var(--green)' : h.pcr < 0.8 ? 'var(--red)' : 'var(--amber)';
     const sig = h.signal || (h.pcr > 1.2 ? 'BULLISH' : h.pcr < 0.8 ? 'BEARISH' : 'NEUTRAL');
     return `<div class="trend-row">${trend} <span style="color:var(--dim);">${timeStr}</span> <span style="color:${pcrColor};">PCR: ${parseFloat(h.pcr).toFixed(2)}</span> <span style="color:var(--dim);font-size:9px;">${sig}</span></div>`;
+  }).join('');
+}
+
+// ─── PCR SLOPE CHART ─────────────────────────────────────────────────────
+// Lightweight canvas line chart — no external lib needed (matches the
+// hand-rolled candlestick chart elsewhere in this app). Plots PCR value
+// across the session with colored zone bands (red <0.8 bearish, green >1.3
+// bullish, amber neutral) so the slope/drift is visible at a glance.
+function drawPCRSlopeChart(history) {
+  const canvas = document.getElementById('pcr-slope-chart');
+  if (!canvas || !history || history.length < 2) return;
+
+  // Match canvas internal resolution to its displayed CSS size (crisp on retina)
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 300, cssH = canvas.clientHeight || 80;
+  if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+    canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const pad = { l: 28, r: 6, t: 6, b: 14 };
+  const w = cssW - pad.l - pad.r, h = cssH - pad.t - pad.b;
+
+  const vals = history.map(h => h.pcr).filter(v => typeof v === 'number' && !isNaN(v));
+  if (vals.length < 2) return;
+  let lo = Math.min(...vals, 0.75), hi = Math.max(...vals, 1.15);
+  const margin = (hi - lo) * 0.1 || 0.1;
+  lo -= margin; hi += margin;
+  const yOf = v => pad.t + h - ((v - lo) / (hi - lo)) * h;
+  const xOf = i => pad.l + (i / (history.length - 1)) * w;
+
+  // Zone bands: bear <0.8 (red tint), bull >1.3 (green tint), neutral between (amber tint)
+  const bandCol = (top, bot, col) => { ctx.fillStyle = col; ctx.fillRect(pad.l, yOf(top), w, Math.max(0, yOf(bot) - yOf(top))); };
+  if (hi > 1.3) bandCol(hi, 1.3, 'rgba(0,255,136,0.06)');
+  bandCol(Math.min(hi,1.3), Math.max(lo,0.8), 'rgba(255,187,0,0.05)');
+  if (lo < 0.8) bandCol(0.8, lo, 'rgba(255,34,68,0.06)');
+
+  // Gridlines + y-axis labels at key thresholds
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1; ctx.font = '8px monospace';
+  [0.8, 1.0, 1.3].forEach(level => {
+    if (level < lo || level > hi) return;
+    const y = yOf(level);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(cssW - pad.r, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillText(level.toFixed(1), 2, y + 3);
+  });
+
+  // PCR line
+  ctx.beginPath();
+  history.forEach((pt, i) => {
+    const x = xOf(i), y = yOf(pt.pcr);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#00aaff'; ctx.lineWidth = 1.6; ctx.stroke();
+
+  // Latest point marker, colored by zone
+  const last = history[history.length - 1];
+  const lastCol = last.pcr > 1.3 ? '#00ff88' : last.pcr < 0.8 ? '#ff2244' : '#ffbb00';
+  ctx.beginPath(); ctx.arc(xOf(history.length - 1), yOf(last.pcr), 3, 0, Math.PI * 2);
+  ctx.fillStyle = lastCol; ctx.fill();
+
+  // X-axis: first and last tick time
+  ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = '8px monospace';
+  ctx.fillText(history[0].time || '', pad.l, cssH - 3);
+  const lastTimeW = ctx.measureText(last.time || '').width;
+  ctx.fillText(last.time || '', cssW - pad.r - lastTimeW, cssH - 3);
+}
+
+function updatePCRSlopeLabel(slope) {
+  const el = document.getElementById('pcr-slope-label');
+  if (!el || !slope) return;
+  el.textContent = slope.label || 'PCR Slope — collecting data…';
+  el.style.color = slope.trend === 'RISING' ? 'var(--green)' : slope.trend === 'FALLING' ? 'var(--red)' : 'var(--dim)';
+}
+
+// ─── FIBONACCI REACTION ZONE CARD (Physics of Trading — Law 3) ─────────────
+function updateFiboCard(fibo) {
+  const lblEl = document.getElementById('fibo-zone-label');
+  const ladderEl = document.getElementById('fibo-ladder');
+  if (!lblEl || !ladderEl) return;
+
+  if (!fibo || !fibo.levels) {
+    lblEl.textContent = 'Awaiting swing data — need a clean impulse move to build levels';
+    lblEl.style.color = 'var(--dim)';
+    lblEl.style.background = 'var(--bg3)';
+    ladderEl.innerHTML = '';
+    return;
+  }
+
+  const colorMap = { green: 'var(--green)', amber: 'var(--amber)', blue: 'var(--blue)', dim: 'var(--dim)' };
+  const col = colorMap[fibo.zoneColor] || 'var(--dim)';
+  lblEl.textContent = `${fibo.zoneLabel} ${fibo.retracePct != null ? '(' + fibo.retracePct.toFixed(0) + '% retrace)' : ''}`;
+  lblEl.style.color = col;
+  lblEl.style.background = fibo.zoneColor === 'green' ? 'rgba(0,255,136,0.06)' : fibo.zoneColor === 'amber' ? 'rgba(255,187,0,0.06)' : 'var(--bg3)';
+
+  // Ladder rows, high level to low level, with current price slotted in
+  const L = fibo.levels;
+  const rows = [
+    { pct: '0%',    val: L.l0   },
+    { pct: '23.6%', val: L.l236 },
+    { pct: '38.2%', val: L.l382 },
+    { pct: '50.0%', val: L.l50  },
+    { pct: '61.8%', val: L.l618 },
+    { pct: '78.6%', val: L.l786 },
+    { pct: '100%',  val: L.l100 },
+  ].sort((a, b) => b.val - a.val); // always render high price at top
+
+  const price = fibo.price;
+  const reactionLabels = ['38.2%', '61.8%'];
+  ladderEl.innerHTML = rows.map(r => {
+    const isReaction = reactionLabels.includes(r.pct);
+    const nearPrice = price != null && Math.abs(price - r.val) < (Math.abs(L.l100 - L.l0) * 0.02 || 1);
+    return `<div style="display:flex;justify-content:space-between;padding:2px 4px;border-bottom:1px solid rgba(255,255,255,0.04);${isReaction ? 'background:rgba(0,255,136,0.04);' : ''}${nearPrice ? 'outline:1px solid var(--blue);border-radius:3px;' : ''}">
+      <span style="color:${isReaction ? 'var(--green)' : 'var(--dim)'};">${r.pct}</span>
+      <span style="color:${nearPrice ? 'var(--blue)' : 'var(--text)'};font-weight:${nearPrice ? '700' : '400'};">₹${r.val.toFixed(1)}${nearPrice ? ' ← spot' : ''}</span>
+    </div>`;
   }).join('');
 }
 
