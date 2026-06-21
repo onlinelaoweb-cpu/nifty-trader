@@ -28,6 +28,7 @@ const { fetchGlobalCues }           = require('./src/api/globalCues');
 const { fetchAdvanceDecline,
         injectAngelSession }        = require('./src/api/breadth');
 const { calculateSRLevels }         = require('./src/api/levels');
+const { getSwingTrend, getReactionZoneGate, calcForceLabel } = require('./src/api/physicsOfTrading');
 const {
     injectDBPool      : injectHistDBPool,
     initHistoricalData,
@@ -1295,7 +1296,45 @@ function combineSignals(indicators) {
             }
         }
 
-        // Grade
+        // 7. Physics of Trading — Law 3: Reaction-Zone Entry (0–15 pts)
+        // Core rule from "Physics of Trading" (Nitin Murarka): never enter on the
+        // ACTION (the sharp move itself) — wait for and enter on the REACTION
+        // (pullback to VWAP or 38.2%–61.8% Fibonacci retracement). Penalizes
+        // entries that are chasing a candle that already ran far from VWAP.
+        try {
+            // BUG FIX: getCandleHistory(true) contains multi-day data — overnight
+            // price gaps would create fake giant "swing" legs and wrong Fibonacci
+            // levels (same issue already fixed for ADX above). Use session-only
+            // candles instead, same as sessionCandlesForADX.
+            const candlesForPhysics = getSessionCandles();
+            const reactionGate = getReactionZoneGate(marketState.nifty, indicators.vwap, candlesForPhysics, signal);
+            marketState.physicsOfTrading = marketState.physicsOfTrading || {};
+            marketState.physicsOfTrading.reactionGate = reactionGate;
+            qs += reactionGate.score;
+            scoreBreakdown.push(`Law3-Reaction:${reactionGate.score} (${reactionGate.zone})`);
+            reasons.push(reactionGate.reason);
+
+            // Law 1 — swing trend structure (HH/HL or LH/LL), independent
+            // second vote alongside the existing MTF alignment check.
+            const swing = getSwingTrend(candlesForPhysics, 30);
+            marketState.physicsOfTrading.swingTrend = swing;
+            const swingAligned =
+                (signal === 'BUY CALL' && swing.trend === 'UPTREND') ||
+                (signal === 'BUY PUT'  && swing.trend === 'DOWNTREND');
+            if (swingAligned) {
+                qs += 5; scoreBreakdown.push(`Law1-Trend:5 (${swing.trend} confirmed — ${swing.reason})`);
+            } else if (swing.trend !== 'UNKNOWN') {
+                scoreBreakdown.push(`Law1-Trend:0 (${swing.trend} — ${swing.reason})`);
+            }
+        } catch (e) {
+            console.warn('[Physics] reaction-zone gate failed:', e.message);
+        }
+
+        // Normalize back to 0–100 scale: max raw score is now 120
+        // (100 original components + 15 Law3-Reaction + 5 Law1-Trend).
+        const qsRaw = qs;
+        qs = Math.round((qsRaw / 120) * 100);
+
         const grade = qs >= 80 ? 'A+' : qs >= 65 ? 'A' : qs >= 50 ? 'B' : qs >= 35 ? 'C' : 'D';
         const gradeColor = qs >= 80 ? '🟢' : qs >= 65 ? '🟢' : qs >= 50 ? '🟡' : '🔴';
 
