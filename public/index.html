@@ -3852,6 +3852,7 @@ let _lastSRUpdatedAt = null;  // dirty flag: skip SR table rebuild when levels h
 let _pollTimer    = null;
 let _sseConn      = null;   // EventSource connection
 let _sseFallback  = false;  // true if SSE failed, using polling
+let _pollFallbackActive = false;  // true when 3s emergency fallback poll is running (distinct from 30s safety-net)
 // FIX: LOT_SIZE was hardcoded as 65 in 8 places in the frontend.
 // Now synced from server via s.lotSize on every poll — when NSE revises the lot size,
 // update server.js LOT_SIZE once and all P&L / position-size calcs auto-update here.
@@ -3975,6 +3976,7 @@ function startSSE() {
   } catch(e) {
     console.warn('[SSE] EventSource not supported — falling back to polling');
     _sseFallback = true;
+    _pollFallbackActive = true;
     if (_pollTimer) clearInterval(_pollTimer);
     _pollTimer = setInterval(fetchSignal, 3000);
     return;
@@ -3983,6 +3985,16 @@ function startSSE() {
   _sseConn.onopen = () => {
     console.log('[SSE] Connected — live updates active');
     _sseFallback = false;
+    // If we had started a 3s fallback poll after SSE dropped, kill it now.
+    // The 30s safety-net poll (started in startPolling) stays alive — it's intentional.
+    if (_pollTimer && _pollFallbackActive) {
+      clearInterval(_pollTimer);
+      _pollTimer = null;
+      _pollFallbackActive = false;
+      // Restart the 30s safety-net poll
+      _pollTimer = setInterval(fetchSignal, 30000);
+      console.log('[SSE] Fallback poll stopped — back on SSE');
+    }
     // Show live indicator
     const dot = document.getElementById('sse-dot');
     if (dot) { dot.style.background = 'var(--green)'; dot.title = 'Live (SSE)'; }
@@ -4220,12 +4232,6 @@ function renderDashboard(s) {
     }
   }
   // VWAP multi-TF
-  { const vA=(v,p)=>v!=null&&p>0?p>v:null, vL=a=>a==null?'--':a?'↑ ABOVE':'↓ BELOW', vC=a=>a==null?'var(--dim)':a?'var(--green)':'var(--red)';
-    const v1=vA(s.vwap,s.nifty),v5=vA(s.mtf?.tf5m?.vwap,s.nifty),v15=vA(s.mtf?.tf15m?.vwap,s.nifty);
-    [['1m',v1],['5m',v5],['15m',v15]].forEach(([tf,a])=>{const el=document.getElementById('vwap-'+tf+'-pos');if(el){el.textContent=vL(a);el.style.color=vC(a);}});
-    const vs=document.getElementById('vwap-multi-signal');
-    if(vs){if(v5!=null&&v15!=null){const b=v5&&v15,d=!v5&&!v15;vs.textContent=b?'✅ BULL':d?'🔴 BEAR':'⚠️ MIX';vs.style.color=b?'var(--green)':d?'var(--red)':'var(--amber)';}else{vs.textContent='--';vs.style.color='var(--dim)';}}}
-  // VWAP multi-TF
   {
     const vwapAbove = (vwap, price) => vwap != null && price > 0 ? price > vwap : null;
     const vwapLabel = (a) => a == null ? '--' : a ? '↑ ABOVE' : '↓ BELOW';
@@ -4254,12 +4260,6 @@ function renderDashboard(s) {
     const crossTrend = s.ema9 > s.ema21 ? '↑ BULL' : '↓ BEAR';
     document.getElementById('ema-trend').textContent = crossTrend;
   }
-  // EMA multi-TF
-  { const eL=(a,b)=>a==null||b==null?'--':a>b?'↑ BULL':'↓ BEAR', eC=(a,b)=>a==null||b==null?'var(--dim)':a>b?'var(--green)':'var(--red)';
-    [['1m',s.ema9,s.ema21],['5m',s.mtf?.tf5m?.ema9,s.mtf?.tf5m?.ema21],['15m',s.mtf?.tf15m?.ema9,s.mtf?.tf15m?.ema21]].forEach(([tf,a,b])=>{const el=document.getElementById('ema-'+tf+'-cross');if(el){el.textContent=eL(a,b);el.style.color=eC(a,b);}});
-    const es=document.getElementById('ema-multi-signal');
-    if(es){const e5a=s.mtf?.tf5m?.ema9,e5b=s.mtf?.tf5m?.ema21,e15a=s.mtf?.tf15m?.ema9,e15b=s.mtf?.tf15m?.ema21;
-      if(e5a!=null&&e5b!=null&&e15a!=null&&e15b!=null){const b=e5a>e5b&&e15a>e15b,d=e5a<e5b&&e15a<e15b;es.textContent=b?'✅ BULL':d?'🔴 BEAR':'⚠️ MIX';es.style.color=b?'var(--green)':d?'var(--red)':'var(--amber)';}else{es.textContent='--';es.style.color='var(--dim)';}}}
   // EMA multi-TF
   {
     const emaLabel = (e9, e21) => e9 == null || e21 == null ? '--' : e9 > e21 ? '↑ BULL' : '↓ BEAR';
@@ -4737,9 +4737,15 @@ function renderDashboard(s) {
   }
   if (tradesEl) tradesEl.textContent = summary.total + ' Trade' + (summary.total !== 1 ? 's' : '');
 
-  // PCR History
-  if (s.pcrHistory) updatePCRTrend(s.pcrHistory);
-  if (s.pcrHistory) drawPCRSlopeChart(s.pcrHistory);
+  // PCR History — only redraw slope chart when data actually changed (canvas draw is expensive)
+  if (s.pcrHistory) {
+    updatePCRTrend(s.pcrHistory);
+    const pcrFingerprint = s.pcrHistory.length + '|' + (s.pcrHistory[s.pcrHistory.length - 1]?.pcr ?? '');
+    if (pcrFingerprint !== renderDashboard._lastPcrFP) {
+      renderDashboard._lastPcrFP = pcrFingerprint;
+      drawPCRSlopeChart(s.pcrHistory);
+    }
+  }
   if (s.pcrSlope) updatePCRSlopeLabel(s.pcrSlope);
 
   // Fibonacci Retracement card (Physics of Trading — Law 3)
@@ -4747,10 +4753,14 @@ function renderDashboard(s) {
 
   // Breadth UI — always update so data is fresh when user switches to tab
   if (s.breadth) updateBreadthUI(s.breadth);
-  // Global UI (if on global tab)
+  // Global UI — only re-render when data actually changes (sector heatmap is DOM-heavy)
   if (s.global) {
-    updateGlobalUI(s.global);
-    updateSectorHeatmap(s.global.sectors);
+    const globalFP = (s.global.globalBias || '') + '|' + (s.global.updatedAt || '');
+    if (globalFP !== renderDashboard._lastGlobalFP) {
+      renderDashboard._lastGlobalFP = globalFP;
+      updateGlobalUI(s.global);
+      updateSectorHeatmap(s.global.sectors);
+    }
   }
   // Calendar (render whenever data is available)
   if (s.calendarEvents && s.calendarEvents.length) {
@@ -4758,9 +4768,26 @@ function renderDashboard(s) {
   }
   // FII/DII (auto-fetched — update all display elements)
   if (s.fii || s.dii) updateFIIDIIDisplay(s.fii, s.dii);
-  // Auto-checklist evaluation (runs on every state update)
-  updateChecklistAuto(s);
-  // Option flow — auto display (no manual input needed)
+  // Auto-checklist — only re-evaluate when signal or confidence changes
+  const clFP = (s.signal || '') + '|' + (s.confidence || 0) + '|' + (s.entryWindow?.status || '');
+  if (clFP !== renderDashboard._lastClFP) {
+    renderDashboard._lastClFP = clFP;
+    updateChecklistAuto(s);
+  }
+  // Momentum Breakdown — fingerprint on signal + key momentum fields
+  const momFP = JSON.stringify(s.momentum?.breakdown || '');
+  if (momFP !== renderDashboard._lastMomFP) {
+    renderDashboard._lastMomFP = momFP;
+    renderMomentum(s.momentum || null);
+  }
+  // Smart Money Bias — only re-render when bias label changes
+  if (s.smartMoney) {
+    const smFP = (s.smartMoney.bias || '') + '|' + (s.smartMoney.confidence || 0);
+    if (smFP !== renderDashboard._lastSmFP) {
+      renderDashboard._lastSmFP = smFP;
+      renderSmartMoney(s.smartMoney);
+    }
+  }
   if (s.optionFlow) {
     const dom = s.optionFlow.dominance || 'NEUTRAL';
     const c = dom.includes('CALL') ? 'var(--blue)' : dom.includes('PUT') ? 'var(--red)' : 'var(--amber)';
@@ -4798,10 +4825,6 @@ function renderDashboard(s) {
   }
   // BTST / STBT card (visible only in 3:00–3:20 PM window)
   renderBTST(s.btst || null);
-  // Momentum Breakdown card
-  renderMomentum(s.momentum || null);
-  // Smart Money Bias
-  if (s.smartMoney) renderSmartMoney(s.smartMoney);
 }
 
 // ─── BREADTH UI ──────────────────────────────────────────
