@@ -138,34 +138,43 @@ function calcFibonacciLevels(swingLow, swingHigh, direction) {
 
 // Finds the most recent impulse leg (last swing low → last swing high, or
 // vice versa, whichever is more recent) to build Fibonacci levels from.
-function getLatestImpulseFibo(candles, lookback = 30) {
+// KEY FIX: without a minimum swing-size filter, any 3-bar micro-wick (5-6
+// points on a 1m chart) qualifies as an "impulse" — all Fib levels end up
+// packed into a Rs.5 range, and retrace% blows up to 300-400% because
+// current price is far outside that tiny range (as seen on dashboard at
+// 10:01 — 390% retrace, 5-point swing). We now enforce:
+//   1. minSwingPct  — leg must be >= 0.20% of price (~48 pts at Nifty 24000)
+//   2. minSwingPts  — hard floor of 30 pts for safety on low-vol days
+// Also increased default lookback 30 -> 60 so we scan a full hour of 1m
+// candles and are more likely to find a real swing leg.
+function getLatestImpulseFibo(candles, lookback = 60) {
+    const MIN_SWING_PCT = 0.20;  // 0.20% of price ~ 48 pts at Nifty 24000
+    const MIN_SWING_PTS = 30;    // absolute floor regardless of price level
+
     const { swingHighs, swingLows } = findSwingPoints(candles, lookback);
     if (!swingHighs.length || !swingLows.length) return null;
 
     const lastHigh = swingHighs[swingHighs.length - 1];
     const lastLow  = swingLows[swingLows.length - 1];
 
-    // The impulse direction is determined by which swing point came LAST —
-    // if the low came after the high, the impulse is UP (low is the more
-    // recent pivot, so price rallied off it); if the high came after the
-    // low, impulse is DOWN... actually for retracement purposes we want the
-    // leg ending closest to "now", so use whichever pivot is more recent as
-    // the END of the impulse and the other (immediately preceding, opposite
-    // type) pivot as its START.
     let direction, swingLow, swingHigh;
     if (lastHigh.index > lastLow.index) {
-        // impulse ran low → high (most recent move was UP)
         direction = 'UP';
         swingHigh = lastHigh.price;
-        // start = the swing low immediately before this high
         const priorLow = [...swingLows].reverse().find(l => l.index < lastHigh.index);
         swingLow = priorLow ? priorLow.price : lastLow.price;
     } else {
-        // impulse ran high → low (most recent move was DOWN)
         direction = 'DOWN';
         swingLow = lastLow.price;
         const priorHigh = [...swingHighs].reverse().find(h => h.index < lastLow.index);
         swingHigh = priorHigh ? priorHigh.price : lastHigh.price;
+    }
+
+    // ── Minimum swing size guard ─────────────────────────────────────────
+    const swingSize = swingHigh - swingLow;
+    const swingPct  = swingLow > 0 ? (swingSize / swingLow) * 100 : 0;
+    if (swingSize < MIN_SWING_PTS || swingPct < MIN_SWING_PCT) {
+        return null;  // micro-swing, not a meaningful impulse leg
     }
 
     const fib = calcFibonacciLevels(swingLow, swingHigh, direction);
