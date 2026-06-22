@@ -405,93 +405,9 @@ async function scraperAPIFetch(targetUrl) {
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── NSE Trading Holidays (single source of truth — server.js imports isNSEHoliday
-//    from here instead of keeping its own copy) ───────────────────────────────
-// 2026 list verified against official NSE Circular NSE/CMTR/71775 (12-Dec-2025).
-// Only weekday closures are listed — holidays that already fall on Sat/Sun don't
-// affect isNSEHoliday()/isExpiryDay() since weekends are filtered separately.
-const NSE_HOLIDAYS_2026 = new Set([
-    '2026-01-26',  // Republic Day (Mon)
-    '2026-03-03',  // Holi (Tue)
-    '2026-03-26',  // Shri Ram Navami (Thu)
-    '2026-03-31',  // Shri Mahavir Jayanti (Tue)
-    '2026-04-03',  // Good Friday (Fri)
-    '2026-04-14',  // Dr. Baba Saheb Ambedkar Jayanti (Tue)
-    '2026-05-01',  // Maharashtra Day (Fri)
-    '2026-05-28',  // Bakri Id (Thu)
-    '2026-06-26',  // Muharram (Fri)
-    '2026-09-14',  // Ganesh Chaturthi (Mon)
-    '2026-10-02',  // Mahatma Gandhi Jayanti (Fri)
-    '2026-10-20',  // Dussehra (Tue)
-    '2026-11-10',  // Diwali-Balipratipada (Tue)
-    '2026-11-24',  // Prakash Gurpurb Sri Guru Nanak Dev (Tue)
-    '2026-12-25',  // Christmas (Fri)
-]);
-
-// 2027 PROJECTED holidays — NSE typically publishes the official circular in
-// Nov/Dec 2026. Fixed national holidays are solid; religious dates (moon/lunar-
-// calendar dependent) are estimates and MUST be re-verified once NSE publishes.
-const NSE_HOLIDAYS_2027 = new Set([
-    '2027-01-26',  // Republic Day (Tue)
-    '2027-02-17',  // Maha Shivratri (Wed) — projected
-    '2027-03-05',  // Holi (Fri) — projected
-    '2027-03-19',  // Id-ul-Fitr / Eid (Fri) — projected, moon-sighting dependent
-    '2027-03-26',  // Good Friday (Fri)
-    '2027-03-29',  // Mahavir Jayanti (Mon) — projected
-    '2027-04-14',  // Dr. Baba Saheb Ambedkar Jayanti (Wed)
-    '2027-05-17',  // Bakri Id / Eid ul-Adha (Mon) — projected
-    '2027-09-02',  // Ganesh Chaturthi (Thu) — projected
-    '2027-10-02',  // Mahatma Gandhi Jayanti (Sat — already weekend)
-    '2027-10-08',  // Dussehra (Fri) — projected
-    '2027-10-29',  // Diwali Laxmi Pujan (Fri) — projected
-    '2027-12-24',  // Christmas observed (Fri) — TBC
-]);
-
-function isNSEHoliday(date) {
-    const ist = date || new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    const yyyy = ist.getFullYear();
-    const mm   = String(ist.getMonth() + 1).padStart(2, '0');
-    const dd   = String(ist.getDate()).padStart(2, '0');
-    const key  = `${yyyy}-${mm}-${dd}`;
-    if (yyyy === 2026) return NSE_HOLIDAYS_2026.has(key);
-    if (yyyy === 2027) {
-        if (mm === '01' && dd === '01') {
-            console.warn('[isNSEHoliday] Using PROJECTED 2027 holidays — verify against official NSE circular once released (usually Nov/Dec 2026)!');
-        }
-        return NSE_HOLIDAYS_2027.has(key);
-    }
-    console.warn(`[isNSEHoliday] No holiday data for ${yyyy} — update NSE_HOLIDAYS_${yyyy} before year start.`);
-    return false;
-}
-
-// Returns true if `date` (default: now, IST) is the real Nifty weekly expiry day.
-// Nifty weekly options expire every Tuesday — EXCEPT when Tuesday is an NSE
-// trading holiday, in which case NSE prepones expiry to the nearest earlier
-// trading day (confirmed rule: "if expiry day is a holiday, expiry shifts to the
-// previous trading day"). E.g. Dr. Ambedkar Jayanti falls Tue 14-Apr-2026, so
-// that week's Nifty expiry actually lands on Mon 13-Apr-2026, not Tuesday.
-// 2026 has SIX such Tuesday holidays: Mar 3, Mar 31, Apr 14, Oct 20, Nov 10, Nov 24.
-function isExpiryDay(date) {
-    const ist = date || new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    const day = ist.getDay();                  // 0=Sun ... 6=Sat
-    if (day === 0 || day === 6) return false;   // weekends are never expiry day
-
-    // This calendar week's scheduled Tuesday — valid for any Mon–Fri `ist`,
-    // setDate() rolls over month/year boundaries correctly.
-    const tuesday = new Date(ist);
-    tuesday.setDate(ist.getDate() + (2 - day));
-
-    if (!isNSEHoliday(tuesday)) {
-        return day === 2;   // normal week — expiry lands exactly on Tuesday
-    }
-
-    // Tuesday is a holiday — walk backwards to the nearest earlier trading day.
-    const shifted = new Date(tuesday);
-    do {
-        shifted.setDate(shifted.getDate() - 1);
-    } while (shifted.getDay() === 0 || shifted.getDay() === 6 || isNSEHoliday(shifted));
-
-    return ist.toDateString() === shifted.toDateString();
+function isExpiryDay() {
+    const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    return ist.getDay() === 2;   // Tuesday
 }
 
 function calcATMStrike(spotPrice) {
@@ -1170,11 +1086,18 @@ function parsePCR(data, spotPrice) {
 
 // ── Market hours guard ────────────────────────────────────────────────────────
 // Returns true if current IST time is within 9:10–15:35 (5-min buffer either side)
+// NSE 2026 holidays (keep in sync with server.js)
+const NSE_HOLIDAYS = new Set([
+    '2026-01-26','2026-03-02','2026-03-20','2026-04-02','2026-04-03',
+    '2026-04-14','2026-05-01','2026-08-15','2026-08-27','2026-10-02',
+    '2026-10-20','2026-10-21','2026-11-04','2026-12-25',
+]);
 function isMarketHours() {
     const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const day = ist.getDay(); // 0=Sun, 6=Sat
     if (day === 0 || day === 6) return false;  // weekend
-    if (isNSEHoliday(ist)) return false;       // NSE holiday
+    const yyyy = ist.getFullYear(), mm = String(ist.getMonth()+1).padStart(2,'0'), dd = String(ist.getDate()).padStart(2,'0');
+    if (NSE_HOLIDAYS.has(`${yyyy}-${mm}-${dd}`)) return false;  // NSE holiday
     const istMin = ist.getHours() * 60 + ist.getMinutes();
     return istMin >= 550 && istMin <= 935;   // 9:10 to 15:35
 }
@@ -1412,7 +1335,12 @@ async function fetchPCRFromAngel(spotPrice) {
         const atmPeOI = atmRange.reduce((s, r) => s + (r.PE?.openInterest || 0), 0);
         const atmPcr = atmCeOI > 0 ? parseFloat((atmPeOI / atmCeOI).toFixed(3)) : null;
 
-        console.log(`[PCR-Angel] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike}(${ceWall}) | PE Wall:${peWallStrike}(${peWall}) | Expiry:${nearestExpiry}`);
+        // FIX: extract ATM CE/PE LTP for optionFlow buyer/seller card
+        const atmRow = strikeRows[atmStrike];
+        const atmCEpremium = (atmRow?.CE?.lastPrice > 0) ? atmRow.CE.lastPrice : null;
+        const atmPEpremium = (atmRow?.PE?.lastPrice > 0) ? atmRow.PE.lastPrice : null;
+
+        console.log(`[PCR-Angel] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike}(${ceWall}) | PE Wall:${peWallStrike}(${peWall}) | ATM CE:${atmCEpremium} PE:${atmPEpremium} | Expiry:${nearestExpiry}`);
 
         // Return in the format expected by parsePCR consumers
         return {
@@ -1424,6 +1352,8 @@ async function fetchPCRFromAngel(spotPrice) {
             maxPain      : calcMaxPain(recordsArr),
             records      : recordsArr,
             source       : 'angel',
+            atmCEpremium,   // FIX: buyer/seller activity card
+            atmPEpremium,
         };
     } catch (e) {
         console.warn('[PCR-Angel] Error:', e.message);
@@ -1502,6 +1432,7 @@ async function fetchPCRFromFyers(spotPrice, opts = {}) {
         let ceWall = 0, ceWallStrike = 0, peWall = 0, peWallStrike = 0;
         const atmStrike = Math.round(spotPrice / strikeStep) * strikeStep;
         let atmCeOI = 0, atmPeOI = 0;
+        let atmCEpremium = null, atmPEpremium = null;  // FIX: ATM option LTP for buyer/seller card
         const records = [];
 
         for (const [strikeStr, sides] of Object.entries(strikeMap)) {
@@ -1517,7 +1448,11 @@ async function fetchPCRFromFyers(spotPrice, opts = {}) {
             totalPeOI += peOI;
             if (ceOI > ceWall) { ceWall = ceOI; ceWallStrike = strike; }
             if (peOI > peWall) { peWall = peOI; peWallStrike = strike; }
-            if (strike === atmStrike) { atmCeOI = ceOI; atmPeOI = peOI; }
+            if (strike === atmStrike) {
+                atmCeOI = ceOI; atmPeOI = peOI;
+                if (ceLtp > 0) atmCEpremium = ceLtp;
+                if (peLtp > 0) atmPEpremium = peLtp;
+            }
 
             records.push({
                 strikePrice : strike,
@@ -1548,7 +1483,7 @@ async function fetchPCRFromFyers(spotPrice, opts = {}) {
         }
 
         console.log(`[PCR-Fyers] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike} | PE Wall:${peWallStrike} | MaxPain:${maxPain} | Strikes:${records.length}`);
-        return { pcr, atmPcr, atm: atmStrike, ceWall: ceWallStrike, peWall: peWallStrike, maxPain, records, source: 'fyers' };
+        return { pcr, atmPcr, atm: atmStrike, ceWall: ceWallStrike, peWall: peWallStrike, maxPain, records, source: 'fyers', atmCEpremium, atmPEpremium };
 
     } catch (e) {
         const status = e.response?.status;
@@ -1643,6 +1578,7 @@ async function fetchPCRFromDhan(spotPrice, opts = {}) {
         const atmStrike = Math.round(spotPrice / strikeStep) * strikeStep;
         let totalCeOI = 0, totalPeOI = 0;
         let ceWall = 0, ceWallStrike = 0, peWall = 0, peWallStrike = 0;
+        let atmCEpremium = null, atmPEpremium = null;  // FIX: ATM option LTP
         const records = [];
 
         for (const [strikeStr, data] of Object.entries(oc)) {
@@ -1659,6 +1595,10 @@ async function fetchPCRFromDhan(spotPrice, opts = {}) {
             totalPeOI += peOI;
             if (ceOI > ceWall) { ceWall = ceOI; ceWallStrike = strike; }
             if (peOI > peWall) { peWall = peOI; peWallStrike = strike; }
+            if (Math.abs(strike - atmStrike) < 1) {
+                if (ceLtp > 0) atmCEpremium = ceLtp;  // FIX: capture ATM LTP
+                if (peLtp > 0) atmPEpremium = peLtp;
+            }
 
             records.push({
                 strikePrice: strike,
@@ -1682,11 +1622,13 @@ async function fetchPCRFromDhan(spotPrice, opts = {}) {
 
         return {
             pcr, atmPcr, atm: atmStrike,
-            ceWall  : { strike: ceWallStrike, oi: ceWall },
-            peWall  : { strike: peWallStrike, oi: peWall },
-            maxPain : calcMaxPain(records),
+            ceWall       : { strike: ceWallStrike, oi: ceWall },
+            peWall       : { strike: peWallStrike, oi: peWall },
+            maxPain      : calcMaxPain(records),
             records,
-            source  : 'dhan',
+            source       : 'dhan',
+            atmCEpremium,   // FIX: buyer/seller activity card
+            atmPEpremium,
         };
     } catch (e) {
         console.warn(`[${logTag}] Error: ${e.message}`);
@@ -1737,18 +1679,20 @@ async function _fetchPCR(spotPrice) {
             const fyersResult = await fetchPCRFromFyers(spotPrice);
             if (fyersResult) {
                 Object.assign(_pcr, {
-                    pcr       : fyersResult.pcr,
-                    atmPcr    : fyersResult.atmPcr,
-                    atm       : fyersResult.atm,
-                    ceWall    : fyersResult.ceWall,
-                    peWall    : fyersResult.peWall,
-                    maxPain   : fyersResult.maxPain,
-                    expiryDay : isExpiryDay(),
-                    fetchedAt : new Date(),
-                    lastError : null,
-                    fetchCount: _pcr.fetchCount + 1,
-                    source    : 'fyers',
-                    fromIndex : 'NIFTY',
+                    pcr          : fyersResult.pcr,
+                    atmPcr       : fyersResult.atmPcr,
+                    atm          : fyersResult.atm,
+                    ceWall       : fyersResult.ceWall,
+                    peWall       : fyersResult.peWall,
+                    maxPain      : fyersResult.maxPain,
+                    atmCEpremium : fyersResult.atmCEpremium || null,  // FIX
+                    atmPEpremium : fyersResult.atmPEpremium || null,  // FIX
+                    expiryDay    : isExpiryDay(),
+                    fetchedAt    : new Date(),
+                    lastError    : null,
+                    fetchCount   : _pcr.fetchCount + 1,
+                    source       : 'fyers',
+                    fromIndex    : 'NIFTY',
                 });
                 try {
                     const oib = calcOIBuildup(fyersResult.records || [], fyersResult.pcr);
@@ -1789,18 +1733,20 @@ async function _fetchPCR(spotPrice) {
             const dhanResult = await fetchPCRFromDhan(spotPrice);
             if (dhanResult) {
                 Object.assign(_pcr, {
-                    pcr       : dhanResult.pcr,
-                    atmPcr    : dhanResult.atmPcr,
-                    atm       : dhanResult.atm,
-                    ceWall    : dhanResult.ceWall,
-                    peWall    : dhanResult.peWall,
-                    maxPain   : dhanResult.maxPain,
-                    expiryDay : isExpiryDay(),
-                    fetchedAt : new Date(),
-                    lastError : null,
-                    fetchCount: _pcr.fetchCount + 1,
-                    source    : 'dhan',
-                    fromIndex : 'NIFTY',
+                    pcr          : dhanResult.pcr,
+                    atmPcr       : dhanResult.atmPcr,
+                    atm          : dhanResult.atm,
+                    ceWall       : dhanResult.ceWall,
+                    peWall       : dhanResult.peWall,
+                    maxPain      : dhanResult.maxPain,
+                    atmCEpremium : dhanResult.atmCEpremium || null,  // FIX
+                    atmPEpremium : dhanResult.atmPEpremium || null,  // FIX
+                    expiryDay    : isExpiryDay(),
+                    fetchedAt    : new Date(),
+                    lastError    : null,
+                    fetchCount   : _pcr.fetchCount + 1,
+                    source       : 'dhan',
+                    fromIndex    : 'NIFTY',
                 });
                 try {
                     const oib = calcOIBuildup(dhanResult.records || [], dhanResult.pcr);
@@ -1842,18 +1788,20 @@ async function _fetchPCR(spotPrice) {
             if (angelResult) {
                 // Commit directly — Angel result is already parsed
                 Object.assign(_pcr, {
-                    pcr       : angelResult.pcr,
-                    atmPcr    : angelResult.atmPcr,
-                    atm       : angelResult.atm,
-                    ceWall    : angelResult.ceWall,
-                    peWall    : angelResult.peWall,
-                    maxPain   : angelResult.maxPain,
-                    expiryDay : isExpiryDay(),
-                    fetchedAt : new Date(),
-                    lastError : null,
-                    fetchCount: _pcr.fetchCount + 1,
-                    source    : 'angel',
-                    fromIndex : 'NIFTY',
+                    pcr          : angelResult.pcr,
+                    atmPcr       : angelResult.atmPcr,
+                    atm          : angelResult.atm,
+                    ceWall       : angelResult.ceWall,
+                    peWall       : angelResult.peWall,
+                    maxPain      : angelResult.maxPain,
+                    atmCEpremium : angelResult.atmCEpremium || null,  // FIX
+                    atmPEpremium : angelResult.atmPEpremium || null,  // FIX
+                    expiryDay    : isExpiryDay(),
+                    fetchedAt    : new Date(),
+                    lastError    : null,
+                    fetchCount   : _pcr.fetchCount + 1,
+                    source       : 'angel',
+                    fromIndex    : 'NIFTY',
                 });
                 // Run OI buildup from Angel records too
                 try {
@@ -2408,5 +2356,4 @@ module.exports = {
     // Utilities
     isExpiryDay,
     isMarketHours,
-    isNSEHoliday,
 };
