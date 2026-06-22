@@ -107,6 +107,8 @@ let marketState = {
     },
     srLevels: null,
     maxPain: { strike: null, expiryDay: false, totalPain: null, updatedAt: null },
+    candles5mRecent: [],
+    sweepReversal: { detected: false, direction: null, strength: 0, reason: '' },
     pcrHistory: [],
     // PCR Slope — rate of change of PCR across the session (morning → close)
     pcrSlope: { slopePerHour: null, recentSlopePerHour: null, trend: 'FLAT', label: 'PCR Slope — awaiting data', sessionHigh: null, sessionLow: null, sessionOpen: null },
@@ -692,17 +694,163 @@ function detectCandlePattern() {
     return { pattern: 'NONE', direction: 'NEUTRAL', strength: 0, reason: '' };
 }
 
+// ── Liquidity Sweep Reversal detector ─────────────────────────────────────────
+// Catches the "stop-hunt then V-snap" pattern: price sweeps below (or above) a
+// recent rolling range, then the very next candle reclaims it strongly on volume.
+// This is the pattern behind big late-session reversals (institutions/algos hunt
+// resting stops just past a known level, then short-covering/aggressive buying
+// snaps price back through the whole range in 1 candle).
+//
+// `candles` = same 5m array from MTF. Last bar can be the still-FORMING current
+// 5m candle (resample() includes it). That's intentional — fires 1-4 min into
+// the reversal rather than waiting for full-close. Trade-off: partial candle can
+// still reverse, so always use a tight initial SL on any entry off this.
+//
+// Strength tier:
+//   3 = volume spike + full reclaim (close > sweep bar open) → highest conviction
+//   2 = volume spike OR full reclaim (one of the two present)
+//   1 = level reclaimed, no vol confirm, still forming → lowest conviction / heads-up only
+// Gate in combineSignals only bypasses Theta Zone for strength >= 2.
+function detectLiquiditySweepReversal(candles) {
+    const NONE = { detected: false, direction: null, strength: 0, reason: '' };
+    if (!Array.isArray(candles) || candles.length < 7) return NONE;
+
+    const sweep    = candles[candles.length - 2];   // candle that broke the range
+    const reversal = candles[candles.length - 1];   // candle reclaiming (may be forming)
+    const lookback = candles.slice(candles.length - 7, candles.length - 2); // 5 bars prior
+
+    // ── Bug guard: malformed candle fields ───────────────────────────────────
+    // resample() (multiTimeframe.js) sets `open: c.close` (prev bar's close),
+    // not the actual opening price. For fullReclaim and strongBody to be
+    // meaningful, open must be a valid non-zero price, and close must differ
+    // from open (a doji has body 0 — never a strong reversal signal anyway).
+    // Guard against 0/undefined/null to avoid spurious strength boosts.
+    if (!sweep.low || !sweep.high || !sweep.open || !sweep.close) return NONE;
+    if (!reversal.close || !reversal.open || reversal.open === 0) return NONE;
+    if (!lookback.every(c => c.low > 0 && c.high > 0)) return NONE;
+
+    const refLow  = Math.min(...lookback.map(c => c.low));
+    const refHigh = Math.max(...lookback.map(c => c.high));
+
+    const avgVol = lookback.reduce((s, c) => s + (c.volume || 0), 0) / lookback.length;
+    // Skip volume gate when data is clearly from Yahoo tick-polling (avgVol ≤ 2 means
+    // the "volume" is just a tick counter, not real exchange volume).
+    const volOK  = avgVol > 2 ? (reversal.volume || 0) >= avgVol * 1.5 : true;
+
+    const revBody    = Math.abs(reversal.close - reversal.open);
+    const revRange   = reversal.high - reversal.low;
+    // strongBody: body covers ≥50% of the candle's total range.
+    // Guards against doji/spinning-top candles firing as "strong reversal".
+    // revRange must be > 0 (it always will be on any real move, but guard anyway).
+    const strongBody = revRange > 10 ? (revBody / revRange) >= 0.5 : false;  // also require > 10pt range (not a tiny candle)
+
+    // ── Bullish: support swept, level reclaimed, decisive bull candle ─────────
+    if (sweep.low < refLow && reversal.close > refLow && reversal.close > reversal.open && strongBody) {
+        const fullReclaim = reversal.close > sweep.open;  // closed back above the whole sweep bar
+        const strength    = 1 + (volOK ? 1 : 0) + (fullReclaim ? 1 : 0); // 1..3
+        const pts         = Math.round(reversal.close - refLow);
+        return {
+            detected: true, direction: 'BULLISH', strength,
+            reason: `🎯 Liquidity Sweep — swept below ${refLow.toFixed(0)}, reclaimed ${reversal.close.toFixed(0)} (+${pts}pt)`
+                  + (volOK ? ' + vol spike' : '') + (fullReclaim ? ' + full reclaim' : ' (partial — still forming)'),
+            sweepLevel: refLow, volConfirmed: volOK, fullReclaim
+        };
+    }
+
+    // ── Bearish: resistance swept, failed back below it, decisive bear candle ─
+    if (sweep.high > refHigh && reversal.close < refHigh && reversal.close < reversal.open && strongBody) {
+        const fullReclaim = reversal.close < sweep.open;
+        const strength    = 1 + (volOK ? 1 : 0) + (fullReclaim ? 1 : 0);
+        const pts         = Math.round(refHigh - reversal.close);
+        return {
+            detected: true, direction: 'BEARISH', strength,
+            reason: `🎯 Liquidity Sweep — spiked above ${refHigh.toFixed(0)}, failed back ${reversal.close.toFixed(0)} (-${pts}pt)`
+                  + (volOK ? ' + vol spike' : '') + (fullReclaim ? ' + full reclaim' : ' (partial — still forming)'),
+            sweepLevel: refHigh, volConfirmed: volOK, fullReclaim
+        };
+    }
+
+    return NONE;
+}
+
 // ── Signal Generator ──────────────────────────────────
 function combineSignals(indicators) {
     // ── Gate 1: safe time window (IST) ────────────────
     const ew = isSafeEntryWindow();
     marketState.entryWindow = ew;
     if (!ew.safe) {
-        marketState.qualityGate = { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, srClear:true, passed:false };
+        // Theta Zone (14:30-15:30) normally blocks ALL new entries — correct
+        // default, since fresh option buys late in the day bleed to theta fast.
+        // But a CONFIRMED liquidity-sweep reversal (stop-hunt + strong snapback
+        // on volume) is exactly the kind of fast, defined-risk, high-conviction
+        // move that this gate would otherwise suppress entirely — and it's
+        // usually driven by short-covering/institutional flow, not weak retail
+        // momentum that theta eats alive. Carve a narrow, explicitly-labeled
+        // exception for ONLY this one pattern; every other late-session signal
+        // (normal PCR/RSI/EMA votes) stays blocked exactly as before.
+        // Build fresh 5m candles from live 1m session candles at call-time,
+        // NOT from marketState.candles5mRecent (that's up to 2 min stale from
+        // the refreshMTF cycle). Using fresh data means the sweep fires within
+        // the same tick the reversal bar becomes detectable — not 0-120 sec late.
+        // Take last 35 1m bars (=7 5m bars, enough for lookback + sweep + reversal).
+        const live1m   = getSessionCandles().slice(-35);
+        const live5m   = (() => {
+            const out = []; let bucket = null; let count = 0;
+            for (const c of live1m) {
+                if (!bucket) {
+                    bucket = { open: c.open || c.close, high: c.high, low: c.low, close: c.close, volume: c.volume || 1 };
+                } else {
+                    bucket.high   = Math.max(bucket.high, c.high);
+                    bucket.low    = Math.min(bucket.low,  c.low);
+                    bucket.close  = c.close;
+                    bucket.volume = (bucket.volume || 1) + (c.volume || 1);
+                }
+                if (++count >= 5) { out.push({ ...bucket }); bucket = null; count = 0; }
+            }
+            if (bucket) out.push({ ...bucket }); // include forming bar
+            return out;
+        })();
+        const sweep = (ew.status === 'theta')
+            ? detectLiquiditySweepReversal(live5m)
+            : { detected: false };
+        marketState.sweepReversal = sweep;
+
+        if (!sweep.detected || sweep.strength < 2) {
+            marketState.qualityGate = { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, srClear:true, passed:false };
+            return {
+                signal     : 'WAIT',
+                confidence : 0,
+                reasons    : [`⏰ ${ew.reason}`, ...(indicators.reasons||[]).slice(0,2)]
+            };
+        }
+
+        // Confidence mapped to sweep quality tier:
+        //   strength 3 (vol spike + full reclaim) → 70% — clearest institutional confirmation
+        //   strength 2 (one of vol/full reclaim)  → 55% — decent signal, smaller size
+        // Both stay < 75 so they never rank as STRONG — correct for theta zone entries.
+        let sweepConf = sweep.strength === 3 ? 70 : 55;
+        const sweepReasons = [sweep.reason, `⏰ ${ew.label} — sweep-reversal exception (small size, tight SL, fast exit)`];
+
+        // Bonus: if the reversal direction also points toward Max Pain, this is
+        // often the magnet pulling price back — bump confidence and say so.
+        if (marketState.maxPain?.strike && marketState.nifty > 0) {
+            const towardMP = sweep.direction === 'BULLISH'
+                ? marketState.maxPain.strike > marketState.nifty
+                : marketState.maxPain.strike < marketState.nifty;
+            if (towardMP) {
+                sweepConf = Math.min(sweepConf + 10, 75);
+                sweepReasons.push(`🧲 Aligned with Max Pain pull toward ${marketState.maxPain.strike}`);
+            }
+        }
+        if (isExpiryDay()) {
+            sweepReasons.push('⚡ Expiry day — extra gamma risk, keep size smaller + booking faster than usual');
+        }
+
+        marketState.qualityGate = { mtfAligned:false, rsiClean:true, safeWindow:true, vixSafe:true, adxTrend:true, srClear:true, passed:true };
         return {
-            signal     : 'WAIT',
-            confidence : 0,
-            reasons    : [`⏰ ${ew.reason}`, ...(indicators.reasons||[]).slice(0,2)]
+            signal     : sweep.direction === 'BULLISH' ? 'BUY CALL' : 'BUY PUT',
+            confidence : sweepConf,
+            reasons    : sweepReasons
         };
     }
 
@@ -2138,6 +2286,12 @@ async function refreshMTF() {
         else if (cpBull === 1 && cpBear === 1) cpConsensusLabel = '⚡ Mixed';
 
         marketState.cpMTF = { cp5m, cp15m, cp1h, cpBull, cpBear, cpConsensus, cpConsensusLabel };
+
+        // Recent 5m candles for the liquidity-sweep-reversal detector (combineSignals
+        // Gate 1 theta-zone exception) — same array used for MTF indicators above,
+        // so it's consistent with everything else on the 5m timeframe. Last bar can
+        // be the still-forming current candle (see resample() in multiTimeframe.js).
+        marketState.candles5mRecent = (d.candles5m || []).slice(-10);
     } catch(e) { console.error('MTF:', e.message); }
 }
 async function refreshGlobal() { try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); } }
