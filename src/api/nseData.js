@@ -1092,6 +1092,13 @@ const NSE_HOLIDAYS = new Set([
     '2026-04-14','2026-05-01','2026-08-15','2026-08-27','2026-10-02',
     '2026-10-20','2026-10-21','2026-11-04','2026-12-25',
 ]);
+function isNSEHoliday(dateObj) {
+    // dateObj: a Date object in IST (or any Date — we extract IST date parts)
+    const ist = dateObj || new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const yyyy = ist.getFullYear(), mm = String(ist.getMonth()+1).padStart(2,'0'), dd = String(ist.getDate()).padStart(2,'0');
+    return NSE_HOLIDAYS.has(yyyy+'-'+mm+'-'+dd);
+}
+
 function isMarketHours() {
     const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const day = ist.getDay(); // 0=Sun, 6=Sat
@@ -2356,4 +2363,5 @@ module.exports = {
     // Utilities
     isExpiryDay,
     isMarketHours,
+    isNSEHoliday,
 };
