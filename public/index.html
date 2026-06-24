@@ -3514,6 +3514,7 @@ html.vn-day .sug-card [style*="color:var(--dim)"] { color: #607080 !important; }
   <button class="btab" onclick="switchTab('tools',this)"><span class="bi">🔧</span>TOOLS</button>
   <button class="btab" onclick="switchTab('analytics',this)"><span class="bi">📊</span>ANALYTICS</button>
   <button class="btab" onclick="switchTab('physics',this)"><span class="bi">⚛️</span>PHYSICS</button>
+  <button class="btab" onclick="switchTab('guard',this)"><span class="bi">🛡️</span>GUARD</button>
 </div>
 
 <script>
@@ -3534,6 +3535,7 @@ function _initDesktopLayout() {
     { id: 'tools',     icon: '🔧', label: 'TOOLS' },
     { id: 'analytics', icon: '📊', label: 'ANALYTICS' },
     { id: 'physics',   icon: '⚛️', label: 'PHYSICS' },
+    { id: 'guard',     icon: '🛡️', label: 'GUARD' },
   ];
 
   // Build sidebar
@@ -7920,5 +7922,272 @@ function updatePhysicsTab(s) {
     <div id="pot-updated" style="font-size:8px;color:var(--dim);text-align:center;margin-top:8px;padding-bottom:100px;">Last updated: —</div>
   </div>
 </div>
+
+<!-- PANEL: PSYCHOLOGY GUARD ─────────────────────────────────── -->
+<div class="panel" id="panel-guard">
+  <div style="padding:10px 12px 80px;">
+
+    <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div style="font-family:'Orbitron',monospace;font-size:13px;letter-spacing:1px;color:var(--accent);">🛡️ TRADING PSYCHOLOGY GUARD</div>
+      <span id="guard-badge" style="font-size:10px;padding:3px 10px;border-radius:20px;background:rgba(0,255,136,0.15);color:var(--green);border:1px solid var(--green);">ACTIVE</span>
+    </div>
+
+    <!-- Lock overlay -->
+    <div id="guard-lock" style="display:none;background:rgba(255,34,68,0.12);border:1px solid var(--red);border-radius:10px;padding:14px;text-align:center;margin-bottom:12px;">
+      <div style="font-size:16px;font-weight:600;color:var(--red);margin-bottom:4px;">🔒 TRADING LOCKED</div>
+      <div style="font-size:12px;color:var(--red);opacity:0.8;">Daily loss limit hit. Market band kar. Kal aana.</div>
+    </div>
+
+    <!-- Cooldown timer -->
+    <div id="guard-cooldown" style="display:none;background:rgba(255,187,0,0.12);border:1px solid var(--amber);border-radius:10px;padding:12px;text-align:center;margin-bottom:12px;">
+      <div style="font-size:11px;color:var(--amber);margin-bottom:4px;">⏳ REVENGE TRADE COOLDOWN — RUKO</div>
+      <div id="guard-timer-num" style="font-size:30px;font-weight:600;color:var(--amber);">30:00</div>
+      <div style="font-size:11px;color:var(--amber);margin-top:2px;">2 consecutive losses. Breathe. Vardaan ke baare mein socho.</div>
+    </div>
+
+    <!-- P&L row -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+      <div style="background:var(--bg2);border-radius:8px;padding:10px 12px;">
+        <div style="font-size:10px;color:var(--dim);margin-bottom:4px;">Today P&L</div>
+        <div id="guard-pnl" style="font-size:22px;font-weight:600;color:var(--text);">₹0</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:8px;padding:10px 12px;">
+        <div style="font-size:10px;color:var(--dim);margin-bottom:4px;">Trades today</div>
+        <div id="guard-trade-count" style="font-size:22px;font-weight:600;color:var(--text);">0</div>
+      </div>
+    </div>
+
+    <!-- Rules card -->
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:10px;color:var(--dim);margin-bottom:10px;letter-spacing:1px;">⚙️ PROTECTION RULES</div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);">
+        <span style="font-size:12px;color:var(--dim);">Daily loss limit</span>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span id="guard-loss-lbl" style="font-size:13px;font-weight:600;color:var(--red);">₹2,000</span>
+          <input type="range" min="500" max="10000" step="500" value="2000" id="guard-loss-slider" style="width:80px;" oninput="guardUpdateLoss(this.value)">
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);">
+        <span style="font-size:12px;color:var(--dim);">Profit lock target</span>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span id="guard-profit-lbl" style="font-size:13px;font-weight:600;color:var(--green);">₹1,500</span>
+          <input type="range" min="500" max="10000" step="500" value="1500" id="guard-profit-slider" style="width:80px;" oninput="guardUpdateProfit(this.value)">
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);">
+        <span style="font-size:12px;color:var(--dim);">Max trades/day</span>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span id="guard-maxt-lbl" style="font-size:13px;font-weight:600;color:var(--amber);">3</span>
+          <input type="range" min="1" max="10" step="1" value="3" id="guard-maxt-slider" style="width:80px;" oninput="guardUpdateMaxT(this.value)">
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;">
+        <span style="font-size:12px;color:var(--dim);">Revenge cooldown (30 min)</span>
+        <div id="guard-cd-toggle" onclick="guardToggleCooldown()" style="width:38px;height:22px;border-radius:11px;background:var(--green);position:relative;cursor:pointer;transition:background 0.2s;">
+          <div id="guard-cd-knob" style="width:16px;height:16px;border-radius:50%;background:#fff;position:absolute;top:3px;left:19px;transition:left 0.2s;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pre-trade checklist -->
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:10px;color:var(--dim);margin-bottom:10px;letter-spacing:1px;">✅ PRE-TRADE CHECKLIST — VARDAAN RULES</div>
+
+      <div id="guard-checklist">
+        <div class="gchk" data-i="0" onclick="guardToggleCheck(0)" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer;">
+          <div id="gchk0" style="width:20px;height:20px;border-radius:50%;border:1.5px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;"></div>
+          <span style="font-size:12px;color:var(--text);">Vardaan signal: BUY CALL / BUY PUT (not WAIT)</span>
+        </div>
+        <div class="gchk" data-i="1" onclick="guardToggleCheck(1)" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer;">
+          <div id="gchk1" style="width:20px;height:20px;border-radius:50%;border:1.5px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;"></div>
+          <span style="font-size:12px;color:var(--text);">ADX &gt; 20 — trending, not choppy</span>
+        </div>
+        <div class="gchk" data-i="2" onclick="guardToggleCheck(2)" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer;">
+          <div id="gchk2" style="width:20px;height:20px;border-radius:50%;border:1.5px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;"></div>
+          <span style="font-size:12px;color:var(--text);">Physics tab — 2/3 laws verified minimum</span>
+        </div>
+        <div class="gchk" data-i="3" onclick="guardToggleCheck(3)" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer;">
+          <div id="gchk3" style="width:20px;height:20px;border-radius:50%;border:1.5px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;"></div>
+          <span style="font-size:12px;color:var(--text);">PCR not in AVOID zone (0.75–1.15)</span>
+        </div>
+        <div class="gchk" data-i="4" onclick="guardToggleCheck(4)" style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;">
+          <div id="gchk4" style="width:20px;height:20px;border-radius:50%;border:1.5px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;"></div>
+          <span style="font-size:12px;color:var(--text);">Exit price defined BEFORE entering trade</span>
+        </div>
+      </div>
+
+      <div id="guard-chk-status" style="margin-top:10px;font-size:11px;color:var(--dim);text-align:center;">0/5 — Ye sab tick karo pehle</div>
+    </div>
+
+    <!-- Log trade -->
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:10px;color:var(--dim);margin-bottom:10px;letter-spacing:1px;">➕ TRADE LOG KARO</div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <select id="guard-type" style="flex:1;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px;font-size:12px;">
+          <option>BUY CALL</option>
+          <option>BUY PUT</option>
+        </select>
+        <input type="number" id="guard-pnl-input" placeholder="P&L (e.g. -890)" style="flex:1;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px;font-size:12px;">
+      </div>
+      <input type="text" id="guard-note-input" placeholder="Kyun liya trade? (optional)" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px;font-size:12px;margin-bottom:8px;">
+      <button onclick="guardLogTrade()" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--green);background:rgba(0,255,136,0.08);color:var(--green);font-size:13px;font-weight:600;cursor:pointer;">+ Log Trade</button>
+    </div>
+
+    <!-- Trade log -->
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:10px;color:var(--dim);margin-bottom:10px;letter-spacing:1px;">📋 AAJ KE TRADES</div>
+      <div id="guard-log" style="max-height:200px;overflow-y:auto;">
+        <div style="text-align:center;color:var(--dim);font-size:12px;padding:1rem 0;">Koi trade log nahi hua abhi</div>
+      </div>
+    </div>
+
+    <!-- Reset button -->
+    <button onclick="guardResetDay()" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--dim);font-size:12px;cursor:pointer;">🔄 Naya din — Reset karo</button>
+
+  </div>
+</div>
+
+<script>
+// ─── PSYCHOLOGY GUARD ──────────────────────────────────────────────────────────
+(function(){
+  const STORE_KEY = 'vn_guard_v1';
+  let G = {
+    pnl:0, trades:[], lossLimit:2000, profitLock:1500, maxTrades:3,
+    cooldownOn:true, cooldownActive:false, cooldownSecs:1800,
+    consecutive:0, locked:false, checks:[false,false,false,false,false]
+  };
+  let _cdInterval = null;
+
+  function save(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(G)); }catch(e){} }
+  function load(){
+    try{
+      const d = localStorage.getItem(STORE_KEY);
+      if(d){ const p = JSON.parse(d); Object.assign(G, p); }
+    }catch(e){}
+  }
+
+  function render(){
+    // P&L
+    const pnlEl = document.getElementById('guard-pnl');
+    if(pnlEl){ pnlEl.textContent = '₹' + G.pnl.toLocaleString('en-IN'); pnlEl.style.color = G.pnl >= 0 ? 'var(--green)' : 'var(--red)'; }
+    const tcEl = document.getElementById('guard-trade-count');
+    if(tcEl) tcEl.textContent = G.trades.length;
+
+    // sliders + labels
+    const ll = document.getElementById('guard-loss-slider'); if(ll) ll.value = G.lossLimit;
+    const lll = document.getElementById('guard-loss-lbl'); if(lll) lll.textContent = '₹' + G.lossLimit.toLocaleString('en-IN');
+    const pl = document.getElementById('guard-profit-slider'); if(pl) pl.value = G.profitLock;
+    const pll = document.getElementById('guard-profit-lbl'); if(pll) pll.textContent = '₹' + G.profitLock.toLocaleString('en-IN');
+    const mt = document.getElementById('guard-maxt-slider'); if(mt) mt.value = G.maxTrades;
+    const mtl = document.getElementById('guard-maxt-lbl'); if(mtl) mtl.textContent = G.maxTrades;
+
+    // cooldown toggle
+    const tog = document.getElementById('guard-cd-toggle');
+    const knob = document.getElementById('guard-cd-knob');
+    if(tog && knob){ tog.style.background = G.cooldownOn ? 'var(--green)' : 'var(--border)'; knob.style.left = G.cooldownOn ? '19px' : '3px'; }
+
+    // checklist
+    for(let i=0;i<5;i++){
+      const c = document.getElementById('gchk'+i);
+      if(c){ c.style.background = G.checks[i] ? 'var(--green)' : 'transparent'; c.style.borderColor = G.checks[i] ? 'var(--green)' : 'var(--border)'; c.innerHTML = G.checks[i] ? '<span style="color:#000;font-size:11px;font-weight:700;">✓</span>' : ''; }
+    }
+    const done = G.checks.filter(Boolean).length;
+    const cs = document.getElementById('guard-chk-status');
+    if(cs){ cs.textContent = done === 5 ? '✅ Sab check — trade le sakte ho' : done + '/5 — Ye sab tick karo pehle'; cs.style.color = done === 5 ? 'var(--green)' : 'var(--dim)'; }
+
+    // lock + cooldown
+    const lo = document.getElementById('guard-lock');
+    const co = document.getElementById('guard-cooldown');
+    const badge = document.getElementById('guard-badge');
+    if(lo) lo.style.display = G.locked ? 'block' : 'none';
+    if(co) co.style.display = G.cooldownActive ? 'block' : 'none';
+    if(badge){
+      if(G.locked){ badge.textContent='LOCKED'; badge.style.color='var(--red)'; badge.style.borderColor='var(--red)'; badge.style.background='rgba(255,34,68,0.12)'; }
+      else if(G.cooldownActive){ badge.textContent='COOLDOWN'; badge.style.color='var(--amber)'; badge.style.borderColor='var(--amber)'; badge.style.background='rgba(255,187,0,0.12)'; }
+      else { badge.textContent='ACTIVE'; badge.style.color='var(--green)'; badge.style.borderColor='var(--green)'; badge.style.background='rgba(0,255,136,0.12)'; }
+    }
+
+    // log
+    renderLog();
+    if(G.cooldownActive && !_cdInterval) startCdTimer();
+  }
+
+  function renderLog(){
+    const el = document.getElementById('guard-log');
+    if(!el) return;
+    if(!G.trades.length){ el.innerHTML = '<div style="text-align:center;color:var(--dim);font-size:12px;padding:1rem 0;">Koi trade log nahi hua abhi</div>'; return; }
+    el.innerHTML = [...G.trades].reverse().map(t =>
+      `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">
+        <span style="color:${t.pnl>=0?'var(--green)':'var(--red)'};font-weight:600;">${t.type}</span>
+        <span style="color:var(--dim);font-size:11px;flex:1;padding:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t.note||''}</span>
+        <span style="color:${t.pnl>=0?'var(--green)':'var(--red)'};font-weight:600;">₹${t.pnl>=0?'+':''}${t.pnl}</span>
+      </div>`
+    ).join('');
+  }
+
+  function startCdTimer(){
+    if(_cdInterval) clearInterval(_cdInterval);
+    _cdInterval = setInterval(()=>{
+      G.cooldownSecs--;
+      const m = Math.floor(G.cooldownSecs/60);
+      const s = G.cooldownSecs % 60;
+      const el = document.getElementById('guard-timer-num');
+      if(el) el.textContent = m + ':' + String(s).padStart(2,'0');
+      if(G.cooldownSecs <= 0){
+        clearInterval(_cdInterval); _cdInterval = null;
+        G.cooldownActive = false; G.cooldownSecs = 1800;
+        render(); save();
+      }
+    }, 1000);
+  }
+
+  window.guardUpdateLoss = function(v){ G.lossLimit = parseInt(v); const el=document.getElementById('guard-loss-lbl'); if(el) el.textContent='₹'+parseInt(v).toLocaleString('en-IN'); save(); };
+  window.guardUpdateProfit = function(v){ G.profitLock = parseInt(v); const el=document.getElementById('guard-profit-lbl'); if(el) el.textContent='₹'+parseInt(v).toLocaleString('en-IN'); save(); };
+  window.guardUpdateMaxT = function(v){ G.maxTrades = parseInt(v); const el=document.getElementById('guard-maxt-lbl'); if(el) el.textContent=v; save(); };
+  window.guardToggleCooldown = function(){ G.cooldownOn = !G.cooldownOn; render(); save(); };
+  window.guardToggleCheck = function(i){ if(G.locked) return; G.checks[i] = !G.checks[i]; render(); save(); };
+
+  window.guardLogTrade = function(){
+    if(G.locked){ alert('🔒 Trading locked hai bhai! Daily loss limit hit ho gayi.\nAaj market band karo.'); return; }
+    if(G.cooldownActive){ const m=Math.ceil(G.cooldownSecs/60); alert('⏳ Cooldown chal raha hai — '+m+' min aur ruko.\n\n2 consecutive losses ke baad ye forced break hai.\nRevenge trade mat lo!'); return; }
+    const allDone = G.checks.every(Boolean);
+    if(!allDone){ alert('❌ Pehle 5 checklist items tick karo!\n\nYe tumhari apni rules hain — isko follow karo.'); return; }
+    if(G.trades.length >= G.maxTrades){ alert('🚫 Aaj ke liye max '+G.maxTrades+' trades ho gaye!\n\nApni limit khud set ki thi — aaj bas.'); return; }
+    const pnlInput = document.getElementById('guard-pnl-input');
+    const noteInput = document.getElementById('guard-note-input');
+    const type = document.getElementById('guard-type').value;
+    const pnl = parseFloat(pnlInput.value);
+    if(isNaN(pnl)){ alert('P&L amount dalo (e.g. -890 ya +500)'); return; }
+    const note = noteInput ? noteInput.value.trim() : '';
+    G.trades.push({ type, pnl, note, time: new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}) });
+    G.pnl = Math.round(G.pnl + pnl);
+    if(pnl < 0){ G.consecutive++; if(G.consecutive >= 2 && G.cooldownOn && !G.cooldownActive){ G.cooldownActive=true; G.cooldownSecs=1800; } }
+    else { G.consecutive = 0; }
+    if(G.pnl <= -G.lossLimit){ G.locked = true; }
+    if(G.pnl >= G.profitLock){ setTimeout(()=>alert('🎉 Profit target hit!\n\n₹'+G.profitLock+' ban gaye!\n\nTumne kaha tha yahan rukna hai.\nVardaan ke saath celebrate karo — market band karo aaj!'), 100); }
+    G.checks = [false,false,false,false,false];
+    if(pnlInput) pnlInput.value = '';
+    if(noteInput) noteInput.value = '';
+    render(); save();
+  };
+
+  window.guardResetDay = function(){
+    if(!confirm('Naya din shuru karo? Aaj ka data reset ho jayega.')) return;
+    if(_cdInterval){ clearInterval(_cdInterval); _cdInterval=null; }
+    G = { pnl:0, trades:[], lossLimit:G.lossLimit, profitLock:G.profitLock, maxTrades:G.maxTrades, cooldownOn:G.cooldownOn, cooldownActive:false, cooldownSecs:1800, consecutive:0, locked:false, checks:[false,false,false,false,false] };
+    render(); save();
+  };
+
+  // Init
+  load();
+  render();
+})();
+</script>
+
 </body>
 </html>

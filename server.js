@@ -1193,10 +1193,21 @@ function combineSignals(indicators) {
         adxTrend   : !adxTooWeak,
 
         // 6. S/R proximity gate — only evaluated when a directional signal exists.
-        //    null  = not evaluated (rawSignal was already WAIT, no entry to protect).
+        //    null  = not evaluated (rawSignal was already WAIT, no entry to protect)
         //    true  = evaluated and clear.
         //    false = blocked (set inside the gate block below).
-        srClear    : rawSignal !== 'WAIT' ? true : null
+        srClear    : rawSignal !== 'WAIT' ? true : null,
+
+        // 7. Physics Law 1 — swing structure gate (set inside the PoT scoring block).
+        //    null  = UNKNOWN / early session (allow through).
+        //    true  = trend aligns or neutral.
+        //    false = confirmed counter-trend or SIDEWAYS = block.
+        physicsLaw1 : null,
+
+        // 8. Physics Law 3 — reaction zone gate (set inside the PoT scoring block).
+        //    true  = price at reaction zone (near VWAP or 38–62% fib) or neutral.
+        //    false = ON_ACTION (chasing a candle far from VWAP) = block.
+        physicsLaw3 : true,
     };
     // qualityGate.passed is computed AFTER the S/R block so srClear=false cannot produce stale passed=true
 
@@ -1341,9 +1352,14 @@ function combineSignals(indicators) {
     }
 
     // Recompute passed HERE — srClear may have been flipped to false inside the gate block above.
+    // Physics gates: physicsLaw1=null means UNKNOWN (early session) → allow through.
+    //                physicsLaw1=false means confirmed counter-trend/sideways → block.
+    //                physicsLaw3=false means ON_ACTION (chasing) → block.
     qualityGate.passed = qualityGate.mtfAligned && qualityGate.rsiClean
                       && qualityGate.safeWindow  && qualityGate.vixSafe
-                      && qualityGate.adxTrend    && (qualityGate.srClear !== false);
+                      && qualityGate.adxTrend    && (qualityGate.srClear !== false)
+                      && (qualityGate.physicsLaw1 !== false)
+                      && (qualityGate.physicsLaw3 !== false);
     marketState.qualityGate = qualityGate;
 
     // ── ADX weak-trend confidence cap ────────────────────────────────────────
@@ -1503,15 +1519,29 @@ function combineSignals(indicators) {
 
             // Law 1 — swing trend structure (HH/HL or LH/LL), independent
             // second vote alongside the existing MTF alignment check.
+            // GATE: SIDEWAYS or confirmed counter-trend = block signal.
+            // UNKNOWN = early session, not enough data = allow through.
             const swing = getSwingTrend(candlesForPhysics, 30);
             marketState.physicsOfTrading.swingTrend = swing;
             const swingAligned =
                 (signal === 'BUY CALL' && swing.trend === 'UPTREND') ||
                 (signal === 'BUY PUT'  && swing.trend === 'DOWNTREND');
+            const swingAgainst =
+                (signal === 'BUY CALL' && (swing.trend === 'DOWNTREND' || swing.trend === 'SIDEWAYS')) ||
+                (signal === 'BUY PUT'  && (swing.trend === 'UPTREND'   || swing.trend === 'SIDEWAYS'));
+            // null = unknown (pass through), false = blocked, true = confirmed ok
+            qualityGate.physicsLaw1 = swing.trend === 'UNKNOWN' ? null : !swingAgainst;
             if (swingAligned) {
-                qs += 5; scoreBreakdown.push(`Law1-Trend:5 (${swing.trend} confirmed — ${swing.reason})`);
-            } else if (swing.trend !== 'UNKNOWN') {
-                scoreBreakdown.push(`Law1-Trend:0 (${swing.trend} — ${swing.reason})`);
+                qs += 5; scoreBreakdown.push(`Law1-Trend:+5 (${swing.trend} confirmed — ${swing.reason})`);
+                reasons.push(`⚛️ Law1 ✅ Swing ${swing.trend} aligns with ${signal}`);
+            } else if (swingAgainst) {
+                qs -= 5; scoreBreakdown.push(`Law1-Trend:-5 (${swing.trend} AGAINST ${signal})`);
+                reasons.push(`⚛️ Law1 ❌ Swing ${swing.trend} AGAINST ${signal} — counter-trend blocked`);
+            }
+            // Law 3 hard gate: ON_ACTION = chasing a candle that already ran = block
+            qualityGate.physicsLaw3 = (reactionGate.zone !== 'ON_ACTION');
+            if (reactionGate.zone === 'ON_ACTION') {
+                reasons.push(`⚛️ Law3 ❌ Chasing the action — ${Math.abs(reactionGate.vwapDistPct ?? 0).toFixed(2)}% from VWAP, not a reaction entry`);
             }
         } catch (e) {
             console.warn('[Physics] reaction-zone gate failed:', e.message);
