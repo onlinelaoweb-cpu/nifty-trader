@@ -379,6 +379,8 @@ async function nseStockQuote(nseSym) {
 let _intradayCache   = [];   // persists successful fetches across calls
 let _intradayCacheAt = 0;
 let _intradayFetch   = null; // serialise concurrent callers
+let _nseFails        = 0;    // consecutive NSE failures — after 3, skip NSE for session
+let _nseBlockedUntil = 0;    // epoch ms — skip NSE until this time
 
 const INTRADAY_URLS = [
     '/api/chart-databyindex?index=NIFTY&indices=true',
@@ -402,10 +404,16 @@ async function nseNiftyIntraday() {
 
     _intradayFetch = (async () => {
         try {
-            for (const url of INTRADAY_URLS) {
-                try {
-                    // 8s timeout per URL — fail fast so Yahoo fallback kicks in sooner
-                    const data = await nseGet(url, 8000);
+            // ── Skip NSE entirely if it has been consistently blocked ──────────
+            // After 3 consecutive all-URL failures, Railway IP is clearly banned.
+            // Skip NSE for 30 min and go straight to Yahoo — saves 9s per cycle.
+            const nseBlocked = Date.now() < _nseBlockedUntil;
+            if (!nseBlocked) {
+                let nseAnySuccess = false;
+                for (const url of INTRADAY_URLS) {
+                    try {
+                        // 3s timeout — NSE from Railway either responds fast or not at all
+                        const data = await nseGet(url, 3000);
                     const raw  = data?.grapthData || data?.graphData || [];
                     if (!raw.length) continue;
 
@@ -429,11 +437,26 @@ async function nseNiftyIntraday() {
                         console.log(`[NSE] intraday bars: ${bars.length} via ${url}`);
                         _intradayCache   = bars;
                         _intradayCacheAt = Date.now();
+                        _nseFails = 0; // reset failure counter on success
+                        nseAnySuccess = true;
                         return _intradayCache;
                     }
                 } catch (e) {
                     console.warn(`[NSE] intraday candles failed (${url}): ${e.message}`);
                 }
+            }
+                // All NSE URLs failed this cycle
+                if (!nseAnySuccess) {
+                    _nseFails++;
+                    if (_nseFails >= 3) {
+                        // Block NSE for 30 min — Railway IP is banned, stop wasting 9s per cycle
+                        _nseBlockedUntil = Date.now() + 30 * 60 * 1000;
+                        console.warn(`[NSE] intraday: blocked after ${_nseFails} failures — skipping NSE for 30 min, using Yahoo only`);
+                        _nseFails = 0;
+                    }
+                }
+            } else {
+                console.log('[NSE] intraday: NSE IP-blocked — going straight to Yahoo fallback');
             }
 
             // ── ALL NSE URLs failed — try Yahoo Finance 1m as fallback ─────────

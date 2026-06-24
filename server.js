@@ -2701,7 +2701,12 @@ async function fetchCalendarEvents() {
 
     scheduleEventAlerts(events2);
   } catch (e) {
-    console.error('Calendar fetch error:', e.message);
+    // Finnhub 403 = no API key or key invalid — not a crash, just no calendar data
+    if (e?.response?.status === 403 || e?.response?.status === 401) {
+      console.log('[Calendar] Finnhub key missing/invalid — using hardcoded India events only');
+    } else {
+      console.warn('Calendar fetch error:', e.message);
+    }
     // Fallback to hardcoded only
     _calendarCache = HARDCODED_INDIA_EVENTS.filter(e => e.date >= (() => { const i = getIST(); return `${i.getFullYear()}-${String(i.getMonth()+1).padStart(2,'0')}-${String(i.getDate()).padStart(2,'0')}`; })()).map(e => ({ ...e, time: '10:00' }));
     marketState.calendarEvents = _calendarCache;
@@ -3412,10 +3417,10 @@ app.get('/api/stream', (req, res) => {
     _sseClients.add(res);
     console.log(`[SSE] Client connected (total: ${_sseClients.size})`);
 
-    // Heartbeat every 25s — keeps Railway/proxy from closing idle connection
+    // Heartbeat every 15s — Railway proxy drops idle connections ~20s, 15s keeps it alive
     const hb = setInterval(() => {
         try { res.write(':heartbeat\n\n'); } catch(_) { clearInterval(hb); }
-    }, 25000);
+    }, 15000);
 
     req.on('close', () => {
         clearInterval(hb);
