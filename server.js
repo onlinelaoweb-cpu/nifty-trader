@@ -3417,10 +3417,10 @@ app.get('/api/stream', (req, res) => {
     _sseClients.add(res);
     console.log(`[SSE] Client connected (total: ${_sseClients.size})`);
 
-    // Heartbeat every 15s — Railway proxy drops idle connections ~20s, 15s keeps it alive
+    // Heartbeat every 10s — Railway proxy drops idle connections ~19s, 10s keeps it alive reliably
     const hb = setInterval(() => {
         try { res.write(':heartbeat\n\n'); } catch(_) { clearInterval(hb); }
-    }, 15000);
+    }, 10000);
 
     req.on('close', () => {
         clearInterval(hb);
