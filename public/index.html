@@ -6345,12 +6345,36 @@ function updateChecklistAuto(s) {
     const mainEl = document.getElementById('cl-verd-main');
     const scoreEl = document.getElementById('cl-verd-score');
 
+    // ── Conflict check (expert recommendation) ─────────────────────────────
+    // If Global bias and institutional/breadth bias are opposing, downgrade to WAIT
+    // regardless of netScore — conflicting macro signals = gambling territory.
+    const globalBias = s.global?.bias || s.global?.globalBias || null;
+    const conf = s.confidence || 0;
+    const instBull = bullVotes > bearVotes;
+    const instBear = bearVotes > bullVotes;
+    const globalBull = globalBias === 'BULLISH';
+    const globalBear = globalBias === 'BEARISH';
+    const conflicting = (instBull && globalBear) || (instBear && globalBull);
+
     let verdict, cls, color;
-    if (netScore >= 4) { verdict = '🟢 READY TO TRADE BULL'; cls = 'bull'; color = 'var(--green)'; }
-    else if (netScore <= -4) { verdict = '🔴 READY TO TRADE BEAR'; cls = 'bear'; color = 'var(--red)'; }
-    else if (netScore >= 2) { verdict = '🟡 CAUTIOUS BULL'; cls = 'bull'; color = 'var(--green)'; }
-    else if (netScore <= -2) { verdict = '🟡 CAUTIOUS BEAR'; cls = 'bear'; color = 'var(--red)'; }
-    else { verdict = '⚪ SIDEWAYS / WAIT'; cls = 'side'; color = 'var(--amber)'; }
+    if (conflicting && Math.abs(netScore) < 6) {
+      // Global and institutional are fighting — force WAIT until one side wins
+      verdict = '⚡ CONFLICT — Global vs Institutional · WAIT';
+      cls = 'wait'; color = 'var(--amber)';
+    } else if (conf < 50 && netScore >= 4) {
+      // Score looks bullish but app confidence is low — warn trader
+      verdict = '🟡 BULL SIGNAL — Low Confidence (' + conf + '%) · Wait';
+      cls = 'side'; color = 'var(--amber)';
+    } else if (conf < 50 && netScore <= -4) {
+      verdict = '🟡 BEAR SIGNAL — Low Confidence (' + conf + '%) · Wait';
+      cls = 'side'; color = 'var(--amber)';
+    } else if (netScore >= 6) { verdict = '🟢 Strong Bull (8+/10)';    cls = 'bull'; color = 'var(--green)'; }
+    else if (netScore <= -6)   { verdict = '🔴 Strong Bear (8+/10)';   cls = 'bear'; color = 'var(--red)'; }
+    else if (netScore >= 4)    { verdict = '🟢 Bull (7-8/10)';          cls = 'bull'; color = 'var(--green)'; }
+    else if (netScore <= -4)   { verdict = '🔴 Bear (7-8/10)';         cls = 'bear'; color = 'var(--red)'; }
+    else if (netScore >= 2)    { verdict = '🟡 Cautious Bull (5-6/10)'; cls = 'side'; color = 'var(--amber)'; }
+    else if (netScore <= -2)   { verdict = '🟡 Cautious Bear (5-6/10)'; cls = 'side'; color = 'var(--amber)'; }
+    else                       { verdict = '⚪ Wait (5/10)';             cls = 'wait'; color = 'var(--dim)'; }
 
     if (verdEl) { verdEl.className = 'cl-verdict ' + cls; }
     if (mainEl) { mainEl.textContent = verdict; mainEl.style.color = color; }
