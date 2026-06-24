@@ -1594,10 +1594,12 @@ function combineSignals(indicators) {
         // LAW 1 — Trend Inertia (swing structure HH/HL or LH/LL)
         const sw = pot.swingTrend;
         let law1 = { status: 'WAIT', label: 'Awaiting candle data…', direction: null };
-        if (sw && sw.direction) {
-            if (sw.direction === 'UP')     law1 = { status: 'PASS', label: `✅ Uptrend — HH/HL structure confirmed`, direction: 'UP' };
-            else if (sw.direction === 'DOWN') law1 = { status: 'PASS', label: `✅ Downtrend — LH/LL structure confirmed`, direction: 'DOWN' };
-            else                           law1 = { status: 'FAIL', label: `❌ No clear trend — choppy/sideways structure`, direction: 'SIDEWAYS' };
+        if (sw && sw.trend) {
+            // getSwingTrend() returns .trend (UPTREND/DOWNTREND/SIDEWAYS/UNKNOWN), not .direction
+            if (sw.trend === 'UPTREND')     law1 = { status: 'PASS', label: `✅ Uptrend — HH/HL structure confirmed (${sw.reason || ''})`, direction: 'UP' };
+            else if (sw.trend === 'DOWNTREND') law1 = { status: 'PASS', label: `✅ Downtrend — LH/LL structure confirmed (${sw.reason || ''})`, direction: 'DOWN' };
+            else if (sw.trend === 'SIDEWAYS') law1 = { status: 'FAIL', label: `❌ No clear trend — choppy/sideways structure`, direction: 'SIDEWAYS' };
+            // UNKNOWN stays as WAIT (default above)
         }
 
         // LAW 2 — Force (PCR + OI + VIX + A/D + FII)
@@ -1626,7 +1628,7 @@ function combineSignals(indicators) {
         const forceHint = trendDir === 'UP'
             ? 'Need: PCR>1.1, PCR rising, VIX<14, A/D>1.5, FII buying'
             : trendDir === 'DOWN'
-            ? 'Need: PCR<0.8, PCR falling, VIX>14, A/D<0.7, FII selling'
+            ? 'Need: PCR<0.8, PCR falling, VIX>20, A/D<0.7, FII selling'
             : '';
         if (!trendDir || trendDir === 'SIDEWAYS') {
             law2 = { status: 'WAIT', label: `⏳ Force check pending — no trend direction yet`, bits, forceScore, forceHint: 'Wait for Law 1 trend first' };
