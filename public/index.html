@@ -7658,7 +7658,7 @@ function anRenderBars(rows) {
   const callGated = rows.filter(r => r.quality_gate && r.signal==='BUY CALL').length;
   const putGated  = rows.filter(r => r.quality_gate && r.signal==='BUY PUT').length;
   const mtfAl     = rows.filter(r => r.quality_gate && r.mtf_aligned).length;
-  const rsiOk     = rows.filter(r => (r.signal==='BUY CALL'&&r.rsi<45)||(r.signal==='BUY PUT'&&r.rsi>55)).length;
+  const rsiOk     = rows.filter(r => (r.signal==='BUY CALL'&&r.rsi>55)||(r.signal==='BUY PUT'&&r.rsi<45)).length;
 
   const gateRate = ((gated/total)*100).toFixed(1);
   const callRate = calls>0 ? ((callGated/calls)*100).toFixed(1) : 0;

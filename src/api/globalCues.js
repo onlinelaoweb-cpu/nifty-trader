@@ -43,6 +43,12 @@ function calcVWAP(bars) {
     return cumVol > 0 ? cumPV / cumVol : null;
 }
 
+// FIX (Jun 2026): BN lead signal was firing on EVERY refresh all day (e.g. once BN
+// is +1.69%, every 2-min global refresh returned signal=1 and added a bull vote each time).
+// Fix: track last confirmed direction. Signal fires only when direction CHANGES
+// (neutral→bull, bull→bear, etc). Same direction on next refresh = signal=0 (no repeat vote).
+let _bnLastDir = 0;  // 0=neutral, 1=bull, -1=bear — persists across calls
+
 async function bankNiftyVWAPLead() {
     // Uses allIndices quote only — no intraday NSE call (which times out from Railway).
     // Without tick data we can't compute a true VWAP cross, so we use the
@@ -82,9 +88,14 @@ async function bankNiftyVWAPLead() {
 
         const changePct = prevClose > 0 ? parseFloat(((bnPrice - prevClose) / prevClose * 100).toFixed(3)) : 0;
         const sourceTag = stale ? ' (yahoo)' : '';
-        if (changePct > 0.3)  return { signal:  1, label: 'ABOVE_VWAP', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty up ${changePct}% today — Bullish lead for Nifty ✅${sourceTag}` };
-        if (changePct < -0.3) return { signal: -1, label: 'BELOW_VWAP', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty down ${changePct}% today — Bearish lead for Nifty ⚠️${sourceTag}` };
-        return { signal: 0, label: 'NEUTRAL', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty flat ${changePct}% — no directional lead${sourceTag}` };
+        const newDir = changePct > 0.3 ? 1 : changePct < -0.3 ? -1 : 0;
+        // Only fire a non-zero signal when direction CHANGES — prevents repeated bull/bear
+        // votes on every 2-min refresh once BN has established its direction for the day.
+        const fireSignal = (newDir !== 0 && newDir !== _bnLastDir) ? newDir : 0;
+        _bnLastDir = newDir;
+        if (fireSignal === 1)  return { signal:  1, label: 'ABOVE_VWAP', crossedAt: new Date().toISOString(), bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty up ${changePct}% today — Bullish lead for Nifty ✅${sourceTag}` };
+        if (fireSignal === -1) return { signal: -1, label: 'BELOW_VWAP', crossedAt: new Date().toISOString(), bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty down ${changePct}% today — Bearish lead for Nifty ⚠️${sourceTag}` };
+        return { signal: 0, label: newDir === 1 ? 'ABOVE_VWAP' : newDir === -1 ? 'BELOW_VWAP' : 'NEUTRAL', crossedAt: null, bnPrice, vwap: null, distancePct: changePct, reason: `BankNifty ${changePct > 0 ? '+' : ''}${changePct}% — direction unchanged, no new vote${sourceTag}` };
     } catch (e) { return empty; }
 }
 
