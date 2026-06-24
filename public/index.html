@@ -1916,6 +1916,22 @@ html.vn-day .sug-card [style*="color:var(--dim)"] { color: #607080 !important; }
 .sm-comp-value{font-size:10px;color:var(--text);flex:1;font-family:'Share Tech Mono',monospace;}
 .sm-comp-pts{font-family:'Orbitron',monospace;font-size:9px;font-weight:700;}
 .mom-strength-label{font-size:9px;color:var(--dim);font-family:'Share Tech Mono',monospace;margin-left:4px;}
+
+/* ─── Physics of Trading Tab ─── */
+.pot-law-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;}
+.pot-law-card.pot-pass{border-color:rgba(0,255,136,0.4);background:rgba(0,255,136,0.04);}
+.pot-law-card.pot-fail{border-color:rgba(255,34,68,0.4);background:rgba(255,34,68,0.04);}
+.pot-law-header{display:flex;align-items:center;gap:6px;margin-bottom:5px;flex-wrap:wrap;}
+.pot-law-num{font-family:'Orbitron',monospace;font-size:9px;color:var(--amber);letter-spacing:1px;flex-shrink:0;}
+.pot-law-name{font-family:'Orbitron',monospace;font-size:8px;color:var(--dim);letter-spacing:1px;flex:1;min-width:0;}
+.pot-law-badge{font-size:10px;font-family:'Share Tech Mono',monospace;padding:2px 7px;border-radius:5px;flex-shrink:0;background:rgba(255,255,255,0.06);color:var(--amber);}
+.pot-law-badge.pass{color:var(--green);background:rgba(0,255,136,0.1);}
+.pot-law-badge.fail{color:var(--red);background:rgba(255,34,68,0.1);}
+.pot-law-desc{font-size:9px;color:var(--dim);line-height:1.5;margin-bottom:6px;border-bottom:1px solid var(--border);padding-bottom:5px;}
+.pot-law-status{font-size:11px;font-family:'Share Tech Mono',monospace;color:var(--text);line-height:1.4;}
+.pot-check-row{display:flex;align-items:flex-start;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:11px;font-family:'Share Tech Mono',monospace;}
+.pot-check-row:last-child{border-bottom:none;}
+.pot-fib-row{display:flex;justify-content:space-between;padding:2px 4px;font-size:10px;font-family:'Share Tech Mono',monospace;}
 </style>
 </head>
 <body>
@@ -3497,6 +3513,7 @@ html.vn-day .sug-card [style*="color:var(--dim)"] { color: #607080 !important; }
   <button class="btab" onclick="switchTab('chart',this)"><span class="bi">🕯️</span>CHART</button>
   <button class="btab" onclick="switchTab('tools',this)"><span class="bi">🔧</span>TOOLS</button>
   <button class="btab" onclick="switchTab('analytics',this)"><span class="bi">📊</span>ANALYTICS</button>
+  <button class="btab" onclick="switchTab('physics',this)"><span class="bi">⚛️</span>PHYSICS</button>
 </div>
 
 <script>
@@ -3666,6 +3683,7 @@ function switchTab(name,btn){
   }
   if(name==='journal'){loadJournal();}
   if(name==='analytics'){ if(!_anLoaded){ loadAnalytics(); } else { anRenderAll(anApplyDateFilter(_anSignals), _anSignals); } }
+  if(name==='physics' && _lastState) updatePhysicsTab(_lastState);
   if(name==='breadth'){
     // Always fetch full breadth (with stocks[]) when tab opens — /api/signal strips stocks
     fetchBreadthFull();
@@ -3684,6 +3702,7 @@ function switchTab(name,btn){
       if(_lastState.pcrHistory){updatePCRTrend(_lastState.pcrHistory);drawPCRSlopeChart(_lastState.pcrHistory);}
       if(_lastState.pcrSlope)updatePCRSlopeLabel(_lastState.pcrSlope);
       if(_lastState.fiboCard)updateFiboCard(_lastState.fiboCard);
+      if(_lastState.physicsOfTrading)updatePhysicsTab(_lastState);
       if(_lastState.fii||_lastState.dii) updateFIIDIIDisplay(_lastState.fii,_lastState.dii);
     } else {
       // No cache yet — do a single fetch to populate
@@ -4750,6 +4769,8 @@ function renderDashboard(s) {
 
   // Fibonacci Retracement card (Physics of Trading — Law 3)
   updateFiboCard(s.fiboCard);
+  // Physics of Trading tab
+  updatePhysicsTab(s);
 
   // Breadth UI — always update so data is fresh when user switches to tab
   if (s.breadth) updateBreadthUI(s.breadth);
@@ -7753,6 +7774,126 @@ function anRenderTable(rows) {
   </table>`;
 }
 
+
+// ─── PHYSICS OF TRADING TAB ──────────────────────────────────────────────────
+function updatePhysicsTab(s) {
+  var pot = s && s.physicsOfTrading;
+  if (!pot) return;
+  var banner = document.getElementById('pot-entry-banner');
+  var lblEl  = document.getElementById('pot-entry-label');
+  var subEl  = document.getElementById('pot-entry-sub');
+  if (banner && lblEl) {
+    lblEl.textContent = pot.entryLabel || '⏳ Waiting…';
+    var col = pot.entryColor === 'green' ? 'var(--green)' : pot.entryColor === 'red' ? 'var(--red)' : 'var(--amber)';
+    lblEl.style.color = col;
+    banner.style.borderColor = pot.entryColor === 'green' ? 'rgba(0,255,136,0.6)' : pot.entryColor === 'red' ? 'rgba(255,34,68,0.5)' : 'var(--border)';
+    banner.style.background  = pot.entryColor === 'green' ? 'rgba(0,255,136,0.07)' : pot.entryColor === 'red' ? 'rgba(255,34,68,0.06)' : 'rgba(15,31,48,0.9)';
+    if (subEl) subEl.textContent = pot.optionDir ? 'Direction: BUY ' + pot.optionDir : 'All 3 laws must align before entry';
+  }
+  function updateLaw(num, law) {
+    if (!law) return;
+    var card  = document.getElementById('pot-law' + num + '-card');
+    var badge = document.getElementById('pot-law' + num + '-badge');
+    var stat  = document.getElementById('pot-law' + num + '-status');
+    if (!card || !badge || !stat) return;
+    var cls = law.status === 'PASS' ? 'pass' : law.status === 'FAIL' ? 'fail' : 'wait';
+    card.className  = 'pot-law-card' + (cls === 'pass' ? ' pot-pass' : cls === 'fail' ? ' pot-fail' : '');
+    badge.className = 'pot-law-badge ' + cls;
+    badge.textContent = law.status === 'PASS' ? '✅ PASS' : law.status === 'FAIL' ? '❌ FAIL' : '⏳ WAIT';
+    stat.textContent  = law.label || '—';
+    stat.style.color  = law.status === 'PASS' ? 'var(--green)' : law.status === 'FAIL' ? 'var(--red)' : 'var(--text)';
+  }
+  updateLaw(1, pot.law1);
+  updateLaw(2, pot.law2);
+  updateLaw(3, pot.law3);
+  // Update Law 3 description based on direction (CALL vs PUT)
+  var law3DescEl = document.getElementById('pot-law3-desc');
+  if (law3DescEl && pot.law1) {
+    if (pot.law1.direction === 'DOWN') {
+      law3DescEl.textContent = 'PUT side: Market fell (action). Wait for dead-cat BOUNCE UP to 38.2–61.8% of the fall before entering PUT. Beyond 78.6% bounce = trend reversal risk.';
+    } else if (pot.law1.direction === 'UP') {
+      law3DescEl.textContent = 'CALL side: Market rose (action). Wait for PULLBACK DOWN to 38.2–61.8% of the rally before entering CALL. Beyond 78.6% pullback = trend reversal risk.';
+    } else {
+      law3DescEl.textContent = 'Never enter on the sharp move. CALL: wait for pullback 38–62%. PUT: wait for bounce 38–62%. Beyond 78.6% = reversal risk.';
+    }
+  }
+  var bitsEl = document.getElementById('pot-law2-bits');
+  if (bitsEl && pot.law2) {
+    var bitsLine = pot.law2.bits ? pot.law2.bits.join(' · ') : '';
+    var hintLine = pot.law2.forceHint ? '\n' + pot.law2.forceHint : '';
+    bitsEl.textContent = bitsLine + hintLine;
+    bitsEl.style.whiteSpace = 'pre-line';
+  }
+  var fibo = s.fiboCard;
+  var ladderEl = document.getElementById('pot-fib-ladder');
+  if (ladderEl) {
+    if (fibo && fibo.levels && fibo.price) {
+      var L = fibo.levels, price = fibo.price;
+      var swRange = Math.abs((L.l100||0)-(L.l0||0));
+      var rows = [{pct:'0%',val:L.l0},{pct:'23.6%',val:L.l236},{pct:'38.2%',val:L.l382},{pct:'50.0%',val:L.l50},{pct:'61.8%',val:L.l618},{pct:'78.6%',val:L.l786},{pct:'100%',val:L.l100}].sort(function(a,b){return b.val-a.val;});
+      ladderEl.innerHTML = rows.map(function(r){
+        var isRxn = r.pct==='38.2%'||r.pct==='61.8%';
+        var near  = price!=null && swRange>0 && Math.abs(price-r.val)<swRange*0.015;
+        return '<div class="pot-fib-row" style="'+(isRxn?'background:rgba(0,255,136,0.06);':'')+(near?'outline:1px solid var(--blue);border-radius:3px;':'')+'">'+
+          '<span style="color:'+(isRxn?'var(--green)':'var(--dim)')+';">'+r.pct+'</span>'+
+          '<span style="color:'+(near?'var(--blue)':'var(--text)')+';font-weight:'+(near?'700':'400')+';">₹'+r.val.toFixed(1)+(near?' ← spot':'')+'</span>'+
+          '</div>';
+      }).join('');
+    } else {
+      ladderEl.innerHTML = '<div style="font-size:9px;color:var(--dim);text-align:center;padding:4px;">Awaiting valid impulse swing (min 30 pts)</div>';
+    }
+  }
+  function setChk(n, law) {
+    var icon = document.getElementById('pot-chk'+n+'-icon');
+    var txt  = document.getElementById('pot-chk'+n+'-txt');
+    if (!icon||!txt) return;
+    if (law&&law.status==='PASS')      { icon.textContent='✅'; txt.style.color='var(--green)'; }
+    else if (law&&law.status==='FAIL') { icon.textContent='❌'; txt.style.color='var(--red)'; }
+    else                                { icon.textContent='⬜'; txt.style.color='var(--dim)'; }
+  }
+  setChk(1,pot.law1); setChk(2,pot.law2); setChk(3,pot.law3);
+  var updEl = document.getElementById('pot-updated');
+  if (updEl && pot.updatedAt) {
+    try {
+      var ist = new Date(new Date(pot.updatedAt).toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+      updEl.textContent = 'Last updated: '+String(ist.getHours()).padStart(2,'0')+':'+String(ist.getMinutes()).padStart(2,'0')+':'+String(ist.getSeconds()).padStart(2,'0')+' IST';
+    } catch(e){}
+  }
+}
 </script>
+
+<!-- PANEL: PHYSICS OF TRADING ─────────────────────────────────── -->
+<div class="panel" id="panel-physics">
+  <div style="padding:10px 12px 0;">
+    <div id="pot-entry-banner" style="border-radius:12px;padding:14px 16px;margin-bottom:12px;background:rgba(15,31,48,0.9);border:2px solid var(--border);text-align:center;">
+      <div id="pot-entry-label" style="font-family:'Orbitron',monospace;font-size:13px;letter-spacing:1px;color:var(--amber);">⏳ Waiting for all 3 Laws…</div>
+      <div id="pot-entry-sub" style="font-size:10px;color:var(--dim);margin-top:4px;">All 3 laws must align before entry</div>
+    </div>
+    <div class="pot-law-card" id="pot-law1-card">
+      <div class="pot-law-header"><span class="pot-law-num">LAW 1</span><span class="pot-law-name">TREND INERTIA</span><span class="pot-law-badge wait" id="pot-law1-badge">⏳ WAIT</span></div>
+      <div class="pot-law-desc">Only trade in direction of trend. HH/HL = UP, LH/LL = DOWN. Never counter-trend.</div>
+      <div class="pot-law-status" id="pot-law1-status">Awaiting candle data…</div>
+    </div>
+    <div class="pot-law-card" id="pot-law2-card">
+      <div class="pot-law-header"><span class="pot-law-num">LAW 2</span><span class="pot-law-name">FORCE = VOL × OI × MOMENTUM</span><span class="pot-law-badge wait" id="pot-law2-badge">⏳ WAIT</span></div>
+      <div class="pot-law-desc">Confirm force via PCR slope, OI buildup, FII/DII, VIX, A/D ratio. Weak force = fake move.</div>
+      <div class="pot-law-status" id="pot-law2-status">Awaiting force data…</div>
+      <div id="pot-law2-bits" style="font-size:9px;color:var(--dim);margin-top:4px;line-height:1.8;"></div>
+    </div>
+    <div class="pot-law-card" id="pot-law3-card">
+      <div class="pot-law-header"><span class="pot-law-num">LAW 3</span><span class="pot-law-name">REACTION ENTRY ONLY</span><span class="pot-law-badge wait" id="pot-law3-badge">⏳ WAIT</span></div>
+      <div class="pot-law-desc" id="pot-law3-desc">Never enter on the sharp move. CALL: wait for pullback 38–62%. PUT: wait for dead-cat bounce 38–62%. Beyond 78.6% = reversal risk.</div>
+      <div class="pot-law-status" id="pot-law3-status">Awaiting swing + price data…</div>
+      <div id="pot-fib-ladder" style="margin-top:8px;"></div>
+    </div>
+    <div style="background:rgba(15,31,48,0.6);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:4px;">
+      <div style="font-family:'Orbitron',monospace;font-size:9px;color:var(--amber);letter-spacing:2px;margin-bottom:8px;">3-RULE CHECKLIST — NITIN MURARKA</div>
+      <div class="pot-check-row"><span id="pot-chk1-icon">⬜</span><span id="pot-chk1-txt" style="color:var(--dim);">Confirm trend direction (Law 1)</span></div>
+      <div class="pot-check-row"><span id="pot-chk2-icon">⬜</span><span id="pot-chk2-txt" style="color:var(--dim);">Confirm force aligned with trend (Law 2)</span></div>
+      <div class="pot-check-row"><span id="pot-chk3-icon">⬜</span><span id="pot-chk3-txt" style="color:var(--dim);">CALL: pullback / PUT: bounce — in 38–62% zone (Law 3)</span></div>
+    </div>
+    <div id="pot-updated" style="font-size:8px;color:var(--dim);text-align:center;margin-top:8px;padding-bottom:100px;">Last updated: —</div>
+  </div>
+</div>
 </body>
 </html>

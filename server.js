@@ -115,6 +115,17 @@ let marketState = {
     // Standalone Fibonacci Retracement card — computed every cycle (independent of
     // active BUY signal) so the UI always shows the latest swing's fib levels.
     fiboCard: null,
+    physicsOfTrading: {
+        swingTrend: null,       // { direction:'UP'|'DOWN'|'SIDEWAYS', hhhl: bool, reason: str }
+        reactionGate: null,     // { zone:'REACTION'|'ACTION'|'REVERSAL_RISK', score: num, reason: str }
+        law1: { status:'WAIT', label:'Awaiting candle data…', direction:null },
+        law2: { status:'WAIT', label:'Awaiting force data…', bullish:false, bearish:false, bits:[] },
+        law3: { status:'WAIT', label:'Awaiting swing + price data…', zone:null, retracePct:null },
+        entryReady: false,
+        entryLabel: '⏳ Waiting for all 3 Laws…',
+        entryColor: 'dim',
+        updatedAt: null,
+    },
     fii: { buy:null, sell:null, net:null },
     dii: { buy:null, sell:null, net:null },
     optionFlow: { atmCEpremium:null, atmPEpremium:null, ceChange:0, peChange:0, dominance:'NEUTRAL', history:[] },
@@ -1572,6 +1583,114 @@ function combineSignals(indicators) {
         }
     } catch (e) {
         console.warn('[Fibo Card] failed:', e.message);
+    }
+
+    // ── Physics of Trading — consolidated 3-Law status for the new tab ────────
+    // Runs every cycle so the Physics tab always shows live Law status even when
+    // the main signal is WAIT.  Each Law is independently evaluated here.
+    try {
+        const pot = marketState.physicsOfTrading || {};
+
+        // LAW 1 — Trend Inertia (swing structure HH/HL or LH/LL)
+        const sw = pot.swingTrend;
+        let law1 = { status: 'WAIT', label: 'Awaiting candle data…', direction: null };
+        if (sw && sw.direction) {
+            if (sw.direction === 'UP')     law1 = { status: 'PASS', label: `✅ Uptrend — HH/HL structure confirmed`, direction: 'UP' };
+            else if (sw.direction === 'DOWN') law1 = { status: 'PASS', label: `✅ Downtrend — LH/LL structure confirmed`, direction: 'DOWN' };
+            else                           law1 = { status: 'FAIL', label: `❌ No clear trend — choppy/sideways structure`, direction: 'SIDEWAYS' };
+        }
+
+        // LAW 2 — Force (PCR + OI + VIX + A/D + FII)
+        const pcr2   = marketState.pcr    || null;
+        const vix2   = marketState.vix    || null;
+        const adR    = marketState.breadth?.adRatio || null;
+        const fiiNet = marketState.fii?.net ?? null;
+        const oiInt  = marketState.oiBuildup?.interpretation || null;
+        const pcrSlope2 = marketState.pcrSlope?.trend || null;
+
+        const bits = [];
+        let forceScore = 0;
+        if (pcr2 != null) { bits.push(`PCR ${pcr2.toFixed(2)}`); if (pcr2 > 1.1) forceScore++; else if (pcr2 < 0.8) forceScore--; }
+        if (pcrSlope2 === 'RISING') { bits.push('PCR rising ▲'); forceScore++; }
+        else if (pcrSlope2 === 'FALLING') { bits.push('PCR falling ▼'); forceScore--; }
+        if (vix2 != null) { bits.push(`VIX ${vix2.toFixed(1)}`); if (vix2 < 14) forceScore++; else if (vix2 > 20) forceScore--; }
+        if (adR != null) { bits.push(`A/D ${adR.toFixed(1)}`); if (adR > 1.5) forceScore++; else if (adR < 0.7) forceScore--; }
+        if (fiiNet != null) { bits.push(`FII ${fiiNet > 0 ? '+' : ''}${Math.round(fiiNet)}Cr`); if (fiiNet > 500) forceScore++; else if (fiiNet < -500) forceScore--; }
+        if (oiInt) { bits.push(`OI: ${oiInt}`); if (oiInt.toLowerCase().includes('long')) forceScore++; else if (oiInt.toLowerCase().includes('short')) forceScore--; }
+
+        let law2;
+        const trendDir = law1.direction;
+        const forceAligned = trendDir === 'UP' ? forceScore >= 2 : trendDir === 'DOWN' ? forceScore <= -2 : false;
+        const forceWeak    = Math.abs(forceScore) < 2;
+        // Direction-specific hints shown below force bits
+        const forceHint = trendDir === 'UP'
+            ? 'Need: PCR>1.1, PCR rising, VIX<14, A/D>1.5, FII buying'
+            : trendDir === 'DOWN'
+            ? 'Need: PCR<0.8, PCR falling, VIX>14, A/D<0.7, FII selling'
+            : '';
+        if (!trendDir || trendDir === 'SIDEWAYS') {
+            law2 = { status: 'WAIT', label: `⏳ Force check pending — no trend direction yet`, bits, forceScore, forceHint: 'Wait for Law 1 trend first' };
+        } else if (forceAligned) {
+            law2 = { status: 'PASS', label: `✅ Force confirmed — ${trendDir === 'UP' ? 'Bullish' : 'Bearish'} momentum (score ${forceScore > 0 ? '+' : ''}${forceScore})`, bits, forceScore, forceHint };
+        } else if (forceWeak) {
+            law2 = { status: 'WAIT', label: `⏳ Weak/neutral force — score ${forceScore > 0 ? '+' : ''}${forceScore}, need ${trendDir === 'UP' ? '≥+2' : '≤-2'}`, bits, forceScore, forceHint };
+        } else {
+            law2 = { status: 'FAIL', label: `❌ Force AGAINST ${trendDir} trend — do not enter ${trendDir === 'UP' ? 'CALL' : 'PUT'} (score ${forceScore > 0 ? '+' : ''}${forceScore})`, bits, forceScore, forceHint };
+        }
+
+        // LAW 3 — Reaction zone (Fibonacci 38.2–61.8%)
+        let law3 = { status: 'WAIT', label: 'Awaiting swing + price data…', zone: null, retracePct: null };
+        const fibo = marketState.fiboCard;
+        if (fibo && fibo.levels && fibo.price) {
+            const rp = fibo.retracePct;
+            // Direction context: for CALL (UP trend) we wait for price to PULL BACK into 38-62%.
+            // For PUT (DOWN trend) we wait for price to BOUNCE UP into 38-62% of the fall.
+            const isDown = (trendDir === 'DOWN') || (fibo.direction === 'DOWN');
+            const reactionWord = isDown ? 'bounce (dead-cat)' : 'pullback';
+            const waitWord     = isDown ? 'Wait for bounce up to 38–62% of fall' : 'Wait for pullback to 38–62%';
+            if (fibo.zoneColor === 'green') {
+                law3 = { status: 'PASS', label: `✅ Price in 38.2–61.8% ${reactionWord} zone (${rp != null ? rp.toFixed(0) + '%' : '--'} retrace) — ENTRY ZONE`, zone: 'REACTION', retracePct: rp };
+            } else if (fibo.zoneColor === 'amber') {
+                law3 = { status: 'FAIL', label: `⚠️ Price beyond 78.6% retrace — trend reversal risk, skip ${isDown ? 'PUT' : 'CALL'} entry`, zone: 'REVERSAL_RISK', retracePct: rp };
+            } else if (fibo.zoneColor === 'blue') {
+                law3 = { status: 'WAIT', label: `⏳ ${isDown ? 'Price still in downmove — ' : 'Price at action zone — '}${waitWord} (${rp != null ? rp.toFixed(0) + '%' : '--'} now)`, zone: 'ACTION', retracePct: rp };
+            } else {
+                law3 = { status: 'WAIT', label: `⏳ ${waitWord} before entering ${isDown ? 'PUT' : 'CALL'} (${rp != null ? rp.toFixed(0) + '%' : '--'} retrace now)`, zone: 'NEUTRAL', retracePct: rp };
+            }
+        }
+
+        // Entry decision — ALL 3 laws must PASS
+        const allPass   = law1.status === 'PASS' && law2.status === 'PASS' && law3.status === 'PASS';
+        const anyFail   = law1.status === 'FAIL'  || law2.status === 'FAIL';
+        const optionDir = law1.direction === 'UP' ? 'CALL' : law1.direction === 'DOWN' ? 'PUT' : null;
+        let entryReady, entryLabel, entryColor;
+        const failedLaw = law1.status === 'FAIL' ? '1' : law2.status === 'FAIL' ? '2' : law3.status === 'FAIL' ? '3' : null;
+        if (allPass && optionDir) {
+            entryReady  = true;
+            entryLabel  = optionDir === 'PUT'
+                ? `🚀 ALL 3 LAWS VERIFIED — BUY PUT NOW (reaction bounce in 38–62%)`
+                : `🚀 ALL 3 LAWS VERIFIED — BUY CALL NOW (pullback in 38–62%)`;
+            entryColor  = 'green';
+        } else if (anyFail) {
+            entryReady  = false;
+            entryLabel  = `🚫 DO NOT ENTER — Law ${failedLaw} failed${optionDir ? ' (' + optionDir + ' side)' : ''}`;
+            entryColor  = 'red';
+        } else {
+            const passed = [law1, law2, law3].filter(l => l.status === 'PASS').length;
+            entryReady  = false;
+            entryLabel  = `⏳ ${passed}/3 Laws verified${optionDir ? ' — watching for ' + optionDir + ' entry' : ' — waiting for trend'}`;
+            entryColor  = 'amber';
+        }
+
+        marketState.physicsOfTrading = {
+            ...pot,
+            law1, law2, law3,
+            entryReady, entryLabel, entryColor,
+            optionDir,
+            updatedAt: new Date().toISOString(),
+        };
+    } catch (e) {
+        console.warn('[Physics tab] compute error:', e.message);
     }
 
     return { signal, confidence, reasons };
