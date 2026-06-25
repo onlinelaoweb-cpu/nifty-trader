@@ -121,7 +121,7 @@ function addTick(price) {
             priceHistory.push(currentCandle.close);
             if (priceHistory.length > 150) priceHistory.shift();
         }
-        currentCandle = { open: price, high: price, low: price, close: price, volume: 1 };
+        currentCandle = { open: price, high: price, low: price, close: price, volume: 1, time: Date.now() };
         lastMinute    = istMin;
     } else {
         currentCandle.high   = Math.max(currentCandle.high, price);
