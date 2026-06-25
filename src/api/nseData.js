@@ -195,8 +195,15 @@ async function autoRefreshFyersToken() {
         }
     } catch (e) {
         const body = JSON.stringify(e.response?.data)?.slice(0, 200) || e.message;
-        console.warn(`[Fyers] ⚠️  Token refresh error (${e.response?.status || e.message}): ${body}`);
-        console.warn('[Fyers] Using existing FYERS_ACCESS_TOKEN — may be expired.');
+        const isSebiDisabled = body.includes('-16') || body.includes('SEBI') || body.includes('disabled');
+        if (isSebiDisabled) {
+            // SEBI permanently disabled the refresh token API — this is expected, not an error.
+            // The stored FYERS_ACCESS_TOKEN is used as-is. Update it manually each morning.
+            console.log('[Fyers] ℹ️  Refresh token API disabled by SEBI — using stored access token. Update FYERS_ACCESS_TOKEN in Railway Variables each morning before 9:15 AM.');
+        } else {
+            console.warn(`[Fyers] ⚠️  Token refresh error (${e.response?.status || e.message}): ${body}`);
+            console.warn('[Fyers] Using existing FYERS_ACCESS_TOKEN — update manually at myapi.fyers.in if PCR fails.');
+        }
     }
 }
 // Run on startup (non-blocking)
