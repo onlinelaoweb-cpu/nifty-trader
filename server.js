@@ -1156,24 +1156,35 @@ function combineSignals(indicators) {
 
     const qualityGate = {
         // 1. All three timeframes must agree (with ADX ≥ 20 per TF)
-        mtfAligned : marketState.mtf.aligned,
+        //    softAligned = 15m+1h agree but 5m dissents — allowed through at capped confidence (≤55%)
+        mtfAligned : marketState.mtf.aligned || marketState.mtf.softAligned,
 
         // 2. RSI multi-timeframe filter:
         //    CALL entry: 15m RSI > 55 AND 5m RSI > 55 (trend + entry alignment)
         //    PUT  entry: 15m RSI < 45 AND 5m RSI < 45
         //    Also: 1m RSI must not be stretched (< 70 for calls, > 30 for puts)
         //    If MTF RSI is null (data not yet loaded), fall back to 1m RSI check only.
+        //    MORNING RELAXATION (before 10:30 AM): After a gap-open, 5m RSI takes
+        //    45–60 min to recover above 55. Only require 15m RSI > 52 before 10:30.
+        //    After 10:30, full strict gate (both 5m AND 15m) applies as before.
         rsiClean   : (() => {
             if (rawSignal === 'WAIT') return true;
             const rsi5m  = marketState.mtf?.tf5m?.rsi  ?? null;
             const rsi15m = marketState.mtf?.tf15m?.rsi ?? null;
+            const istNow = getIST();
+            const istMins = istNow.getHours() * 60 + istNow.getMinutes();
+            const morning = istMins < 630; // before 10:30 AM
             if (rawSignal === 'BUY CALL') {
-                const mtfOk = (rsi15m === null || rsi15m > 55) && (rsi5m === null || rsi5m > 55);
+                const mtfOk = morning
+                    ? (rsi15m === null || rsi15m > 52)  // morning: only 15m needs to be above 52
+                    : (rsi15m === null || rsi15m > 55) && (rsi5m === null || rsi5m > 55); // full gate after 10:30
                 const notOverbought = rsi === null || rsi < 70;
                 return mtfOk && notOverbought;
             }
             if (rawSignal === 'BUY PUT') {
-                const mtfOk = (rsi15m === null || rsi15m < 45) && (rsi5m === null || rsi5m < 45);
+                const mtfOk = morning
+                    ? (rsi15m === null || rsi15m < 48)  // morning: only 15m needs to be below 48
+                    : (rsi15m === null || rsi15m < 45) && (rsi5m === null || rsi5m < 45); // full gate after 10:30
                 const notOversold = rsi === null || rsi > 30;
                 return mtfOk && notOversold;
             }
@@ -1369,6 +1380,16 @@ function combineSignals(indicators) {
         const before = confidence;
         confidence = Math.min(confidence, 60);
         if (confidence < before) reasons.push(`⚠️ Confidence capped at 60% — ADX ${adxVal} < ${adxFloor1m + 5} (trend weak, full signal needs ADX ≥ ${adxFloor1m + 5})`);
+    }
+
+    // ── SoftAligned confidence cap — 5m dissenting ───────────────────────────
+    // When 15m+1h agree but 5m is still choppy (morning pattern), gate is passed
+    // but conviction is limited. Cap at 55% — below the 65% minimum threshold,
+    // so this will be converted to WAIT below unless other votes push it higher.
+    if (signal !== 'WAIT' && !marketState.mtf.aligned && marketState.mtf.softAligned) {
+        const before = confidence;
+        confidence = Math.min(confidence, 55);
+        if (confidence < before) reasons.push(`⚠️ Confidence capped at 55% — 5m TF dissenting (15m+1h aligned, wait for 5m confirmation)`);
     }
 
     // ── Caution zone confidence cap (14:00–14:30) ─────────────────────────────
@@ -2409,6 +2430,7 @@ async function refreshMTF() {
             strength      : preMarket ? 'WEAK'    : d.mtfStrength,
             confidence    : preMarket ? 0         : adjConfidence,
             aligned       : preMarket ? false      : d.aligned,
+            softAligned   : preMarket ? false      : (d.softAligned ?? false),  // 15m+1h agree, 5m dissents
             bullCount     : preMarket ? 0          : d.bullCount,
             bearCount     : preMarket ? 0          : d.bearCount,
             validTFs      : preMarket ? 0          : d.validTFCount ?? 0, // ← fix: was missing, frontend checklist always showed 0/3

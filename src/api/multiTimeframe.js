@@ -470,6 +470,21 @@ async function analyzeMultiTimeframe(vix = null) {
     // aligned = all valid TFs agree (minimum 2 valid TFs required to claim alignment)
     const aligned = validCount >= 2 && (bullCount === validCount || bearCount === validCount);
 
+    // softAligned = 15m + 1h agree but 5m dissents (morning chop pattern).
+    // 5m is the noisiest TF — it stays choppy for 45–60 min after gap opens.
+    // When the two slower TFs confirm direction but 5m lags, we still have a
+    // tradeable setup — just lower conviction. Capped at 65% confidence in server.js.
+    // Only fires when all 3 TFs are valid (not INSUFFICIENT) so we're not guessing.
+    const softAligned =
+        !aligned &&
+        validCount === 3 &&
+        tf15m.signal !== 'INSUFFICIENT' &&
+        tf1h.signal  !== 'INSUFFICIENT' &&
+        (
+            (tf15m.signal === 'BULLISH' && tf1h.signal === 'BULLISH' && tf5m.signal !== 'BULLISH') ||
+            (tf15m.signal === 'BEARISH' && tf1h.signal === 'BEARISH' && tf5m.signal !== 'BEARISH')
+        );
+
     // ── Granular MTF confidence (replaces old flat 85/65 constants) ──────────
     // BUG FIX: mtfConfidence used to be a hardcoded 85 whenever all 3 TFs
     // aligned, and 65 for 2/3 — same number whether the trend was barely
@@ -511,6 +526,12 @@ async function analyzeMultiTimeframe(vix = null) {
         mtfConfidence = validCount === 3
             ? Math.round(75 + avgStrength * 10)   // 75–85
             : Math.round(55 + avgStrength * 10);  // 55–65
+    } else if (softAligned) {
+        // 15m + 1h agree, 5m dissents — moderate conviction, capped at 55% in server.js
+        mtfStrength   = 'MODERATE';
+        mtfSignal     = (tf15m.signal === 'BULLISH') ? 'BUY CALL' : 'BUY PUT';
+        const avgStrength = [tf15m, tf1h].reduce((s, tf, i) => s + tfStrengthScore(tf, adxFloors[i + 1]), 0) / 2;
+        mtfConfidence = Math.round(45 + avgStrength * 10);  // 45–55 — server.js caps at 55
     } else if (bullCount > bearCount) {
         mtfSignal = 'WAIT'; mtfStrength = 'WEAK'; mtfConfidence = 25;
     } else if (bearCount > bullCount) {
@@ -530,6 +551,7 @@ async function analyzeMultiTimeframe(vix = null) {
         mtfSignal, mtfStrength, mtfConfidence,
         bullCount, bearCount,
         aligned,
+        softAligned,   // true when 15m+1h agree but 5m dissents — used by server.js quality gate
         validTFCount: validCount,
         tf5mWarming: tf5m.signal === 'INSUFFICIENT', // true during first ~22 min after restart
         tf5mBarsNeeded: tf5m.signal === 'INSUFFICIENT' ? (MIN_BARS['5m'] - (tf5m.barCount ?? 0)) : 0,
