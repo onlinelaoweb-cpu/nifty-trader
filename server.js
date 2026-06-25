@@ -2466,8 +2466,23 @@ async function refreshMTF() {
         // be the still-forming current candle (see resample() in multiTimeframe.js).
         marketState.candles5mRecent = (d.candles5m || []).slice(-10);
     } catch(e) { console.error('MTF:', e.message); }
+
+    // ── Signal recalc trigger ─────────────────────────────────────────────────
+    // MTF data just changed — recalc signal immediately instead of waiting for
+    // next price tick (up to 60s on Yahoo fallback).
+    if (marketState.nifty > 0 && isMarketOpen()) {
+        try { await updatePrice(marketState.nifty, marketState.change ?? 0, marketState.changePct ?? 0, marketState.source ?? 'yahoo'); }
+        catch(e) { console.error('[MTF signal trigger]', e.message); }
+    }
 }
-async function refreshGlobal() { try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); } }
+async function refreshGlobal() {
+    try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); }
+    // Signal recalc — BankNifty lead / global bias just refreshed
+    if (marketState.nifty > 0 && isMarketOpen()) {
+        try { await updatePrice(marketState.nifty, marketState.change ?? 0, marketState.changePct ?? 0, marketState.source ?? 'yahoo'); }
+        catch(e) { console.error('[Global signal trigger]', e.message); }
+    }
+}
 let _breadthInFlight = false;
 async function refreshBreadth(force = false) {
     if (!force && !isNSEMarketDay()) return; // skip outside market hours unless forced (e.g. startup)
@@ -2628,6 +2643,14 @@ async function refreshPCR() {
 
     } catch(e) {
         console.error('refreshPCR:', e.message);
+    }
+
+    // ── Signal recalc trigger ─────────────────────────────────────────────────
+    // PCR, OI buildup, Murarka zone, FII all just refreshed — recalc signal
+    // immediately so the vote tally uses fresh PCR without waiting for next tick.
+    if (marketState.nifty > 0 && isMarketOpen()) {
+        try { await updatePrice(marketState.nifty, marketState.change ?? 0, marketState.changePct ?? 0, marketState.source ?? 'yahoo'); }
+        catch(e) { console.error('[PCR signal trigger]', e.message); }
     }
 }
 
