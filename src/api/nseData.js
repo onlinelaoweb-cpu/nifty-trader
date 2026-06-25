@@ -80,60 +80,9 @@ const FIIDII_INTERVAL_MS = 15 * 60 * 1000;   // re-fetch FII/DII every 15 min
 const COOKIE_TTL_MS      = 15 * 60 * 1000;   // proactive cookie re-warm
 
 
-// ── Dhan API config ────────────────────────────────────────────────────────────
-// Dhan option chain works from Railway US IPs (confirmed not IP-blocked).
-// Set DHAN_ACCESS_TOKEN + DHAN_CLIENT_ID in Railway env vars.
-// NOTE: Dhan token expires daily — app auto-renews it at startup using RenewToken API.
-let   DHAN_ACCESS_TOKEN = (process.env.DHAN_ACCESS_TOKEN || '').trim() || null;
-const DHAN_CLIENT_ID    = (process.env.DHAN_CLIENT_ID    || '').trim() || null;
-// Log Dhan status at module load — appears in Railway startup logs
-console.log(`[nseData] Dhan PCR: ${DHAN_ACCESS_TOKEN ? '✅ token present (' + DHAN_ACCESS_TOKEN.slice(0,12) + '...)' : '❌ DHAN_ACCESS_TOKEN missing'} | ClientID: ${DHAN_CLIENT_ID ? '✅ ' + DHAN_CLIENT_ID : '❌ MISSING — set DHAN_CLIENT_ID in Railway Variables!'}`);
-if (!DHAN_CLIENT_ID || !DHAN_ACCESS_TOKEN) {
-    console.error('[nseData] ⚠️  PCR DISABLED — DHAN_ACCESS_TOKEN + DHAN_CLIENT_ID dono Railway Variables mein set karo. PCR tab N/A dikhega jab tak fix nahi hota.');
-}
+// PCR sources: Fyers (primary) → Angel (secondary) → NSE direct (fallback)
 
-// ── Dhan Token — MANUAL DAILY REFRESH REQUIRED ─────────────────────────────────
-// NOTE (Jun 13, 2026): Dhan's /v2/RenewToken endpoint does NOT support
-// programmatic refresh of access tokens — there is no API-based renewal flow.
-// Access tokens must be regenerated manually (~once every 24h) from the
-// Dhan web portal: Profile → DhanHQ Trading APIs → Generate Token, then
-// updated in Railway → Variables → DHAN_ACCESS_TOKEN.
-// This function attempts the call anyway (harmless if it 400s) in case Dhan
-// adds support later, but DO NOT rely on it — set a daily reminder to refresh
-// the token manually, or expect Dhan PCR to silently stop working ~24h after
-// the last manual token update.
-async function renewDhanToken() {
-    if (!DHAN_ACCESS_TOKEN || !DHAN_CLIENT_ID) return;
-    try {
-        const res = await axios.post(
-            'https://api.dhan.co/v2/RenewToken',
-            {},
-            {
-                headers: {
-                    'access-token' : DHAN_ACCESS_TOKEN,
-                    'dhanClientId'  : DHAN_CLIENT_ID,
-                    'Content-Type'  : 'application/json',
-                },
-                timeout: 8000,
-            }
-        );
-        if (res.data?.accessToken) {
-            DHAN_ACCESS_TOKEN = res.data.accessToken.trim();
-            console.log('[Dhan] ✅ Token auto-renewed successfully (' + DHAN_ACCESS_TOKEN.slice(0,12) + '...)');
-        } else {
-            console.warn('[Dhan] Token renewal response unexpected:', JSON.stringify(res.data)?.slice(0,120));
-        }
-    } catch (e) {
-        // Expected: Dhan has no public renewal API for this token type.
-        // A 400/404 here is NORMAL — it does NOT mean your token is invalid.
-        // ⚠️  REMINDER: Refresh DHAN_ACCESS_TOKEN manually once daily via Dhan web portal.
-        console.warn(`[Dhan] Auto-renewal not supported by Dhan API (${e.response?.status || e.message}) — using existing token. ⚠️ Remember to refresh DHAN_ACCESS_TOKEN manually once/day from Dhan web portal if Dhan PCR stops working.`);
-    }
-}
-// Run renewal at startup (non-blocking)
-renewDhanToken();
-
-// ScraperAPI removed — trial ended. Dhan API is now the primary PCR source.
+// PCR sources: Fyers (primary) → Angel (secondary) → NSE direct (fallback)
 const SCRAPERAPI_KEY  = null;   // disabled
 const SCRAPERAPI_BASE = 'https://api.scraperapi.com';  // kept for reference only
 
@@ -1061,7 +1010,7 @@ const _pcr = {
     fetchedAt   : null,
     lastError   : null,
     fetchCount  : 0,
-    source      : null,   // 'fyers' | 'dhan' | 'angel' | 'nse' | 'banknifty-fyers' | 'banknifty-dhan'
+    source      : null,   // 'fyers' | 'angel' | 'nse' | 'banknifty-fyers'
     fromIndex   : 'NIFTY', // 'NIFTY' | 'BANKNIFTY' — set to BANKNIFTY when used as fallback proxy
 };
 
@@ -1376,14 +1325,9 @@ async function fetchPCRFromAngel(spotPrice) {
 }
 
 
-// ── Dhan API PCR ──────────────────────────────────────────────────────────────
-// Dhan option chain API works from Railway US IPs.
-// Docs: https://dhanhq.co/docs/v2/option-chain/
-// Requires DHAN_ACCESS_TOKEN + DHAN_CLIENT_ID env vars.
-
 // ── Fyers API PCR ─────────────────────────────────────────────────────────────
 // Fetches Nifty option chain from Fyers API v3 → computes PCR, ATM PCR, walls.
-// No IP restriction, 365-day token. Primary PCR source replacing Dhan.
+// Primary PCR source. Update FYERS_ACCESS_TOKEN daily before 9:15 AM.
 async function fetchPCRFromFyers(spotPrice, opts = {}) {
     if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return null;
     if (!spotPrice || spotPrice <= 0) return null;
@@ -1516,139 +1460,6 @@ async function fetchPCRFromFyers(spotPrice, opts = {}) {
     }
 }
 
-async function fetchPCRFromDhan(spotPrice, opts = {}) {
-    if (!DHAN_ACCESS_TOKEN || !DHAN_CLIENT_ID) return null;
-    if (!spotPrice || spotPrice <= 0) return null;
-
-    const underlyingScrip = opts.underlyingScrip ?? 13;   // NIFTY 50 = 13, BANKNIFTY = 25
-    const strikeStep       = opts.strikeStep ?? 50;
-    const logTag            = opts.logTag || 'PCR-Dhan';
-
-    try {
-        // Get current/upcoming Tuesday expiry (Nifty weekly — changed from Thursday to Tuesday)
-        // If today IS Tuesday → use today (same-day expiry)
-        // Otherwise → find next Tuesday
-        const getNextWeeklyExpiry = () => {
-            const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-            const day = now.getDay(); // 0=Sun, 2=Tue
-            let daysAhead = (2 - day + 7) % 7; // 0 if today is Tuesday
-            const expiry = new Date(now);
-            expiry.setDate(now.getDate() + daysAhead);
-            return `${expiry.getFullYear()}-${String(expiry.getMonth()+1).padStart(2,'0')}-${String(expiry.getDate()).padStart(2,'0')}`;
-        };
-
-        // BankNifty options are now monthly — expiry = last Tuesday of current month
-        // (falls back to next month's last Tuesday if current month's has passed)
-        const getNextMonthlyExpiry = () => {
-            const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-            const lastTuesdayOf = (year, month) => {
-                const d = new Date(year, month + 1, 0); // last day of month
-                const offset = (d.getDay() - 2 + 7) % 7; // days to subtract to reach Tuesday
-                d.setDate(d.getDate() - offset);
-                return d;
-            };
-            let candidate = lastTuesdayOf(now.getFullYear(), now.getMonth());
-            const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            if (candidate < todayStart) {
-                candidate = lastTuesdayOf(now.getFullYear(), now.getMonth() + 1);
-            }
-            return `${candidate.getFullYear()}-${String(candidate.getMonth()+1).padStart(2,'0')}-${String(candidate.getDate()).padStart(2,'0')}`;
-        };
-
-        const expiry = underlyingScrip === 25 ? getNextMonthlyExpiry() : getNextWeeklyExpiry();
-        console.log(`[${logTag}] Fetching option chain for expiry ${expiry}...`);
-
-        const res = await axios.post(
-            'https://api.dhan.co/v2/optionchain',
-            {
-                UnderlyingScrip : underlyingScrip,
-                UnderlyingType  : 'INDEX',
-                Expiry          : expiry,
-            },
-            {
-                headers: {
-                    'Content-Type' : 'application/json',
-                    'Accept'       : 'application/json',
-                    'access-token' : DHAN_ACCESS_TOKEN,
-                    'client-id'    : DHAN_CLIENT_ID,
-                },
-                timeout: 12_000,
-            }
-        );
-
-        if (res.status !== 200) {
-            console.warn(`[${logTag}] HTTP ${res.status}`);
-            return null;
-        }
-
-        const body = res.data;
-        // Dhan response: { data: { oc: { [strikeStr]: { call_options: {...}, put_options: {...} } } } }
-        const oc = body?.data?.oc || body?.oc || body?.data;
-        if (!oc || typeof oc !== 'object') {
-            console.warn(`[${logTag}] Unexpected response shape: ${JSON.stringify(body)?.slice(0,120)}`);
-            return null;
-        }
-
-        const atmStrike = Math.round(spotPrice / strikeStep) * strikeStep;
-        let totalCeOI = 0, totalPeOI = 0;
-        let ceWall = 0, ceWallStrike = 0, peWall = 0, peWallStrike = 0;
-        let atmCEpremium = null, atmPEpremium = null;  // FIX: ATM option LTP
-        const records = [];
-
-        for (const [strikeStr, data] of Object.entries(oc)) {
-            const strike = parseFloat(strikeStr);
-            if (isNaN(strike)) continue;
-            const ceOI = parseInt(data?.call_options?.oi || data?.CE?.openInterest || 0);
-            const peOI = parseInt(data?.put_options?.oi  || data?.PE?.openInterest || 0);
-            const ceLtp = parseFloat(data?.call_options?.last_price || data?.CE?.lastPrice || 0);
-            const peLtp = parseFloat(data?.put_options?.last_price  || data?.PE?.lastPrice || 0);
-            const ceOIChg = parseInt(data?.call_options?.oi_change || data?.CE?.changeinOpenInterest || 0);
-            const peOIChg = parseInt(data?.put_options?.oi_change  || data?.PE?.changeinOpenInterest || 0);
-
-            totalCeOI += ceOI;
-            totalPeOI += peOI;
-            if (ceOI > ceWall) { ceWall = ceOI; ceWallStrike = strike; }
-            if (peOI > peWall) { peWall = peOI; peWallStrike = strike; }
-            if (Math.abs(strike - atmStrike) < 1) {
-                if (ceLtp > 0) atmCEpremium = ceLtp;  // FIX: capture ATM LTP
-                if (peLtp > 0) atmPEpremium = peLtp;
-            }
-
-            records.push({
-                strikePrice: strike,
-                CE: { openInterest: ceOI, lastPrice: ceLtp, changeinOpenInterest: ceOIChg },
-                PE: { openInterest: peOI, lastPrice: peLtp, changeinOpenInterest: peOIChg },
-            });
-        }
-
-        if (totalCeOI === 0 || totalPeOI === 0) {
-            console.warn(`[${logTag}] Zero OI — market closed or no data`);
-            return null;
-        }
-
-        const pcr    = parseFloat((totalPeOI / totalCeOI).toFixed(3));
-        const atmRange = records.filter(r => Math.abs(r.strikePrice - atmStrike) <= strikeStep * 3);
-        const atmCeOI  = atmRange.reduce((s, r) => s + (r.CE?.openInterest || 0), 0);
-        const atmPeOI  = atmRange.reduce((s, r) => s + (r.PE?.openInterest || 0), 0);
-        const atmPcr   = atmCeOI > 0 ? parseFloat((atmPeOI / atmCeOI).toFixed(3)) : null;
-
-        console.log(`[${logTag}] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike}(${ceWall}) | PE Wall:${peWallStrike}(${peWall}) | Expiry:${expiry}`);
-
-        return {
-            pcr, atmPcr, atm: atmStrike,
-            ceWall       : { strike: ceWallStrike, oi: ceWall },
-            peWall       : { strike: peWallStrike, oi: peWall },
-            maxPain      : calcMaxPain(records),
-            records,
-            source       : 'dhan',
-            atmCEpremium,   // FIX: buyer/seller activity card
-            atmPEpremium,
-        };
-    } catch (e) {
-        console.warn(`[${logTag}] Error: ${e.message}`);
-        return null;
-    }
-}
 
 async function _fetchBankNiftyPCRFallback() {
     const bnSpot = _getBankNiftySpot();
@@ -1662,15 +1473,7 @@ async function _fetchBankNiftyPCRFallback() {
         console.log('[PCR-BankNifty] Trying Fyers...');
         const r = await fetchPCRFromFyers(bnSpot, { fyersSymbol: 'NSE:NIFTYBANK-INDEX', strikeStep: 100 });
         if (r) return { ...r, source: 'banknifty-fyers' };
-        console.warn('[PCR-BankNifty] Fyers failed — trying Dhan');
-    }
-
-    // Then Dhan
-    if (DHAN_ACCESS_TOKEN && DHAN_CLIENT_ID) {
-        console.log('[PCR-BankNifty] Trying Dhan...');
-        const r = await fetchPCRFromDhan(bnSpot, { underlyingScrip: 25, strikeStep: 100, logTag: 'PCR-BankNifty-Dhan' });
-        if (r) return { ...r, source: 'banknifty-dhan' };
-        console.warn('[PCR-BankNifty] Dhan failed too');
+        console.warn('[PCR-BankNifty] Fyers failed — no further fallback for BankNifty PCR');
     }
 
     return null;
@@ -1738,132 +1541,7 @@ async function _fetchPCR(spotPrice) {
                 } catch (_) {}
                 return;  // ✅ Fyers success — skip all other paths
             }
-            console.warn('[PCR] Fyers path failed — falling back to Dhan');
-        }
-
-        // ── Path 0b: Dhan API — fallback (1-day token, needs manual refresh) ────────────
-        if (DHAN_ACCESS_TOKEN && DHAN_CLIENT_ID) {
-            console.log('[PCR] Trying Dhan API...');
-            const dhanResult = await fetchPCRFromDhan(spotPrice);
-            if (dhanResult) {
-                Object.assign(_pcr, {
-                    pcr          : dhanResult.pcr,
-                    atmPcr       : dhanResult.atmPcr,
-                    atm          : dhanResult.atm,
-                    ceWall       : dhanResult.ceWall,
-                    peWall       : dhanResult.peWall,
-                    maxPain      : dhanResult.maxPain,
-                    atmCEpremium : dhanResult.atmCEpremium || null,  // FIX
-                    atmPEpremium : dhanResult.atmPEpremium || null,  // FIX
-                    expiryDay    : isExpiryDay(),
-                    fetchedAt    : new Date(),
-                    lastError    : null,
-                    fetchCount   : _pcr.fetchCount + 1,
-                    source       : 'dhan',
-                    fromIndex    : 'NIFTY',
-                });
-                try {
-                    const oib = calcOIBuildup(dhanResult.records || [], dhanResult.pcr);
-                    if (oib) {
-                        const oiSignal = interpretOIBuildup(oib);
-                        Object.assign(_oiBuildup, oib, {
-                            signal: oiSignal.signal, strength: oiSignal.strength,
-                            label: oiSignal.label, fetchedAt: new Date(),
-                            fetchCount: _oiBuildup.fetchCount + 1,
-                        });
-                    }
-                    const emomRaw = parseEarlyMomentum(dhanResult.records || [], spotPrice);
-                    if (emomRaw) {
-                        const emSignal = interpretEarlyMomentum({
-                            ...emomRaw,
-                            topCEbuildup: _oiBuildup.topCEbuildup || [],
-                            topPEbuildup: _oiBuildup.topPEbuildup || [],
-                            maxCEoiAddStrike: _oiBuildup.maxCEoiAddStrike,
-                            maxPEoiAddStrike: _oiBuildup.maxPEoiAddStrike,
-                            maxCEoiAdd: _oiBuildup.maxCEoiAdd,
-                            maxPEoiAdd: _oiBuildup.maxPEoiAdd,
-                        });
-                        Object.assign(_earlyMom, emomRaw, {
-                            score: emSignal.score, signal: emSignal.signal,
-                            strength: emSignal.strength, label: emSignal.label,
-                            votes: emSignal.votes, fetchedAt: new Date(),
-                        });
-                    }
-                } catch (_) {}
-                return;  // ✅ Dhan success — skip all other paths
-            }
-            console.warn('[PCR] Dhan path failed — falling back to direct NSE');
-        }
-
-        // ── Path 0b: Angel One SmartAPI (DISABLED — HTML IP block on Railway) ─────────
-        if (_angelSession?.jwtToken) {  // RE-ENABLED Jun 13, 2026 — try Angel; falls through to NSE if blocked
-            console.log('[PCR] Trying Angel Market Data...');
-            const angelResult = await fetchPCRFromAngel(spotPrice);
-            if (angelResult) {
-                // Commit directly — Angel result is already parsed
-                Object.assign(_pcr, {
-                    pcr          : angelResult.pcr,
-                    atmPcr       : angelResult.atmPcr,
-                    atm          : angelResult.atm,
-                    ceWall       : angelResult.ceWall,
-                    peWall       : angelResult.peWall,
-                    maxPain      : angelResult.maxPain,
-                    atmCEpremium : angelResult.atmCEpremium || null,  // FIX
-                    atmPEpremium : angelResult.atmPEpremium || null,  // FIX
-                    expiryDay    : isExpiryDay(),
-                    fetchedAt    : new Date(),
-                    lastError    : null,
-                    fetchCount   : _pcr.fetchCount + 1,
-                    source       : 'angel',
-                    fromIndex    : 'NIFTY',
-                });
-                // Run OI buildup from Angel records too
-                try {
-                    const oib = calcOIBuildup(angelResult.records?.map(r => ({
-                        strikePrice: r.strikePrice,
-                        CE: r.CE || {},
-                        PE: r.PE || {},
-                    })) || [], angelResult.pcr);
-                    if (oib) {
-                        const oiSignal = interpretOIBuildup(oib);
-                        Object.assign(_oiBuildup, oib, {
-                            signal    : oiSignal.signal,
-                            strength  : oiSignal.strength,
-                            label     : oiSignal.label,
-                            fetchedAt : new Date(),
-                            fetchCount: _oiBuildup.fetchCount + 1,
-                        });
-                    }
-                    // FIX: function is parseEarlyMomentum, not calcEarlyMomentum
-                    const emomRaw = parseEarlyMomentum(angelResult.records?.map(r => ({
-                        strikePrice: r.strikePrice,
-                        CE: r.CE || {},
-                        PE: r.PE || {},
-                    })) || [], spotPrice);
-                    if (emomRaw) {
-                        const emSignal = interpretEarlyMomentum({
-                            ...emomRaw,
-                            topCEbuildup    : _oiBuildup.topCEbuildup   || [],
-                            topPEbuildup    : _oiBuildup.topPEbuildup   || [],
-                            maxCEoiAddStrike: _oiBuildup.maxCEoiAddStrike,
-                            maxPEoiAddStrike: _oiBuildup.maxPEoiAddStrike,
-                            maxCEoiAdd      : _oiBuildup.maxCEoiAdd,
-                            maxPEoiAdd      : _oiBuildup.maxPEoiAdd,
-                        });
-                        Object.assign(_earlyMom, emomRaw, {
-                            score    : emSignal.score,
-                            signal   : emSignal.signal,
-                            strength : emSignal.strength,
-                            label    : emSignal.label,
-                            votes    : emSignal.votes,
-                            fetchedAt: new Date(),
-                            fetchCount: _earlyMom.fetchCount + 1,
-                        });
-                    }
-                } catch (_) {}
-                return;  // success — skip ScraperAPI + direct NSE
-            }
-            // Angel path disabled
+            console.warn('[PCR] Fyers path failed — trying Angel/NSE fallback');
         }
 
         // ── Path A: ScraperAPI — REMOVED (trial ended) ───────────────────
