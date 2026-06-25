@@ -79,7 +79,10 @@ function todaySessionCandles(candles) {
         const istDate = new Date(ts + IST_OFFSET_MS).toISOString().slice(0, 10);
         return istDate === todayStr;
     });
-    return session.length >= 2 ? session : candles.slice(-80);
+    // FIX: never fall back to multi-day candles — return today's session candles only,
+    // even if fewer than 2 (caller will handle insufficient bars via MIN_BARS check).
+    // Using multi-day candles causes stale BEARISH readings from yesterday on fresh boots.
+    return session;
 }
 
 // ── Direct Yahoo Finance fallback (bypasses NSE/fetchYahooChart entirely) ─────
@@ -112,8 +115,8 @@ async function fetchCandlesFromYahoo(intervalKey) {
     }
 
     const cfgMap = {
-        '5m' : { interval: '5m',  range: '5d'  },
-        '15m': { interval: '15m', range: '5d'  },
+        '5m' : { interval: '5m',  range: '1d'  },   // FIX: was 5d — today only, no multi-day stale data
+        '15m': { interval: '15m', range: '1d'  },   // FIX: was 5d — today only
         '1h' : { interval: '60m', range: '1mo' },
     };
     const cfg = cfgMap[intervalKey];
@@ -294,12 +297,9 @@ function calcIndicators(candles, tfLabel, vix = null) {
     }
 
     // ADX(14) — min 30 candles (2 × period + buffer), used for NEUTRAL override only
-    // For 5m TF: Yahoo gives today-only bars (< 100 total), so `candles` IS the session.
-    // For 15m/1h TF: Yahoo gives multi-day bars (100+), so we need sessionC to avoid gaps.
-    // Rule: if candles looks like single-session data (< 100 bars), use it directly for ADX.
-    const adxSource = sessionC.length >= 30 ? sessionC
-                    : candles.length < 100   ? candles      // today-only (5m Yahoo)
-                    : candles.slice(-80);                    // last 80 of multi-day (strip oldest gaps)
+    // Yahoo now fetches range=1d so all candles are today's session — use directly.
+    // sessionC (today-filtered) is always safe as ADX source since range=1d fix.
+    const adxSource = sessionC.length >= 30 ? sessionC : candles;
     const adxData  = calculateADX(adxSource);
     const adxVal   = adxData?.adx ?? null;
     // ADX < 20 = choppy, override signal to NEUTRAL even if bull/bear votes pass.
