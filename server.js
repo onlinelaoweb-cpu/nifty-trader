@@ -1658,7 +1658,8 @@ function combineSignals(indicators) {
         const vix2   = marketState.vix    || null;
         const adR    = marketState.breadth?.adRatio || null;
         const fiiNet = marketState.fii?.net ?? null;
-        const oiInt  = marketState.oiBuildup?.interpretation || null;
+        // FIX Bug1: oiBuildup has no 'interpretation' field — use 'signal' instead
+        const oiSignal = marketState.oiBuildup?.signal || null;  // 'BULL_LONG'|'BEAR_SHORT'|'NEUTRAL' etc.
         const pcrSlope2 = marketState.pcrSlope?.trend || null;
 
         const bits = [];
@@ -1668,8 +1669,17 @@ function combineSignals(indicators) {
         else if (pcrSlope2 === 'FALLING') { bits.push('PCR falling ▼'); forceScore--; }
         if (vix2 != null) { bits.push(`VIX ${vix2.toFixed(1)}`); if (vix2 < 14) forceScore++; else if (vix2 > 20) forceScore--; }
         if (adR != null) { bits.push(`A/D ${adR.toFixed(1)}`); if (adR > 1.5) forceScore++; else if (adR < 0.7) forceScore--; }
-        if (fiiNet != null) { bits.push(`FII ${fiiNet > 0 ? '+' : ''}${Math.round(fiiNet)}Cr`); if (fiiNet > 500) forceScore++; else if (fiiNet < -500) forceScore--; }
-        if (oiInt) { bits.push(`OI: ${oiInt}`); if (oiInt.toLowerCase().includes('long')) forceScore++; else if (oiInt.toLowerCase().includes('short')) forceScore--; }
+        // FIX Bug2: FII threshold was 500Cr — too high for normal days (avg ±50-200Cr).
+        // Lowered to 100Cr so FII net buying/selling actually contributes to force score.
+        if (fiiNet != null) { bits.push(`FII ${fiiNet > 0 ? '+' : ''}${Math.round(fiiNet)}Cr`); if (fiiNet > 100) forceScore++; else if (fiiNet < -100) forceScore--; }
+        // FIX Bug1 cont: use oiSignal (signal field) to determine OI direction
+        if (oiSignal && oiSignal !== 'NEUTRAL') {
+            const oiLabel = marketState.oiBuildup?.label || oiSignal;
+            bits.push(`OI: ${oiSignal}`);
+            const isBull = oiSignal.includes('BULL') || oiSignal.includes('LONG');
+            const isBear = oiSignal.includes('BEAR') || oiSignal.includes('SHORT');
+            if (isBull) forceScore++; else if (isBear) forceScore--;
+        }
 
         let law2;
         const trendDir = law1.direction;
