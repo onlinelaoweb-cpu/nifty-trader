@@ -2494,8 +2494,10 @@ async function refreshMTF() {
             confidence    : preMarket ? 0         : adjConfidence,
             aligned       : preMarket ? false      : d.aligned,
             softAligned   : preMarket ? false      : (d.softAligned ?? false),  // 15m+1h agree, 5m dissents
+            oneHourLagging: preMarket ? false      : (d.oneHourLagging ?? false), // 5m+15m flipped vs 1H → 1H excluded
             bullCount     : preMarket ? 0          : d.bullCount,
             bearCount     : preMarket ? 0          : d.bearCount,
+            validTFCount  : preMarket ? 0          : d.validTFCount ?? 0,  // used by telegram.js title
             validTFs      : preMarket ? 0          : d.validTFCount ?? 0, // ← fix: was missing, frontend checklist always showed 0/3
             tf5m          : d.tf5m,
             tf15m         : d.tf15m,
