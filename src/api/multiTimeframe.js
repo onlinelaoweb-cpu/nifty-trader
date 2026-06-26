@@ -117,7 +117,7 @@ async function fetchCandlesFromYahoo(intervalKey) {
     const cfgMap = {
         '5m' : { interval: '5m',  range: '1d'  },   // FIX: was 5d — today only, no multi-day stale data
         '15m': { interval: '15m', range: '1d'  },   // FIX: was 5d — today only
-        '1h' : { interval: '60m', range: '1mo' },
+        '1h' : { interval: '60m', range: '5d'  },   // FIX: was 1mo — 5d gives recent context without month-old bias
     };
     const cfg = cfgMap[intervalKey];
     if (!cfg) return [];
@@ -467,16 +467,42 @@ async function analyzeMultiTimeframe(vix = null) {
     const bearCount = validTFs.filter(tf => tf.signal === 'BEARISH').length;
     const validCount = validTFs.length;
 
-    // aligned = all valid TFs agree (minimum 2 valid TFs required to claim alignment)
-    const aligned = validCount >= 2 && (bullCount === validCount || bearCount === validCount);
+    // ── 1H lag / reversal detection ───────────────────────────────────────────
+    // Problem: 1H candle reflects the full prior session trend. When 5m + 15m
+    // both flip direction intraday (e.g. 24,200 peak → sellers take over), the
+    // 1H candle still shows BULLISH from the morning rally for 60+ min.
+    // Result: app kept saying "ALL 3 ALIGNED BULLISH" while price was falling.
+    //
+    // Fix: if 5m AND 15m are BOTH valid and both disagree with 1H, mark 1H as
+    // lagging (oneHourLagging=true) and exclude it from the aligned vote.
+    // "2 fast TFs vs 1 slow TF" = the fast ones are right; 1H is stale.
+    const oneHourLagging =
+        tf1h.signal !== 'INSUFFICIENT' &&
+        tf5m.signal  !== 'INSUFFICIENT' && tf5m.signal  !== 'NEUTRAL' &&
+        tf15m.signal !== 'INSUFFICIENT' && tf15m.signal !== 'NEUTRAL' &&
+        tf5m.signal === tf15m.signal &&         // 5m and 15m agree with each other
+        tf5m.signal !== tf1h.signal;            // but both disagree with 1H
+
+    // When 1H is lagging, exclude it from the vote so 5m+15m consensus drives the signal
+    const voteTFs    = oneHourLagging
+        ? [tf5m, tf15m]                         // ignore lagging 1H
+        : validTFs;
+    const voteBull   = voteTFs.filter(tf => tf.signal === 'BULLISH').length;
+    const voteBear   = voteTFs.filter(tf => tf.signal === 'BEARISH').length;
+    const voteCount  = voteTFs.length;
+
+    // aligned = all voting TFs agree (minimum 2 valid TFs required to claim alignment)
+    const aligned = voteCount >= 2 && (voteBull === voteCount || voteBear === voteCount);
 
     // softAligned = 15m + 1h agree but 5m dissents (morning chop pattern).
     // 5m is the noisiest TF — it stays choppy for 45–60 min after gap opens.
     // When the two slower TFs confirm direction but 5m lags, we still have a
     // tradeable setup — just lower conviction. Capped at 65% confidence in server.js.
     // Only fires when all 3 TFs are valid (not INSUFFICIENT) so we're not guessing.
+    // Disabled when 1H is lagging (that pattern is already handled by voteTFs above).
     const softAligned =
         !aligned &&
+        !oneHourLagging &&
         validCount === 3 &&
         tf15m.signal !== 'INSUFFICIENT' &&
         tf1h.signal  !== 'INSUFFICIENT' &&
@@ -512,29 +538,36 @@ async function analyzeMultiTimeframe(vix = null) {
     if (validCount === 0) {
         // No usable TFs at all — happens only in first few minutes of session
         mtfSignal = 'WAIT'; mtfStrength = 'WEAK'; mtfConfidence = 0;
-    } else if (aligned && bullCount === validCount) {
-        mtfStrength   = validCount === 3 ? 'STRONG' : 'MODERATE';
+    } else if (aligned && voteBull === voteCount) {
+        // When 1H is lagging and excluded, voteCount=2 → MODERATE not STRONG
+        mtfStrength   = (voteCount === 3 && !oneHourLagging) ? 'STRONG' : 'MODERATE';
         mtfSignal     = 'BUY CALL';
-        const avgStrength = allTFs.reduce((s, tf, i) => s + tfStrengthScore(tf, adxFloors[i]), 0) / allTFs.length;
-        mtfConfidence = validCount === 3
-            ? Math.round(75 + avgStrength * 10)   // 75–85
-            : Math.round(55 + avgStrength * 10);  // 55–65
-    } else if (aligned && bearCount === validCount) {
-        mtfStrength   = validCount === 3 ? 'STRONG' : 'MODERATE';
+        const avgStrength = voteTFs.reduce((s, tf) => {
+            const i = allTFs.indexOf(tf);
+            return s + tfStrengthScore(tf, adxFloors[i] ?? 12);
+        }, 0) / voteTFs.length;
+        mtfConfidence = (voteCount === 3 && !oneHourLagging)
+            ? Math.round(75 + avgStrength * 10)
+            : Math.round(55 + avgStrength * 10);
+    } else if (aligned && voteBear === voteCount) {
+        mtfStrength   = (voteCount === 3 && !oneHourLagging) ? 'STRONG' : 'MODERATE';
         mtfSignal     = 'BUY PUT';
-        const avgStrength = allTFs.reduce((s, tf, i) => s + tfStrengthScore(tf, adxFloors[i]), 0) / allTFs.length;
-        mtfConfidence = validCount === 3
-            ? Math.round(75 + avgStrength * 10)   // 75–85
-            : Math.round(55 + avgStrength * 10);  // 55–65
+        const avgStrength = voteTFs.reduce((s, tf) => {
+            const i = allTFs.indexOf(tf);
+            return s + tfStrengthScore(tf, adxFloors[i] ?? 12);
+        }, 0) / voteTFs.length;
+        mtfConfidence = (voteCount === 3 && !oneHourLagging)
+            ? Math.round(75 + avgStrength * 10)
+            : Math.round(55 + avgStrength * 10);
     } else if (softAligned) {
         // 15m + 1h agree, 5m dissents — moderate conviction, capped at 55% in server.js
         mtfStrength   = 'MODERATE';
         mtfSignal     = (tf15m.signal === 'BULLISH') ? 'BUY CALL' : 'BUY PUT';
         const avgStrength = [tf15m, tf1h].reduce((s, tf, i) => s + tfStrengthScore(tf, adxFloors[i + 1]), 0) / 2;
         mtfConfidence = Math.round(45 + avgStrength * 10);  // 45–55 — server.js caps at 55
-    } else if (bullCount > bearCount) {
+    } else if (voteBull > voteBear) {
         mtfSignal = 'WAIT'; mtfStrength = 'WEAK'; mtfConfidence = 25;
-    } else if (bearCount > bullCount) {
+    } else if (voteBear > voteBull) {
         mtfSignal = 'WAIT'; mtfStrength = 'WEAK'; mtfConfidence = 25;
     }
 
@@ -549,9 +582,10 @@ async function analyzeMultiTimeframe(vix = null) {
     return {
         tf5m, tf15m, tf1h,
         mtfSignal, mtfStrength, mtfConfidence,
-        bullCount, bearCount,
+        bullCount: voteBull, bearCount: voteBear,   // reflect vote-adjusted counts
         aligned,
         softAligned,   // true when 15m+1h agree but 5m dissents — used by server.js quality gate
+        oneHourLagging,// true when 5m+15m both flip against 1H → 1H excluded from vote
         validTFCount: validCount,
         tf5mWarming: tf5m.signal === 'INSUFFICIENT', // true during first ~22 min after restart
         tf5mBarsNeeded: tf5m.signal === 'INSUFFICIENT' ? (MIN_BARS['5m'] - (tf5m.barCount ?? 0)) : 0,

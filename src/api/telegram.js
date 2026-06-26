@@ -98,11 +98,14 @@ ${mtfInfo}
 // ── MTF All Aligned Alert ─────────────────────────────
 async function sendMTFAlert(state) {
     const emoji      = state.mtf.signal === 'BUY CALL' ? '🟢' : '🔴';
-    const validCount = state.mtf.validTFCount ?? 3;
-    // Honest title: only say "ALL 3" when all 3 TFs are actually valid + aligned
-    const alignTitle = validCount === 3
-        ? '🔥 STRONG SIGNAL — ALL 3 ALIGNED!'
-        : `⚡ SIGNAL — ${validCount}/3 TFs ALIGNED (15m warming up)`;
+    const validCount     = state.mtf.validTFCount ?? 3;
+    const oneHourLagging = state.mtf.oneHourLagging ?? false;
+    // Honest title: show exact situation
+    const alignTitle = oneHourLagging
+        ? '⚡ SIGNAL — 2/3 TFs ALIGNED (1H lagging — reversed)'
+        : validCount === 3
+            ? '🔥 STRONG SIGNAL — ALL 3 ALIGNED!'
+            : `⚡ SIGNAL — ${validCount}/3 TFs ALIGNED (15m warming up)`;
 
     const msg = `
 ${alignTitle}

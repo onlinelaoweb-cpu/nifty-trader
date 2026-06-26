@@ -167,6 +167,8 @@ let signalStreak = { signal: 'WAIT', count: 0 }; // consecutive same-signal coun
 let btstSentToday=false;     // one-shot: BTST/STBT Telegram alert per day
 let telegramAlertInFlight=false; // race-condition guard — prevents duplicate sends when onTick fires concurrently
 let ema920AlertSentToday=false;  // one-shot: 9:20 AM EMA-VWAP setup alert per day
+let lastSignalFiredPrice=0;  // price level at which last SIGNAL CHANGED alert was sent
+                             // prevents duplicate alerts when Nifty barely moves between ticks
 
 function isMarketOpen() {
     const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
@@ -2215,11 +2217,15 @@ async function checkTelegramAlerts(newSignal) {
     // Gate signal-changed alerts to market hours (9:15–15:30) only.
     // On container restart Yahoo data can make TFs look aligned instantly,
     // causing spurious SIGNAL CHANGED alerts at 3–8 AM before market opens.
+    // Also require minimum 15-point price move from last fired level to prevent
+    // rapid-fire duplicates when Nifty oscillates within a tight range (9:58 AM bug).
     const sigIst  = getIST();
     const sigMins = sigIst.getHours() * 60 + sigIst.getMinutes();
-    const sigInMarketHours = sigMins >= 555 && sigMins <= 930;
-    if (newSignal!==prevSignal&&newSignal!=='WAIT'&&sigInMarketHours) {
+    const sigInMarketHours  = sigMins >= 555 && sigMins <= 930;
+    const sigPriceMoved     = Math.abs((marketState.nifty || 0) - lastSignalFiredPrice) >= 15;
+    if (newSignal!==prevSignal&&newSignal!=='WAIT'&&sigInMarketHours&&sigPriceMoved) {
         await sendSignalAlert(marketState,prevSignal);
+        lastSignalFiredPrice = marketState.nifty || 0;
         // ── Trigger AI suggestion on fresh signal (costs 1 API call here only) ──
         if (marketState.qualityGate.passed) {
             try {
