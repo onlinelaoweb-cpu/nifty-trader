@@ -1924,6 +1924,7 @@ function evaluateBTST() {
 // ═══════════════════════════════════════════════════════════════════════════════
 async function check920Setup() {
     if (!isConfigured()) return;
+    if (!isMarketOpen()) return;           // ← holiday / weekend / outside hours guard
     if (ema920AlertSentToday) return;
 
     const ist  = getIST();
@@ -1932,6 +1933,13 @@ async function check920Setup() {
 
     const { nifty, ema9, ema21, vwap } = marketState;
     if (!nifty || nifty <= 0 || !ema9 || !ema21 || !vwap) return;
+
+    // ── Stale price guard — if change% is exactly 0.00 and no tick arrived,
+    //    we have yesterday's close, not a live price. Skip to avoid false signal.
+    if (marketState.change === 0 && marketState.changePct === 0) {
+        console.log('[9:20] Skipping — price appears stale (change=0, no live tick yet)');
+        return;
+    }
 
     // ── LAYER 1: 1m Price + EMA vs VWAP ──────────────────────────────────────
     const priceAbove = nifty  > vwap;
@@ -2204,7 +2212,13 @@ async function checkTelegramAlerts(newSignal) {
             console.log(`🌙 [BTST] Telegram alert sent — ${b.type} ${b.signal} ${b.strike}`);
         } catch(e) { console.error('[BTST] Telegram error:', e.message); }
     }
-    if (newSignal!==prevSignal&&newSignal!=='WAIT') {
+    // Gate signal-changed alerts to market hours (9:15–15:30) only.
+    // On container restart Yahoo data can make TFs look aligned instantly,
+    // causing spurious SIGNAL CHANGED alerts at 3–8 AM before market opens.
+    const sigIst  = getIST();
+    const sigMins = sigIst.getHours() * 60 + sigIst.getMinutes();
+    const sigInMarketHours = sigMins >= 555 && sigMins <= 930;
+    if (newSignal!==prevSignal&&newSignal!=='WAIT'&&sigInMarketHours) {
         await sendSignalAlert(marketState,prevSignal);
         // ── Trigger AI suggestion on fresh signal (costs 1 API call here only) ──
         if (marketState.qualityGate.passed) {
@@ -2219,12 +2233,16 @@ async function checkTelegramAlerts(newSignal) {
             } catch(e) { console.error('AI on signal trigger:', e.message); }
         }
     }
-    // MTF alert cooldown: 30 min between same-direction alerts.
-    // Prevents spam when aligned toggles on/off due to minor ADX fluctuations.
-    const MTF_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
-    const mtfSignalNow = marketState.mtf?.signal || '';
+    // MTF alert cooldown: 60 min between same-direction alerts.
+    // Also gated to actual market hours (9:15–15:30) only — prevents pre-market
+    // spam on container restart when Yahoo data makes all TFs look aligned.
+    const MTF_ALERT_COOLDOWN_MS = 60 * 60 * 1000;  // was 30 min — doubled to cut spam
+    const mtfSignalNow  = marketState.mtf?.signal || '';
+    const mtfIst        = getIST();
+    const mtfMins       = mtfIst.getHours() * 60 + mtfIst.getMinutes();
+    const mtfInWindow   = mtfMins >= 555 && mtfMins <= 930;  // 9:15–15:30 only
     const mtfCooldownOk = (Date.now() - lastMTFAlertAt) > MTF_ALERT_COOLDOWN_MS || mtfSignalNow !== lastMTFAlertSignal;
-    if (marketState.mtf.aligned && (!prevMTFAligned || mtfCooldownOk)) {
+    if (marketState.mtf.aligned && mtfInWindow && (!prevMTFAligned || mtfCooldownOk)) {
         await sendMTFAlert(marketState);
         lastMTFAlertAt     = Date.now();
         lastMTFAlertSignal = mtfSignalNow;
