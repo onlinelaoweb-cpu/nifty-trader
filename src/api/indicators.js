@@ -603,4 +603,139 @@ function calcMomentumBreakdown() {
     return result;
 }
 
-module.exports = { processIndicators, initializeHistory, getCandleHistory, getSessionCandles, loadCandlesFromYahoo, getCandleSource, calcMomentumBreakdown };
+// ── POC (Point of Control) ────────────────────────────────────────────────────
+// Splits today's price range into buckets and finds the level with most volume.
+// Returns { poc, vah, val, signal, label }
+//   poc    = price level with highest volume (magnet)
+//   vah    = Value Area High (top of 70% volume zone)
+//   val    = Value Area Low  (bottom of 70% volume zone)
+//   signal = 'ABOVE_POC' | 'BELOW_POC' | 'AT_POC' | 'INSUFFICIENT'
+//
+// How it helps:
+//   - Price above POC + bullish MTF → CE entry valid (trend has force)
+//   - Price below POC + bearish MTF → PE entry valid
+//   - Price AT POC (±0.1%) → magnet zone, avoid entry — price will chop
+//   - Price rejected at VAH/VAL → good reaction entry (Wyckoff Law 3)
+function computePOC(candles) {
+    const session = (candles || getSessionCandles());
+    if (!session || session.length < 5) {
+        return { poc: null, vah: null, val: null, signal: 'INSUFFICIENT', label: 'POC — not enough data' };
+    }
+
+    // Find session high/low for bucket range
+    const highs  = session.map(c => c.high  ?? c.close);
+    const lows   = session.map(c => c.low   ?? c.close);
+    const hi     = Math.max(...highs);
+    const lo     = Math.min(...lows);
+    const range  = hi - lo;
+    if (range < 10) {
+        return { poc: null, vah: null, val: null, signal: 'INSUFFICIENT', label: 'POC — range too narrow' };
+    }
+
+    // 50-point buckets for Nifty (each bucket = 50pt price level)
+    const BUCKET_SIZE = 50;
+    const numBuckets  = Math.ceil(range / BUCKET_SIZE) + 1;
+    const volBuckets  = new Array(numBuckets).fill(0);
+
+    for (const c of session) {
+        const vol    = c.volume || 1;
+        const cLow   = c.low  ?? c.close;
+        const cHigh  = c.high ?? c.close;
+        // Distribute candle volume proportionally across price buckets it spans
+        const bStart = Math.floor((cLow  - lo) / BUCKET_SIZE);
+        const bEnd   = Math.floor((cHigh - lo) / BUCKET_SIZE);
+        const bSpan  = Math.max(1, bEnd - bStart + 1);
+        for (let b = bStart; b <= Math.min(bEnd, numBuckets - 1); b++) {
+            volBuckets[b] += vol / bSpan;
+        }
+    }
+
+    // POC = bucket with most volume
+    let maxVol = 0, pocBucket = 0;
+    for (let i = 0; i < volBuckets.length; i++) {
+        if (volBuckets[i] > maxVol) { maxVol = volBuckets[i]; pocBucket = i; }
+    }
+    const poc = parseFloat((lo + pocBucket * BUCKET_SIZE + BUCKET_SIZE / 2).toFixed(2));
+
+    // Value Area = 70% of total volume (expand outward from POC)
+    const totalVol = volBuckets.reduce((s, v) => s + v, 0);
+    const target   = totalVol * 0.70;
+    let   vaVol    = volBuckets[pocBucket];
+    let   vaLo     = pocBucket, vaHi = pocBucket;
+    while (vaVol < target && (vaLo > 0 || vaHi < numBuckets - 1)) {
+        const addLo = vaLo > 0              ? volBuckets[vaLo - 1] : 0;
+        const addHi = vaHi < numBuckets - 1 ? volBuckets[vaHi + 1] : 0;
+        if (addHi >= addLo && vaHi < numBuckets - 1) { vaHi++; vaVol += addHi; }
+        else if (vaLo > 0)                            { vaLo--; vaVol += addLo; }
+        else                                          { break; }
+    }
+    const vah = parseFloat((lo + vaHi * BUCKET_SIZE + BUCKET_SIZE).toFixed(2));
+    const val = parseFloat((lo + vaLo * BUCKET_SIZE).toFixed(2));
+
+    // Signal vs current price
+    const lastClose = session[session.length - 1]?.close ?? poc;
+    const atPOC     = Math.abs(lastClose - poc) / poc < 0.001; // within 0.1%
+    const signal    = atPOC
+        ? 'AT_POC'
+        : lastClose > poc ? 'ABOVE_POC' : 'BELOW_POC';
+
+    const label = `POC:${poc} | VAH:${vah} | VAL:${val} | Price ${signal.replace('_',' ')}`;
+    return { poc, vah, val, signal, label, lastClose };
+}
+
+// ── Delta (Buy/Sell pressure imbalance) ──────────────────────────────────────
+// Approximates delta from candle direction + volume since we don't have
+// Level-2 tape data. Close > Open = buying pressure (positive delta).
+// Close < Open = selling pressure (negative delta).
+//
+// Returns { delta, deltaPct, signal, divergence, label }
+//   delta       = net buy - sell volume this session
+//   deltaPct    = delta as % of total volume (−100 to +100)
+//   signal      = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+//   divergence  = true when price trend and delta trend disagree (reversal warning)
+//
+// Divergence examples from June 25:
+//   Price rose 24,000 → 24,250 but delta was negative → sellers absorbing → PUT signal
+//   Price fell 24,250 → 24,050 but delta was positive → buyers absorbing → CALL signal
+function computeDelta(candles) {
+    const session = (candles || getSessionCandles());
+    if (!session || session.length < 3) {
+        return { delta: 0, deltaPct: 0, signal: 'NEUTRAL', divergence: false, label: 'Delta — not enough data' };
+    }
+
+    let buyVol = 0, sellVol = 0;
+    for (const c of session) {
+        const vol  = c.volume || 1;
+        const body = (c.close ?? 0) - (c.open ?? c.close ?? 0);
+        if (body > 0)      { buyVol  += vol; }       // bullish candle
+        else if (body < 0) { sellVol += vol; }        // bearish candle
+        else {
+            buyVol  += vol / 2;                        // doji = split evenly
+            sellVol += vol / 2;
+        }
+    }
+
+    const totalVol  = buyVol + sellVol;
+    const delta     = buyVol - sellVol;
+    const deltaPct  = totalVol > 0 ? parseFloat(((delta / totalVol) * 100).toFixed(1)) : 0;
+    const signal    = deltaPct >  15 ? 'BULLISH'
+                    : deltaPct < -15 ? 'BEARISH'
+                    :                  'NEUTRAL';
+
+    // Divergence: compare price direction (first→last close) vs delta direction
+    const firstClose = session[0]?.close   ?? 0;
+    const lastClose  = session[session.length - 1]?.close ?? 0;
+    const priceUp    = lastClose > firstClose;
+    const deltaPos   = delta > 0;
+    const divergence = session.length >= 10 && (priceUp !== deltaPos) && Math.abs(deltaPct) > 10;
+
+    const divLabel   = divergence
+        ? (priceUp ? ' ⚠️ DIVERGENCE: Price up but sellers absorbing — reversal risk'
+                   : ' ⚠️ DIVERGENCE: Price down but buyers absorbing — bounce risk')
+        : '';
+    const label = `Delta:${deltaPct > 0 ? '+' : ''}${deltaPct}% (${signal})${divLabel}`;
+
+    return { delta: parseFloat(delta.toFixed(0)), deltaPct, signal, divergence, divergenceLabel: divLabel.trim(), label };
+}
+
+module.exports = { processIndicators, initializeHistory, getCandleHistory, getSessionCandles, loadCandlesFromYahoo, getCandleSource, calcMomentumBreakdown, computePOC, computeDelta };

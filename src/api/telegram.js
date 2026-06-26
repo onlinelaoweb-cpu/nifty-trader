@@ -70,6 +70,27 @@ async function sendSignalAlert(state, prevSignal) {
         ? '🔥 ALL 3 TIMEFRAMES ALIGNED!'
         : `MTF: ${state.mtf?.bullCount || 0}/3 Bullish`;
 
+    // POC info — show POC level and whether price is on right side
+    const pocData  = state.poc;
+    const pocEmoji = !pocData || pocData.signal === 'INSUFFICIENT' ? '⏳'
+                   : pocData.signal === 'AT_POC'    ? '🟡'
+                   : pocData.signal === 'ABOVE_POC' ? '🟢'
+                   :                                   '🔴';
+    const pocInfo  = pocData?.poc
+        ? `${pocEmoji} POC:${pocData.poc} | VAH:${pocData.vah} | VAL:${pocData.val} (${pocData.signal.replace('_',' ')})`
+        : '⏳ POC — warming up';
+
+    // Delta info — show pressure + divergence warning if present
+    const deltaData = state.delta;
+    const deltaEmoji = !deltaData ? '⏳'
+                     : deltaData.divergence      ? '⚠️'
+                     : deltaData.signal === 'BULLISH' ? '🟢'
+                     : deltaData.signal === 'BEARISH' ? '🔴'
+                     :                                   '⚪';
+    const deltaInfo = deltaData?.deltaPct !== undefined
+        ? `${deltaEmoji} Delta:${deltaData.deltaPct > 0 ? '+' : ''}${deltaData.deltaPct}% (${deltaData.signal})${deltaData.divergence ? ' — REVERSAL WARNING' : ''}`
+        : '⏳ Delta — warming up';
+
     const msg = `
 ${emoji} <b>SIGNAL CHANGED!</b>
 ━━━━━━━━━━━━━━━━━━
@@ -85,6 +106,9 @@ ${rsiInfo}
 ${vwapInfo}
 ${vixInfo}
 ${pcrInfo}
+━━━━━━━━━━━━━━━━━━
+${pocInfo}
+${deltaInfo}
 ━━━━━━━━━━━━━━━━━━
 ${mtfInfo}
 ━━━━━━━━━━━━━━━━━━

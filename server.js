@@ -21,7 +21,8 @@ const { processIndicators,
         getCandleHistory,
         getSessionCandles,
         loadCandlesFromYahoo, getCandleSource,
-        calcMomentumBreakdown }                      = require('./src/api/indicators');
+        calcMomentumBreakdown,
+        computePOC, computeDelta }                    = require('./src/api/indicators');
 const { fetchMarketData }           = require('./src/api/marketData');
 const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
 const { fetchGlobalCues }           = require('./src/api/globalCues');
@@ -133,6 +134,8 @@ let marketState = {
     adx: null,
     earlyMom: { score: null, signal: 'NEUTRAL', strength: 0, label: 'Early Momentum — awaiting data', votes: [] },
     oiBuildup: { signal: 'NEUTRAL', strength: 0, label: 'OI Buildup — awaiting data', maxCEoiStrike: null, maxPEoiStrike: null, totalCEoiChange: null, totalPEoiChange: null },
+    poc:   { poc: null, vah: null, val: null, signal: 'INSUFFICIENT', label: 'POC — awaiting data' },
+    delta: { delta: 0, deltaPct: 0, signal: 'NEUTRAL', divergence: false, label: 'Delta — awaiting data' },
     // ── Murarka Strategy fields ───────────────────────────────────────────────
     // PCR Zone: 'BULL' (>1.15) | 'AVOID' (0.75–1.15) | 'BEAR' (<0.75)
     pcrZone: { zone: 'AVOID', label: 'Awaiting PCR…', color: 'amber', pcr: null },
@@ -1364,6 +1367,26 @@ function combineSignals(indicators) {
         }
     }
 
+    // ── POC Gate — block entry when price is AT the POC magnet (chop zone) ────
+    // AT_POC = price within 0.1% of highest-volume level → market will oscillate,
+    // not trend. INSUFFICIENT = not enough data yet → let through (don't block early session).
+    const pocSig = marketState.poc?.signal ?? 'INSUFFICIENT';
+    qualityGate.pocClear = pocSig !== 'AT_POC';   // false = AT POC magnet → block
+
+    // Direction alignment: BUY CALL needs price ABOVE POC (buyers in control).
+    //                      BUY PUT needs price BELOW POC (sellers in control).
+    // If INSUFFICIENT → allow (no data to block on).
+    if (rawSignal !== 'WAIT' && pocSig !== 'INSUFFICIENT') {
+        if (rawSignal === 'BUY CALL' && pocSig === 'BELOW_POC') qualityGate.pocClear = false;
+        if (rawSignal === 'BUY PUT'  && pocSig === 'ABOVE_POC') qualityGate.pocClear = false;
+    }
+
+    // ── Delta Divergence Gate — warn when price and delta disagree ────────────
+    // Divergence = price going up but sellers absorbing (or vice versa).
+    // This is the most reliable reversal early warning from order flow.
+    // We don't block on divergence alone — just reduce confidence (handled in Telegram).
+    qualityGate.deltaOk = !(marketState.delta?.divergence ?? false);
+
     // Recompute passed HERE — srClear may have been flipped to false inside the gate block above.
     // Physics gates: physicsLaw1=null means UNKNOWN (early session) → allow through.
     //                physicsLaw1=false means confirmed counter-trend/sideways → block.
@@ -1372,7 +1395,8 @@ function combineSignals(indicators) {
                       && qualityGate.safeWindow  && qualityGate.vixSafe
                       && qualityGate.adxTrend    && (qualityGate.srClear !== false)
                       && (qualityGate.physicsLaw1 !== false)
-                      && (qualityGate.physicsLaw3 !== false);
+                      && (qualityGate.physicsLaw3 !== false)
+                      && (qualityGate.pocClear   !== false);  // AT_POC or wrong side = block
     marketState.qualityGate = qualityGate;
 
     // ── ADX weak-trend confidence cap ────────────────────────────────────────
@@ -2291,7 +2315,12 @@ async function updatePrice(price, change, changePct, source) {
     marketState.candleSource=getCandleSource();
     // ── Smart Money Bias ──────────────────────────────────────────────────────
     marketState.smartMoney = computeSmartMoneyBias();
-    if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%)`);
+    // ── POC + Delta — computed from today's session candles ───────────────────
+    // Run on every price tick so qualityGate and Telegram can use fresh values.
+    // computePOC/Delta read getSessionCandles() internally — no extra args needed.
+    try { marketState.poc   = computePOC();   } catch(e) { console.warn('[POC] error:', e.message); }
+    try { marketState.delta = computeDelta(); } catch(e) { console.warn('[Delta] error:', e.message); }
+    if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%) | POC:${marketState.poc?.poc??'--'} Delta:${marketState.delta?.deltaPct??'--'}%`);
     evaluateBTST();
     await checkTelegramAlerts(signal);
     // ── Auto-log every fresh BUY CALL / BUY PUT transition to signal_log ─────
