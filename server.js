@@ -136,6 +136,13 @@ let marketState = {
     oiBuildup: { signal: 'NEUTRAL', strength: 0, label: 'OI Buildup — awaiting data', maxCEoiStrike: null, maxPEoiStrike: null, totalCEoiChange: null, totalPEoiChange: null },
     poc:   { poc: null, vah: null, val: null, signal: 'INSUFFICIENT', label: 'POC — awaiting data' },
     delta: { delta: 0, deltaPct: 0, signal: 'NEUTRAL', divergence: false, label: 'Delta — awaiting data' },
+    // ── WebSocket Mode 2 live fields (updated every tick from Angel WS) ───────
+    wsVolume  : 0,     // session cumulative volume from WS (resets 9:15 AM)
+    wsBuyQty  : 0,     // total buy orders at market — buying pressure
+    wsSellQty : 0,     // total sell orders at market — selling pressure
+    wsOpen    : 0,     // session open from WS
+    wsHigh    : 0,     // session high from WS (live)
+    wsLow     : 0,     // session low from WS (live)
     // ── Murarka Strategy fields ───────────────────────────────────────────────
     // PCR Zone: 'BULL' (>1.15) | 'AVOID' (0.75–1.15) | 'BEAR' (<0.75)
     pcrZone: { zone: 'AVOID', label: 'Awaiting PCR…', color: 'amber', pcr: null },
@@ -2319,7 +2326,12 @@ async function updatePrice(price, change, changePct, source) {
     // Run on every price tick so qualityGate and Telegram can use fresh values.
     // computePOC/Delta read getSessionCandles() internally — no extra args needed.
     try { marketState.poc   = computePOC();   } catch(e) { console.warn('[POC] error:', e.message); }
-    try { marketState.delta = computeDelta(); } catch(e) { console.warn('[Delta] error:', e.message); }
+    // Only run candle-body proxy delta when WS hasn't provided real order flow data yet.
+    // Once onTick() starts writing marketState.delta.source='websocket', we skip the proxy
+    // so the real buy/sell qty delta from Mode 2 is never overwritten by the approximation.
+    if ((marketState.delta?.source ?? '') !== 'websocket') {
+        try { marketState.delta = computeDelta(); } catch(e) { console.warn('[Delta] error:', e.message); }
+    }
     if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%) | POC:${marketState.poc?.poc??'--'} Delta:${marketState.delta?.deltaPct??'--'}%`);
     evaluateBTST();
     await checkTelegramAlerts(signal);
@@ -2396,6 +2408,51 @@ async function onTick(tickData) {
     }
 
     _lastTickAt = Date.now();  // update watchdog timestamp on every tick
+
+    // ── Mode 2 fields — store live OHLCV + buy/sell qty from WS tick ─────────
+    // volume  = session cumulative volume (resets each day at 9:15)
+    // buyQty  = total buy orders at market  → buying pressure
+    // sellQty = total sell orders at market → selling pressure
+    // Delta from WS = buyQty - sellQty (real order flow, much better than candle-body proxy)
+    if (tickData.volume  > 0) marketState.wsVolume  = tickData.volume;
+    if (tickData.buyQty  > 0) marketState.wsBuyQty  = tickData.buyQty;
+    if (tickData.sellQty > 0) marketState.wsSellQty = tickData.sellQty;
+    if (tickData.open    > 0) marketState.wsOpen    = tickData.open;
+    if (tickData.high    > 0) marketState.wsHigh    = tickData.high;
+    if (tickData.low     > 0) marketState.wsLow     = tickData.low;
+
+    // ── Real-time Delta from live WS buy/sell qty ─────────────────────────────
+    // Override computeDelta() candle-body proxy when WS gives real order flow data.
+    // wsDelta > 0 = more buy orders = bullish pressure
+    // wsDelta < 0 = more sell orders = bearish pressure
+    // Divergence: price making new session high but wsDelta trending negative = trap
+    if (tickData.buyQty > 0 && tickData.sellQty > 0) {
+        const total     = tickData.buyQty + tickData.sellQty;
+        const wsDelta   = tickData.buyQty - tickData.sellQty;
+        const deltaPct  = parseFloat(((wsDelta / total) * 100).toFixed(1));
+        const signal    = deltaPct >  10 ? 'BULLISH'
+                        : deltaPct < -10 ? 'BEARISH'
+                        :                  'NEUTRAL';
+
+        // Divergence: price at or near session high but sellers dominating
+        const sessionHigh = marketState.wsHigh || price;
+        const nearHigh    = price >= sessionHigh * 0.998;  // within 0.2% of high
+        const nearLow     = price <= (marketState.wsLow || price) * 1.002;
+        const divergence  = (nearHigh && deltaPct < -10) || (nearLow && deltaPct > 10);
+
+        marketState.delta = {
+            delta      : wsDelta,
+            deltaPct,
+            signal,
+            divergence,
+            divergenceLabel: divergence
+                ? (nearHigh ? '⚠️ DIVERGENCE: Price near high but sellers dominating — reversal risk'
+                            : '⚠️ DIVERGENCE: Price near low but buyers absorbing — bounce risk')
+                : '',
+            label  : `Delta:${deltaPct > 0 ? '+' : ''}${deltaPct}% (${signal}) [live WS]${divergence ? ' ⚠️' : ''}`,
+            source : 'websocket',   // distinguishes from candle-body proxy
+        };
+    }
 
     // ── Throttle: update price display on every tick, but only run full ───────
     // indicator calculation (ADX/EMA/RSI/VWAP) once per second to avoid spam
