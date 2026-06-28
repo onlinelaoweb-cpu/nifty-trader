@@ -1937,6 +1937,188 @@ html.vn-day .sug-card [style*="color:var(--dim)"] { color: #607080 !important; }
 .pot-check-row{display:flex;align-items:flex-start;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:11px;font-family:'Share Tech Mono',monospace;}
 .pot-check-row:last-child{border-bottom:none;}
 .pot-fib-row{display:flex;justify-content:space-between;padding:2px 4px;font-size:10px;font-family:'Share Tech Mono',monospace;}
+
+/* ═══════════════════════════════════════════════════════════════
+   VN CLEAN UI — Unified Design System
+   Goal: Bloomberg terminal feel — dark, minimal, data-dense
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Global spacing reset ── */
+.panel { padding:0 !important; }
+.panel > div[style*="padding"] { padding: 0 !important; }
+
+/* ── Price Hero ── */
+.price-section {
+  padding: 16px 16px 10px !important;
+  text-align: left;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  background: linear-gradient(180deg, rgba(0,255,136,0.03) 0%, transparent 100%);
+}
+.price-label {
+  font-family: 'Orbitron', monospace !important;
+  font-size: 8px !important;
+  letter-spacing: 3px !important;
+  color: var(--dim) !important;
+  margin-bottom: 2px !important;
+}
+.price-value {
+  font-family: 'Orbitron', monospace !important;
+  font-size: 36px !important;
+  font-weight: 900 !important;
+  line-height: 1 !important;
+  letter-spacing: -1px;
+}
+.price-change {
+  font-size: 11px !important;
+  font-family: 'Share Tech Mono', monospace !important;
+  margin-top: 3px !important;
+}
+
+/* ── Section Labels — unified ── */
+.sec-label {
+  font-family: 'Orbitron', monospace !important;
+  font-size: 7px !important;
+  letter-spacing: 2.5px !important;
+  color: var(--dim) !important;
+  padding: 10px 16px 5px !important;
+  opacity: 0.7;
+}
+
+/* ── Signal Card ── */
+.signal-wrap { padding: 10px 12px 6px !important; }
+.signal-card {
+  border-radius: 10px !important;
+  padding: 12px 14px !important;
+  border-width: 1px !important;
+}
+.signal-badge {
+  font-size: 18px !important;
+  letter-spacing: 3px !important;
+  margin-bottom: 8px !important;
+}
+.conf-wrap {
+  height: 3px !important;
+  border-radius: 2px !important;
+  margin-bottom: 5px !important;
+  background: rgba(255,255,255,0.06) !important;
+}
+.conf-label { font-size: 9px !important; }
+.conf-ticks { font-size: 8px !important; margin-top: 4px !important; }
+
+/* ── Cards — universal tightening ── */
+.card, .suggest-card, .btst-card, .sr-card,
+.pot-law-card, .mz-zone-card {
+  border-radius: 10px !important;
+  border-width: 1px !important;
+}
+
+/* ── Strike Banner ── */
+.strike-banner {
+  margin: 0 12px 8px !important;
+  border-radius: 10px !important;
+  padding: 10px 12px !important;
+}
+.strike-left { font-size: 7px !important; letter-spacing: 2px !important; }
+.strike-val  { font-size: 15px !important; }
+
+/* ── SR Section ── */
+.sr-section { padding: 0 12px 8px !important; }
+.sr-card    { border-radius: 10px !important; padding: 10px 12px !important; }
+.sr-title   { font-size: 9px !important; margin-bottom: 8px !important; }
+.sr-near    { gap: 6px !important; }
+.sr-near-card {
+  border-radius: 8px !important;
+  padding: 8px !important;
+}
+.sr-near-label { font-size: 7px !important; letter-spacing: 1.5px !important; }
+.sr-near-val   { font-size: 16px !important; }
+.sr-near-dist  { font-size: 9px !important; }
+
+/* ── Suggest Card ── */
+.suggest-wrap  { padding: 0 12px 8px !important; }
+.suggest-card  { padding: 10px 12px !important; border-radius: 10px !important; }
+.suggest-title { font-size: 9px !important; letter-spacing: 2px !important; }
+.suggest-header { margin-bottom: 8px !important; }
+
+/* ── Info Row (RSI/VIX/PCR row) ── */
+.info-row, .metrics-row, .data-row {
+  padding: 0 12px 6px !important;
+  gap: 6px !important;
+}
+
+/* ── Bottom Tabs — cleaner ── */
+.bottom-tabs {
+  height: 58px !important;
+  padding: 0 4px !important;
+  gap: 2px !important;
+  border-top: 1px solid rgba(255,255,255,0.06) !important;
+  background: rgba(5,5,5,0.98) !important;
+  backdrop-filter: blur(20px) !important;
+}
+.btab {
+  font-size: 8px !important;
+  letter-spacing: 0.5px !important;
+  padding: 6px 2px !important;
+  border-radius: 8px !important;
+  gap: 2px !important;
+}
+.btab .bi { font-size: 18px !important; }
+
+/* ── More menu ── */
+#more-menu {
+  box-shadow: 0 -8px 32px rgba(0,0,0,0.6) !important;
+  border-radius: 16px 16px 0 0 !important;
+  padding: 12px 0 8px !important;
+}
+.more-item {
+  border-radius: 10px !important;
+  padding: 12px 4px !important;
+  font-size: 8px !important;
+}
+.more-item span { font-size: 22px !important; }
+
+/* ── POC / Delta info rows in Telegram-preview cards ── */
+.vn-poc-row, .vn-delta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 10px;
+  font-family: 'Share Tech Mono', monospace;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+/* ── Physics Tab ── */
+#panel-physics > div { padding: 10px 12px 0 !important; }
+.pot-law-card {
+  padding: 10px 12px !important;
+  margin-bottom: 6px !important;
+  border-radius: 10px !important;
+}
+.pot-law-header { margin-bottom: 4px !important; }
+.pot-law-num  { font-size: 8px !important; }
+.pot-law-name { font-size: 9px !important; }
+.pot-law-badge { font-size: 9px !important; padding: 2px 8px !important; border-radius: 6px !important; }
+
+/* ── Spread Section inside Physics ── */
+#spread-section {
+  border-radius: 10px !important;
+  padding: 10px 12px !important;
+  margin-top: 8px !important;
+}
+
+/* ── Guard Tab ── */
+#panel-guard { padding: 0 12px !important; }
+
+/* ── Analytics / Journal consistent cards ── */
+#panel-analytics .card,
+#panel-journal .card { padding: 10px 12px !important; border-radius: 10px !important; }
+
+/* ── Day mode overrides ── */
+html.vn-day .bottom-tabs  { background: rgba(240,242,245,0.98) !important; border-top: 1px solid rgba(0,0,0,0.08) !important; }
+html.vn-day #more-menu    { background: rgba(240,242,245,0.98) !important; border-top: 1px solid rgba(0,0,0,0.08) !important; }
+html.vn-day .more-item    { border-color: rgba(0,0,0,0.1) !important; }
+html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0.04) 0%, transparent 100%) !important; }
 </style>
 </head>
 <body>
@@ -2019,9 +2201,37 @@ html.vn-day .sug-card [style*="color:var(--dim)"] { color: #607080 !important; }
 <div class="panel active" id="panel-dashboard">
 
   <div class="price-section" id="price-section">
-    <div class="price-label">NIFTY 50 INDEX</div>
-    <div class="price-value" id="price">--</div>
-    <div class="price-change flat" id="change">Market Closed</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <div>
+        <div class="price-label">NIFTY 50 INDEX</div>
+        <div class="price-value" id="price">--</div>
+        <div class="price-change flat" id="change">Market Closed</div>
+      </div>
+      <div style="text-align:right;padding-top:4px;">
+        <div style="font-size:8px;color:var(--dim);letter-spacing:1.5px;font-family:'Orbitron',monospace;">ATM</div>
+        <div id="atm-strike-display-hero" style="font-family:'Orbitron',monospace;font-size:16px;font-weight:700;color:var(--amber);">--</div>
+        <div style="font-size:8px;color:var(--dim);margin-top:2px;font-family:'Share Tech Mono',monospace;" id="dte-display-hero">-- DTE</div>
+      </div>
+    </div>
+    <!-- Compact live metrics row -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;margin-top:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;">
+      <div style="padding:5px 8px;background:var(--bg2);">
+        <div style="font-size:7px;color:var(--dim);letter-spacing:1px;font-family:'Orbitron',monospace;">VIX</div>
+        <div id="hdr-vix" style="font-size:13px;font-family:'Share Tech Mono',monospace;color:var(--text);">--</div>
+      </div>
+      <div style="padding:5px 8px;background:var(--bg2);">
+        <div style="font-size:7px;color:var(--dim);letter-spacing:1px;font-family:'Orbitron',monospace;">RSI</div>
+        <div id="hdr-rsi" style="font-size:13px;font-family:'Share Tech Mono',monospace;color:var(--text);">--</div>
+      </div>
+      <div style="padding:5px 8px;background:var(--bg2);">
+        <div style="font-size:7px;color:var(--dim);letter-spacing:1px;font-family:'Orbitron',monospace;">PCR</div>
+        <div id="hdr-pcr" style="font-size:13px;font-family:'Share Tech Mono',monospace;color:var(--text);">--</div>
+      </div>
+      <div style="padding:5px 8px;background:var(--bg2);">
+        <div style="font-size:7px;color:var(--dim);letter-spacing:1px;font-family:'Orbitron',monospace;">ADX</div>
+        <div id="hdr-adx" style="font-size:13px;font-family:'Share Tech Mono',monospace;color:var(--text);">--</div>
+      </div>
+    </div>
   </div>
 
   <div class="signal-wrap">
@@ -4170,6 +4380,25 @@ startPolling();
 
 // ─── DASHBOARD RENDERER ──────────────────────────────────
 function renderDashboard(s) {
+  // ── Compact header metrics bar ─────────────────────────────────────────────
+  var _set = function(id, val, color) {
+    var el = document.getElementById(id);
+    if (el) { el.textContent = val; if (color) el.style.color = color; }
+  };
+  var vixColor = s.vix > 20 ? 'var(--red)' : s.vix > 15 ? 'var(--amber)' : 'var(--green)';
+  var rsiColor = s.rsi > 70 ? 'var(--red)' : s.rsi < 30 ? 'var(--green)' : 'var(--text)';
+  var adxColor = s.adx > 25 ? 'var(--green)' : s.adx > 20 ? 'var(--amber)' : 'var(--red)';
+  _set('hdr-vix', s.vix ? s.vix.toFixed(1) : '--', vixColor);
+  _set('hdr-rsi', s.rsi ? s.rsi.toFixed(1) : '--', rsiColor);
+  _set('hdr-pcr', s.pcr ? s.pcr.toFixed(2) : '--', null);
+  _set('hdr-adx', s.adx ? s.adx.toFixed(1) : '--', adxColor);
+  // ATM + DTE in price hero
+  if (s.nifty > 0) {
+    var atm = Math.round(s.nifty / 50) * 50;
+    _set('atm-strike-display-hero', atm, null);
+  }
+  if (s.daysToExpiry !== undefined) _set('dte-display-hero', (s.daysToExpiry||0).toFixed(1) + 'd DTE', null);
+
   // Price
   if (s.nifty > 0) {
     _lastKnownNifty = s.nifty;
