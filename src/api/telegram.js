@@ -43,7 +43,7 @@ async function sendMessage(text) {
 }
 
 // ── Signal Change Alert ───────────────────────────────
-async function sendSignalAlert(state, prevSignal) {
+async function sendSignalAlert(state, prevSignal, strikeData = null) {
     const emoji = state.signal === 'BUY CALL' ? '🟢'
                 : state.signal === 'BUY PUT'  ? '🔴'
                 : '🟡';
@@ -91,6 +91,25 @@ async function sendSignalAlert(state, prevSignal) {
         ? `${deltaEmoji} Delta:${deltaData.deltaPct > 0 ? '+' : ''}${deltaData.deltaPct}% (${deltaData.signal})${deltaData.divergence ? ' — REVERSAL WARNING' : ''}`
         : '⏳ Delta — warming up';
 
+    // ── Strike SL / Target block ─────────────────────────────────────────────
+    // If pickStrikeAndPremium computed a strike, show it with entry/SL/target.
+    // Lot size 75 for Nifty — show per-lot P&L for quick mental math.
+    const LOT = 75;
+    let strikeBlock = '';
+    if (strikeData && strikeData.entry > 0) {
+        const slPct    = ((strikeData.entry - strikeData.sl) / strikeData.entry * 100).toFixed(0);
+        const tgtPct   = ((strikeData.target - strikeData.entry) / strikeData.entry * 100).toFixed(0);
+        const slLoss   = Math.round((strikeData.entry - strikeData.sl) * LOT);
+        const tgtGain  = Math.round((strikeData.target - strikeData.entry) * LOT);
+        strikeBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
+📥 Entry : ₹${strikeData.entry}
+🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
+🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
+📊 R:R   : 1:2`;
+    } else {
+        strikeBlock = '🎯 Strike: ATM ±50 | Set SL at -20% premium';
+    }
+
     const msg = `
 ${emoji} <b>SIGNAL CHANGED!</b>
 ━━━━━━━━━━━━━━━━━━
@@ -109,6 +128,8 @@ ${pcrInfo}
 ━━━━━━━━━━━━━━━━━━
 ${pocInfo}
 ${deltaInfo}
+━━━━━━━━━━━━━━━━━━
+${strikeBlock}
 ━━━━━━━━━━━━━━━━━━
 ${mtfInfo}
 ━━━━━━━━━━━━━━━━━━
@@ -287,6 +308,53 @@ async function sendRawMessage(text) {
     await sendMessage(text);
 }
 
+// ── Spread / Hedging Strategy Alert ──────────────────────────────────────────
+async function sendSpreadAlert(spread, state) {
+    const legLines = spread.legs.map(l =>
+        `  ${l.action === 'BUY' ? '📥 BUY ' : '📤 SELL'} ${l.strike} ${l.type} @ ₹${l.premium}`
+    ).join('\n');
+
+    const creditOrDebit = spread.netCredit !== undefined
+        ? `💰 Net Credit : ₹${spread.netCredit} per unit`
+        : `💸 Net Debit  : ₹${spread.netDebit} per unit`;
+
+    const profitLine = spread.maxProfit !== undefined && typeof spread.maxProfit === 'number'
+        ? `✅ Max Profit : ₹${spread.maxProfit} per unit (₹${Math.round(spread.maxProfit * 75)}/lot)`
+        : `✅ Max Profit : ${spread.maxProfit}`;
+
+    const lossLine = typeof spread.maxLoss === 'number'
+        ? `🛑 Max Loss   : ₹${spread.maxLoss} per unit (₹${Math.round(spread.maxLoss * 75)}/lot)`
+        : `🛑 Max Loss   : ${spread.maxLoss}`;
+
+    const beLine = spread.breakEvenUp
+        ? `↕️ Breakeven  : ${spread.breakEvenDn ? spread.breakEvenDn.toFixed(0) + ' – ' : ''}${spread.breakEvenUp.toFixed(0)}`
+        : '';
+
+    const msg = `
+📊 <b>${spread.label}</b>
+━━━━━━━━━━━━━━━━━━
+📌 NIFTY: ${state.nifty?.toLocaleString('en-IN', {minimumFractionDigits: 2}) || '--'}
+⚡ VIX: ${state.vix || '--'} | ADX: ${state.adx?.toFixed(1) || '--'} | DTE: ${spread.dte}d
+
+<b>Legs:</b>
+${legLines}
+
+━━━━━━━━━━━━━━━━━━
+${creditOrDebit}
+${profitLine}
+${lossLine}
+${beLine ? beLine + '\n' : ''}🎯 Profit Zone: ${spread.profitZone}
+
+💡 ${spread.reason}
+📝 ${spread.note}
+━━━━━━━━━━━━━━━━━━
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true })}
+<i>VardaanNifty AI — Spread Strategy</i>
+`.trim();
+
+    await sendMessage(msg);
+}
+
 module.exports = {
     sendSignalAlert,
     sendMTFAlert,
@@ -295,6 +363,7 @@ module.exports = {
     sendCloseSummary,
     sendExitAlert,
     sendNishanebaazAlert,
+    sendSpreadAlert,
     sendRawMessage,
     isConfigured
 };

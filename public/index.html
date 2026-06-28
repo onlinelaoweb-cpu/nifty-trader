@@ -861,6 +861,11 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .btab.active{color:var(--green);background:rgba(0,255,136,0.07);box-shadow:0 0 16px rgba(0,255,136,0.08);}
 .btab.active .bi{text-shadow:0 0 12px rgba(0,255,136,0.7);filter:drop-shadow(0 0 4px rgba(0,255,136,0.5));}
 .btab.active::before{content:'';position:absolute;top:-4px;left:20%;right:20%;height:2px;background:var(--green);border-radius:0 0 3px 3px;box-shadow:0 0 8px var(--green);}
+
+/* More menu items */
+.more-item{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;background:transparent;border:1px solid rgba(0,255,136,0.1);border-radius:8px;color:var(--dim);font-family:'Rajdhani',sans-serif;font-weight:700;font-size:9px;letter-spacing:0.8px;cursor:pointer;transition:all 0.2s;}
+.more-item:active,.more-item.active-more{color:var(--green);background:rgba(0,255,136,0.08);border-color:rgba(0,255,136,0.3);}
+.more-item span{font-size:20px;}
 .panel{display:none;}.panel.active{display:block;}
 
 /* ── Murarka panel — MOBILE FIRST ── */
@@ -3506,15 +3511,22 @@ html.vn-day .sug-card [style*="color:var(--dim)"] { color: #607080 !important; }
 
 <!-- BOTTOM TABS — 6 tabs -->
 <div class="bottom-tabs">
-  <button class="btab active" onclick="switchTab('dashboard',this)"><span class="bi">📊</span>LIVE</button>
-  <button class="btab" onclick="switchTab('journal',this)"><span class="bi">📔</span>JOURNAL</button>
-  <button class="btab" onclick="switchTab('breadth',this)"><span class="bi">📈</span>BREADTH</button>
-  <button class="btab" onclick="switchTab('global',this)"><span class="bi">🌍</span>GLOBAL</button>
-  <button class="btab" onclick="switchTab('chart',this)"><span class="bi">🕯️</span>CHART</button>
-  <button class="btab" onclick="switchTab('tools',this)"><span class="bi">🔧</span>TOOLS</button>
-  <button class="btab" onclick="switchTab('analytics',this)"><span class="bi">📊</span>ANALYTICS</button>
-  <button class="btab" onclick="switchTab('physics',this)"><span class="bi">⚛️</span>PHYSICS</button>
-  <button class="btab" onclick="switchTab('guard',this)"><span class="bi">🛡️</span>GUARD</button>
+  <button class="btab active" id="btab-dashboard" onclick="switchTab('dashboard',this)"><span class="bi">📊</span>LIVE</button>
+  <button class="btab" id="btab-physics" onclick="switchTab('physics',this)"><span class="bi">⚛️</span>PHYSICS</button>
+  <button class="btab" id="btab-breadth" onclick="switchTab('breadth',this)"><span class="bi">📈</span>BREADTH</button>
+  <button class="btab" id="btab-global" onclick="switchTab('global',this)"><span class="bi">🌍</span>GLOBAL</button>
+  <button class="btab" id="btab-more" onclick="toggleMoreMenu(this)"><span class="bi">☰</span>MORE</button>
+</div>
+
+<!-- More dropdown menu -->
+<div id="more-menu" style="display:none;position:fixed;bottom:62px;right:0;left:0;z-index:300;background:rgba(6,13,20,0.97);border-top:1px solid rgba(0,255,136,0.15);backdrop-filter:blur(16px);padding:8px 0 4px;">
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;padding:0 8px;">
+    <button class="more-item" onclick="switchTabFromMore('journal')"><span>📔</span>JOURNAL</button>
+    <button class="more-item" onclick="switchTabFromMore('chart')"><span>🕯️</span>CHART</button>
+    <button class="more-item" onclick="switchTabFromMore('guard')"><span>🛡️</span>GUARD</button>
+    <button class="more-item" onclick="switchTabFromMore('tools')"><span>🔧</span>TOOLS</button>
+    <button class="more-item" onclick="switchTabFromMore('analytics')"><span>📊</span>ANALYTICS</button>
+  </div>
 </div>
 
 <script>
@@ -3551,8 +3563,12 @@ function _initDesktopLayout() {
     btn.dataset.tab = t.id;
     btn.innerHTML = `<span class="bi">${t.icon}</span>${t.label}`;
     btn.onclick = () => {
-      // Direct call — no querySelector needed, switchTab handles tab activation
-      switchTab(t.id, document.querySelector('.bottom-tabs .btab[onclick*="' + t.id + '"]') || btn);
+      const primaryTabs = ['dashboard','physics','breadth','global'];
+      if (primaryTabs.includes(t.id)) {
+        switchTab(t.id, document.getElementById('btab-' + t.id) || btn);
+      } else {
+        switchTabFromMore(t.id);
+      }
     };
     sidebar.appendChild(btn);
   });
@@ -3665,6 +3681,46 @@ function switchJournalTab(tab) {
   document.querySelectorAll('.j-stab').forEach(b => b.classList.remove('active'));
   document.getElementById('jsec-' + tab).classList.add('active');
   document.getElementById('jstab-' + tab).classList.add('active');
+}
+
+// ── More menu toggle ──────────────────────────────────────────────────────────
+function toggleMoreMenu(btn) {
+  const menu = document.getElementById('more-menu');
+  const isOpen = menu.style.display !== 'none';
+  menu.style.display = isOpen ? 'none' : 'block';
+  btn.classList.toggle('active', !isOpen);
+  // Close menu when tapping outside
+  if (!isOpen) {
+    setTimeout(() => {
+      document.addEventListener('click', _closeMoreMenu, { once: true, capture: true });
+    }, 0);
+  }
+}
+function _closeMoreMenu(e) {
+  const menu = document.getElementById('more-menu');
+  const btn  = document.getElementById('btab-more');
+  if (menu && !menu.contains(e.target) && e.target !== btn) {
+    menu.style.display = 'none';
+    if (btn) btn.classList.remove('active');
+  }
+}
+function switchTabFromMore(name) {
+  // Close the more menu
+  const menu = document.getElementById('more-menu');
+  const moreBtn = document.getElementById('btab-more');
+  if (menu) menu.style.display = 'none';
+
+  // Deactivate all primary tabs, mark MORE as active-proxy
+  document.querySelectorAll('.btab').forEach(b => b.classList.remove('active'));
+  if (moreBtn) moreBtn.classList.add('active');
+
+  // Highlight the selected more-item
+  document.querySelectorAll('.more-item').forEach(b => b.classList.remove('active-more'));
+  const activeItem = document.querySelector(`.more-item[onclick*="${name}"]`);
+  if (activeItem) activeItem.classList.add('active-more');
+
+  // Switch panel — pass moreBtn as the "active" button so switchTab doesn't crash
+  switchTab(name, moreBtn);
 }
 
 function switchTab(name,btn){
@@ -4032,6 +4088,11 @@ function startSSE() {
       }
       _lastState = s;
       if (s.lotSize && s.lotSize > 0) LOT_SIZE = s.lotSize;
+      // Update spread section live whenever physics panel is visible
+      if (document.getElementById('panel-physics') &&
+          document.getElementById('panel-physics').classList.contains('active')) {
+        try { renderSpreadStrategy(s); } catch(e) {}
+      }
       if (_splashDone) {
         try { renderDashboard(s); } catch(err) { console.warn('renderDashboard SSE:', err.message); }
       } else {
@@ -7886,6 +7947,128 @@ function updatePhysicsTab(s) {
       updEl.textContent = 'Last updated: '+String(ist.getHours()).padStart(2,'0')+':'+String(ist.getMinutes()).padStart(2,'0')+':'+String(ist.getSeconds()).padStart(2,'0')+' IST';
     } catch(e){}
   }
+  // Render spread strategy using latest state
+  if (window._lastState) renderSpreadStrategy(window._lastState);
+}
+
+// ── Spread Strategy Renderer ──────────────────────────────────────────────────
+// Runs client-side using the same logic as spreadStrategy.js (mirrored here
+// so the UI updates instantly on every SSE tick without a separate API call).
+function renderSpreadStrategy(s) {
+  var el = document.getElementById('spread-body');
+  if (!el) return;
+
+  var nifty = s.nifty || 0;
+  var vix   = s.vix   || 0;
+  var adx   = s.adx   || 0;
+  var swing = (s.swingTrend && s.swingTrend.trend) || 'UNKNOWN';
+  var mtfSig= (s.mtf && s.mtf.signal) || 'WAIT';
+  var dte   = s.daysToExpiry || 2;
+
+  if (!nifty || !vix || !adx) {
+    el.innerHTML = '<div style="color:var(--dim);font-size:10px;text-align:center;padding:8px 0;">Awaiting market data…</div>';
+    return;
+  }
+
+  var atm        = Math.round(nifty / 50) * 50;
+  var isSideways = adx < 20 || swing === 'SIDEWAYS';
+  var isBullish  = mtfSig === 'BUY CALL' && swing === 'UPTREND';
+  var isBearish  = mtfSig === 'BUY PUT'  && swing === 'DOWNTREND';
+  var vixLow     = vix < 14;
+  var vixVeryLow = vix < 12;
+  var nearExpiry = dte <= 2;
+
+  // ── Iron Condor
+  if (isSideways && vixLow) {
+    var wing = vixVeryLow ? 100 : 150;
+    var sC = atm + 100, lC = atm + 100 + wing;
+    var sP = atm - 100, lP = atm - 100 - wing;
+    var credit = ((vix/100) * Math.sqrt(dte/365) * nifty * 0.015).toFixed(0);
+    el.innerHTML =
+      '<div style="color:var(--green);font-size:11px;font-weight:700;margin-bottom:6px;">🦅 Iron Condor — Theta Play</div>' +
+      '<div style="font-size:9px;color:var(--dim);margin-bottom:8px;">ADX ' + adx.toFixed(1) + ' (sideways) + VIX ' + vix + ' (low)</div>' +
+      _legRow('SELL', sC, 'CE') + _legRow('BUY',  lC, 'CE') +
+      _legRow('SELL', sP, 'PE') + _legRow('BUY',  lP, 'PE') +
+      '<div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);">' +
+      _statRow('Profit Zone', sP + ' – ' + sC) +
+      _statRow('Est. Credit', '~₹' + credit + '/unit') +
+      _statRow('Max Loss', '₹' + wing + '/unit if breached') +
+      '</div>' +
+      (nearExpiry ? '<div style="color:var(--amber);font-size:9px;margin-top:6px;">⚡ Near expiry — fast theta, exit by 15:00</div>' : '');
+    return;
+  }
+
+  // ── Bull Call Spread
+  if (isBullish && vixLow) {
+    var bS = atm, sS = atm + 150;
+    el.innerHTML =
+      '<div style="color:var(--green);font-size:11px;font-weight:700;margin-bottom:6px;">📈 Bull Call Spread</div>' +
+      '<div style="font-size:9px;color:var(--dim);margin-bottom:8px;">Bullish + VIX low → hedge cost by selling ' + sS + ' CE</div>' +
+      _legRow('BUY',  bS, 'CE') + _legRow('SELL', sS, 'CE') +
+      '<div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);">' +
+      _statRow('Max Profit', '₹150 − net debit/unit') +
+      _statRow('Max Loss', 'Net debit only') +
+      _statRow('Target', 'Nifty ≥ ' + sS + ' at expiry') +
+      '</div>';
+    return;
+  }
+
+  // ── Bear Put Spread
+  if (isBearish && vixLow) {
+    var bP2 = atm, sP2 = atm - 150;
+    el.innerHTML =
+      '<div style="color:#ff4466;font-size:11px;font-weight:700;margin-bottom:6px;">📉 Bear Put Spread</div>' +
+      '<div style="font-size:9px;color:var(--dim);margin-bottom:8px;">Bearish + VIX low → hedge cost by selling ' + sP2 + ' PE</div>' +
+      _legRow('BUY',  bP2, 'PE') + _legRow('SELL', sP2, 'PE') +
+      '<div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);">' +
+      _statRow('Max Profit', '₹150 − net debit/unit') +
+      _statRow('Max Loss', 'Net debit only') +
+      _statRow('Target', 'Nifty ≤ ' + sP2 + ' at expiry') +
+      '</div>';
+    return;
+  }
+
+  // ── Short Strangle
+  if (adx < 15 && vixVeryLow && nearExpiry) {
+    var sCE = atm + 150, sPE = atm - 150;
+    el.innerHTML =
+      '<div style="color:var(--amber);font-size:11px;font-weight:700;margin-bottom:6px;">⚡ Short Strangle</div>' +
+      '<div style="font-size:9px;color:var(--dim);margin-bottom:8px;">ADX ' + adx.toFixed(1) + ' + VIX ' + vix + ' + near expiry</div>' +
+      _legRow('SELL', sCE, 'CE') + _legRow('SELL', sPE, 'PE') +
+      '<div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);">' +
+      _statRow('Profit Zone', sPE + ' – ' + sCE) +
+      _statRow('Risk', 'Unlimited — exit if breached') +
+      '</div>' +
+      '<div style="color:var(--red,#f55);font-size:9px;margin-top:6px;">⚠️ Naked sell — needs margin</div>';
+    return;
+  }
+
+  // ── No spread conditions met — show directional note
+  var adxColor = adx >= 25 ? 'var(--green)' : adx >= 20 ? 'var(--amber)' : 'var(--red,#f55)';
+  el.innerHTML =
+    '<div style="font-size:10px;color:var(--dim);line-height:1.8;">' +
+    '<span style="color:' + adxColor + ';">ADX ' + adx.toFixed(1) + '</span> — ' +
+    (adx >= 25
+      ? 'Strong trend. <span style="color:var(--green);">Use directional options (naked CE/PE).</span> Spreads reduce profit in trending market.'
+      : adx >= 20
+      ? 'Moderate trend. <span style="color:var(--amber);">Spreads optional</span> — use if premium is expensive (VIX > 14).'
+      : 'Low ADX but VIX not low enough for spread. <span style="color:var(--dim);">Wait for clearer setup.</span>') +
+    '</div>';
+}
+
+function _legRow(action, strike, type) {
+  var color = action === 'BUY' ? 'var(--green)' : 'var(--amber)';
+  var icon  = action === 'BUY' ? '📥' : '📤';
+  return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);">' +
+    '<span style="color:' + color + ';font-size:9px;font-weight:700;">' + icon + ' ' + action + '</span>' +
+    '<span style="font-family:\'Share Tech Mono\',monospace;font-size:10px;color:#e0e8f0;">' + strike + ' ' + type + '</span>' +
+    '</div>';
+}
+function _statRow(label, val) {
+  return '<div style="display:flex;justify-content:space-between;font-size:9px;padding:2px 0;">' +
+    '<span style="color:var(--dim);">' + label + '</span>' +
+    '<span style="color:#e0e8f0;font-family:\'Share Tech Mono\',monospace;">' + val + '</span>' +
+    '</div>';
 }
 </script>
 
@@ -7919,6 +8102,15 @@ function updatePhysicsTab(s) {
       <div class="pot-check-row"><span id="pot-chk2-icon">⬜</span><span id="pot-chk2-txt" style="color:var(--dim);">Confirm force aligned with trend (Law 2)</span></div>
       <div class="pot-check-row"><span id="pot-chk3-icon">⬜</span><span id="pot-chk3-txt" style="color:var(--dim);">CALL: pullback / PUT: bounce — in 38–62% zone (Law 3)</span></div>
     </div>
+
+    <!-- ── SPREAD STRATEGY SECTION ─────────────────────────────────────── -->
+    <div id="spread-section" style="margin-top:10px;background:rgba(15,31,48,0.7);border:1px solid rgba(0,255,136,0.12);border-radius:10px;padding:10px 12px;">
+      <div style="font-family:'Orbitron',monospace;font-size:9px;color:var(--green);letter-spacing:2px;margin-bottom:8px;">📊 SPREAD / HEDGE STRATEGY</div>
+      <div id="spread-body">
+        <div style="color:var(--dim);font-size:10px;text-align:center;padding:8px 0;">Awaiting market data…</div>
+      </div>
+    </div>
+
     <div id="pot-updated" style="font-size:8px;color:var(--dim);text-align:center;margin-top:8px;padding-bottom:100px;">Last updated: —</div>
   </div>
 </div>

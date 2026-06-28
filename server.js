@@ -30,6 +30,7 @@ const { fetchAdvanceDecline,
         injectAngelSession }        = require('./src/api/breadth');
 const { calculateSRLevels }         = require('./src/api/levels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo } = require('./src/api/physicsOfTrading');
+const { suggestSpreadStrategy }     = require('./src/api/spreadStrategy');
 const {
     injectDBPool      : injectHistDBPool,
     initHistoricalData,
@@ -51,7 +52,7 @@ const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
     sendCloseSummary, sendExitAlert,
-    sendNishanebaazAlert, sendRawMessage, isConfigured
+    sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured
 }                                   = require('./src/api/telegram');
 
 const app    = express();
@@ -179,6 +180,8 @@ let telegramAlertInFlight=false; // race-condition guard — prevents duplicate 
 let ema920AlertSentToday=false;  // one-shot: 9:20 AM EMA-VWAP setup alert per day
 let lastSignalFiredPrice=0;  // price level at which last SIGNAL CHANGED alert was sent
                              // prevents duplicate alerts when Nifty barely moves between ticks
+let lastSpreadAlertAt=0;     // cooldown: spread strategy alert max once per 60 min
+let lastSpreadStrategy='';   // last spread type sent — avoid repeat of same strategy
 
 function isMarketOpen() {
     const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
@@ -2255,18 +2258,22 @@ async function checkTelegramAlerts(newSignal) {
     const sigInMarketHours  = sigMins >= 555 && sigMins <= 930;
     const sigPriceMoved     = Math.abs((marketState.nifty || 0) - lastSignalFiredPrice) >= 15;
     if (newSignal!==prevSignal&&newSignal!=='WAIT'&&sigInMarketHours&&sigPriceMoved) {
-        await sendSignalAlert(marketState,prevSignal);
+        // Compute strikeData BEFORE sending alert so SL/Target appear in the message
+        let strikeDataForAlert = null;
+        try {
+            const pcrState = getPCRState();
+            strikeDataForAlert = pickStrikeAndPremium(newSignal, marketState.nifty, marketState.vix, pcrState);
+        } catch(e) { console.warn('[Strike] compute error:', e.message); }
+
+        await sendSignalAlert(marketState, prevSignal, strikeDataForAlert);
         lastSignalFiredPrice = marketState.nifty || 0;
+
         // ── Trigger AI suggestion on fresh signal (costs 1 API call here only) ──
-        if (marketState.qualityGate.passed) {
+        if (marketState.qualityGate.passed && strikeDataForAlert) {
             try {
-                const pcrState   = getPCRState();
-                const strikeData = pickStrikeAndPremium(newSignal, marketState.nifty, marketState.vix, pcrState);
-                if (strikeData) {
-                    const winRate = await getWinRateFromHistory(strikeData.type);
-                    await getAITradeSuggestion(marketState, strikeData, winRate);
-                    console.log(`🤖 AI suggestion triggered by fresh signal: ${newSignal}`);
-                }
+                const winRate = await getWinRateFromHistory(strikeDataForAlert.type);
+                await getAITradeSuggestion(marketState, strikeDataForAlert, winRate);
+                console.log(`🤖 AI suggestion triggered by fresh signal: ${newSignal}`);
             } catch(e) { console.error('AI on signal trigger:', e.message); }
         }
     }
@@ -2287,6 +2294,25 @@ async function checkTelegramAlerts(newSignal) {
     prevMTFAligned = marketState.mtf.aligned;
     if (marketState.vix>20&&!vixAlertSent) { vixAlertSent=true; await sendVIXAlert(marketState.vix,marketState.vixNote); }
     if (marketState.vix<=20) vixAlertSent=false;
+
+    // ── Spread / Hedging Strategy Alert ──────────────────────────────────────
+    // Fires when market conditions warrant a spread trade instead of naked buy.
+    // Cooldown: once per 60 min, only during market hours, no repeat of same strategy.
+    const spreadIst  = getIST();
+    const spreadMins = spreadIst.getHours() * 60 + spreadIst.getMinutes();
+    const spreadInHours = spreadMins >= 555 && spreadMins <= 900; // 9:15–15:00
+    const spreadCooldownOk = (Date.now() - lastSpreadAlertAt) > 60 * 60 * 1000;
+    if (spreadInHours && spreadCooldownOk) {
+        try {
+            const spread = suggestSpreadStrategy(marketState);
+            if (spread && spread.strategy !== lastSpreadStrategy) {
+                await sendSpreadAlert(spread, marketState);
+                lastSpreadAlertAt  = Date.now();
+                lastSpreadStrategy = spread.strategy;
+                console.log(`📊 Spread alert sent: ${spread.strategy}`);
+            }
+        } catch(e) { console.error('[Spread] alert error:', e.message); }
+    }
     } catch(e) {
         // Without this catch, any thrown error here (e.g. accessing a property on an
         // undefined marketState field inside one of the message templates) propagated
