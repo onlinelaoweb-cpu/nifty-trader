@@ -3298,13 +3298,6 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
       </div>
     </div>
 
-    <!-- Physics of Trading — Law 3: Fibonacci Reaction Zone card -->
-    <div class="pcr-trend-card" id="fibo-card">
-      <div class="trend-title">🌀 FIBONACCI REACTION ZONE <span style="font-size:8px;color:var(--dim);letter-spacing:1px;font-weight:400;">LAW 3</span></div>
-      <div id="fibo-zone-label" style="font-size:10px;color:var(--dim);text-align:center;padding:4px;margin-bottom:6px;border-radius:6px;background:var(--bg3);">Awaiting swing data…</div>
-      <div id="fibo-ladder" style="font-size:10px;font-family:'Share Tech Mono',monospace;"></div>
-    </div>
-
     <!-- FII/DII auto-fetched display card -->
     <div class="fiidii-card">
       <div class="fiidii-title">💼 FII / DII FLOW <span style="font-size:8px;color:var(--dim);letter-spacing:1px;font-family:monospace;font-weight:400;">AUTO</span></div>
@@ -5917,23 +5910,22 @@ function updatePCRSlopeLabel(slope) {
 
 // ─── FIBONACCI REACTION ZONE CARD (Physics of Trading — Law 3) ─────────────
 function updateFiboCard(fibo) {
-  const lblEl = document.getElementById('fibo-zone-label');
-  const ladderEl = document.getElementById('fibo-ladder');
-  if (!lblEl || !ladderEl) return;
+  // Fibo card removed from Breadth tab (duplicate of Physics Law 3).
+  // This function now only updates pot-fib-ladder in Physics tab.
+  // pot-fib-ladder is also updated by updatePhysicsTab() directly,
+  // so we just guard and return if Physics tab is already handling it.
+  const ladderEl = document.getElementById('pot-fib-ladder');
+  if (!ladderEl) return;
 
   if (!fibo || !fibo.levels) {
-    lblEl.textContent = 'Awaiting swing data — need a clean impulse move to build levels';
-    lblEl.style.color = 'var(--dim)';
-    lblEl.style.background = 'var(--bg3)';
     ladderEl.innerHTML = '';
     return;
   }
 
+  // Minimal label update — pot-law3-status handles the text in Physics tab
   const colorMap = { green: 'var(--green)', amber: 'var(--amber)', blue: 'var(--blue)', dim: 'var(--dim)' };
   const col = colorMap[fibo.zoneColor] || 'var(--dim)';
-  lblEl.textContent = `${fibo.zoneLabel} ${fibo.retracePct != null ? '(' + fibo.retracePct.toFixed(0) + '% retrace)' : ''}`;
-  lblEl.style.color = col;
-  lblEl.style.background = fibo.zoneColor === 'green' ? 'rgba(0,255,136,0.06)' : fibo.zoneColor === 'amber' ? 'rgba(255,187,0,0.06)' : 'var(--bg3)';
+  // (no lblEl needed — Physics tab has pot-law3-status for this)
 
   // Ladder rows, high level to low level, with current price slotted in
   const L = fibo.levels;
