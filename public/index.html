@@ -4309,16 +4309,29 @@ function startSSE() {
   _sseConn.addEventListener('tick', e => {
     try {
       const t = JSON.parse(e.data);
-      // Update Nifty price display without full re-render
-      const priceEl = document.getElementById('nifty-price');
-      const changeEl = document.getElementById('nifty-change');
-      if (priceEl && t.nifty > 0) {
-        priceEl.textContent = t.nifty.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
-      }
-      if (changeEl && t.change != null) {
-        const sign = t.change >= 0 ? '+' : '';
-        changeEl.textContent = `${sign}${t.change.toFixed(2)} (${sign}${t.changePct.toFixed(2)}%)`;
-        changeEl.style.color = t.change >= 0 ? 'var(--green)' : 'var(--red)';
+      // FIX 2026-06-29: Use correct element IDs ('price'/'change', not 'nifty-price'/'nifty-change')
+      // Old IDs didn't exist in HTML — tick updates were silently dropped, price froze.
+      if (t.nifty > 0) {
+        _lastKnownNifty = t.nifty;
+        _lastKnownChange = t.change;
+        _lastKnownChangePct = t.changePct;
+        const priceEl = document.getElementById('price');
+        if (priceEl) priceEl.textContent = t.nifty.toFixed(2);
+        // Flash price element briefly to indicate live tick
+        if (priceEl) {
+          priceEl.style.transition = 'color 0.15s';
+          priceEl.style.color = t.change >= 0 ? 'var(--green)' : 'var(--red)';
+          setTimeout(() => { priceEl.style.color = ''; }, 400);
+        }
+        const changeEl = document.getElementById('change');
+        if (changeEl && t.change != null) {
+          const sign = t.change >= 0 ? '+' : '';
+          changeEl.textContent = `${sign}${t.change.toFixed(2)}  (${sign}${t.changePct.toFixed(2)}%)`;
+          changeEl.className = 'price-change ' + (t.change > 0 ? 'up' : t.change < 0 ? 'down' : 'flat');
+        }
+        // Also update ATM strike in hero (recalc on each tick)
+        const atmEl = document.getElementById('atm-strike-display-hero');
+        if (atmEl) atmEl.textContent = (Math.round(t.nifty / 50) * 50);
       }
     } catch(_) {}
   });
