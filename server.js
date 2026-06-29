@@ -3321,6 +3321,9 @@ function daysToNextExpiry() {
 // Picks the right strike and reads live LTP from option chain already in memory
 function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
     if (!nifty || nifty <= 0) return null;
+    // FIX: If VIX not yet fetched, use safe default (15 = moderate volatility)
+    // so Black-Scholes fallback always runs instead of returning null
+    const effectiveVix = vix || 15;
 
     const isBull = signal === 'BUY CALL';
     const type   = isBull ? 'CE' : 'PE';
@@ -3331,7 +3334,7 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
     // VIX 13-18: normal → ATM (best liquidity)
     // VIX > 18: volatile → ATM (don't go OTM, decay risk too high)
     let strike = atm;
-    if (vix && vix < 13) {
+    if (effectiveVix < 13) {
         strike = isBull ? atm + 50 : atm - 50;
     }
 
@@ -3346,17 +3349,17 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
         if (type === 'CE') {
             entryPremium = strike === atm
                 ? pcrState.atmCEpremium
-                : (vix ? parseFloat(bsEstimate(nifty, strike, dte / 365, vix / 100, 'CE').toFixed(2)) : null);
+                : parseFloat(bsEstimate(nifty, strike, dte / 365, effectiveVix / 100, 'CE').toFixed(2));
         } else {
             entryPremium = strike === atm
                 ? pcrState.atmPEpremium
-                : (vix ? parseFloat(bsEstimate(nifty, strike, dte / 365, vix / 100, 'PE').toFixed(2)) : null);
+                : parseFloat(bsEstimate(nifty, strike, dte / 365, effectiveVix / 100, 'PE').toFixed(2));
         }
     }
 
     // If no live premium available, use Black-Scholes with real DTE (not hardcoded 3 days)
-    if (!entryPremium && vix) {
-        const sigma = vix / 100;
+    if (!entryPremium) {  // always try BS — effectiveVix guaranteed
+        const sigma = effectiveVix / 100;
         const T = dte / 365;  // FIX: real days to expiry, not hardcoded 3
         entryPremium = parseFloat(bsEstimate(nifty, strike, T, sigma, type).toFixed(2));
     }
@@ -3372,11 +3375,11 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
     //   VIX > 20  → 35% SL (very wide, but signal is blocked by gate anyway)
     // Target always = SL risk × 2 (1:2 R:R) from entry.
     let slPct = 0.25;  // default
-    if (vix) {
-        if      (vix < 12) slPct = 0.20;
-        else if (vix < 16) slPct = 0.25;
-        else if (vix < 20) slPct = 0.30;
-        else               slPct = 0.35;
+    {
+        if      (effectiveVix < 12) slPct = 0.20;
+        else if (effectiveVix < 16) slPct = 0.25;
+        else if (effectiveVix < 20) slPct = 0.30;
+        else                        slPct = 0.35;
     }
     const slWidth  = parseFloat((entryPremium * slPct).toFixed(2));
     const sl       = parseFloat((entryPremium - slWidth).toFixed(2));

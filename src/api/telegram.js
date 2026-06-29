@@ -66,6 +66,11 @@ async function sendSignalAlert(state, prevSignal, strikeData = null) {
 
     const strikeInfo = state.strikeRange || 'ATM ±200';
 
+    // Volume info from Angel One WS (wsVolume = session cumulative)
+    const volInfo = state.wsVolume > 0
+        ? `📦 Volume: ${(state.wsVolume / 1e6).toFixed(2)}M (session)`
+        : null;  // omit entirely if no WS volume (Yahoo mode)
+
     const mtfInfo = state.mtf?.aligned
         ? '🔥 ALL 3 TIMEFRAMES ALIGNED!'
         : `MTF: ${state.mtf?.bullCount || 0}/3 Bullish`;
@@ -88,13 +93,13 @@ async function sendSignalAlert(state, prevSignal, strikeData = null) {
                      : deltaData.signal === 'BEARISH' ? '🔴'
                      :                                   '⚪';
     const deltaInfo = deltaData?.deltaPct !== undefined
-        ? `${deltaEmoji} Delta:${deltaData.deltaPct > 0 ? '+' : ''}${deltaData.deltaPct}% (${deltaData.signal})${deltaData.divergence ? ' — REVERSAL WARNING' : ''}`
-        : '⏳ Delta — warming up';
+        ? `${deltaEmoji} Delta:${deltaData.deltaPct > 0 ? '+' : ''}${deltaData.deltaPct}% (${deltaData.signal})${deltaData.divergence ? ' — REVERSAL WARNING' : ''}${deltaData.source === 'websocket' ? ' [live]' : ' [proxy]'}`
+        : '⏳ Delta — warming up (WS buyQty/sellQty not yet received)';
 
     // ── Strike SL / Target block ─────────────────────────────────────────────
     // If pickStrikeAndPremium computed a strike, show it with entry/SL/target.
     // Lot size 75 for Nifty — show per-lot P&L for quick mental math.
-    const LOT = 75;
+    const LOT = 65;  // FIX: Nifty lot size revised Jan 2026 by NSE: 75 → 65
     let strikeBlock = '';
     if (strikeData && strikeData.entry > 0) {
         const slPct    = ((strikeData.entry - strikeData.sl) / strikeData.entry * 100).toFixed(0);
@@ -107,7 +112,11 @@ async function sendSignalAlert(state, prevSignal, strikeData = null) {
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
 📊 R:R   : 1:2`;
     } else {
-        strikeBlock = '🎯 Strike: ATM ±50 | Set SL at -20% premium';
+        // strikeData is null when: (a) no VIX available yet, or (b) PCR premiums not loaded
+        // Give actionable guidance instead of just showing ATM
+        strikeBlock = state.vix
+            ? `🎯 ATM ${Math.round((state.nifty||0)/50)*50} ${state.signal==='BUY CALL'?'CE':'PE'} | SL: -25% premium | Target: +50% (1:2 R:R)`
+            : '⏳ Strike data loading (VIX pending) — use ATM, SL -20%';
     }
 
     const msg = `
@@ -124,7 +133,7 @@ ${state.change >= 0 ? '▲' : '▼'} ${Math.abs(state.change).toFixed(2)} (${sta
 ${rsiInfo}
 ${vwapInfo}
 ${vixInfo}
-${pcrInfo}
+${pcrInfo}${volInfo ? '\n' + volInfo : ''}
 ━━━━━━━━━━━━━━━━━━
 ${pocInfo}
 ${deltaInfo}
