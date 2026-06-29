@@ -73,7 +73,7 @@ async function getNSECookie() {
 // ── nseGet — single attempt, fail fast ───────────────────────────────────────
 // validateStatus: accept 200-299 and 404 (return null data) — 404 no longer
 // throws, so the NIFTY50_URLS waterfall can continue to the next URL cleanly.
-async function nseGet(path, timeoutMs = 10000) {
+async function nseGet(path, timeoutMs = 15000) {
     const cookie = await getNSECookie();
     const headers = { ...NSE_HEADERS };
     if (cookie) headers['Cookie'] = cookie;
@@ -125,7 +125,7 @@ let _allIndicesAt           = 0;
 let _allIndicesFailed       = false;  // true after a timeout — retry sooner
 let _allIndicesFetch        = null;
 let _allIndicesFailStreak   = 0;      // consecutive failure count
-const ALL_INDICES_BACKOFF_AFTER = 3;              // failures before long backoff
+const ALL_INDICES_BACKOFF_AFTER = 5;              // failures before long backoff (was 3 — too aggressive)
 const ALL_INDICES_BACKOFF_TTL   = 15 * 60 * 1000; // 15 min — stop hammering NSE when rate-limited
 const ALL_INDICES_RETRY_TTL     = 30_000;          // 30s retry after a single failure
 const ALL_INDICES_OK_TTL        = 240_000;         // 4 min cache on success
@@ -143,7 +143,7 @@ async function fetchAllIndices() {
     if (_allIndicesFetch) return _allIndicesFetch;
     _allIndicesFetch = (async () => {
         try {
-            const data = await nseGet('/api/allIndices');
+            const data = await nseGet('/api/allIndices', 20000);  // 20s — NSE allIndices can be slow from Railway
             if (data?.data) {
                 _allIndicesCache      = data.data;
                 _allIndicesAt         = Date.now();

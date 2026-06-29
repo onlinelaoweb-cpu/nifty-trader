@@ -36,9 +36,14 @@ const { getCandleHistory, getSessionCandles }    = require('./indicators');
 // Switched RSI(14)→RSI(9): matches 1m indicator, less lag, more reactive on short TFs.
 // MIN_BARS driven by EMA21(22) and ADX(30) — RSI(9) needs fewer so no change needed.
 const MIN_BARS = {
-    '5m' : 22,   // 5m: 22 bars = 110 min. Achievable from memory within ~2h of open.
-    '15m': 30,   // 15m: 30 bars = 7.5h. Needs Yahoo fallback for most of the session.
-    '1h' : 30,   // 1h:  30 bars = 30h. Always needs Yahoo multi-day fallback.
+    // FIX 2025-06-29: Reduced from 22/30/30 to allow early-session MTF voting.
+    // Yahoo delivers 17 5m bars, 7 15m bars, 24 1h bars in the first ~90 min.
+    // Old thresholds caused ALL TFs to be INSUFFICIENT all session after restart.
+    // EMA21 and ADX degrade gracefully (null) when bars < their warmup — signal
+    // is computed from RSI9 + EMA9 + VWAP + price-vs-EMA instead.
+    '5m' : 10,   // 5m: 10 bars = 50 min. RSI9+EMA9 ready; EMA21/ADX degrade gracefully.
+    '15m': 7,    // 15m: 7 bars = 105 min. Yahoo delivers 7 bars — usable early session.
+    '1h' : 6,    // 1h:  6 bars. Yahoo delivers 24 multi-day bars — usable from market open.
 };
 
 // ── Resample 1m candles → higher timeframe ────────────────────────────────────
