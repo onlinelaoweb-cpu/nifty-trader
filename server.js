@@ -2499,6 +2499,12 @@ async function onTick(tickData) {
         marketState.lastUpdated = new Date().toISOString();
         marketState.connected   = true;
         marketState.source      = 'websocket';
+        // FIX: also push tick to SSE so frontend gets realtime price updates
+        // even when indicator recalc is throttled (runIndicators=false)
+        if (!global._lastSsePush || now - global._lastSsePush > 1000) {
+            global._lastSsePush = now;
+            sseBroadcast('tick', { nifty: price, change, changePct: chgPct, ts: now });
+        }
     }
 }
 
