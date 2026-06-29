@@ -2566,8 +2566,8 @@ async function refreshMTF() {
         // e.g. PCR 0.828 (bearish/neutral) but MTF = BUY CALL → reduce conviction.
         let adjConfidence = d.mtfConfidence;
         if (!preMarket && d.mtfSignal !== 'WAIT' && marketState.pcrSignal) {
-            const pcrBull = ['STRONG_BULL', 'MILD_BULL'].includes(marketState.pcrSignal);
-            const pcrBear = ['STRONG_BEAR', 'MILD_BEAR'].includes(marketState.pcrSignal);
+            const pcrBull = ['BULLISH', 'STRONG_BULL', 'MILD_BULL'].includes(marketState.pcrSignal);
+            const pcrBear = ['BEARISH', 'STRONG_BEAR', 'MILD_BEAR'].includes(marketState.pcrSignal);
             const isBullCall = d.mtfSignal === 'BUY CALL';
             const isBearPut  = d.mtfSignal === 'BUY PUT';
             const contra = (isBullCall && pcrBear) || (isBearPut && pcrBull);
