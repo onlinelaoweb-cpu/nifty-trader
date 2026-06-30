@@ -144,6 +144,7 @@ let marketState = {
     wsOpen    : 0,     // session open from WS
     wsHigh    : 0,     // session high from WS (live)
     wsLow     : 0,     // session low from WS (live)
+    sessionOpenPrice: 0, // first valid tick of today — used for accurate day-change in Close Summary
     // ── Murarka Strategy fields ───────────────────────────────────────────────
     // PCR Zone: 'BULL' (>1.15) | 'AVOID' (0.75–1.15) | 'BEAR' (<0.75)
     pcrZone: { zone: 'AVOID', label: 'Awaiting PCR…', color: 'amber', pcr: null },
@@ -182,6 +183,11 @@ let lastSignalFiredPrice=0;  // price level at which last SIGNAL CHANGED alert w
                              // prevents duplicate alerts when Nifty barely moves between ticks
 let lastSpreadAlertAt=0;     // cooldown: spread strategy alert max once per 60 min
 let lastSpreadStrategy='';   // last spread type sent — avoid repeat of same strategy
+let _sessionOpenPrice=0;     // first valid price seen each trading day — used for
+                              // accurate day's net change in Close Summary (wsOpen is
+                              // always 0 for the Nifty index — WS Mode 2 doesn't send
+                              // OHLC for indices, only for tradeable instruments)
+let _sessionOpenDate='';     // IST date-string the above belongs to — reset daily
 
 function isMarketOpen() {
     const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
@@ -2212,6 +2218,7 @@ async function checkTelegramAlerts(newSignal) {
     if (h===14&&m===0&&!nishanebaazAlertSent&&marketState.nifty>0) { nishanebaazAlertSent=true; await sendNishanebaazAlert(marketState); }
     if (h===15&&m>=30&&!closeSummarySent) {
         closeSummarySent=true;
+        marketState.sessionOpenPrice = _sessionOpenPrice; // expose for accurate day-change calc
         await sendCloseSummary(marketState);
         setTimeout(() => {
             morningSummarySent=false; closeSummarySent=false; vixAlertSent=false;
@@ -2341,6 +2348,16 @@ async function checkTelegramAlerts(newSignal) {
 }
 
 async function updatePrice(price, change, changePct, source) {
+    // ── Track today's session-open price (independent of WS OHLC, which is
+    // always 0 for the Nifty index). Reset once per IST calendar day so the
+    // Close Summary's day-change calculation is always accurate.
+    const _todayIst = getIST().toISOString().slice(0,10);
+    if (_sessionOpenDate !== _todayIst && price > 0) {
+        _sessionOpenDate  = _todayIst;
+        _sessionOpenPrice = price;
+        console.log(`[Session] New day open captured: ₹${price}`);
+    }
+
     const indicators=processIndicators(price, marketState.global?.bankNiftyLeadSignal ?? null);
     const { signal, confidence, reasons }=combineSignals(indicators);
     marketState.prevNifty = marketState.nifty || price;
@@ -4031,6 +4048,24 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
     setTimeout(() => setInterval(syncFIIToMarketState, 20*60*1000), 5*1000);    // FIX: sync FII always, even after market close
     setTimeout(() => setInterval(fetchCalendarEvents, 60*60*1000), 180*1000); // refresh calendar hourly
+
+    // ── ROOT CAUSE FIX — Periodic full-state SSE broadcast ────────────────────
+    // BUG: sseBroadcast('signal', buildSignalPayload()) was ONLY called when a
+    // new signal got saved to the DB (signal-change events). The 'tick' event
+    // updates price/change every second (working fine), but VIX, RSI, PCR, ADX,
+    // signal card, MTF, breadth, global, physics, suggested-trade, S/R levels —
+    // everything that reads from the 'signal' SSE event — stayed FROZEN at
+    // whatever value was present at the last signal-change, even though
+    // refreshMTF/refreshGlobal/refreshBreadth/refreshPCR were updating
+    // marketState correctly in memory every 2-3 min (confirmed in logs).
+    // Fix: push the full payload every 5s regardless of signal change, so the
+    // dashboard, breadth tab, global tab, physics tab, and guard tab all stay
+    // live. The 'tick' event keeps handling sub-second price flashes.
+    setInterval(() => {
+        if (_sseClients.size > 0) {
+            try { sseBroadcast('signal', buildSignalPayload()); } catch(e) { console.warn('[SSE periodic] broadcast error:', e.message); }
+        }
+    }, 5000);
     // BUG FIX: old code ran check920Setup every 30s from boot to shutdown = 2,880 calls/day.
     // It returned early outside 9:20–9:30, so no functional bug but pure CPU waste.
     // Now: check every 30s but only between 9:15 and 9:35 AM IST.

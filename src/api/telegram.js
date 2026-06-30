@@ -71,9 +71,22 @@ async function sendSignalAlert(state, prevSignal, strikeData = null) {
         ? `📦 Volume: ${(state.wsVolume / 1e6).toFixed(2)}M (session)`
         : null;  // omit entirely if no WS volume (Yahoo mode)
 
+    // FIX: old label only showed bullCount regardless of signal direction —
+    // produced "SIGNAL: BUY CALL ... MTF: 0/3 Bullish" which looks contradictory.
+    // Now shows both counts and flags when the signal disagrees with MTF
+    // (this happens because combineSignals() is a separate multi-factor system
+    // — RSI/EMA/VWAP/PCR/breadth — that can diverge from the MTF vote; that's
+    // by design, but the message should say so instead of looking like a bug).
+    const mtfBull = state.mtf?.bullCount || 0;
+    const mtfBear = state.mtf?.bearCount || 0;
+    const mtfDisagrees =
+        (state.signal === 'BUY CALL' && mtfBear > mtfBull) ||
+        (state.signal === 'BUY PUT'  && mtfBull > mtfBear);
     const mtfInfo = state.mtf?.aligned
         ? '🔥 ALL 3 TIMEFRAMES ALIGNED!'
-        : `MTF: ${state.mtf?.bullCount || 0}/3 Bullish`;
+        : mtfDisagrees
+            ? `⚠️ MTF: ${mtfBull}↑ ${mtfBear}↓ — signal from other factors (RSI/PCR/breadth), not MTF`
+            : `MTF: ${mtfBull}/3 Bullish, ${mtfBear}/3 Bearish`;
 
     // POC info — show POC level and whether price is on right side
     const pocData  = state.poc;
@@ -259,11 +272,15 @@ Status: ${note}
 
 // ── Market Close Summary ──────────────────────────────
 async function sendCloseSummary(state) {
-    // Use session open (from WS Mode 2 wsOpen, or first known price) for the
-    // day's NET change — not state.change which is only the last-tick delta.
-    // Last-tick delta shows 0.00% if final 2 ticks were identical (common near
-    // 15:30 when volume thins out), which looked like "no movement all day".
-    const dayOpen   = state.wsOpen > 0 ? state.wsOpen : (state.nifty - state.change);
+    // Priority for day's net change:
+    //   1. sessionOpenPrice — captured on the first valid tick of today (most accurate)
+    //   2. wsOpen — from WS Mode 2 (always 0 for the Nifty index, kept as fallback
+    //      in case a future token change does send OHLC)
+    //   3. nifty - change — last-tick delta as final fallback (can show 0.00% if
+    //      the last 2 ticks were identical near 15:30, which is the bug we're fixing)
+    const dayOpen   = state.sessionOpenPrice > 0 ? state.sessionOpenPrice
+                     : state.wsOpen > 0 ? state.wsOpen
+                     : (state.nifty - state.change);
     const dayChange = dayOpen > 0 ? parseFloat((state.nifty - dayOpen).toFixed(2)) : state.change;
     const dayPct    = dayOpen > 0 ? parseFloat(((dayChange / dayOpen) * 100).toFixed(2)) : state.changePct;
 
