@@ -2455,13 +2455,23 @@ async function onTick(tickData) {
     // ── Sanity check: reject ticks that are >5% away from last known price ────
     // Prevents wrong-offset prices (sequence numbers misread as LTP) from
     // corrupting ADX/VWAP/EMA calculations. If last price is unknown, accept.
+    //
+    // BOOTSTRAP FIX: On startup, marketState.nifty holds yesterday's close
+    // (loaded from DB/cache). The first live WS tick may differ by >5% (gap
+    // open, circuit, or simply a different day). We skip the guard until the
+    // first live tick has been accepted and marketState.nifty is updated from
+    // a real tick. _wsBootstrapped is set to true after first accepted tick.
     const lastKnown = marketState.nifty;
-    if (lastKnown > 0) {
+    if (lastKnown > 0 && onTick._bootstrapped) {
         const pctMove = Math.abs((price - lastKnown) / lastKnown) * 100;
         if (pctMove > 5) {
             console.warn(`[WS] Tick rejected: ${price} is ${pctMove.toFixed(1)}% from last known ${lastKnown} — possible wrong packet offset`);
             return;
         }
+    }
+    if (!onTick._bootstrapped) {
+        console.log(`[WS] Bootstrap tick accepted: ₹${price} (was: ${lastKnown || 'none'}) — guard active from next tick`);
+        onTick._bootstrapped = true;
     }
 
     _lastTickAt = Date.now();  // update watchdog timestamp on every tick
