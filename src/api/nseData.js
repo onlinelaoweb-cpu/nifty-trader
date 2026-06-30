@@ -1325,6 +1325,65 @@ async function fetchPCRFromAngel(spotPrice) {
 }
 
 
+// ── Fyers Quotes API — real volume/OHLC for NIFTY index ────────────────────────
+// Angel One WS Mode 2 sends volume/OHLC = 0 for index tokens (26000 = NIFTY 50
+// INDEX) because indices aren't traded directly — no order flow exists on them.
+// Fyers' REST quote endpoint pulls from NSE's proper market-data feed and DOES
+// return real session volume + OHLC for the index, even though it's not a
+// tradeable instrument. No new WS connection needed — reuses the same
+// FYERS_ACCESS_TOKEN already used for PCR (no extra auth setup required).
+//
+// Polled (not WS) — call this every 10-15s from server.js, not on every tick,
+// to stay well under Fyers' rate limits.
+//
+// Returns { volume, open, high, low, close, ltp } or null on failure.
+async function fetchFyersQuote(symbol = 'NSE:NIFTY50-INDEX') {
+    if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return null;
+
+    try {
+        const res = await axios.get(
+            'https://api-t1.fyers.in/data/quotes',
+            {
+                params: { symbols: symbol },
+                headers: {
+                    'Authorization': `${FYERS_APP_ID}:${FYERS_ACCESS_TOKEN}`,
+                    'Content-Type' : 'application/json',
+                },
+                timeout: 8_000,
+            }
+        );
+
+        if (typeof res.data === 'string' && res.data.includes('<html')) {
+            console.warn('[Fyers Quote] HTML response — auth/IP issue');
+            return null;
+        }
+
+        const d = res.data;
+        if (!d || d.s !== 'ok' || !Array.isArray(d.d) || d.d.length === 0) {
+            console.warn(`[Fyers Quote] Bad response: s=${d?.s} | code=${d?.code} | msg=${d?.message || ''}`);
+            return null;
+        }
+
+        const v = d.d[0]?.v;
+        if (!v || !v.lp) {
+            console.warn('[Fyers Quote] No quote data in response');
+            return null;
+        }
+
+        return {
+            ltp    : parseFloat(v.lp)           || 0,
+            volume : parseInt(v.volume, 10)     || 0,
+            open   : parseFloat(v.open_price)   || 0,
+            high   : parseFloat(v.high_price)   || 0,
+            low    : parseFloat(v.low_price)    || 0,
+            close  : parseFloat(v.prev_close_price) || 0,
+        };
+    } catch (e) {
+        console.warn(`[Fyers Quote] error: ${e.response?.status || e.message}`);
+        return null;
+    }
+}
+
 // ── Fyers API PCR ─────────────────────────────────────────────────────────────
 // Fetches Nifty option chain from Fyers API v3 → computes PCR, ATM PCR, walls.
 // Primary PCR source. Update FYERS_ACCESS_TOKEN daily before 9:15 AM.
@@ -2026,6 +2085,9 @@ module.exports = {
     startNSEScheduler,
     injectAngelSession,   // call after Angel login to enable PCR via Angel Market Data
     triggerInitialPCR,    // call after Angel login to fire first PCR fetch (session ready)
+
+    // Real volume/OHLC for the index (Angel WS Mode 2 sends 0 for index tokens)
+    fetchFyersQuote,
 
     // Snapshots (for /debug routes)
     getPCRState,

@@ -47,6 +47,7 @@ const {
     isNSEHoliday,
     injectAngelSession: injectAngelSessionNSE,   // nseData Angel session for PCR
     triggerInitialPCR,                            // fire first PCR after Angel login
+    fetchFyersQuote,                              // real volume/OHLC for index (Angel WS sends 0)
 } = require('./src/api/nseData');
 const {
     sendSignalAlert, sendMTFAlert,
@@ -2385,10 +2386,13 @@ async function updatePrice(price, change, changePct, source) {
     // Run on every price tick so qualityGate and Telegram can use fresh values.
     // computePOC/Delta read getSessionCandles() internally — no extra args needed.
     try { marketState.poc   = computePOC();   } catch(e) { console.warn('[POC] error:', e.message); }
-    // Only run candle-body proxy delta when WS hasn't provided real order flow data yet.
-    // Once onTick() starts writing marketState.delta.source='websocket', we skip the proxy
-    // so the real buy/sell qty delta from Mode 2 is never overwritten by the approximation.
-    if ((marketState.delta?.source ?? '') !== 'websocket') {
+    // Only run candle-body proxy delta when neither WS nor Fyers has provided
+    // real volume data yet. Priority: websocket (true buy/sell qty, when Angel
+    // sends it for non-index tokens) > fyers (volume-weighted range-position
+    // proxy, real session volume) > candle-body proxy (weakest signal, only
+    // used when neither live source is available).
+    const _deltaSrc = marketState.delta?.source ?? '';
+    if (_deltaSrc !== 'websocket' && _deltaSrc !== 'fyers') {
         try { marketState.delta = computeDelta(); } catch(e) { console.warn('[Delta] error:', e.message); }
     }
     if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%) | POC:${marketState.poc?.poc??'--'} Delta:${marketState.delta?.deltaPct??'--'}%`);
@@ -2864,6 +2868,56 @@ async function refreshPCR() {
         try { await updatePrice(marketState.nifty, marketState.change ?? 0, marketState.changePct ?? 0, marketState.source ?? 'yahoo'); }
         catch(e) { console.error('[PCR signal trigger]', e.message); }
     }
+}
+
+// ── Fyers Volume/OHLC Refresh ─────────────────────────────────────────────────
+// Angel One WS Mode 2 sends Vol:0 Buy:0 Sell:0 O:0 H:0 L:0 for the NIFTY 50
+// INDEX token (26000) — indices have no order flow, so Angel doesn't send this
+// data for them. Fyers' REST quote endpoint pulls from NSE's proper feed and
+// DOES return real session volume + OHLC for the index.
+//
+// This reuses the same FYERS_ACCESS_TOKEN already configured for PCR — no new
+// auth setup needed. Polled every 15s (not on every tick) to stay well under
+// Fyers rate limits. Populates the same marketState.wsVolume/wsOpen/wsHigh/wsLow
+// fields that WS Mode 2 was supposed to fill, so computeDelta() and the
+// dashboard's volume display both get real data instead of always-zero.
+async function refreshFyersVolume() {
+    if (!isNSEMarketDay() || !isMarketOpen()) return;
+    try {
+        const q = await fetchFyersQuote('NSE:NIFTY50-INDEX');
+        if (!q || !q.ltp) return;
+
+        marketState.wsVolume = q.volume;
+        marketState.wsOpen   = q.open;
+        marketState.wsHigh   = q.high;
+        marketState.wsLow    = q.low;
+
+        // Recompute live delta now that we have real volume — same logic as
+        // the WS onTick() handler, but using Fyers' aggregate volume instead
+        // of per-tick buy/sell qty (Fyers index quote doesn't expose those,
+        // only NSE's order book does — so this is volume-weighted, not a true
+        // buy/sell split, but still far better than the candle-body proxy).
+        if (q.volume > 0 && q.high > q.low) {
+            // Approximate buy/sell split using where LTP sits in the day's range —
+            // closer to high = more buying pressure, closer to low = more selling.
+            const rangePos = (q.ltp - q.low) / (q.high - q.low); // 0 = at low, 1 = at high
+            const buyShare = Math.max(0.1, Math.min(0.9, rangePos));
+            const buyQty   = Math.round(q.volume * buyShare);
+            const sellQty  = q.volume - buyQty;
+            const deltaPct = parseFloat((((buyQty - sellQty) / q.volume) * 100).toFixed(1));
+            const signal   = deltaPct > 10 ? 'BULLISH' : deltaPct < -10 ? 'BEARISH' : 'NEUTRAL';
+
+            marketState.delta = {
+                delta   : buyQty - sellQty,
+                deltaPct,
+                signal,
+                divergence: false, // range-position proxy can't reliably detect divergence
+                divergenceLabel: '',
+                label   : `Delta:${deltaPct > 0 ? '+' : ''}${deltaPct}% (${signal}) [fyers-vol]`,
+                source  : 'fyers',
+            };
+        }
+    } catch(e) { console.error('[Fyers Volume]', e.message); }
 }
 
 // ── FII/DII Sync (runs always — not gated by market hours) ───────────────────
@@ -4046,6 +4100,7 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshBreadth,        2*60*1000), 90*1000);   // 2 min — breadth is fast-changing
     setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
+    setTimeout(() => setInterval(refreshFyersVolume,      15*1000), 20*1000);   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
     setTimeout(() => setInterval(syncFIIToMarketState, 20*60*1000), 5*1000);    // FIX: sync FII always, even after market close
     setTimeout(() => setInterval(fetchCalendarEvents, 60*60*1000), 180*1000); // refresh calendar hourly
 
