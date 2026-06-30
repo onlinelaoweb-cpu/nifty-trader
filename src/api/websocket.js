@@ -14,11 +14,12 @@ async function reconnectWebSocket(onTick, delayMs = 5000) {
     }
 }
 
-// ── Angel One SmartStream Mode 2 (Quote) binary packet ───────────────────────
+// ── Angel One SmartStream v2 Mode 2 (Quote) binary packet — 123 bytes ────────
 //
-// v1 was 195 bytes (included 5-level market depth).
-// v2 is 123 bytes (depth removed, OI + circuit limits added at end).
-// ALL field OFFSETS are IDENTICAL — only the total packet size changed.
+// v1 was 195 bytes. v2 is 123 bytes.
+// Difference: v2 removed `last_traded_qty` (4 bytes) and `avg_trade_price`
+// (8 bytes) that sat between LTP and Volume in v1 — total 12 bytes removed.
+// Everything after byte 46 shifts UP by 12. LTP and header are unchanged.
 //
 // Byte layout (all little-endian):
 //   0      : subscription mode (2 = Quote)
@@ -26,23 +27,20 @@ async function reconnectWebSocket(onTick, delayMs = 5000) {
 //   2–26   : token string, null-padded to 25 bytes
 //   27–34  : sequence number   (int64 LE)
 //   35–42  : exchange timestamp (int64 LE, epoch seconds)
-//   43–46  : LTP               (uint32 LE, in PAISE)   ← price
-//   47–50  : Last Traded Qty   (uint32 LE)
-//   51–58  : Avg Trade Price   (int64 LE, in paise)
-//   59–62  : Volume            (uint32 LE, session cumulative)
-//   63–66  : Total Buy Qty     (uint32 LE)
-//   67–70  : Total Sell Qty    (uint32 LE)
-//   71–78  : Open price        (int64 LE, in paise)
-//   79–86  : High price        (int64 LE, in paise)
-//   87–94  : Low price         (int64 LE, in paise)
-//   95–102 : Close/Prev Close  (int64 LE, in paise)
-//   103–122: OI + circuit limits (20 bytes, replaces old depth data)
+//   43–46  : LTP               (uint32 LE, in PAISE)
+//   47–50  : Volume            (uint32 LE, session cumulative)  ← was 59 in v1
+//   51–54  : Total Buy Qty     (uint32 LE)                      ← was 63 in v1
+//   55–58  : Total Sell Qty    (uint32 LE)                      ← was 67 in v1
+//   59–66  : Open price        (int64 LE, in paise)             ← was 71 in v1
+//   67–74  : High price        (int64 LE, in paise)             ← was 79 in v1
+//   75–82  : Low price         (int64 LE, in paise)             ← was 87 in v1
+//   83–90  : Close/Prev Close  (int64 LE, in paise)             ← was 95 in v1
+//   91–122 : OI + circuit limits (32 bytes)
 //
 // Returns { price, volume, buyQty, sellQty, open, high, low, close, exchTs }
 // or null if packet is not parseable.
 function parseQuotePacket(buf) {
-    // Mode 2 full quote — accept both v2 (123 bytes) and v1 (195 bytes)
-    // Offsets are identical in both versions
+    // Mode 2 full quote — v2 = 123 bytes, v1 = 195 bytes
     if (buf.length >= 123) {
         const mode = buf.readUInt8(0);
         if (mode !== 2) {
@@ -53,25 +51,25 @@ function parseQuotePacket(buf) {
         const ltpPaise = buf.readUInt32LE(43);
         const price    = ltpPaise / 100;
 
-        // Sanity check: Nifty realistic range
         if (price < 15000 || price > 35000) {
-            if (ltpPaise > 0) console.warn(`[WS] Price out of range: ${price} (raw paise: ${ltpPaise})`);
+            if (ltpPaise > 0) console.warn(`[WS] Price out of range: ${price}`);
             return null;
         }
 
-        const volume  = buf.readUInt32LE(59);
-        const buyQty  = buf.readUInt32LE(63);
-        const sellQty = buf.readUInt32LE(67);
-        const open    = Number(buf.readBigInt64LE(71)) / 100;
-        const high    = Number(buf.readBigInt64LE(79)) / 100;
-        const low     = Number(buf.readBigInt64LE(87)) / 100;
-        const close   = Number(buf.readBigInt64LE(95)) / 100;
-        const exchTs  = Number(buf.readBigInt64LE(35)); // epoch seconds
+        // v2 offsets (v1 offsets - 12 for all fields after byte 46)
+        const volume  = buf.readUInt32LE(47);
+        const buyQty  = buf.readUInt32LE(51);
+        const sellQty = buf.readUInt32LE(55);
+        const open    = Number(buf.readBigInt64LE(59)) / 100;
+        const high    = Number(buf.readBigInt64LE(67)) / 100;
+        const low     = Number(buf.readBigInt64LE(75)) / 100;
+        const close   = Number(buf.readBigInt64LE(83)) / 100;
+        const exchTs  = Number(buf.readBigInt64LE(35)); // unchanged
 
         return { price, volume, buyQty, sellQty, open, high, low, close, exchTs };
     }
 
-    // Mode 1 LTP-only fallback (47 bytes) — LTP at byte 43 (same offset)
+    // Mode 1 LTP-only fallback (47 bytes)
     if (buf.length >= 47) {
         const mode = buf.readUInt8(0);
         if (mode === 1) {
@@ -119,10 +117,10 @@ function startWebSocket(authData, onTick) {
                 correlationID: 'vardaannifty',
                 action       : 1,
                 params       : {
-                    mode     : 2,        // Quote — LTP + OHLCV + Buy/Sell Qty
+                    mode     : 2,
                     tokenList: [{
                         exchangeType: 1,
-                        tokens      : ['26000'] // NIFTY 50
+                        tokens      : ['26000']
                     }]
                 }
             }));
@@ -142,22 +140,16 @@ function startWebSocket(authData, onTick) {
 
                 tickCount++;
 
-                // Log first 5 packets for debugging
                 if (tickCount <= 5) {
                     console.log(`WS msg #${tickCount}: len=${buf.length} hex=${buf.slice(0, 20).toString('hex')}...`);
                 }
 
-                // JSON = acknowledgment message
                 const str = buf.toString('utf8');
                 if (str.startsWith('{') || str.startsWith('[')) {
-                    try {
-                        const json = JSON.parse(str);
-                        console.log('WS JSON msg:', JSON.stringify(json));
-                    } catch(e) {}
+                    try { console.log('WS JSON msg:', JSON.stringify(JSON.parse(str))); } catch(e) {}
                     return;
                 }
 
-                // Parse Mode 2 binary quote packet
                 const tick = parseQuotePacket(buf);
                 if (tick !== null) {
                     if (tickCount <= 10 || tickCount % 100 === 0) {
@@ -184,16 +176,12 @@ function startWebSocket(authData, onTick) {
             }
         });
 
-        ws.on('error', (err) => {
-            console.error('WebSocket Error:', err.message);
-        });
-
-        ws.on('close', (code) => {
+        ws.on('error',  (err)  => { console.error('WebSocket Error:', err.message); });
+        ws.on('close',  (code) => {
             console.log('🔴 WebSocket Closed:', code);
             clearInterval(heartbeat);
             reconnectWebSocket(onTick, 5000);
         });
-
         ws.on('ping', () => ws.pong());
 
     } catch (err) {
