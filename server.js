@@ -2208,8 +2208,8 @@ async function checkTelegramAlerts(newSignal) {
     telegramAlertInFlight = true;
     try {
     const ist=getIST(), h=ist.getHours(), m=ist.getMinutes();
-    if (h===9&&m>=16&&m<=20&&!morningSummarySent) { morningSummarySent=true; await sendMorningSummary(marketState); return; }
-    if (h===14&&m===0&&!nishanebaazAlertSent) { nishanebaazAlertSent=true; await sendNishanebaazAlert(marketState); }
+    if (h===9&&m>=16&&m<=20&&!morningSummarySent&&marketState.nifty>0) { morningSummarySent=true; await sendMorningSummary(marketState); return; }
+    if (h===14&&m===0&&!nishanebaazAlertSent&&marketState.nifty>0) { nishanebaazAlertSent=true; await sendNishanebaazAlert(marketState); }
     if (h===15&&m>=30&&!closeSummarySent) {
         closeSummarySent=true;
         await sendCloseSummary(marketState);
@@ -2280,14 +2280,30 @@ async function checkTelegramAlerts(newSignal) {
     // MTF alert cooldown: 60 min between same-direction alerts.
     // Also gated to actual market hours (9:15–15:30) only — prevents pre-market
     // spam on container restart when Yahoo data makes all TFs look aligned.
-    const MTF_ALERT_COOLDOWN_MS = 60 * 60 * 1000;  // was 30 min — doubled to cut spam
+    //
+    // BUG FIX (found in logs): the old condition `(!prevMTFAligned || mtfCooldownOk)`
+    // let ANY aligned→false→aligned flicker bypass the cooldown entirely, even
+    // seconds after the last alert. Since `oneHourLagging` toggles aligned on/off
+    // as 1H data updates, this fired alerts every ~12 min instead of every 60 min
+    // (seen in logs: 6:16, 6:28, 6:48, 7:02, 7:14, 7:26, 7:32 — all within cooldown).
+    // Fix: cooldown is now absolute — only a genuine signal-type change (CALL↔PUT)
+    // or 60 min elapsed can fire a new alert, regardless of aligned flicker.
+    const MTF_ALERT_COOLDOWN_MS = 60 * 60 * 1000;
     const mtfSignalNow  = marketState.mtf?.signal || '';
     const mtfIst        = getIST();
     const mtfMins       = mtfIst.getHours() * 60 + mtfIst.getMinutes();
     const mtfInWindow   = mtfMins >= 555 && mtfMins <= 930;  // 9:15–15:30 only
-    const mtfCooldownOk = (Date.now() - lastMTFAlertAt) > MTF_ALERT_COOLDOWN_MS || mtfSignalNow !== lastMTFAlertSignal;
-    if (marketState.mtf.aligned && mtfInWindow && (!prevMTFAligned || mtfCooldownOk)) {
-        await sendMTFAlert(marketState);
+    const mtfTimeOk     = (Date.now() - lastMTFAlertAt) > MTF_ALERT_COOLDOWN_MS;
+    const mtfSignalChanged = mtfSignalNow !== '' && mtfSignalNow !== lastMTFAlertSignal && lastMTFAlertSignal !== '';
+    const mtfNeverFired = lastMTFAlertAt === 0;
+    const mtfCooldownOk = mtfTimeOk || mtfSignalChanged || mtfNeverFired;
+    if (marketState.mtf.aligned && mtfInWindow && mtfCooldownOk) {
+        let mtfStrikeData = null;
+        try {
+            const pcrStateMtf = getPCRState();
+            mtfStrikeData = pickStrikeAndPremium(marketState.mtf.signal, marketState.nifty, marketState.vix, pcrStateMtf);
+        } catch(e) { console.warn('[MTF Strike] compute error:', e.message); }
+        await sendMTFAlert(marketState, mtfStrikeData);
         lastMTFAlertAt     = Date.now();
         lastMTFAlertSignal = mtfSignalNow;
     }
@@ -2375,9 +2391,15 @@ async function updatePrice(price, change, changePct, source) {
 // This poller fetches ONLY spot price every 60s so frontend sees fresh values.
 // Skips automatically when Angel One WS is actively ticking.
 async function pollYahooPrice() {
-    // On weekends/outside hours: still poll price (keeps app responsive)
-    // but all heavy processing is skipped via isNSEMarketDay() guards above
-    if (!isMarketOpen()) return;
+    // FIX: extended to 8:00 AM - 4:00 PM (not just isMarketOpen 9:15-15:30) so
+    // that once the watchdog flips source to 'yahoo' on a pre/post-market stale
+    // tick, this function can actually run and refresh the price. Previously
+    // both used the same narrow window, so a stale tick outside 9:15-15:30
+    // never got corrected until the next isMarketOpen() tick — hence the
+    // multi-hour freeze seen in logs (24,094.80 stuck 5:17-7:32 AM).
+    const ist  = getIST();
+    const mins = ist.getHours() * 60 + ist.getMinutes();
+    if (mins < 480 || mins > 960) return; // 8:00 AM – 4:00 PM
     if (marketState.source === 'websocket' && (Date.now() - _lastTickAt) < 90_000) return;
     try {
         const data = await fetchMarketData();
@@ -2406,7 +2428,16 @@ let _wsWatchdog  = null;
 function startTickWatchdog() {
     if (_wsWatchdog) clearInterval(_wsWatchdog);
     _wsWatchdog = setInterval(() => {
-        if (!isMarketOpen()) return;
+        // FIX: previously gated by isMarketOpen() (9:15-15:30 only), so a stale
+        // WS tick received just before/after market hours never got flagged —
+        // price stayed frozen for hours (seen in logs: 24,094.80 frozen 5:17-7:32 AM).
+        // Now checks during extended pre/post-market window (8:00-16:00) so any
+        // leftover stale tick from yesterday's session or a phantom reconnect
+        // gets caught and source falls back to Yahoo immediately.
+        const ist  = getIST();
+        const mins = ist.getHours() * 60 + ist.getMinutes();
+        const inExtendedWindow = mins >= 480 && mins <= 960; // 8:00 AM – 4:00 PM
+        if (!inExtendedWindow) return;
         const silentMs = Date.now() - _lastTickAt;
         if (_lastTickAt > 0 && silentMs > 3 * 60 * 1000 && marketState.source === 'websocket') {
             console.warn(`⚠️ [WS Watchdog] No tick for ${Math.round(silentMs/1000)}s — switching to Yahoo fallback`);

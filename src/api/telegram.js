@@ -150,7 +150,7 @@ ${mtfInfo}
 }
 
 // ── MTF All Aligned Alert ─────────────────────────────
-async function sendMTFAlert(state) {
+async function sendMTFAlert(state, strikeData = null) {
     const emoji      = state.mtf.signal === 'BUY CALL' ? '🟢' : '🔴';
     const validCount     = state.mtf.validTFCount ?? 3;
     const oneHourLagging = state.mtf.oneHourLagging ?? false;
@@ -161,19 +161,55 @@ async function sendMTFAlert(state) {
             ? '🔥 STRONG SIGNAL — ALL 3 ALIGNED!'
             : `⚡ SIGNAL — ${validCount}/3 TFs ALIGNED (15m warming up)`;
 
+    // ── Strike SL/Target block (same logic as sendSignalAlert) ────────────────
+    const LOT = 75;
+    let strikeBlock = '';
+    if (strikeData && strikeData.entry > 0) {
+        const slPct   = ((strikeData.entry - strikeData.sl) / strikeData.entry * 100).toFixed(0);
+        const tgtPct  = ((strikeData.target - strikeData.entry) / strikeData.entry * 100).toFixed(0);
+        const slLoss  = Math.round((strikeData.entry - strikeData.sl) * LOT);
+        const tgtGain = Math.round((strikeData.target - strikeData.entry) * LOT);
+        strikeBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
+📥 Entry : ₹${strikeData.entry}
+🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
+🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
+📊 R:R   : 1:2
+━━━━━━━━━━━━━━━━━━
+`;
+    }
+
+    // ── POC + Delta block (same as sendSignalAlert) ────────────────────────────
+    const pocData  = state.poc;
+    const pocEmoji = !pocData || pocData.signal === 'INSUFFICIENT' ? '⏳'
+                   : pocData.signal === 'AT_POC'    ? '🟡'
+                   : pocData.signal === 'ABOVE_POC' ? '🟢'
+                   :                                   '🔴';
+    const pocInfo  = pocData?.poc
+        ? `${pocEmoji} POC:${pocData.poc} | VAH:${pocData.vah} | VAL:${pocData.val} (${pocData.signal.replace('_',' ')})\n`
+        : '';
+
+    const deltaData = state.delta;
+    const deltaEmoji = !deltaData ? '⏳'
+                     : deltaData.divergence      ? '⚠️'
+                     : deltaData.signal === 'BULLISH' ? '🟢'
+                     : deltaData.signal === 'BEARISH' ? '🔴'
+                     :                                   '⚪';
+    const deltaInfo = deltaData?.deltaPct !== undefined
+        ? `${deltaEmoji} Delta:${deltaData.deltaPct > 0 ? '+' : ''}${deltaData.deltaPct}% (${deltaData.signal})${deltaData.divergence ? ' — REVERSAL WARNING' : ''}\n`
+        : '';
+
     const msg = `
 ${alignTitle}
 ━━━━━━━━━━━━━━━━━━
 ${emoji} <b>${state.mtf.signal}</b> — ${state.mtf.strength}
 📊 NIFTY: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}
-🎯 Strike: ${state.nifty > 0 ? (Math.round(state.nifty / 50) * 50) + (state.mtf.signal === 'BUY PUT' ? ' PE' : ' CE') : 'ATM'} (ATM)
 📈 Confidence: ${state.mtf.confidence}%
 ━━━━━━━━━━━━━━━━━━
 5 MIN  : ${state.mtf.tf5m?.signal  || '--'}
 15 MIN : ${state.mtf.tf15m?.signal || '--'}
 1 HOUR : ${state.mtf.tf1h?.signal  || '--'}
 ━━━━━━━━━━━━━━━━━━
-⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true })}
+${pocInfo}${deltaInfo}${pocInfo || deltaInfo ? '━━━━━━━━━━━━━━━━━━\n' : ''}${strikeBlock}⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true })}
 <i>VardaanNifty AI</i>
 `.trim();
 
@@ -223,11 +259,19 @@ Status: ${note}
 
 // ── Market Close Summary ──────────────────────────────
 async function sendCloseSummary(state) {
+    // Use session open (from WS Mode 2 wsOpen, or first known price) for the
+    // day's NET change — not state.change which is only the last-tick delta.
+    // Last-tick delta shows 0.00% if final 2 ticks were identical (common near
+    // 15:30 when volume thins out), which looked like "no movement all day".
+    const dayOpen   = state.wsOpen > 0 ? state.wsOpen : (state.nifty - state.change);
+    const dayChange = dayOpen > 0 ? parseFloat((state.nifty - dayOpen).toFixed(2)) : state.change;
+    const dayPct    = dayOpen > 0 ? parseFloat(((dayChange / dayOpen) * 100).toFixed(2)) : state.changePct;
+
     const msg = `
 🔔 <b>MARKET CLOSED — End of Day</b>
 ━━━━━━━━━━━━━━━━━━
 📊 NIFTY Close: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}
-${state.change >= 0 ? '▲' : '▼'} ${Math.abs(state.change).toFixed(2)} (${state.changePct.toFixed(2)}%)
+${dayChange >= 0 ? '▲' : '▼'} ${Math.abs(dayChange).toFixed(2)} (${dayPct.toFixed(2)}%)
 
 VIX: ${state.vix || '--'}
 RSI: ${state.rsi || '--'}

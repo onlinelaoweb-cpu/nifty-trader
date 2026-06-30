@@ -36,14 +36,9 @@ const { getCandleHistory, getSessionCandles }    = require('./indicators');
 // Switched RSI(14)→RSI(9): matches 1m indicator, less lag, more reactive on short TFs.
 // MIN_BARS driven by EMA21(22) and ADX(30) — RSI(9) needs fewer so no change needed.
 const MIN_BARS = {
-    // FIX 2025-06-29: Reduced from 22/30/30 to allow early-session MTF voting.
-    // Yahoo delivers 17 5m bars, 7 15m bars, 24 1h bars in the first ~90 min.
-    // Old thresholds caused ALL TFs to be INSUFFICIENT all session after restart.
-    // EMA21 and ADX degrade gracefully (null) when bars < their warmup — signal
-    // is computed from RSI9 + EMA9 + VWAP + price-vs-EMA instead.
-    '5m' : 10,   // 5m: 10 bars = 50 min. RSI9+EMA9 ready; EMA21/ADX degrade gracefully.
-    '15m': 7,    // 15m: 7 bars = 105 min. Yahoo delivers 7 bars — usable early session.
-    '1h' : 6,    // 1h:  6 bars. Yahoo delivers 24 multi-day bars — usable from market open.
+    '5m' : 22,   // 5m: 22 bars = 110 min. Achievable from memory within ~2h of open.
+    '15m': 30,   // 15m: 30 bars = 7.5h. Needs Yahoo fallback for most of the session.
+    '1h' : 30,   // 1h:  30 bars = 30h. Always needs Yahoo multi-day fallback.
 };
 
 // ── Resample 1m candles → higher timeframe ────────────────────────────────────
@@ -99,18 +94,33 @@ function todaySessionCandles(candles) {
 // Two query hosts (query1 / query2) — rotate on failure.
 //
 // TF → Yahoo interval / range:
-//   5m  → interval=5m,  range=5d   → ~390 bars (5 days × ~78 bars/day)
-//   15m → interval=15m, range=5d   → ~130 bars (5 days × ~26 bars/day)
-//   1h  → interval=60m, range=1mo  → ~130 bars (~1 month of hourly)
+//   5m  → interval=5m,  range=1d   → today's session candles
+//   15m → interval=15m, range=1d   → today's session candles
+//   1h  → interval=60m, range=5d   → recent week hourly
 
 const _yahooCache = {};   // { '15m': { ts, candles }, '1h': { ts, candles } }
 const YAHOO_CACHE_TTL_MS = 5 * 60 * 1000;
+const YAHOO_STALE_TTL_MS = 30 * 60 * 1000; // use stale cache up to 30min if all URLs fail
 
-const YAHOO_DIRECT_HEADERS = {
-    'User-Agent'     : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept'         : 'application/json',
-    'Accept-Language': 'en-US,en;q=0.9',
-};
+// Rotate User-Agent to avoid Railway IP fingerprinting by Yahoo
+const UA_POOL = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+];
+let _uaIdx = 0;
+function getYahooHeaders() {
+    _uaIdx = (_uaIdx + 1) % UA_POOL.length;
+    return {
+        'User-Agent'     : UA_POOL[_uaIdx],
+        'Accept'         : 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer'        : 'https://finance.yahoo.com/',
+        'Origin'         : 'https://finance.yahoo.com',
+    };
+}
 
 async function fetchCandlesFromYahoo(intervalKey) {
     // Return cached data if still fresh
@@ -120,25 +130,31 @@ async function fetchCandlesFromYahoo(intervalKey) {
     }
 
     const cfgMap = {
-        '5m' : { interval: '5m',  range: '1d'  },   // FIX: was 5d — today only, no multi-day stale data
-        '15m': { interval: '15m', range: '1d'  },   // FIX: was 5d — today only
-        '1h' : { interval: '60m', range: '5d'  },   // FIX: was 1mo — 5d gives recent context without month-old bias
+        '5m' : { interval: '5m',  range: '1d'  },
+        '15m': { interval: '15m', range: '1d'  },
+        '1h' : { interval: '60m', range: '5d'  },
     };
     const cfg = cfgMap[intervalKey];
     if (!cfg) return [];
 
-    // Try query1 then query2 — Yahoo load-balances across these two hosts
     const SYMBOL = '%5ENSEI';  // ^NSEI = Nifty 50 index
+    // Try query1, query2, then v7 download endpoint as last resort
     const urls = [
         `https://query1.finance.yahoo.com/v8/finance/chart/${SYMBOL}?interval=${cfg.interval}&range=${cfg.range}&includePrePost=false`,
         `https://query2.finance.yahoo.com/v8/finance/chart/${SYMBOL}?interval=${cfg.interval}&range=${cfg.range}&includePrePost=false`,
+        // v7 chart endpoint — different path, sometimes bypasses rate-limit
+        `https://query1.finance.yahoo.com/v7/finance/chart/${SYMBOL}?interval=${cfg.interval}&range=${cfg.range}&includePrePost=false`,
+        // Alternate range — try 2d for intraday TFs (sometimes one range is blocked, other isn't)
+        ...(cfg.range === '1d' ? [
+            `https://query2.finance.yahoo.com/v8/finance/chart/${SYMBOL}?interval=${cfg.interval}&range=2d&includePrePost=false`,
+        ] : []),
     ];
 
     for (const url of urls) {
         try {
             const res = await axios.get(url, {
-                timeout: 12000,
-                headers: YAHOO_DIRECT_HEADERS,
+                timeout: 10000,
+                headers: getYahooHeaders(),
             });
             const result = res.data?.chart?.result?.[0];
             if (!result) continue;
@@ -165,21 +181,28 @@ async function fetchCandlesFromYahoo(intervalKey) {
             }
 
             if (candles.length > 0) {
-                // MEM FIX: only keep the most recent bars needed for indicators
-                // (RSI9/ADX14/EMA9 need ~30 bars; keep 80 for safety/resampling headroom)
                 const trimmed = candles.length > 80 ? candles.slice(-80) : candles;
                 console.log(`[MTF] Yahoo direct ${intervalKey}: ${candles.length} bars → cached ${trimmed.length} ✅`);
                 _yahooCache[intervalKey] = { ts: Date.now(), candles: trimmed };
                 return trimmed;
             }
         } catch (err) {
-            console.warn(`[MTF Yahoo direct] ${intervalKey} ${url.includes('query1') ? 'q1' : 'q2'} failed: ${err.message}`);
+            console.warn(`[MTF Yahoo direct] ${intervalKey} ${url.includes('query1') ? 'q1' : url.includes('v7') ? 'v7' : 'q2'} failed: ${err.message}`);
         }
+    }
+
+    // ── Stale cache fallback ─────────────────────────────────────────────────
+    // If all URLs fail but we have recent-enough stale cache, use it.
+    // Better to use 10-min-old candles than show INSUFFICIENT for 30min.
+    if (cached && (Date.now() - cached.ts) < YAHOO_STALE_TTL_MS) {
+        console.warn(`[MTF Yahoo direct] ${intervalKey}: all URLs failed — using stale cache (${Math.round((Date.now()-cached.ts)/60000)}min old)`);
+        return cached.candles;
     }
 
     console.warn(`[MTF Yahoo direct] ${intervalKey}: all URLs failed — MTF will use INSUFFICIENT for this TF`);
     return [];
 }
+
 
 // ── ADX (Wilder's smoothing, period=14) ───────────────────────────────────────
 function calculateADX(candles, period = 14) {
