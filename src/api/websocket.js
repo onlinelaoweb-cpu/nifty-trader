@@ -14,31 +14,35 @@ async function reconnectWebSocket(onTick, delayMs = 5000) {
     }
 }
 
-// ── Angel One SmartStream v2 Mode 2 (Quote) binary packet — 123 bytes ────────
+// ── Angel One SmartStream Mode 2 (Quote) binary packet ───────────────────────
+//
+// v1 was 195 bytes (included 5-level market depth).
+// v2 is 123 bytes (depth removed, OI + circuit limits added at end).
+// ALL field OFFSETS are IDENTICAL — only the total packet size changed.
 //
 // Byte layout (all little-endian):
 //   0      : subscription mode (2 = Quote)
 //   1      : exchange type     (1 = NSE CM)
 //   2–26   : token string, null-padded to 25 bytes
-//   27–30  : LTP               (uint32 LE, in PAISE)   ← price
-//   31–34  : Last Traded Qty   (uint32 LE)
-//   35–42  : Avg Trade Price   (int64 LE, in paise)
-//   43–46  : Volume            (uint32 LE, session cumulative)
-//   47–50  : Total Buy Qty     (uint32 LE)
-//   51–54  : Total Sell Qty    (uint32 LE)
-//   55–62  : Open price        (int64 LE, in paise)
-//   63–70  : High price        (int64 LE, in paise)
-//   71–78  : Low price         (int64 LE, in paise)
-//   79–86  : Close/Prev Close  (int64 LE, in paise)
-//   87–94  : Exchange timestamp (int64 LE, epoch seconds)
-//   95–122 : OI + circuit limits (28 bytes, unused)
-//
-// NOTE: v1 was 195 bytes with LTP at byte 43. v2 is 123 bytes with LTP at byte 27.
+//   27–34  : sequence number   (int64 LE)
+//   35–42  : exchange timestamp (int64 LE, epoch seconds)
+//   43–46  : LTP               (uint32 LE, in PAISE)   ← price
+//   47–50  : Last Traded Qty   (uint32 LE)
+//   51–58  : Avg Trade Price   (int64 LE, in paise)
+//   59–62  : Volume            (uint32 LE, session cumulative)
+//   63–66  : Total Buy Qty     (uint32 LE)
+//   67–70  : Total Sell Qty    (uint32 LE)
+//   71–78  : Open price        (int64 LE, in paise)
+//   79–86  : High price        (int64 LE, in paise)
+//   87–94  : Low price         (int64 LE, in paise)
+//   95–102 : Close/Prev Close  (int64 LE, in paise)
+//   103–122: OI + circuit limits (20 bytes, replaces old depth data)
 //
 // Returns { price, volume, buyQty, sellQty, open, high, low, close, exchTs }
 // or null if packet is not parseable.
 function parseQuotePacket(buf) {
-    // ── v2 packet: 123 bytes ──────────────────────────────────────────────────
+    // Mode 2 full quote — accept both v2 (123 bytes) and v1 (195 bytes)
+    // Offsets are identical in both versions
     if (buf.length >= 123) {
         const mode = buf.readUInt8(0);
         if (mode !== 2) {
@@ -46,32 +50,31 @@ function parseQuotePacket(buf) {
             return null;
         }
 
-        const ltpPaise = buf.readUInt32LE(27);
+        const ltpPaise = buf.readUInt32LE(43);
         const price    = ltpPaise / 100;
 
         // Sanity check: Nifty realistic range
         if (price < 15000 || price > 35000) {
-            if (ltpPaise > 0) console.warn(`[WS] Mode2 v2 price out of range: ${price} (raw paise: ${ltpPaise})`);
+            if (ltpPaise > 0) console.warn(`[WS] Price out of range: ${price} (raw paise: ${ltpPaise})`);
             return null;
         }
 
-        const volume  = buf.readUInt32LE(43);
-        const buyQty  = buf.readUInt32LE(47);
-        const sellQty = buf.readUInt32LE(51);
-        const open    = Number(buf.readBigInt64LE(55)) / 100;
-        const high    = Number(buf.readBigInt64LE(63)) / 100;
-        const low     = Number(buf.readBigInt64LE(71)) / 100;
-        const close   = Number(buf.readBigInt64LE(79)) / 100;
-        const exchTs  = Number(buf.readBigInt64LE(87)); // epoch seconds
+        const volume  = buf.readUInt32LE(59);
+        const buyQty  = buf.readUInt32LE(63);
+        const sellQty = buf.readUInt32LE(67);
+        const open    = Number(buf.readBigInt64LE(71)) / 100;
+        const high    = Number(buf.readBigInt64LE(79)) / 100;
+        const low     = Number(buf.readBigInt64LE(87)) / 100;
+        const close   = Number(buf.readBigInt64LE(95)) / 100;
+        const exchTs  = Number(buf.readBigInt64LE(35)); // epoch seconds
 
         return { price, volume, buyQty, sellQty, open, high, low, close, exchTs };
     }
 
-    // ── Mode 1 LTP-only fallback (47 bytes) ──────────────────────────────────
+    // Mode 1 LTP-only fallback (47 bytes) — LTP at byte 43 (same offset)
     if (buf.length >= 47) {
         const mode = buf.readUInt8(0);
         if (mode === 1) {
-            // v1 Mode1: LTP at byte 43
             const ltpPaise = buf.readUInt32LE(43);
             const price    = ltpPaise / 100;
             if (price >= 15000 && price <= 35000) {
