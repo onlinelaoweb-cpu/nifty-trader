@@ -37,8 +37,13 @@ const { getCandleHistory, getSessionCandles }    = require('./indicators');
 // MIN_BARS driven by EMA21(22) and ADX(30) — RSI(9) needs fewer so no change needed.
 const MIN_BARS = {
     '5m' : 22,   // 5m: 22 bars = 110 min. Achievable from memory within ~2h of open.
-    '15m': 30,   // 15m: 30 bars = 7.5h. Needs Yahoo fallback for most of the session.
-    '1h' : 30,   // 1h:  30 bars = 30h. Always needs Yahoo multi-day fallback.
+    '15m': 20,   // FIX: was 30 (7.5h) — lowered to 20 (5h). Yahoo gives 26-27 bars for
+                 // range=1d which was just barely under 30, causing permanent INSUFFICIENT.
+                 // ADX(14) needs 28+ bars but EMA21 only needs 21; 20 is a safe minimum
+                 // that allows the TF to vote from ~10:00 AM onwards instead of never.
+    '1h' : 20,   // FIX: was 30 (30h) — lowered to 20 (20h). Yahoo range=5d gives 23 bars
+                 // which was always under 30, so 1H was PERMANENTLY INSUFFICIENT all session.
+                 // 20 bars gives adequate ADX/EMA history while fitting within 5d Yahoo data.
 };
 
 // ── Resample 1m candles → higher timeframe ────────────────────────────────────

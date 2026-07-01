@@ -2885,12 +2885,17 @@ async function refreshFyersVolume() {
     if (!isNSEMarketDay() || !isMarketOpen()) return;
     try {
         const q = await fetchFyersQuote('NSE:NIFTY50-INDEX');
-        if (!q || !q.ltp) return;
+        if (!q || !q.ltp) {
+            console.warn('[Fyers Volume] No quote returned — token may need refresh');
+            return;
+        }
 
         marketState.wsVolume = q.volume;
         marketState.wsOpen   = q.open;
         marketState.wsHigh   = q.high;
         marketState.wsLow    = q.low;
+
+        console.log(`[Fyers Volume] Vol:${(q.volume/1e7).toFixed(2)}Cr | O:${q.open} H:${q.high} L:${q.low} | LTP:${q.ltp}`);
 
         // Recompute live delta now that we have real volume — same logic as
         // the WS onTick() handler, but using Fyers' aggregate volume instead
