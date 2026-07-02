@@ -48,6 +48,7 @@ const {
     injectAngelSession: injectAngelSessionNSE,   // nseData Angel session for PCR
     triggerInitialPCR,                            // fire first PCR after Angel login
     fetchFyersQuote,                              // real volume/OHLC for index (Angel WS sends 0)
+    getCurrentFyersFutSymbol,                     // correct NSE:NIFTY{YY}{MMM}FUT symbol (NIFTY-I is invalid on Fyers)
 } = require('./src/api/nseData');
 const {
     sendSignalAlert, sendMTFAlert,
@@ -2885,13 +2886,17 @@ async function refreshFyersVolume() {
     if (!isNSEMarketDay() || !isMarketOpen()) return;
     try {
         // NSE:NIFTY50-INDEX returns volume=0 (index has no actual traded volume).
-        // Try NSE:NIFTY-I (rolling nearest futures) which has real volume data.
-        // Fallback: NSE:NIFTY25JULFUT (current month expiry format) — changes monthly.
-        let q = await fetchFyersQuote('NSE:NIFTY-I');
+        // "NSE:NIFTY-I" (Zerodha-style continuous-contract alias) is NOT a valid
+        // Fyers symbol — it always failed silently and fell through to the
+        // index-only fallback below, which is why Vol stayed "0.00Cr" forever
+        // even though O/H/L/LTP looked fine (those came from the index fallback).
+        // Fixed: use the real current-month contract symbol, e.g. NSE:NIFTY26JULFUT.
+        const futSymbol = getCurrentFyersFutSymbol();
+        let q = await fetchFyersQuote(futSymbol);
 
         // If futures volume still 0, the symbol format may have changed — log and skip
         if (!q || !q.ltp) {
-            console.warn('[Fyers Volume] NSE:NIFTY-I failed — trying index as LTP-only');
+            console.warn(`[Fyers Volume] ${futSymbol} failed — trying index as LTP-only`);
             q = await fetchFyersQuote('NSE:NIFTY50-INDEX');
         }
 

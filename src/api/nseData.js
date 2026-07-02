@@ -1337,6 +1337,43 @@ async function fetchPCRFromAngel(spotPrice) {
 // to stay well under Fyers' rate limits.
 //
 // Returns { volume, open, high, low, close, ltp } or null on failure.
+// ── Current-month NIFTY futures symbol for Fyers ─────────────────────────────
+// Fyers does NOT support the Zerodha-style continuous-contract alias
+// "NSE:NIFTY-I" — that symbol always fails on Fyers' quote endpoint, silently
+// falling back to the plain index quote (which correctly has real O/H/L/LTP
+// but volume is ALWAYS 0 for an index — indices have no traded volume).
+// That's exactly why volume was stuck at "0.00Cr" — the primary futures
+// symbol was never valid in the first place, so it always fell through.
+//
+// Fyers' real format is: NSE:NIFTY{YY}{MMM}FUT, e.g. NSE:NIFTY26JULFUT.
+// Contracts roll on the monthly expiry (last Thursday of the month) — this
+// rolls the symbol to next month once we're past that Thursday.
+function getCurrentFyersFutSymbol() {
+    const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const y = istNow.getFullYear();
+    const m = istNow.getMonth(); // 0-indexed
+
+    // Last Thursday of a given (year, month)
+    const lastThursday = (year, month) => {
+        const d = new Date(year, month + 1, 0); // last calendar day of month
+        const diff = (d.getDay() - 4 + 7) % 7;   // 4 = Thursday
+        d.setDate(d.getDate() - diff);
+        return d;
+    };
+
+    let targetY = y, targetM = m;
+    const thisMonthExpiry = lastThursday(y, m);
+    // If today is past this month's expiry date, roll to next month's contract.
+    if (istNow.getDate() > thisMonthExpiry.getDate()) {
+        targetM = m + 1;
+        if (targetM > 11) { targetM = 0; targetY = y + 1; }
+    }
+
+    const MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+    const yy = String(targetY).slice(-2);
+    return `NSE:NIFTY${yy}${MONTHS[targetM]}FUT`;
+}
+
 async function fetchFyersQuote(symbol = 'NSE:NIFTY50-INDEX') {
     if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return null;
 
@@ -2088,6 +2125,7 @@ module.exports = {
 
     // Real volume/OHLC for the index (Angel WS Mode 2 sends 0 for index tokens)
     fetchFyersQuote,
+    getCurrentFyersFutSymbol,
 
     // Snapshots (for /debug routes)
     getPCRState,
