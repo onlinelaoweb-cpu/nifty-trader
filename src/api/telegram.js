@@ -155,7 +155,7 @@ ${strikeBlock}
 ━━━━━━━━━━━━━━━━━━
 ${mtfInfo}
 ━━━━━━━━━━━━━━━━━━
-⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true })}
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
 <i>VardaanNifty AI</i>
 `.trim();
 
@@ -175,7 +175,9 @@ async function sendMTFAlert(state, strikeData = null) {
             : `⚡ SIGNAL — ${validCount}/3 TFs ALIGNED (15m warming up)`;
 
     // ── Strike SL/Target block (same logic as sendSignalAlert) ────────────────
-    const LOT = 75;
+    const LOT = 65;  // FIX: was hardcoded 75 (pre-Jan-2026 lot size) — caused wrong
+                      // ₹/lot amounts in "ALL 3 ALIGNED" messages while sendSignalAlert
+                      // correctly used 65. Now matches LOT_SIZE in server.js.
     let strikeBlock = '';
     if (strikeData && strikeData.entry > 0) {
         const slPct   = ((strikeData.entry - strikeData.sl) / strikeData.entry * 100).toFixed(0);
@@ -222,7 +224,7 @@ ${emoji} <b>${state.mtf.signal}</b> — ${state.mtf.strength}
 15 MIN : ${state.mtf.tf15m?.signal || '--'}
 1 HOUR : ${state.mtf.tf1h?.signal  || '--'}
 ━━━━━━━━━━━━━━━━━━
-${pocInfo}${deltaInfo}${pocInfo || deltaInfo ? '━━━━━━━━━━━━━━━━━━\n' : ''}${strikeBlock}⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true })}
+${pocInfo}${deltaInfo}${pocInfo || deltaInfo ? '━━━━━━━━━━━━━━━━━━\n' : ''}${strikeBlock}⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
 <i>VardaanNifty AI</i>
 `.trim();
 
@@ -337,7 +339,7 @@ ${emoji} <b>${heading}</b>
 P&L : ${pnlSign}₹${Math.abs(totalPnl)} (${pnlSign}₹${Math.abs(pnlPerLot)}/lot)
 ━━━━━━━━━━━━━━━━━━
 ⚡ <b>Action: ${action}</b>
-⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true })}
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
 <i>VardaanNifty AI</i>
 `.trim();
 
@@ -389,11 +391,11 @@ async function sendSpreadAlert(spread, state) {
         : `💸 Net Debit  : ₹${spread.netDebit} per unit`;
 
     const profitLine = spread.maxProfit !== undefined && typeof spread.maxProfit === 'number'
-        ? `✅ Max Profit : ₹${spread.maxProfit} per unit (₹${Math.round(spread.maxProfit * 75)}/lot)`
+        ? `✅ Max Profit : ₹${spread.maxProfit} per unit (₹${Math.round(spread.maxProfit * 65)}/lot)`  // FIX: was ×75 (stale pre-Jan-2026 lot size)
         : `✅ Max Profit : ${spread.maxProfit}`;
 
     const lossLine = typeof spread.maxLoss === 'number'
-        ? `🛑 Max Loss   : ₹${spread.maxLoss} per unit (₹${Math.round(spread.maxLoss * 75)}/lot)`
+        ? `🛑 Max Loss   : ₹${spread.maxLoss} per unit (₹${Math.round(spread.maxLoss * 65)}/lot)`  // FIX: was ×75
         : `🛑 Max Loss   : ${spread.maxLoss}`;
 
     const beLine = spread.breakEvenUp
@@ -418,7 +420,7 @@ ${beLine ? beLine + '\n' : ''}🎯 Profit Zone: ${spread.profitZone}
 💡 ${spread.reason}
 📝 ${spread.note}
 ━━━━━━━━━━━━━━━━━━
-⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true })}
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
 <i>VardaanNifty AI — Spread Strategy</i>
 `.trim();
 
