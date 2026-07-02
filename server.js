@@ -2884,7 +2884,17 @@ async function refreshPCR() {
 async function refreshFyersVolume() {
     if (!isNSEMarketDay() || !isMarketOpen()) return;
     try {
-        const q = await fetchFyersQuote('NSE:NIFTY50-INDEX');
+        // NSE:NIFTY50-INDEX returns volume=0 (index has no actual traded volume).
+        // Try NSE:NIFTY-I (rolling nearest futures) which has real volume data.
+        // Fallback: NSE:NIFTY25JULFUT (current month expiry format) — changes monthly.
+        let q = await fetchFyersQuote('NSE:NIFTY-I');
+
+        // If futures volume still 0, the symbol format may have changed — log and skip
+        if (!q || !q.ltp) {
+            console.warn('[Fyers Volume] NSE:NIFTY-I failed — trying index as LTP-only');
+            q = await fetchFyersQuote('NSE:NIFTY50-INDEX');
+        }
+
         if (!q || !q.ltp) {
             console.warn('[Fyers Volume] No quote returned — token may need refresh');
             return;
@@ -2895,7 +2905,8 @@ async function refreshFyersVolume() {
         marketState.wsHigh   = q.high;
         marketState.wsLow    = q.low;
 
-        console.log(`[Fyers Volume] Vol:${(q.volume/1e7).toFixed(2)}Cr | O:${q.open} H:${q.high} L:${q.low} | LTP:${q.ltp}`);
+        const volCr = q.volume > 0 ? (q.volume / 1e7).toFixed(2) + 'Cr' : '0 (index-only LTP)';
+        console.log(`[Fyers Volume] Vol:${volCr} | O:${q.open} H:${q.high} L:${q.low} | LTP:${q.ltp}`);
 
         // Recompute live delta now that we have real volume — same logic as
         // the WS onTick() handler, but using Fyers' aggregate volume instead
@@ -3766,10 +3777,13 @@ app.get('/api/stream', (req, res) => {
     _sseClients.add(res);
     console.log(`[SSE] Client connected (total: ${_sseClients.size})`);
 
-    // Heartbeat every 10s — Railway proxy drops idle connections ~19s, 10s keeps it alive reliably
+    // Heartbeat every 8s — Railway proxy drops idle connections ~19s.
+    // FIX: was 10s which was too close to the Railway timeout causing
+    // disconnect/reconnect loop every 10-15s visible in logs.
+    // Using 8s gives 2x safety margin vs the ~19s Railway SSE timeout.
     const hb = setInterval(() => {
-        try { res.write(':heartbeat\n\n'); } catch(_) { clearInterval(hb); }
-    }, 10000);
+        try { res.write(':hb\n\n'); } catch(_) { clearInterval(hb); }
+    }, 8000);
 
     req.on('close', () => {
         clearInterval(hb);
