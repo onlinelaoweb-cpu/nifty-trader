@@ -1022,6 +1022,8 @@ function parsePCR(data, spotPrice) {
     let totalCEoi = 0, totalPEoi = 0;
     let atmCEoi = 0, atmPEoi = 0;
     let atmCEpremium = null, atmPEpremium = null;
+    const normalizedRecords = [];  // FIX: previously discarded — needed so OTM strike
+                                    // premiums can use real LTP instead of always BS estimate
 
     for (const row of records) {
         const ce = row.CE, pe = row.PE;
@@ -1031,13 +1033,18 @@ function parsePCR(data, spotPrice) {
             if (ce) { atmCEoi = ce.openInterest || 0; atmCEpremium = ce.lastPrice || null; }
             if (pe) { atmPEoi = pe.openInterest || 0; atmPEpremium = pe.lastPrice || null; }
         }
+        normalizedRecords.push({
+            strikePrice: row.strikePrice,
+            CE: { openInterest: ce?.openInterest || 0, lastPrice: ce?.lastPrice || 0 },
+            PE: { openInterest: pe?.openInterest || 0, lastPrice: pe?.lastPrice || 0 },
+        });
     }
 
     const pcr    = totalCEoi > 0 ? parseFloat((totalPEoi / totalCEoi).toFixed(2)) : null;
     const atmPcr = atmCEoi  > 0 ? parseFloat((atmPEoi  / atmCEoi ).toFixed(2)) : null;
     const maxPain = calcMaxPain(records);
 
-    return { pcr, atmPcr, atm, atmCEpremium, atmPEpremium, totalCEoi, totalPEoi, maxPain };
+    return { pcr, atmPcr, atm, atmCEpremium, atmPEpremium, totalCEoi, totalPEoi, maxPain, records: normalizedRecords };
 }
 
 // ── Market hours guard ────────────────────────────────────────────────────────
@@ -1600,6 +1607,10 @@ async function _fetchPCR(spotPrice) {
                     maxPain      : fyersResult.maxPain,
                     atmCEpremium : fyersResult.atmCEpremium || null,  // FIX
                     atmPEpremium : fyersResult.atmPEpremium || null,  // FIX
+                    records      : fyersResult.records || [],  // FIX: was computed (used locally for
+                                    // OI-buildup/early-momentum) but never persisted — meant every
+                                    // OTM strike premium in Telegram fell back to a Black-Scholes
+                                    // estimate instead of the real live LTP already sitting right here.
                     expiryDay    : isExpiryDay(),
                     fetchedAt    : new Date(),
                     lastError    : null,

@@ -3472,22 +3472,23 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
     }
 
     // Try to get live LTP from pcrState option chain data
-    // FIX: OTM premium no longer uses hardcoded 0.55× multiplier.
-    // For ATM: use live NSE LTP directly (most accurate).
-    // For OTM+50: calculate with Black-Scholes using REAL DTE so premium is meaningful.
-    // The 0.55× approximation was off by 20–40% depending on IV and DTE.
+    // FIX: previously, OTM strikes (VIX<13 → ATM±50) ALWAYS used a Black-Scholes
+    // estimate, even though the full option chain (pcrState.records) already has
+    // every strike's REAL live LTP — records was fetched but never consulted for
+    // non-ATM strikes. BS-vs-market divergence was 15-25%+ on observed signals
+    // (BS said ₹131 for a strike that never traded above ~₹115 that day).
+    // Now: look up the real LTP for the chosen strike first, BS is the fallback
+    // only if that strike isn't present in the fetched chain (rare — chain covers
+    // ATM±20 strikes, our OTM pick is only ±50 = 1 strike away).
     const dte = daysToNextExpiry();   // real days to next Tuesday expiry
     let entryPremium = null;
-    if (pcrState && pcrState.atmCEpremium && pcrState.atmPEpremium) {
-        if (type === 'CE') {
-            entryPremium = strike === atm
-                ? pcrState.atmCEpremium
-                : parseFloat(bsEstimate(nifty, strike, dte / 365, effectiveVix / 100, 'CE').toFixed(2));
-        } else {
-            entryPremium = strike === atm
-                ? pcrState.atmPEpremium
-                : parseFloat(bsEstimate(nifty, strike, dte / 365, effectiveVix / 100, 'PE').toFixed(2));
-        }
+
+    if (strike === atm && pcrState && pcrState.atmCEpremium && pcrState.atmPEpremium) {
+        entryPremium = type === 'CE' ? pcrState.atmCEpremium : pcrState.atmPEpremium;
+    } else if (pcrState?.records?.length) {
+        const rec = pcrState.records.find(r => r.strikePrice === strike);
+        const liveLtp = type === 'CE' ? rec?.CE?.lastPrice : rec?.PE?.lastPrice;
+        if (liveLtp > 0) entryPremium = liveLtp;
     }
 
     // If no live premium available, use Black-Scholes with real DTE (not hardcoded 3 days)
