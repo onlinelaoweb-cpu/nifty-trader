@@ -2172,6 +2172,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
   </div>
   <div class="header-row2">
     <div class="hbadge market-closed" id="market-badge">--</div>
+    <div class="hbadge pnl-zero" id="header-nifty-chg">NIFTY --</div>
     <div class="hbadge expiry" id="expiry-badge">⏳ Expiry: --</div>
     <div class="hbadge pnl-zero" id="header-pnl">P&L: ₹0</div>
     <div class="hbadge" id="header-trades" style="color:var(--dim);border-color:var(--border);">0 Trades</div>
@@ -4415,6 +4416,12 @@ function renderDashboard(s) {
     const chgEl = document.getElementById('change');
     chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '  (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)';
     chgEl.className = 'price-change ' + (chg > 0 ? 'up' : chg < 0 ? 'down' : 'flat');
+    // Compact top-bar badge — same data, "Punch"-style quick glance (no need to scroll to price hero)
+    const hdrChgEl = document.getElementById('header-nifty-chg');
+    if (hdrChgEl) {
+      hdrChgEl.textContent = 'NIFTY ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+      hdrChgEl.className = 'hbadge ' + (chg > 0 ? 'pnl-pos' : chg < 0 ? 'pnl-neg' : 'pnl-zero');
+    }
   } else {
     // Market closed — use server lastClose or in-memory _lastKnownNifty, whichever available
     const closedPrice = _lastKnownNifty > 0 ? _lastKnownNifty : (s.lastClose > 0 ? s.lastClose : 0);
@@ -4425,6 +4432,11 @@ function renderDashboard(s) {
       const chg = _lastKnownChange || 0, pct = _lastKnownChangePct || 0;
       chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '  (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)  · CLOSED';
       chgEl.className = 'price-change flat';
+      const hdrChgEl = document.getElementById('header-nifty-chg');
+      if (hdrChgEl && (chg !== 0 || pct !== 0)) {
+        hdrChgEl.textContent = 'NIFTY ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+        hdrChgEl.className = 'hbadge ' + (chg > 0 ? 'pnl-pos' : chg < 0 ? 'pnl-neg' : 'pnl-zero');
+      }
     } else {
       document.getElementById('price').textContent = '--';
       document.getElementById('change').textContent = 'Market Closed';
