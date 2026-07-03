@@ -123,7 +123,7 @@ async function sendSignalAlert(state, prevSignal, strikeData = null) {
 📥 Entry : ₹${strikeData.entry}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
-📊 R:R   : 1:2`;
+📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}`;
     } else {
         // strikeData is null when: (a) no VIX available yet, or (b) PCR premiums not loaded
         // Give actionable guidance instead of just showing ATM
@@ -188,7 +188,7 @@ async function sendMTFAlert(state, strikeData = null) {
 📥 Entry : ₹${strikeData.entry}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
-📊 R:R   : 1:2
+📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}
 ━━━━━━━━━━━━━━━━━━
 `;
     }
@@ -306,7 +306,7 @@ RSI: ${state.rsi || '--'}
 // trade        : the trade object from the trades[] array
 // reason       : 'STOP_LOSS' | 'TARGET_1R' | 'TARGET_1_5R'
 // currentPremium : latest live ATM premium (from optionFlow)
-async function sendExitAlert(trade, reason, currentPremium) {
+async function sendExitAlert(trade, reason, currentPremium, extra = {}) {
     const pnlPerLot = parseFloat(((currentPremium - trade.premium) * 65).toFixed(0));
     const totalPnl  = pnlPerLot * trade.lots;
     const pnlSign   = totalPnl >= 0 ? '+' : '';
@@ -317,6 +317,14 @@ async function sendExitAlert(trade, reason, currentPremium) {
         emoji   = '🛑';
         heading = 'STOP-LOSS HIT';
         action  = 'EXIT NOW — cut loss';
+    } else if (reason === 'TRAILING_SL') {
+        emoji   = '🪜';
+        heading = 'TRAILING SL HIT';
+        action  = 'EXIT NOW — profit locked in';
+    } else if (reason === 'TREND_BREAK') {
+        emoji   = '⚠️';
+        heading = 'TREND STRUCTURE BROKE (Physics Law-1)';
+        action  = 'Consider tightening exit — trend that got you here may be over';
     } else if (reason === 'TARGET_1_5R') {
         emoji   = '🎯';
         heading = 'TARGET 1:1.5 HIT';
@@ -324,8 +332,12 @@ async function sendExitAlert(trade, reason, currentPremium) {
     } else {
         emoji   = '✅';
         heading = 'TARGET 1:1 HIT';
-        action  = 'Book 50–75% or move SL to cost';
+        action  = 'Trailing SL now active — winners can run';
     }
+
+    const trailLine = (reason === 'TRAILING_SL' || reason === 'TREND_BREAK') && extra.peak != null
+        ? `\n📈 Peak Premium  : ₹${extra.peak}\n🪜 Trail SL      : ₹${extra.trailSL}\n━━━━━━━━━━━━━━━━━━`
+        : '';
 
     const msg = `
 ${emoji} <b>${heading}</b>
@@ -334,7 +346,7 @@ ${emoji} <b>${heading}</b>
 ⏰ Entry Time: ${trade.time}
 
 💰 Entry Premium : ₹${trade.premium}
-📉 Current Premium: ₹${currentPremium} (${changePct > 0 ? '+' : ''}${changePct}%)
+📉 Current Premium: ₹${currentPremium} (${changePct > 0 ? '+' : ''}${changePct}%)${trailLine}
 ━━━━━━━━━━━━━━━━━━
 P&L : ${pnlSign}₹${Math.abs(totalPnl)} (${pnlSign}₹${Math.abs(pnlPerLot)}/lot)
 ━━━━━━━━━━━━━━━━━━

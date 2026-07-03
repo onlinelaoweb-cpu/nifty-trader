@@ -3119,6 +3119,18 @@ function getTradeSummary() {
 // Uses live ATM premiums from optionFlow (updated by refreshPCR every 3 min).
 // Fires a Telegram exit alert ONCE per trade per threshold via alertSent flags.
 // P&L is premium-based, not Nifty-move-based.
+//
+// TRAILING SL (chandelier-style): once a trade reaches 1R profit, the fixed
+// target is no longer the exit plan — instead SL starts trailing behind the
+// trade's own peak premium, always at (peak − original risk). This means:
+//   • At 1R    → trail SL sits at breakeven (entry)
+//   • At 2R    → trail SL sits at entry+1R (locks in 1R)
+//   • At 5R/10R → trail SL keeps following at (peak − 1R), so a trade CAN run
+//                 to 5x, 10x etc. organically if the move keeps extending —
+//                 no artificial fixed target caps it, but a pullback of one
+//                 risk-unit from the peak locks in whatever was made.
+// SL never moves down, only up (for CE) — same mirrored logic works for PE
+// since we're comparing premium levels, not direction.
 async function updateOpenTradesMTM() {
     const price = marketState.nifty;
     if (!price) return;
@@ -3151,34 +3163,75 @@ async function updateOpenTradesMTM() {
         }
         const risk    = t.sl > 0 ? (entry - t.sl) : entry * slFallbackPct;
         const sl      = t.sl > 0 ? t.sl : parseFloat((entry * (1 - slFallbackPct)).toFixed(2));
-        const target1R  = parseFloat((entry + risk).toFixed(2));         // 1:1
-        const target15R = parseFloat((entry + risk * 1.5).toFixed(2));   // 1:1.5
+        const target1R  = parseFloat((entry + risk).toFixed(2));         // 1:1 — trailing activation point
+        const target15R = parseFloat((entry + risk * 1.5).toFixed(2));   // 1:1.5 — informational checkpoint only
 
-        // Initialise alert-sent guards on first pass
-        if (!t.alertSent) t.alertSent = { sl: false, target1R: false, target15R: false };
+        // Initialise alert-sent guards + trailing state on first pass
+        if (!t.alertSent) t.alertSent = { sl: false, target1R: false, target15R: false, trailSL: false };
+        if (t.peakPremium == null) t.peakPremium = entry;
 
-        // ── SL hit ──────────────────────────────────────
-        if (!t.alertSent.sl && livePremium <= sl) {
+        // Track the best premium seen since entry (needed to trail from)
+        if (livePremium > t.peakPremium) t.peakPremium = livePremium;
+
+        // ── Trailing SL: only active once 1R profit has been reached ────
+        const trailingActive = t.peakPremium >= target1R;
+        if (trailingActive) {
+            const candidateTrailSL = parseFloat((t.peakPremium - risk).toFixed(2));
+            // Ratchet only upward — never lower an already-set trail SL
+            t.trailSL = t.trailSL != null ? Math.max(t.trailSL, candidateTrailSL) : candidateTrailSL;
+        }
+        const effectiveSL = trailingActive ? t.trailSL : sl;
+
+        // ── Hard SL hit (before 1R — original structural/VIX SL) ────────
+        if (!t.alertSent.sl && !trailingActive && livePremium <= sl) {
             t.alertSent.sl = true;
             console.log(`🛑 SL hit: Trade #${t.id} ${t.type} ${t.strike} — premium ₹${livePremium} ≤ SL ₹${sl}`);
             if (isConfigured()) await sendExitAlert(t, 'STOP_LOSS', livePremium);
         }
 
-        // ── Target 1:1 ──────────────────────────────────
+        // ── Trailing SL hit (after 1R — locks in whatever profit was made) ─
+        if (!t.alertSent.trailSL && trailingActive && livePremium <= effectiveSL) {
+            t.alertSent.trailSL = true;
+            console.log(`🎯 Trailing SL hit: Trade #${t.id} ${t.type} ${t.strike} — premium ₹${livePremium} ≤ trail ₹${effectiveSL} (peak was ₹${t.peakPremium})`);
+            if (isConfigured()) await sendExitAlert(t, 'TRAILING_SL', livePremium, { peak: t.peakPremium, trailSL: effectiveSL });
+        }
+
+        // ── Target 1:1 — now just an informational checkpoint (trailing takes over) ──
         if (!t.alertSent.target1R && livePremium >= target1R) {
             t.alertSent.target1R = true;
-            console.log(`✅ Target 1R hit: Trade #${t.id} — premium ₹${livePremium} ≥ ₹${target1R}`);
+            console.log(`✅ Target 1R hit: Trade #${t.id} — premium ₹${livePremium} ≥ ₹${target1R} — trailing SL now active`);
             if (isConfigured()) await sendExitAlert(t, 'TARGET_1R', livePremium);
         }
 
-        // ── Target 1:1.5 ────────────────────────────────
+        // ── Target 1:1.5 — informational checkpoint ──────────────────────
         if (!t.alertSent.target15R && livePremium >= target15R) {
             t.alertSent.target15R = true;
             console.log(`🎯 Target 1.5R hit: Trade #${t.id} — premium ₹${livePremium} ≥ ₹${target15R}`);
             if (isConfigured()) await sendExitAlert(t, 'TARGET_1_5R', livePremium);
         }
+
+        // ── Physics Law-1 trend-break — early warning while trailing ────
+        // If the swing trend structure flips against the trade's direction
+        // while it's in profit and trailing, that's a real-time reason the
+        // trend that got us here may be over — send one heads-up (not a
+        // forced exit, trailSL still governs the actual exit level).
+        try {
+            const swing = marketState.physicsOfTrading?.swingTrend;
+            if (trailingActive && swing?.trend && !t.alertSent.trendBreak) {
+                const against = (t.type === 'CE' && swing.trend === 'DOWNTREND') ||
+                                (t.type === 'PE' && swing.trend === 'UPTREND');
+                if (against) {
+                    t.alertSent.trendBreak = true;
+                    console.log(`⚠️ Trend break while trailing: Trade #${t.id} ${t.type} — swing now ${swing.trend}`);
+                    if (isConfigured()) await sendExitAlert(t, 'TREND_BREAK', livePremium, { peak: t.peakPremium, trailSL: effectiveSL });
+                }
+            }
+        } catch (e) {
+            console.warn('[Trail] trend-break check failed:', e.message);
+        }
     }
 }
+
 
 // ── TRADE SUGGESTION ENGINE ──────────────────────────────────────────────────
 // Added block — paste this entire section into server.js just before the
@@ -3500,7 +3553,10 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
 
     if (!entryPremium || entryPremium <= 0) return null;
 
-    // ── VIX-dynamic SL (Murarka strategy) ────────────────────────────────────
+    const sigma = effectiveVix / 100;
+    const T     = dte / 365;
+
+    // ── VIX-dynamic SL (Murarka strategy) — baseline / fallback ──────────────
     // Flat 25% SL is too tight on high-VIX days (frequent noise stops) and
     // too loose on calm days (poor R:R). Scale SL width with realised volatility:
     //   VIX < 12  → 20% SL (tight, calm market, premiums cheap)
@@ -3515,11 +3571,59 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
         else if (effectiveVix < 20) slPct = 0.30;
         else                        slPct = 0.35;
     }
-    const slWidth  = parseFloat((entryPremium * slPct).toFixed(2));
-    const sl       = parseFloat((entryPremium - slWidth).toFixed(2));
-    const target   = parseFloat((entryPremium + slWidth * 2).toFixed(2));  // 1:2 R:R
+    let slWidth  = parseFloat((entryPremium * slPct).toFixed(2));
+    let sl       = parseFloat((entryPremium - slWidth).toFixed(2));
+    let target   = parseFloat((entryPremium + slWidth * 2).toFixed(2));  // 1:2 R:R
+    let slSource = 'vix-pct';
 
-    return { type, strike, entry: entryPremium, sl, target };
+    // ── Structural SL from Physics Law-3 Fibonacci swing (preferred) ─────────
+    // The flat VIX-% SL above has zero connection to actual chart structure —
+    // it doesn't know where the last swing high/low or the 61.8% reaction zone
+    // sits. marketState.fiboCard (same swing data the Physics tab shows) gives
+    // real support/resistance on the SPOT. We translate that spot level into
+    // premium terms using a Black-Scholes RATIO (not absolute BS price —
+    // entryPremium above is still the real market LTP; only the *shape* of the
+    // move SL-spot→entry-spot is taken from BS, anchored to the live premium).
+    // Target is intentionally kept at the disciplined 1:2 R:R off this
+    // structural risk — NOT the swing-high itself (tested: using the raw swing
+    // high as target routinely implied 4–6x R:R, i.e. the premium nearly
+    // doubling — optimistic and ignores theta decay before that level is hit).
+    // Falls back to the VIX-% system above on ANY doubt: missing/misaligned
+    // swing, level on the wrong side of price, or resulting risk outside a
+    // sane 5–45% band.
+    try {
+        const fibo = marketState?.fiboCard;
+        if (fibo && fibo.levels && fibo.swingHigh > fibo.swingLow) {
+            let slSpot = null;
+            if (isBull && fibo.direction === 'UP' && fibo.levels.l618 < nifty) {
+                slSpot = fibo.levels.l618;   // 61.8% retrace below = structural invalidation
+            } else if (!isBull && fibo.direction === 'DOWN' && fibo.levels.l618 > nifty) {
+                slSpot = fibo.levels.l618;   // 61.8% retrace above = structural invalidation
+            }
+
+            if (slSpot !== null) {
+                const bsNow  = bsEstimate(nifty,  strike, T, sigma, type);
+                const bsAtSL = bsEstimate(slSpot, strike, T, sigma, type);
+
+                if (bsNow > 0 && bsAtSL >= 0) {
+                    const structSL = parseFloat((entryPremium * (bsAtSL / bsNow)).toFixed(2));
+                    const risk     = entryPremium - structSL;
+                    const riskPct  = risk / entryPremium;
+
+                    if (risk > 0 && riskPct >= 0.05 && riskPct <= 0.45) {
+                        sl       = structSL;
+                        slWidth  = parseFloat(risk.toFixed(2));
+                        target   = parseFloat((entryPremium + slWidth * 2).toFixed(2));  // keep 1:2 R:R
+                        slSource = `fibo-swing (61.8% retrace @ ${slSpot.toFixed(0)} spot)`;
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('[Strike] Fibo-structural SL failed, using VIX-% fallback:', e.message);
+    }
+
+    return { type, strike, entry: entryPremium, sl, target, slSource };
 }
 
 // Simple Black-Scholes call/put price estimate
