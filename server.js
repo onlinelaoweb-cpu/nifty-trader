@@ -2549,8 +2549,21 @@ async function onTick(tickData) {
     const runIndicators = (now - _lastIndicatorRun) >= 1000;
     if (runIndicators) _lastIndicatorRun = now;
 
-    const prev=marketState.nifty||price, change=parseFloat((price-prev).toFixed(2));
-    const chgPct=prev>0?parseFloat(((change/prev)*100).toFixed(2)):0;
+    // ── FIX: change/changePct vs YESTERDAY'S CLOSE, not vs the last tick ─────
+    // Previously: `prev = marketState.nifty` — but marketState.nifty gets
+    // overwritten to the CURRENT price on every single tick (a few lines below,
+    // and in updatePrice()). So on the very next tick, "change" was really just
+    // (this tick − previous tick) — a few paise of noise — NOT the cumulative
+    // move since yesterday's close that Telegram/header/Punch-style badge are
+    // supposed to show. It only ever looked right for a moment after each 3-min
+    // refreshMarketData() cycle silently overwrote it with the correct value,
+    // then drifted back to near-zero on every WS tick until the next cycle.
+    // Now: anchor to marketState.prevClose (yesterday's real close, captured
+    // once by refreshMarketData() and static for the whole session) so every
+    // tick's change is correct, all day, not just once every 3 minutes.
+    const prev    = marketState.prevClose || marketState.nifty || price;
+    const change  = parseFloat((price-prev).toFixed(2));
+    const chgPct  = prev>0?parseFloat(((change/prev)*100).toFixed(2)):0;
 
     if (runIndicators) {
         await updatePrice(price,change,chgPct,'websocket');
@@ -2594,6 +2607,10 @@ async function refreshMarketData() {
     const { niftyData, vixData }=await fetchMarketData();
     if (niftyData?.closes?.length>0&&!historyLoaded) { initializeHistory(niftyData.closes,niftyData.candles); historyLoaded=true; console.log(`History: ${niftyData.closes.length} candles`); }
     if (vixData) { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.strikeRange; }
+    // FIX: capture the real previous-trading-day close (static, doesn't change
+    // intraday) so onTick() can compute change/changePct against IT instead of
+    // the last WS tick — see onTick() for why that was wrong.
+    if (niftyData?.prevClose > 0) marketState.prevClose = niftyData.prevClose;
     if (niftyData?.price>0 && isMarketOpen()) {
         // Always update via Yahoo if WS is not actively ticking (source != websocket,
         // or watchdog has already reset source to yahoo due to silent freeze).
