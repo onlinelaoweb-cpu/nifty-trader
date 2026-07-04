@@ -139,7 +139,7 @@ ${emoji} <b>SIGNAL CHANGED!</b>
 ${state.change >= 0 ? '▲' : '▼'} ${Math.abs(state.change).toFixed(2)} (${state.changePct.toFixed(2)}%)
 
 ⚡ <b>SIGNAL: ${state.signal}</b>
-📈 Confidence: ${state.confidence}%
+📈 Confidence: ${state.confidence}%${state.tradeQuality ? ` | Grade: ${state.tradeQuality.grade} (${state.tradeQuality.sizeHint})` : ''}
 
 🎯 Strike Zone: ${strikeInfo}
 ━━━━━━━━━━━━━━━━━━
@@ -150,10 +150,11 @@ ${pcrInfo}${volInfo ? '\n' + volInfo : ''}
 ━━━━━━━━━━━━━━━━━━
 ${pocInfo}
 ${deltaInfo}
+${state.orb?.label ? '\n' + state.orb.label : ''}
 ━━━━━━━━━━━━━━━━━━
 ${strikeBlock}
 ━━━━━━━━━━━━━━━━━━
-${mtfInfo}
+${mtfInfo}${state.marketHealth ? `\n📋 Market Health: ${state.marketHealth.total}/100 — ${state.marketHealth.label}` : ''}
 ━━━━━━━━━━━━━━━━━━
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
 <i>VardaanNifty AI</i>
@@ -218,7 +219,7 @@ ${alignTitle}
 ━━━━━━━━━━━━━━━━━━
 ${emoji} <b>${state.mtf.signal}</b> — ${state.mtf.strength}
 📊 NIFTY: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}
-📈 Confidence: ${state.mtf.confidence}%
+📈 Confidence: ${state.mtf.confidence}%${state.tradeQuality ? ` | Grade: ${state.tradeQuality.grade} (${state.tradeQuality.sizeHint})` : ''}
 ━━━━━━━━━━━━━━━━━━
 5 MIN  : ${state.mtf.tf5m?.signal  || '--'}
 15 MIN : ${state.mtf.tf15m?.signal || '--'}

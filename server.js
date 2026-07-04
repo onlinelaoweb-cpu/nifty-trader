@@ -172,6 +172,33 @@ let events       = [];
 
 // ── Helpers ───────────────────────────────────────────
 let historyLoaded=false, prevSignal='WAIT', prevMTFAligned=false;
+// ── Trend Lock state (signal-flip prevention) ──────────────────────────────
+// External day-audit feedback flagged rapid CALL→PUT→CALL whipsaws (e.g. 12:50
+// PM BUY CALL → 1:02 PM BUY PUT, only 12 min apart) as the single biggest
+// quality issue — most were reversed again shortly after, costing traders on
+// both sides of the flip. A full direction reversal (CALL↔PUT, not WAIT↔CALL
+// or WAIT↔PUT — those aren't reversals) now needs to PERSIST for a minimum
+// duration before it's allowed through as a real signal change.
+let pendingFlipSignal = null;   // the opposite-direction signal currently "waiting to confirm"
+let pendingFlipSince  = 0;      // ms timestamp when it first appeared
+let lastDirectionalSignal = 'WAIT'; // last CONFIRMED non-WAIT signal actually shown to the user —
+                                     // tracked separately from prevSignal because prevSignal gets
+                                     // overwritten to 'WAIT' while a reversal is locked/pending,
+                                     // which would otherwise let the very next cycle's opposite
+                                     // signal sail through as a fresh "WAIT→PUT" (bypassing the lock).
+let signalSince = 0; // ms timestamp when lastDirectionalSignal last CHANGED — powers "Signal Age" display
+const TREND_LOCK_MS   = 10 * 60 * 1000; // 10 min — long enough to filter noise, short enough to stay responsive
+
+// ── Opening Range Breakout (ORB) state ─────────────────────────────────────
+// First 15 minutes (9:15–9:30 IST) often sets the tone for the rest of the
+// session. Once that range is locked in, price breaking above/below it is a
+// meaningful intraday filter (per external feedback review).
+let orbHigh = null, orbLow = null, orbDate = null;
+
+// ── Day-open option premium tracking (for Option Premium Filter) ──────────
+// Freshly-computed once per day from the first valid ATM CE/PE premium seen.
+// Used to detect "premium already overextended" before issuing a fresh entry.
+let atmCEpremiumOpen = null, atmPEpremiumOpen = null, premiumOpenDate = null;
 let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-direction MTF alerts
 let morningSummarySent=false, closeSummarySent=false, vixAlertSent=false;
 let nishanebaazAlertSent=false;  // one-shot: fired once at 14:00 per day
@@ -453,6 +480,13 @@ function calcPCRSlope(history) {
 }
 
 function updateOptionFlow(atmCE, atmPE) {
+    // Capture the day's FIRST valid ATM premium reading — static reference for
+    // the rest of the session, used by the Option Premium Filter below.
+    const todayStr = getIST().toISOString().slice(0, 10);
+    if (premiumOpenDate !== todayStr) { atmCEpremiumOpen = null; atmPEpremiumOpen = null; premiumOpenDate = todayStr; }
+    if (atmCEpremiumOpen === null && atmCE > 0) atmCEpremiumOpen = atmCE;
+    if (atmPEpremiumOpen === null && atmPE > 0) atmPEpremiumOpen = atmPE;
+
     const prev = marketState.optionFlow;
     const ceChange = atmCE && prev.atmCEpremium ? parseFloat((((atmCE-prev.atmCEpremium)/prev.atmCEpremium)*100).toFixed(2)) : 0;
     const peChange = atmPE && prev.atmPEpremium ? parseFloat((((atmPE-prev.atmPEpremium)/prev.atmPEpremium)*100).toFixed(2)) : 0;
@@ -465,7 +499,9 @@ function updateOptionFlow(atmCE, atmPE) {
     const time = `${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
     const history = [...(prev.history||[])];
     if (dominance !== 'NEUTRAL') { history.push({time,dominance,ceChange,peChange}); if(history.length>20) history.shift(); }
-    marketState.optionFlow = { atmCEpremium:atmCE||prev.atmCEpremium, atmPEpremium:atmPE||prev.atmPEpremium, ceChange, peChange, dominance, history };
+    const ceChangeFromOpen = atmCEpremiumOpen > 0 && atmCE > 0 ? parseFloat((((atmCE - atmCEpremiumOpen) / atmCEpremiumOpen) * 100).toFixed(1)) : 0;
+    const peChangeFromOpen = atmPEpremiumOpen > 0 && atmPE > 0 ? parseFloat((((atmPE - atmPEpremiumOpen) / atmPEpremiumOpen) * 100).toFixed(1)) : 0;
+    marketState.optionFlow = { atmCEpremium:atmCE||prev.atmCEpremium, atmPEpremium:atmPE||prev.atmPEpremium, ceChange, peChange, ceChangeFromOpen, peChangeFromOpen, dominance, history };
 }
 
 // ── Smart Money Bias Aggregator ───────────────────────────────────────────────
@@ -808,6 +844,33 @@ function detectLiquiditySweepReversal(candles) {
 }
 
 // ── Signal Generator ──────────────────────────────────
+// ── Opening Range Breakout (ORB) ────────────────────────────────────────────
+// First 15 minutes of the session (9:15–9:30 IST) often sets the tone for the
+// rest of the day. Once locked, price breaking cleanly above/below it is a
+// useful directional filter — reduces false entries while price is still
+// inside the morning's initial balance.
+function updateORB() {
+    const todayStr = getIST().toISOString().slice(0, 10);
+    if (orbDate !== todayStr) { orbHigh = null; orbLow = null; orbDate = todayStr; }
+    if (orbHigh !== null) return; // already locked for today
+
+    const candles = getSessionCandles(); // 9:15 IST onward, 1 candle per minute
+    if (candles.length >= 15) {
+        const first15 = candles.slice(0, 15);
+        orbHigh = Math.max(...first15.map(c => c.high));
+        orbLow  = Math.min(...first15.map(c => c.low));
+    }
+}
+
+function getORBStatus(price) {
+    if (orbHigh === null || orbLow === null) {
+        return { status: 'FORMING', label: '⏳ Opening range forming (need 15 min)', high: null, low: null };
+    }
+    if (price > orbHigh) return { status: 'BROKEN_UP',   label: `🔼 ORB Broken Up (>${orbHigh.toFixed(0)})`,   high: orbHigh, low: orbLow };
+    if (price < orbLow)  return { status: 'BROKEN_DOWN', label: `🔽 ORB Broken Down (<${orbLow.toFixed(0)})`, high: orbHigh, low: orbLow };
+    return { status: 'INSIDE', label: `↔️ Inside Opening Range (${orbLow.toFixed(0)}–${orbHigh.toFixed(0)})`, high: orbHigh, low: orbLow };
+}
+
 function combineSignals(indicators) {
     // ── Gate 1: safe time window (IST) ────────────────
     const ew = isSafeEntryWindow();
@@ -1103,6 +1166,20 @@ function combineSignals(indicators) {
     } else if (cp.pattern !== 'NONE') {
         reasons.push(cp.reason);  // show even weak patterns as info
     }
+
+    // ── Opening Range Breakout (ORB) — modest confirming vote ────────────────
+    // Per external feedback: first 15-min range often sets the day's tone.
+    // Weighted lightly (1 vote) since it's a confirming filter, not a leading
+    // signal — a breakout WITH other votes agreeing is meaningful, a lone ORB
+    // break with everything else neutral shouldn't force a trade by itself.
+    try {
+        updateORB();
+        const orb = getORBStatus(marketState.nifty);
+        marketState.orb = orb;
+        if (orb.status === 'BROKEN_UP')        { bull += 1; reasons.push(`${orb.label} ✅`); }
+        else if (orb.status === 'BROKEN_DOWN') { bear += 1; reasons.push(`${orb.label} ⚠️`); }
+        else                                    reasons.push(orb.label);
+    } catch (e) { console.warn('[ORB] error:', e.message); }
 
     // Raw directional intention from the vote tally
     const total = bull + bear;
@@ -1405,6 +1482,23 @@ function combineSignals(indicators) {
     // We don't block on divergence alone — just reduce confidence (handled in Telegram).
     qualityGate.deltaOk = !(marketState.delta?.divergence ?? false);
 
+    // ── Delta CONTRADICTION Gate — NEW ─────────────────────────────────────────
+    // External review of a live day flagged this exact failure: Delta was +65.7%
+    // (buyers clearly in control) yet the engine still issued BUY PUT from other
+    // votes. Divergence (above) only catches price-near-extreme cases — it
+    // missed this because price wasn't at a session high/low at the time. This
+    // is a direct veto: real-time order-flow delta is one of the freshest, most
+    // reliable inputs (updates every tick), so a signal that directly opposes a
+    // STRONG delta reading (>25% either way) should not fire — the underlying
+    // votes (PCR, global cues, FII/DII — all lagging/daily-granularity data)
+    // are being outweighed by what large intraday buyers/sellers are doing right now.
+    const deltaPct = marketState.delta?.deltaPct ?? null;
+    qualityGate.deltaAligned = true;
+    if (rawSignal !== 'WAIT' && deltaPct !== null && Math.abs(deltaPct) >= 25) {
+        if (rawSignal === 'BUY PUT'  && deltaPct >  25) qualityGate.deltaAligned = false;
+        if (rawSignal === 'BUY CALL' && deltaPct < -25) qualityGate.deltaAligned = false;
+    }
+
     // Recompute passed HERE — srClear may have been flipped to false inside the gate block above.
     // Physics gates: physicsLaw1=null means UNKNOWN (early session) → allow through.
     //                physicsLaw1=false means confirmed counter-trend/sideways → block.
@@ -1414,8 +1508,31 @@ function combineSignals(indicators) {
                       && qualityGate.adxTrend    && (qualityGate.srClear !== false)
                       && (qualityGate.physicsLaw1 !== false)
                       && (qualityGate.physicsLaw3 !== false)
-                      && (qualityGate.pocClear   !== false);  // AT_POC or wrong side = block
+                      && (qualityGate.pocClear   !== false)   // AT_POC or wrong side = block
+                      && qualityGate.deltaAligned;            // strong opposing delta = block
     marketState.qualityGate = qualityGate;
+
+    if (rawSignal !== 'WAIT' && !qualityGate.deltaAligned) {
+        signal = 'WAIT'; confidence = 0;
+        reasons.push(`⛔ Delta ${deltaPct > 0 ? '+' : ''}${deltaPct}% strongly contradicts ${rawSignal} — order flow disagrees, wait for alignment`);
+    }
+
+    // ── Option Premium Filter — NEW ────────────────────────────────────────────
+    // Per feedback: "Avoid buying options that are already overextended.
+    // 24350 CE, Premium already +45% today. Fresh entry not recommended."
+    // Chasing a premium that's already run 40%+ from the day's open means most
+    // of the easy move is already captured — poor risk/reward for a fresh buyer,
+    // and the position is much more exposed to a sharp pullback/profit-booking.
+    qualityGate.premiumOk = true;
+    if (signal !== 'WAIT') {
+        const flow = marketState.optionFlow;
+        const relevantChange = signal === 'BUY CALL' ? flow?.ceChangeFromOpen : flow?.peChangeFromOpen;
+        if (relevantChange != null && relevantChange >= 40) {
+            qualityGate.premiumOk = false;
+            signal = 'WAIT'; confidence = 0;
+            reasons.push(`⛔ Premium already +${relevantChange}% today — overextended, fresh entry not recommended (wait for pullback/pause)`);
+        }
+    }
 
     // ── ADX weak-trend confidence cap ────────────────────────────────────────
     // Signal passes gate but trend is not fully confirmed (ADX near floor).
@@ -2361,7 +2478,55 @@ async function updatePrice(price, change, changePct, source) {
     }
 
     const indicators=processIndicators(price, marketState.global?.bankNiftyLeadSignal ?? null);
-    const { signal, confidence, reasons }=combineSignals(indicators);
+    let { signal, confidence, reasons }=combineSignals(indicators);
+
+    // ── Trend Lock — block instant CALL↔PUT reversals until confirmed ────────
+    // Only applies to a FULL direction reversal (the last CONFIRMED directional
+    // signal and the new signal are opposite non-WAIT directions). WAIT→CALL,
+    // WAIT→PUT, and a signal simply re-confirming its own direction are NOT
+    // reversals — those pass through immediately as before.
+    // NOTE: compares against lastDirectionalSignal, NOT prevSignal — prevSignal
+    // gets set to 'WAIT' below while a reversal is pending/locked, which would
+    // otherwise reset the comparison and let the very next cycle bypass the lock.
+    const isReversal = signal !== 'WAIT' && lastDirectionalSignal !== 'WAIT' && signal !== lastDirectionalSignal;
+    if (isReversal) {
+        const now = Date.now();
+        if (pendingFlipSignal !== signal) {
+            // New reversal candidate — start the confirmation clock, hold at WAIT.
+            pendingFlipSignal = signal;
+            pendingFlipSince  = now;
+            reasons.push(`🔒 Trend Lock: ${signal} reversal detected but not yet confirmed — holding ${lastDirectionalSignal} for up to ${TREND_LOCK_MS/60000} min`);
+            signal = 'WAIT'; confidence = 0;
+        } else if (now - pendingFlipSince < TREND_LOCK_MS) {
+            // Same reversal candidate, still within the lock window — keep holding.
+            const remainMin = Math.ceil((TREND_LOCK_MS - (now - pendingFlipSince)) / 60000);
+            reasons.push(`🔒 Trend Lock: ${signal} reversal pending confirmation (~${remainMin} min left) — holding ${lastDirectionalSignal}`);
+            signal = 'WAIT'; confidence = 0;
+        } else {
+            // Persisted past the lock window — confirmed, let it through.
+            reasons.push(`🔓 Trend Lock: ${signal} reversal confirmed after ${TREND_LOCK_MS/60000} min — flip allowed`);
+            pendingFlipSignal = null; pendingFlipSince = 0;
+        }
+    } else if (pendingFlipSignal !== null && signal !== pendingFlipSignal) {
+        // The reversal candidate stopped reappearing (flickered back) — clear it,
+        // this was noise, not a genuine trend change.
+        pendingFlipSignal = null; pendingFlipSince = 0;
+    }
+    // Update the confirmed-direction tracker: only advances on a genuine non-WAIT
+    // signal that made it through the lock above (still non-WAIT after locking).
+    if (signal !== 'WAIT' && signal !== lastDirectionalSignal) signalSince = Date.now();
+    if (signal !== 'WAIT') lastDirectionalSignal = signal;
+    // ── Signal Age — how long the CURRENT directional signal has been active ──
+    // Per feedback: helps a trader avoid entering very late into a signal that's
+    // already run most of its course. WAIT has no meaningful "age".
+    marketState.signalAge = (signal !== 'WAIT' && signalSince > 0)
+        ? { seconds: Math.floor((Date.now() - signalSince) / 1000), label: null }
+        : { seconds: 0, label: null };
+    if (marketState.signalAge.seconds > 0) {
+        const mins = Math.floor(marketState.signalAge.seconds / 60);
+        marketState.signalAge.label = mins < 1 ? 'Just now' : `${mins} min`;
+    }
+
     marketState.prevNifty = marketState.nifty || price;
     marketState.nifty=price; marketState.lastClose=price; marketState.change=change; marketState.changePct=changePct; marketState.marketClosed=false;
     // Push live tick to SSE clients (throttled — max 1 push per second)
@@ -2376,9 +2541,100 @@ async function updatePrice(price, change, changePct, source) {
                          : confidence >= 75   ? 'STRONG'
                          : confidence >= 65   ? 'MODERATE'
                          :                      'WEAK';
+    // ── Trade Quality grade — simple, glanceable position-sizing guide ────────
+    // Per feedback: a bare "Confidence: 65%" number doesn't tell a trader how
+    // much size to put on. A letter grade with a suggested size multiplier is
+    // faster to act on, especially on mobile mid-session.
+    marketState.tradeQuality = signal === 'WAIT' ? { grade: '—', sizeHint: 'No trade', pct: 0 }
+                             : confidence >= 80   ? { grade: 'A+', sizeHint: 'Full size',    pct: 100 }
+                             : confidence >= 70   ? { grade: 'A',  sizeHint: '75% size',      pct: 75  }
+                             : confidence >= 60   ? { grade: 'B',  sizeHint: '50% size',      pct: 50  }
+                             : confidence >= 50   ? { grade: 'C',  sizeHint: '25% size',      pct: 25  }
+                                                  : { grade: 'D',  sizeHint: 'Skip — too weak',pct: 0  };
     marketState.rsi=indicators.rsi; marketState.ema9=indicators.ema9;
     marketState.ema21=indicators.ema21; marketState.vwap=indicators.vwap;
     marketState.reason=reasons; marketState.lastUpdated=new Date().toISOString();
+    // ── NO TRADE mode — concise digest for WAIT states ────────────────────────
+    // Per feedback: "Avoiding bad trades often improves results more than
+    // finding extra good trades." A bare "WAIT" with a wall of technical
+    // reasons is hard to scan; surface the 3 most decision-relevant ones.
+    if (signal === 'WAIT') {
+        // Prioritize gate-block reasons (⛔) and lock/structural reasons (🔒) —
+        // these are WHY no trade is happening, not just background context.
+        const priority = reasons.filter(r => r.startsWith('⛔') || r.startsWith('🔒'));
+        const rest      = reasons.filter(r => !priority.includes(r));
+        marketState.noTrade = {
+            active : true,
+            reasons: [...priority, ...rest].slice(0, 3).map(r => r.replace(/^[⛔🔒⏳]\s*/, '')),
+        };
+    } else {
+        marketState.noTrade = { active: false, reasons: [] };
+    }
+
+    // ── Market Health Score (0-100) ───────────────────────────────────────────
+    // Per feedback: "Instead of watching 10 different indicators, users can
+    // understand the overall market condition at a glance." Aggregates trend
+    // strength, momentum, volume conviction, options positioning, and breadth
+    // into one number + sub-scores, independent of which direction (CALL/PUT)
+    // is currently favored — this measures HOW STRONG the prevailing move is,
+    // not which side to trade.
+    try {
+        // Trend /25 — ADX strength + MTF alignment
+        let trendScore = 0;
+        const adxV = marketState.adx?.adx ?? null;
+        if (adxV !== null) trendScore += Math.min((adxV / 40) * 15, 15); // ADX contributes up to 15
+        if (marketState.mtf?.aligned) trendScore += 10;
+        else if (marketState.mtf?.bullCount === 2 || marketState.mtf?.bearCount === 2) trendScore += 5;
+
+        // Momentum /20 — breakdown/breakout detector strength
+        let momentumScore = 0;
+        const momS = marketState.momentum;
+        if (momS?.canTrade) momentumScore = Math.min((momS.strength / 4) * 20, 20);
+        else momentumScore = 8; // baseline — no strong momentum either way isn't "unhealthy", just quiet
+
+        // Volume /20 — order-flow delta conviction (magnitude, not direction)
+        let volumeScore = 8; // baseline
+        const deltaAbs = Math.abs(marketState.delta?.deltaPct ?? 0);
+        if (deltaAbs > 0) volumeScore = Math.min(8 + (deltaAbs / 50) * 12, 20);
+
+        // Options Flow /20 — PCR extremity + optionFlow dominance clarity
+        let optionsScore = 8;
+        if (marketState.pcr !== null) {
+            const pcrExtremity = Math.min(Math.abs(marketState.pcr - 1) * 20, 12);
+            optionsScore = 8 + pcrExtremity;
+        }
+        if (marketState.optionFlow?.dominance && marketState.optionFlow.dominance !== 'NEUTRAL') optionsScore = Math.min(optionsScore + 4, 20);
+
+        // Breadth /15 — advance/decline clarity
+        let breadthScore = 6;
+        const br2 = marketState.breadth;
+        if (br2?.breadthSignal === 'BULLISH' || br2?.breadthSignal === 'BEARISH') {
+            const total = (br2.advances || 0) + (br2.declines || 0);
+            const clarity = total > 0 ? Math.abs((br2.advances - br2.declines) / total) : 0;
+            breadthScore = 6 + clarity * 9;
+        }
+
+        const healthTotal = Math.round(trendScore + momentumScore + volumeScore + optionsScore + breadthScore);
+        // Bias direction for the label — bull/bear vote tally isn't accessible here
+        // (it's local to combineSignals()), so use MTF bull/bear counts as the proxy.
+        const biasIsBull = (marketState.mtf?.bullCount ?? 0) >= (marketState.mtf?.bearCount ?? 0);
+        const healthLabel = healthTotal >= 80 ? (biasIsBull ? 'Strong Bullish Trend' : 'Strong Bearish Trend')
+                           : healthTotal >= 60 ? (biasIsBull ? 'Moderate Bullish Bias' : 'Moderate Bearish Bias')
+                           : healthTotal >= 40 ? 'Choppy / Mixed'
+                           :                     'Weak / Avoid Trading';
+
+        marketState.marketHealth = {
+            total: Math.min(healthTotal, 100),
+            trend: Math.round(trendScore), trendMax: 25,
+            momentum: Math.round(momentumScore), momentumMax: 20,
+            volume: Math.round(volumeScore), volumeMax: 20,
+            optionsFlow: Math.round(optionsScore), optionsFlowMax: 20,
+            breadth: Math.round(breadthScore), breadthMax: 15,
+            label: healthLabel,
+        };
+    } catch (e) {
+        console.warn('[MarketHealth] error:', e.message);
+    }
     marketState.connected=true; marketState.source=source; marketState.dataPoints=indicators.priceCount;
     marketState.candleSource=getCandleSource();
     // ── Smart Money Bias ──────────────────────────────────────────────────────

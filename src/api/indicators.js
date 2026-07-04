@@ -407,8 +407,24 @@ async function loadCandlesFromYahoo() {
                 }
                 if (newCandles.length === 0) continue;
 
-                // Seed priceHistory and candleHistory — only if we have more data than currently loaded
-                if (newCandles.length > candleHistory.length) {
+                // Seed priceHistory and candleHistory — but ONLY when our own live data is
+                // genuinely stale/insufficient, not just because Yahoo's fetch (which always
+                // returns the FULL day, 300+ candles by afternoon) exceeds our intentionally-
+                // capped 150-candle rolling window (see addTick()). The old condition
+                // `newCandles.length > candleHistory.length` was permanently true from
+                // ~150 minutes after market open (~11:45 AM) onwards — even while live WS
+                // ticks were flowing fine — causing a full priceHistory/candleHistory
+                // overwrite EVERY 2 minutes for the rest of the day. Each overwrite replaced
+                // the clean, consistently-spaced WS-tick-driven series with Yahoo's own
+                // (differently-timed, sometimes gappy during 429 throttling) series —
+                // exactly why indicators appeared to "freeze"/misbehave starting ~11:30 AM.
+                // Now: only reseed if candleHistory is actually thin (<100, i.e. a genuine
+                // gap — startup, WS reconnect, or extended outage), OR our most recent candle
+                // is meaningfully older than Yahoo's (our live feed has actually stalled).
+                const ourLatestTs   = candleHistory.length ? (candleHistory[candleHistory.length - 1].time || candleHistory[candleHistory.length - 1].ts || 0) : 0;
+                const yahooLatestTs = newCandles[newCandles.length - 1].time;
+                const ourDataStale  = candleHistory.length < 100 || (yahooLatestTs - ourLatestTs) > 3 * 60 * 1000; // >3 min behind
+                if (ourDataStale) {
                     const closes = newCandles.map(c => c.close);
                     initializeHistory(closes, newCandles);
                     // Seed sessionCandles: today + market-hours-only (>= 9:15 IST).

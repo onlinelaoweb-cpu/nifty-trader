@@ -4679,6 +4679,7 @@ function renderDashboard(s) {
 
 
   // VIX
+  try {
   if (s.vix != null) {
     document.getElementById('vix-val').textContent = s.vix.toFixed(2);
     document.getElementById('vix-sig').textContent = s.vixSignal || 'AUTO ✅';
@@ -4687,8 +4688,15 @@ function renderDashboard(s) {
     const vixCard = document.getElementById('vix-card');
     if (vixCard) { if (s.vix > 20) vixCard.classList.add('pv-card-alert'); else vixCard.classList.remove('pv-card-alert'); }
   }
+  } catch(e) { console.warn('[renderDashboard] VIX section failed:', e.message); }
 
   // ADX
+  // FIX: previously unguarded — a throw anywhere in this block (or any block
+  // below it) would silently kill the rest of this 780-line function, leaving
+  // every widget after the failure point stuck on its placeholder text
+  // indefinitely (this is exactly what caused ADX/momentum/checklist panels
+  // to freeze for hours while VIX/RSI/PCR above kept updating fine).
+  try {
   if (s.adx && s.adx.adx != null) {
     const adx = s.adx.adx; const dip = s.adx.diPlus; const dim = s.adx.diMinus;
     document.getElementById('adx-val').textContent = adx.toFixed(1);
@@ -4712,8 +4720,10 @@ function renderDashboard(s) {
     document.getElementById('adx-trend-label').textContent = s.adx === null ? '⏳ Needs 60 session candles' : 'LOADING';
     document.getElementById('adx-card').style.borderLeft = '2px solid var(--amber)';
   }
+  } catch(e) { console.warn('[renderDashboard] ADX section failed:', e.message); }
 
   // MTF
+  try {
   const mtf = s.mtf;
   if (mtf) {
     const badge = document.getElementById('mtf-badge');
@@ -4750,14 +4760,17 @@ function renderDashboard(s) {
       }
     });
   }
+  } catch(e) { console.warn('[renderDashboard] MTF section failed:', e.message); }
 
   // PCR — auto-fetched from NSE option chain every 3 min
+  try {
   if (s.pcr != null) {
     document.getElementById('pcr-val').textContent = s.pcr.toFixed(2);
     document.getElementById('pcr-sig').textContent = s.pcrSignal || '--';
     const pcrCard = document.getElementById('pcr-card');
     if (pcrCard) { if (s.pcr < 0.7 || s.pcr > 1.5) pcrCard.classList.add('pv-card-alert'); else pcrCard.classList.remove('pv-card-alert'); }
   }
+  } catch(e) { console.warn('[renderDashboard] PCR section failed:', e.message); }
   if (s.atmPcr != null) {
     document.getElementById('atm-pcr-val').textContent = s.atmPcr.toFixed(2);
     document.getElementById('atm-pcr-sig').textContent = s.atmPcrSignal || '--';
@@ -4781,6 +4794,12 @@ function renderDashboard(s) {
   if (atmSrcEl) { atmSrcEl.textContent = srcLbl; atmSrcEl.style.color = srcColor; atmSrcEl.title = bnTitle; }
 
   // Strike range
+  // FIX: everything from here to just before renderMomentum()/renderBTST() at
+  // the end of this function was previously unguarded — one bad field access
+  // anywhere in this ~320-line middle section would silently stop the function,
+  // and Momentum/BTST (rendered last) would never update. Wrapped so those
+  // final widgets still get a chance to render even if something here fails.
+  try {
   document.getElementById('strike-range').textContent = s.strikeRange || 'ATM ±200';
 
   // FIX: ATM strike display — the #1 thing an option buyer needs to see
@@ -5155,8 +5174,14 @@ function renderDashboard(s) {
     }
     if (s.optionFlow.history) updateFlowHistory(s.optionFlow.history);
   }
-  // BTST / STBT card (visible only in 3:00–3:20 PM window)
-  renderBTST(s.btst || null);
+  } catch(e) { console.warn('[renderDashboard] middle section failed:', e.message); }
+
+  // BTST — wrapped separately so it always gets a chance to render even if
+  // the big middle section above threw.
+  try {
+    // BTST / STBT card (visible only in 3:00–3:20 PM window)
+    renderBTST(s.btst || null);
+  } catch(e) { console.warn('[renderDashboard] renderBTST failed:', e.message); }
 }
 
 // ─── BREADTH UI ──────────────────────────────────────────
