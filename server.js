@@ -2841,18 +2841,26 @@ async function onTick(tickData) {
 }
 
 async function refreshMarketData() {
-    if (!isNSEMarketDay()) {
-        console.log('[Scheduler] Outside market hours — skipping refreshMarketData');
-        return;
+    // FIX: previously returned here on non-trading days (weekends/holidays)
+    // BEFORE ever calling fetchMarketData() — meaning marketState.prevClose
+    // (and change/changePct) never got populated at all on a closed day.
+    // Real broker apps (Punch, Groww, etc.) still show "vs Friday's close" on
+    // a Saturday — so we still need this fetch. We just skip the LIVE-only
+    // bits (indicator/history seeding, VIX, WS-dependent updates) below when
+    // it's not a trading day.
+    const isTradingDay = isNSEMarketDay();
+    if (!isTradingDay) {
+        console.log('[Scheduler] Outside market hours — refreshing prevClose/change only, skipping live indicators');
     }
     // When market is closed, preserve last known price as lastClose so the
     // frontend can show "23,382 · CLOSED" instead of blank "--".
+    // FIX: no longer zeroing change/changePct here — those should keep
+    // reflecting the actual last-session move vs prevClose (set below), not
+    // reset to a misleading "+0 pts +0.00%".
     if (!isMarketOpen()) {
         if (marketState.nifty > 0) {
             marketState.lastClose = marketState.nifty;  // save before zeroing
             marketState.nifty     = 0;
-            marketState.change    = 0;
-            marketState.changePct = 0;
             marketState.connected = false;
             marketState.source    = 'none';
         }
@@ -2861,12 +2869,18 @@ async function refreshMarketData() {
         marketState.marketClosed = false;
     }
     const { niftyData, vixData }=await fetchMarketData();
-    if (niftyData?.closes?.length>0&&!historyLoaded) { initializeHistory(niftyData.closes,niftyData.candles); historyLoaded=true; console.log(`History: ${niftyData.closes.length} candles`); }
-    if (vixData) { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.strikeRange; }
     // FIX: capture the real previous-trading-day close (static, doesn't change
     // intraday) so onTick() can compute change/changePct against IT instead of
-    // the last WS tick — see onTick() for why that was wrong.
+    // the last WS tick — see onTick() for why that was wrong. Also apply
+    // change/changePct directly here so a closed-day restart shows the correct
+    // last-session move immediately, without waiting for a live WS tick that
+    // will never come today.
     if (niftyData?.prevClose > 0) marketState.prevClose = niftyData.prevClose;
+    if (niftyData?.change != null)    marketState.change    = niftyData.change;
+    if (niftyData?.changePct != null) marketState.changePct = niftyData.changePct;
+    if (!isTradingDay) return; // rest of this function is live-market-only from here
+    if (niftyData?.closes?.length>0&&!historyLoaded) { initializeHistory(niftyData.closes,niftyData.candles); historyLoaded=true; console.log(`History: ${niftyData.closes.length} candles`); }
+    if (vixData) { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.strikeRange; }
     if (niftyData?.price>0 && isMarketOpen()) {
         // Always update via Yahoo if WS is not actively ticking (source != websocket,
         // or watchdog has already reset source to yahoo due to silent freeze).

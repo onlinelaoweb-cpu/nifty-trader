@@ -4429,7 +4429,14 @@ function renderDashboard(s) {
       if (_lastKnownNifty === 0 && s.lastClose > 0) { _lastKnownNifty = s.lastClose; }
       document.getElementById('price').textContent = closedPrice.toFixed(2);
       const chgEl = document.getElementById('change');
-      const chg = _lastKnownChange || 0, pct = _lastKnownChangePct || 0;
+      // FIX: _lastKnownChange only ever gets set from a LIVE tick this session.
+      // On a fresh page load on a day the market never opens (weekend/holiday
+      // restart), no live tick ever arrives, so it stays at its initial 0 —
+      // showing a misleading "+0 pts +0.00%" even though the backend now
+      // correctly computes the real last-session change. Fall back to the
+      // API payload's own s.change/s.changePct (now populated by the backend
+      // even on closed days) whenever the local cache hasn't been set yet.
+      const chg = _lastKnownChange || s.change || 0, pct = _lastKnownChangePct || s.changePct || 0;
       chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '  (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)  · CLOSED';
       chgEl.className = 'price-change flat';
       const hdrChgEl = document.getElementById('header-nifty-chg');
