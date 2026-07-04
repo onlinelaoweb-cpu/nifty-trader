@@ -66,14 +66,24 @@ function buildVIX(vix, change, prevClose) {
 //     day) → use that row's own prev_close (yesterday vs the day before).
 //   • Otherwise (still mid-session, today's row not written yet) → use the
 //     latest row's close directly (that IS yesterday's close).
-async function getRealPrevClose() {
+async function getRealPrevClose(currentPrice) {
     try {
         const rows = await getHistoricalCandles(2);
         if (!rows || rows.length === 0) return null;
         const latest = rows[rows.length - 1];
-        const todayStr = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
-            .toISOString().slice(0, 10);
-        return latest.date === todayStr ? latest.prev_close : latest.close;
+        // FIX: comparing dates (todayStr vs latest.date) never worked on a
+        // non-trading day — "today" (e.g. Saturday) never equals a trading-day
+        // row's date, so the date check always fell through to the wrong
+        // branch, returning latest.close as "prevClose" while the CURRENTLY
+        // DISPLAYED price (frozen at Friday's close) was ALSO Friday's close
+        // — giving change = 0. Compare against the actual price instead:
+        // if the current (possibly frozen) price already matches the latest
+        // committed daily close, that session IS already "yesterday" from
+        // the table's perspective — use ITS prev_close (the day before that).
+        // Otherwise, current price is a live/still-forming session — use the
+        // latest row's close as the correct "yesterday's close" reference.
+        const matchesLatestClose = currentPrice != null && Math.abs(currentPrice - latest.close) < 0.5;
+        return matchesLatestClose ? latest.prev_close : latest.close;
     } catch (e) {
         console.warn('[MarketData] getRealPrevClose failed:', e.message);
         return null;
@@ -90,7 +100,7 @@ async function fetchNiftyData() {
             const price     = parseFloat(last.close.toFixed(2));
             // FIX: prevClose now from the daily-history table (real previous
             // trading day's close), not the second-to-last 1-min candle.
-            const realPrevClose = await getRealPrevClose();
+            const realPrevClose = await getRealPrevClose(price);
             const prevClose = realPrevClose > 0 ? parseFloat(realPrevClose.toFixed(2))
                                                  : parseFloat(memCandles[memCandles.length - 2].close.toFixed(2)); // fallback if DB unavailable
             const change    = parseFloat((price - prevClose).toFixed(2));
