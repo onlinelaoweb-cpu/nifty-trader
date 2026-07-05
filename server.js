@@ -2878,9 +2878,24 @@ async function refreshMarketData() {
     if (niftyData?.prevClose > 0) marketState.prevClose = niftyData.prevClose;
     if (niftyData?.change != null)    marketState.change    = niftyData.change;
     if (niftyData?.changePct != null) marketState.changePct = niftyData.changePct;
+    // FIX: on a FRESH server restart while market is closed (e.g. weekend
+    // reboot), marketState.nifty starts at 0 — so the "capture before
+    // zeroing" block above (`if (marketState.nifty > 0) lastClose = nifty`)
+    // never fires even once, leaving lastClose stuck at 0 forever until
+    // Monday's live trading. The frontend then shows blank "--" instead of
+    // the frozen last price. Fall back to the freshly-fetched niftyData.price
+    // (which correctly reflects the last session's close) whenever we don't
+    // already have a lastClose from live memory.
+    if (!isMarketOpen() && !(marketState.lastClose > 0) && niftyData?.price > 0) {
+        marketState.lastClose = niftyData.price;
+    }
+    // FIX: VIX was being fetched successfully every cycle (visible in logs)
+    // even on closed days, but the early `return` below prevented it from
+    // ever reaching marketState — VIX has a meaningful "last close" value
+    // too (e.g. "VIX closed 11.8 Friday"), so apply it regardless of trading day.
+    if (vixData) { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.strikeRange; }
     if (!isTradingDay) return; // rest of this function is live-market-only from here
     if (niftyData?.closes?.length>0&&!historyLoaded) { initializeHistory(niftyData.closes,niftyData.candles); historyLoaded=true; console.log(`History: ${niftyData.closes.length} candles`); }
-    if (vixData) { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.strikeRange; }
     if (niftyData?.price>0 && isMarketOpen()) {
         // Always update via Yahoo if WS is not actively ticking (source != websocket,
         // or watchdog has already reset source to yahoo due to silent freeze).
