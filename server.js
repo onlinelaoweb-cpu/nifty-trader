@@ -4552,14 +4552,21 @@ function startPollingIntervals() {
             try { sseBroadcast('signal', buildSignalPayload()); } catch(e) { console.warn('[SSE periodic] broadcast error:', e.message); }
         }
     }, 5000);
-    // BUG FIX: old code ran check920Setup every 30s from boot to shutdown = 2,880 calls/day.
-    // It returned early outside 9:20–9:30, so no functional bug but pure CPU waste.
-    // Now: check every 30s but only between 9:15 and 9:35 AM IST.
-    setInterval(() => {
-        const ist = getIST();
-        const istMin = ist.getHours() * 60 + ist.getMinutes();
-        if (istMin >= 555 && istMin <= 575) check920Setup();  // 9:15–9:35 window only
-    }, 30*1000);
+    // DISABLED (per user request, July 2026): check920Setup() is a fully separate,
+    // 1-minute-EMA/VWAP-only opening check that runs independently of the main
+    // signal engine (which already has Trend Lock, Delta veto, MTF alignment,
+    // ORB, etc.). Because 1-minute data is noisy, it frequently disagreed with
+    // a legitimate STRONG signal from the main engine within the same minute —
+    // e.g. a "STRONG BUY CALL — ALL 3 ALIGNED (83%)" at 9:19 AM followed by a
+    // "9:20 SETUP — NO TRADE (mixed 1m signals)" at 9:20 AM, for the SAME move,
+    // which later hit its target. That contradiction created exactly the kind
+    // of uncertainty/fear that causes good signals to be skipped. The main
+    // engine's own gates already cover this ground more reliably.
+    // setInterval(() => {
+    //     const ist = getIST();
+    //     const istMin = ist.getHours() * 60 + ist.getMinutes();
+    //     if (istMin >= 555 && istMin <= 575) check920Setup();  // 9:15–9:35 window only
+    // }, 30*1000);
     startTickWatchdog(); // ← watchdog: detects silent WS freeze, falls back to Yahoo
     // Daily 6 PM IST top-up — fetch any new daily candles from Yahoo Finance
     setTimeout(() => setInterval(async () => {
