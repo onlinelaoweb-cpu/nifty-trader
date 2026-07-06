@@ -4387,18 +4387,36 @@ startPolling();
 
 // ─── DASHBOARD RENDERER ──────────────────────────────────
 function renderDashboard(s) {
-  // ── Compact header metrics bar ─────────────────────────────────────────────
+  // ── Compact header metrics bar + Price hero ────────────────────────────────
+  // FIX: wrapped in try/catch — this was the LAST unguarded section in
+  // renderDashboard (see the s.adx.toFixed bug fixed above for what happens
+  // when code here throws unguarded: the entire rest of the function dies for
+  // every subsequent render). All other sections already have their own
+  // try/catch from earlier hardening passes.
+  try {
   var _set = function(id, val, color) {
     var el = document.getElementById(id);
     if (el) { el.textContent = val; if (color) el.style.color = color; }
   };
   var vixColor = s.vix > 20 ? 'var(--red)' : s.vix > 15 ? 'var(--amber)' : 'var(--green)';
   var rsiColor = s.rsi > 70 ? 'var(--red)' : s.rsi < 30 ? 'var(--green)' : 'var(--text)';
-  var adxColor = s.adx > 25 ? 'var(--green)' : s.adx > 20 ? 'var(--amber)' : 'var(--red)';
+  var adxVal = s.adx && s.adx.adx != null ? s.adx.adx : null;
+  var adxColor = adxVal > 25 ? 'var(--green)' : adxVal > 20 ? 'var(--amber)' : 'var(--red)';
   _set('hdr-vix', s.vix ? s.vix.toFixed(1) : '--', vixColor);
   _set('hdr-rsi', s.rsi ? s.rsi.toFixed(1) : '--', rsiColor);
   _set('hdr-pcr', s.pcr ? s.pcr.toFixed(2) : '--', null);
-  _set('hdr-adx', s.adx ? s.adx.toFixed(1) : '--', adxColor);
+  // FIX: s.adx is an OBJECT ({adx, diPlus, diMinus}), not a plain number —
+  // calling s.adx.toFixed(1) directly threw "s.adx.toFixed is not a function"
+  // EVERY time ADX successfully computed (60+ session candles reached), and
+  // since this runs at the very top of renderDashboard with no surrounding
+  // try/catch, the exception killed the ENTIRE rest of the function for every
+  // subsequent 'signal' event for the rest of the session — header badge, ADX
+  // panel, PCR/MTF panels, ATM Strike, DTE, Trades count, Suggested Trade all
+  // froze at their last value, while price/change kept updating fine because
+  // those come from the separate, unaffected 'tick' event handler. This is
+  // why "some fields work, some don't" and why it always broke partway
+  // through the morning (exactly when ADX first got enough candles).
+  _set('hdr-adx', adxVal != null ? adxVal.toFixed(1) : '--', adxColor);
   // ATM + DTE in price hero
   if (s.nifty > 0) {
     var atm = Math.round(s.nifty / 50) * 50;
@@ -4450,6 +4468,7 @@ function renderDashboard(s) {
       document.getElementById('change').className = 'price-change flat';
     }
   }
+  } catch(e) { console.warn('[renderDashboard] header/price section failed:', e.message); }
 
   // Signal card
   const sig = s.signal || 'WAIT';
