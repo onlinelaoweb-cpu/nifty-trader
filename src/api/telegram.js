@@ -124,6 +124,18 @@ async function sendSignalAlert(state, prevSignal, strikeData = null) {
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
 📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}`;
+
+        // ── AI Trade Coach block — entry-zone + staged profit plan ───────────
+        const coach = strikeData.coach;
+        if (coach) {
+            strikeBlock += `\n\n🧑‍🏫 <b>AI Trade Coach</b>
+✅ Ideal Entry: ${coach.idealEntryLabel}
+⚠️ ${coach.chaseWarning}
+💡 ${coach.ifMissed}
+📈 +20% → ${coach.plan[0].action}
+📈 +30% → ${coach.plan[1].action}
+📈 +40% → ${coach.plan[2].action}`;
+        }
     } else {
         // strikeData is null when: (a) no VIX available yet, or (b) PCR premiums not loaded
         // Give actionable guidance instead of just showing ATM
@@ -185,12 +197,16 @@ async function sendMTFAlert(state, strikeData = null) {
         const tgtPct  = ((strikeData.target - strikeData.entry) / strikeData.entry * 100).toFixed(0);
         const slLoss  = Math.round((strikeData.entry - strikeData.sl) * LOT);
         const tgtGain = Math.round((strikeData.target - strikeData.entry) * LOT);
+        const coach = strikeData.coach;
+        const coachBlock = coach
+            ? `\n🧑‍🏫 <b>AI Trade Coach</b>\n✅ Ideal Entry: ${coach.idealEntryLabel} | ${coach.chaseWarning}\n📈 +20% SL→cost | +30% book 50% | +40% exit\n`
+            : '';
         strikeBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
 📥 Entry : ₹${strikeData.entry}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
 📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}
-━━━━━━━━━━━━━━━━━━
+${coachBlock}━━━━━━━━━━━━━━━━━━
 `;
     }
 

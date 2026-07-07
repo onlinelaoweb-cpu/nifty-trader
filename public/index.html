@@ -3730,6 +3730,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     <button class="more-item" onclick="switchTabFromMore('guard')"><span>🛡️</span>GUARD</button>
     <button class="more-item" onclick="switchTabFromMore('tools')"><span>🔧</span>TOOLS</button>
     <button class="more-item" onclick="switchTabFromMore('analytics')"><span>📊</span>ANALYTICS</button>
+    <button class="more-item" onclick="switchTabFromMore('insights')"><span>🧠</span>INSIGHTS</button>
   </div>
 </div>
 
@@ -3945,6 +3946,7 @@ function switchTab(name,btn){
     autoATM();
   }
   if(name==='journal'){loadJournal();}
+  if(name==='insights'){ fetchSignalPerformance(); if(_lastState) updateInsightsUI(_lastState); }
   if(name==='analytics'){ if(!_anLoaded){ loadAnalytics(); } else { anRenderAll(anApplyDateFilter(_anSignals), _anSignals); } }
   if(name==='physics' && _lastState) updatePhysicsTab(_lastState);
   if(name==='breadth'){
@@ -4387,6 +4389,7 @@ startPolling();
 
 // ─── DASHBOARD RENDERER ──────────────────────────────────
 function renderDashboard(s) {
+  try { updateInsightsUI(s); } catch(e) { console.warn('updateInsightsUI call:', e.message); }
   // ── Compact header metrics bar + Price hero ────────────────────────────────
   // FIX: wrapped in try/catch — this was the LAST unguarded section in
   // renderDashboard (see the s.adx.toFixed bug fixed above for what happens
@@ -5468,6 +5471,19 @@ async function fetchTradeSuggestion() {
     const target     = ai.target  || d.strikeData?.target;
     const confidence = ai.confidence || d.confidence || '';
     const reasoning  = ai.reasoning  || ai.rationale || '';  // server uses 'reasoning'
+    const coach      = d.strikeData?.coach;
+    const coachHtml  = coach ? `
+      <div class="suggest-coach" style="margin-top:10px;padding:10px;border-radius:8px;background:rgba(255,255,255,0.03);border:1px solid var(--border);">
+        <div style="font-size:11.5px;letter-spacing:1px;color:var(--accent);margin-bottom:6px;">🧑‍🏫 AI TRADE COACH</div>
+        <div style="font-size:13px;color:var(--text);margin-bottom:3px;">✅ Ideal Entry: <b>${coach.idealEntryLabel}</b></div>
+        <div style="font-size:13px;color:var(--amber);margin-bottom:3px;">⚠️ ${coach.chaseWarning}</div>
+        <div style="font-size:12px;color:var(--dim);margin-bottom:6px;">${coach.ifMissed}</div>
+        <div style="display:flex;flex-direction:column;gap:2px;font-size:12.5px;color:var(--dim);">
+          <span>📈 +20% (₹${coach.plan[0].premium}) → ${coach.plan[0].action}</span>
+          <span>📈 +30% (₹${coach.plan[1].premium}) → ${coach.plan[1].action}</span>
+          <span>📈 +40% (₹${coach.plan[2].premium}) → ${coach.plan[2].action}</span>
+        </div>
+      </div>` : '';
     if (card) card.className = 'suggest-card ' + (ai.action.includes('CALL') ? 'bull' : ai.action.includes('PUT') ? 'bear' : 'wait');
     body.innerHTML = `
       <div class="suggest-action" style="color:${ai.action.includes('CALL') ? 'var(--green)' : ai.action.includes('PUT') ? 'var(--red)' : 'var(--amber)'}">${ai.action}</div>
@@ -5475,6 +5491,7 @@ async function fetchTradeSuggestion() {
       ${sl ? `<div class="suggest-detail">SL: ₹${sl} | Target: ₹${target || '--'}</div>` : ''}
       ${reasoning ? `<div class="suggest-rationale">${reasoning}</div>` : ''}
       ${confidence ? `<div class="suggest-conf">Confidence: ${confidence}</div>` : ''}
+      ${coachHtml}
     `;
     _startSuggestCountdown();
   } catch (e) {
@@ -5483,6 +5500,133 @@ async function fetchTradeSuggestion() {
 }
 
 // ─── BTST / STBT RENDERER ────────────────────────────────
+// ─── AI INSIGHTS TAB ──────────────────────────────────────────────────────
+function updateInsightsUI(s) {
+  try {
+    // Trade Quality
+    const tq = s.tradeQuality;
+    if (tq) {
+      const tqGradeColor = tq.grade === 'A+' || tq.grade === 'A' ? 'var(--green)' : tq.grade === 'B' ? 'var(--amber)' : tq.grade === 'C' ? '#ff9944' : tq.grade === 'D' ? 'var(--red)' : 'var(--dim)';
+      const tqEl = document.getElementById('ins-tq-grade');
+      const tqHintEl = document.getElementById('ins-tq-hint');
+      if (tqEl) { tqEl.textContent = tq.grade; tqEl.style.color = tqGradeColor; }
+      if (tqHintEl) tqHintEl.textContent = tq.sizeHint;
+    }
+
+    // Market Health
+    const mh = s.marketHealth;
+    if (mh) {
+      const mhColor = mh.total >= 80 ? 'var(--green)' : mh.total >= 60 ? '#88cc88' : mh.total >= 40 ? 'var(--amber)' : 'var(--red)';
+      const mhScoreEl = document.getElementById('ins-mh-score');
+      const mhLabelEl = document.getElementById('ins-mh-label');
+      if (mhScoreEl) { mhScoreEl.textContent = mh.total + '/100'; mhScoreEl.style.color = mhColor; }
+      if (mhLabelEl) mhLabelEl.textContent = mh.label;
+    }
+
+    // No Trade digest
+    const noTradeWrap = document.getElementById('ins-notrade-wrap');
+    const noTradeReasons = document.getElementById('ins-notrade-reasons');
+    if (noTradeWrap && noTradeReasons) {
+      if (s.noTrade && s.noTrade.active && s.noTrade.reasons?.length) {
+        noTradeWrap.style.display = 'block';
+        noTradeReasons.innerHTML = s.noTrade.reasons.map(r => `<div>• ${r}</div>`).join('');
+      } else {
+        noTradeWrap.style.display = 'none';
+      }
+    }
+
+    // Trend Day vs Range Day
+    const dt = s.dayType;
+    if (dt) {
+      const trendEl = document.getElementById('ins-trend-pct');
+      const rangeEl = document.getElementById('ins-range-pct');
+      const labelEl = document.getElementById('ins-daytype-label');
+      if (trendEl) trendEl.textContent = dt.trendProbability + '%';
+      if (rangeEl) rangeEl.textContent = dt.rangeProbability + '%';
+      if (labelEl && dt.recommendation) labelEl.textContent = dt.recommendation.label;
+    }
+
+    // Trap Zone
+    const tz = s.trapZone;
+    if (tz) {
+      const tzWrap = document.getElementById('ins-trapzone-wrap');
+      const tzLabel = document.getElementById('ins-trapzone-label');
+      if (tzLabel) tzLabel.textContent = tz.label;
+      if (tzWrap) {
+        tzWrap.style.borderColor = tz.active ? 'var(--amber)' : 'var(--border)';
+        tzWrap.style.background  = tz.active ? 'rgba(255,187,0,0.08)' : 'var(--bg1)';
+      }
+    }
+
+    // Contradiction Score
+    const cs = s.contradictionScore;
+    if (cs) {
+      const bullEl = document.getElementById('ins-contra-bull');
+      const bearEl = document.getElementById('ins-contra-bear');
+      const bullFEl = document.getElementById('ins-contra-bull-factors');
+      const bearFEl = document.getElementById('ins-contra-bear-factors');
+      const resultEl = document.getElementById('ins-contra-result');
+      if (bullEl) bullEl.textContent = cs.bullWeight + '%';
+      if (bearEl) bearEl.textContent = cs.bearWeight + '%';
+      if (bullFEl) bullFEl.textContent = (cs.bullFactors || []).join(', ') || '—';
+      if (bearFEl) bearFEl.textContent = (cs.bearFactors || []).join(', ') || '—';
+      if (resultEl) {
+        if (cs.result === 'NO_TRADE') { resultEl.textContent = '⛔ NO TRADE — both sides substantial'; resultEl.style.color = 'var(--red)'; }
+        else if (cs.result === 'BULLISH') { resultEl.textContent = '✅ Leans Bullish (+' + cs.diff + '%)'; resultEl.style.color = 'var(--green)'; }
+        else if (cs.result === 'BEARISH') { resultEl.textContent = '✅ Leans Bearish (' + cs.diff + '%)'; resultEl.style.color = 'var(--red)'; }
+        else { resultEl.textContent = 'Neutral'; resultEl.style.color = 'var(--dim)'; }
+      }
+    }
+
+    // Confidence Breakdown
+    const cb = s.confidenceBreakdown;
+    const cbItemsEl = document.getElementById('ins-conf-items');
+    const cbFinalEl = document.getElementById('ins-conf-final');
+    if (cbItemsEl) {
+      if (cb && cb.items && cb.items.length) {
+        cbItemsEl.innerHTML = cb.items.map(it => {
+          const color = it.pts >= 0 ? 'var(--green)' : 'var(--red)';
+          const sign = it.pts >= 0 ? '+' : '';
+          return `<div style="display:flex;justify-content:space-between;"><span>${it.label}</span><span style="color:${color};font-weight:600;">${sign}${it.pts}</span></div>`;
+        }).join('');
+      } else {
+        cbItemsEl.innerHTML = 'No active signal';
+      }
+    }
+    if (cbFinalEl) cbFinalEl.textContent = cb && cb.items && cb.items.length ? ('Final Confidence = ' + cb.final + '%') : '';
+  } catch (e) { console.warn('updateInsightsUI:', e.message); }
+}
+
+async function fetchSignalPerformance() {
+  try {
+    const r = await fetch('/api/signal-performance');
+    if (!r.ok) return;
+    const d = await r.json();
+    const fmt = (x) => x && x.total > 0 ? `${x.accuracy}% (${x.total})` : '—';
+    const tEl = document.getElementById('ins-acc-today');
+    const wEl = document.getElementById('ins-acc-weekly');
+    const mEl = document.getElementById('ins-acc-monthly');
+    if (tEl) tEl.textContent = fmt(d.summary?.today);
+    if (wEl) wEl.textContent = fmt(d.summary?.weekly);
+    if (mEl) mEl.textContent = fmt(d.summary?.monthly);
+
+    const openEl = document.getElementById('ins-perf-open');
+    if (openEl) {
+      if (d.open && d.open.length) {
+        openEl.innerHTML = d.open.map(o => {
+          const color = o.signal === 'BUY CALL' ? 'var(--green)' : 'var(--red)';
+          return `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
+            <div style="color:${color};font-weight:600;">${o.signal} ${o.strike}${o.type}</div>
+            <div style="color:var(--dim);">Entry: ₹${o.entry} | High: ₹${o.high} | Target: ₹${o.target} | ${o.elapsedMin} min elapsed</div>
+          </div>`;
+        }).join('');
+      } else {
+        openEl.innerHTML = '<div style="text-align:center;color:var(--dim);font-size:12.5px;padding:0.5rem 0;">No open signals being tracked</div>';
+      }
+    }
+  } catch (e) { console.warn('fetchSignalPerformance:', e.message); }
+}
+
 function renderBTST(btst) {
   const wrap  = document.getElementById('btst-wrap');
   const card  = document.getElementById('btst-card');
@@ -8537,6 +8681,109 @@ function _statRow(label, val) {
 
     <!-- Reset button -->
     <button onclick="guardResetDay()" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--dim);font-size:13.5px;cursor:pointer;">🔄 Naya din — Reset karo</button>
+
+  </div>
+</div>
+
+<!-- PANEL: AI INSIGHTS ─────────────────────────────────── -->
+<div class="panel" id="panel-insights">
+  <div style="padding:10px 12px 80px;">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div style="font-family:'Orbitron',monospace;font-size:14.5px;letter-spacing:1px;color:var(--accent);">🧠 AI INSIGHTS</div>
+    </div>
+
+    <!-- Trade Quality + Market Health row -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+      <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;">
+        <div style="font-size:11.5px;color:var(--dim);letter-spacing:1px;margin-bottom:6px;">TRADE QUALITY</div>
+        <div id="ins-tq-grade" style="font-size:26px;font-weight:700;color:var(--dim);">—</div>
+        <div id="ins-tq-hint" style="font-size:12.5px;color:var(--dim);margin-top:2px;">No trade</div>
+      </div>
+      <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;">
+        <div style="font-size:11.5px;color:var(--dim);letter-spacing:1px;margin-bottom:6px;">MARKET HEALTH</div>
+        <div id="ins-mh-score" style="font-size:26px;font-weight:700;color:var(--dim);">—</div>
+        <div id="ins-mh-label" style="font-size:12.5px;color:var(--dim);margin-top:2px;">Awaiting data</div>
+      </div>
+    </div>
+
+    <!-- No Trade digest -->
+    <div id="ins-notrade-wrap" style="display:none;background:rgba(255,187,0,0.08);border:1px solid var(--amber);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--amber);letter-spacing:1px;margin-bottom:6px;">⛔ NO TRADE — WHY</div>
+      <div id="ins-notrade-reasons" style="font-size:13px;color:var(--text);line-height:1.6;"></div>
+    </div>
+
+    <!-- Trend Day vs Range Day -->
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">📅 TODAY'S MARKET — TREND vs RANGE</div>
+      <div style="display:flex;gap:14px;margin-bottom:8px;">
+        <div style="flex:1;">
+          <div style="font-size:11px;color:var(--dim);">Trend Probability</div>
+          <div id="ins-trend-pct" style="font-size:20px;font-weight:700;color:var(--green);">—%</div>
+        </div>
+        <div style="flex:1;">
+          <div style="font-size:11px;color:var(--dim);">Range Probability</div>
+          <div id="ins-range-pct" style="font-size:20px;font-weight:700;color:var(--amber);">—%</div>
+        </div>
+      </div>
+      <div id="ins-daytype-label" style="font-size:13px;color:var(--text);">Awaiting data...</div>
+    </div>
+
+    <!-- Trap Zone -->
+    <div id="ins-trapzone-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:6px;">⚠️ TRAP ZONE</div>
+      <div id="ins-trapzone-label" style="font-size:13px;color:var(--text);">Awaiting data...</div>
+    </div>
+
+    <!-- Contradiction Score -->
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">⚖️ CONTRADICTION SCORE</div>
+      <div style="display:flex;gap:14px;margin-bottom:6px;">
+        <div style="flex:1;">
+          <div style="font-size:11px;color:var(--green);">Bullish</div>
+          <div id="ins-contra-bull" style="font-size:18px;font-weight:700;color:var(--green);">0%</div>
+          <div id="ins-contra-bull-factors" style="font-size:11.5px;color:var(--dim);"></div>
+        </div>
+        <div style="flex:1;">
+          <div style="font-size:11px;color:var(--red);">Bearish</div>
+          <div id="ins-contra-bear" style="font-size:18px;font-weight:700;color:var(--red);">0%</div>
+          <div id="ins-contra-bear-factors" style="font-size:11.5px;color:var(--dim);"></div>
+        </div>
+      </div>
+      <div id="ins-contra-result" style="font-size:13px;color:var(--text);font-weight:600;">—</div>
+    </div>
+
+    <!-- Confidence Breakdown -->
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">🔍 CONFIDENCE BREAKDOWN</div>
+      <div id="ins-conf-items" style="font-size:13px;color:var(--text);line-height:1.8;">No active signal</div>
+      <div id="ins-conf-final" style="font-size:14px;font-weight:700;color:var(--accent);margin-top:6px;"></div>
+    </div>
+
+    <!-- Signal Performance -->
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div style="font-size:12px;color:var(--dim);letter-spacing:1px;">📊 SIGNAL PERFORMANCE</div>
+        <button onclick="fetchSignalPerformance()" style="font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--dim);cursor:pointer;">↺ Refresh</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;">
+        <div style="text-align:center;">
+          <div style="font-size:10.5px;color:var(--dim);">Today</div>
+          <div id="ins-acc-today" style="font-size:16px;font-weight:700;color:var(--text);">—</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:10.5px;color:var(--dim);">7 Days</div>
+          <div id="ins-acc-weekly" style="font-size:16px;font-weight:700;color:var(--text);">—</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:10.5px;color:var(--dim);">30 Days</div>
+          <div id="ins-acc-monthly" style="font-size:16px;font-weight:700;color:var(--text);">—</div>
+        </div>
+      </div>
+      <div id="ins-perf-open" style="max-height:260px;overflow-y:auto;">
+        <div style="text-align:center;color:var(--dim);font-size:12.5px;padding:0.5rem 0;">No open signals being tracked</div>
+      </div>
+    </div>
 
   </div>
 </div>

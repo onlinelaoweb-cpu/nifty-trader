@@ -163,12 +163,25 @@ let marketState = {
     // ── Candle pattern — initialized so frontend never stays on "Waiting for candle data..." ──
     candlePattern: { pattern: 'NONE', direction: 'NEUTRAL', strength: 0, reason: 'Waiting for session candles...' },
     cpMTF: { cp5m: null, cp15m: null, cp1h: null, cpBull: 0, cpBear: 0, cpConsensus: 'NEUTRAL', cpConsensusLabel: 'Waiting...' },
+    // ── Trend Day vs Range Day — morning strategy guidance ────────────────────
+    dayType: { trendProbability: 0, rangeProbability: 0, recommendation: { favor: 'NEUTRAL', avoid: '', label: 'Awaiting data...' }, adx: null, mtfAligned: false, orbStatus: 'FORMING' },
+    // ── Trap Zone — VWAP/POC chop pocket warning ──────────────────────────────
+    trapZone: { active: false, label: 'Trap Zone — awaiting data' },
+    // ── Signal Performance — today's live tracking cards ──────────────────────
+    signalPerformance: { open: [], todayAccuracy: null, todayCount: 0 },
+    // ── Contradiction Score — 6-factor weighted bull/bear check ────────────────
+    contradictionScore: { bullWeight: 0, bearWeight: 0, diff: 0, bullFactors: [], bearFactors: [], contradiction: false, result: 'NEUTRAL' },
+    // ── Confidence Breakdown — top contributing factors for the active signal ─
+    confidenceBreakdown: { items: [], final: 0 },
 };
 
 // ── Trade Journal ─────────────────────────────────────
 let trades       = [];
 let tradeCounter = 1;
 let events       = [];
+// ── Signal Performance Tracking (automatic, independent of Journal) ─────────
+let openPerfRecords = [];   // records currently being tracked toward target/SL
+const PERF_AUTOCLOSE_MIN = 90;  // auto-close untouched signals after 90 min (theta eats the edge past this)
 
 // ── Helpers ───────────────────────────────────────────
 let historyLoaded=false, prevSignal='WAIT', prevMTFAligned=false;
@@ -871,6 +884,184 @@ function getORBStatus(price) {
     return { status: 'INSIDE', label: `↔️ Inside Opening Range (${orbLow.toFixed(0)}–${orbHigh.toFixed(0)})`, high: orbHigh, low: orbLow };
 }
 
+// ── Trend Day vs Range Day Detector ─────────────────────────────────────────
+// Per external feedback: "This is one of the biggest improvements you can
+// make" — knowing BEFORE taking trades whether today favors trend-following
+// (option buying) or mean-reversion (iron-fly / selling / quick scalps) saves
+// traders from fighting the day's actual character.
+// Combines ADX (trend strength), MTF alignment, ORB breakout status, and
+// momentum-breakout strength into a single 0-100 trend-probability score.
+// Informational only — does NOT gate/block combineSignals(), it's a
+// strategy-selection aid shown to the trader each morning.
+function computeDayType() {
+    const adxVal = marketState.adx?.adx ?? null;
+    let trendScore = 0;
+    if (adxVal !== null) trendScore += Math.min((adxVal / 40) * 40, 40);   // up to 40 pts
+    if (marketState.mtf?.aligned)          trendScore += 30;               // all 3 TF agree
+    else if (marketState.mtf?.softAligned) trendScore += 15;               // 15m+1h agree, 5m dissents
+    const orbStatus = marketState.orb?.status;
+    if (orbStatus === 'BROKEN_UP' || orbStatus === 'BROKEN_DOWN') trendScore += 20;
+    const mom = marketState.momentum;
+    if (mom?.canTrade && mom.strength >= 3) trendScore += 10;
+
+    const trendProbability = Math.round(Math.min(trendScore, 100));
+    const rangeProbability = Math.round(100 - trendProbability);
+
+    const recommendation = trendProbability >= 60
+        ? { favor: 'OPTION_BUYING',    avoid: 'Selling / Iron Fly',                 label: '✅ Recommended: Option Buying' }
+        : rangeProbability >= 60
+        ? { favor: 'RANGE_STRATEGIES', avoid: 'Fresh directional option buying',    label: '✅ Recommended: Iron Fly / Option Selling / Quick Scalps' }
+        : { favor: 'NEUTRAL',          avoid: 'Oversized directional bets either way', label: '⚠️ Mixed signals — trade small, confirm before entry' };
+
+    return {
+        trendProbability, rangeProbability, recommendation,
+        adx: adxVal, mtfAligned: !!marketState.mtf?.aligned, orbStatus: orbStatus ?? 'FORMING',
+        generatedAt: new Date().toISOString(),
+    };
+}
+
+// ── Trap Zone Detector — VWAP/POC chop pocket ───────────────────────────────
+// When VWAP and POC sit close together AND price is squeezed inside that
+// narrow band, the market tends to whipsaw rather than trend — fresh entries
+// there get stopped out on noise. Flag it so the trader waits for a clean
+// break of the band. Informational only — does not block combineSignals().
+// ── Confidence Breakdown ─────────────────────────────────────────────────────
+// Per feedback: "Instead of just Confidence: 81%, explain it" — shows the
+// handful of factors doing the heavy lifting for the CURRENT active signal,
+// in plain +/- points, ending at the real confidence number. This is a
+// simplified, illustrative view of the top contributors — not a literal
+// re-derivation of the full internal vote tally in combineSignals() (that
+// engine has 25+ correlated inputs; a card listing all of them would be
+// unreadable). Computed AFTER combineSignals() so marketState.signal /
+// confidence are already final.
+function computeConfidenceBreakdown() {
+    const sig = marketState.signal;
+    if (sig === 'WAIT' || !sig) return { items: [], final: 0, label: 'No active signal' };
+    const isBull = sig === 'BUY CALL';
+    const items = [];
+
+    // Trend — MTF alignment
+    if (marketState.mtf?.aligned) items.push({ label: 'Trend (3/3 TF aligned)', pts: 25 });
+    else if ((isBull && marketState.mtf?.bullCount === 2) || (!isBull && marketState.mtf?.bearCount === 2)) {
+        items.push({ label: 'Trend (2/3 TF aligned)', pts: 12 });
+    }
+
+    // Momentum — breakdown/breakout detector
+    const mom = marketState.momentum;
+    if (mom?.canTrade && ((isBull && mom.signal === 'BREAKOUT') || (!isBull && mom.signal === 'BREAKDOWN'))) {
+        items.push({ label: `Momentum (${mom.signal.toLowerCase()}, strength ${mom.strength})`, pts: Math.round((mom.strength / 4) * 20) });
+    }
+
+    // Delta — order flow
+    const deltaPct = marketState.delta?.deltaPct;
+    if (deltaPct != null && ((isBull && deltaPct > 0) || (!isBull && deltaPct < 0))) {
+        items.push({ label: `Delta (${deltaPct > 0 ? '+' : ''}${deltaPct}%)`, pts: Math.min(Math.round((Math.abs(deltaPct) / 100) * 15), 15) });
+    }
+
+    // PCR
+    if ((isBull && marketState.pcrSignal === 'BULLISH') || (!isBull && marketState.pcrSignal === 'BEARISH')) {
+        items.push({ label: `PCR (${marketState.pcr})`, pts: 10 });
+    }
+
+    // Proximity to Support/Resistance — penalty when signal direction is chasing INTO a wall
+    const srLvls = marketState.srLevels?.levels;
+    if (srLvls?.length && marketState.nifty > 0) {
+        const near = srLvls.find(l => Math.abs(marketState.nifty - l.price) <= 30);
+        if (near) {
+            const isRes = near.price > marketState.nifty;
+            if ((isBull && isRes) || (!isBull && !isRes)) {
+                items.push({ label: `Near ${isRes ? 'Resistance' : 'Support'} (${near.label || near.type} @ ${near.price})`, pts: -10 });
+            }
+        }
+    }
+
+    // RSI extreme — penalty for chasing an already-stretched move
+    const rsi = marketState.rsi;
+    if (isBull && rsi != null && rsi > 68) items.push({ label: `RSI Overbought (${rsi})`, pts: -5 });
+    if (!isBull && rsi != null && rsi < 32) items.push({ label: `RSI Oversold (${rsi})`, pts: -5 });
+
+    return { items, final: marketState.confidence, generatedAt: new Date().toISOString() };
+}
+
+function computeTrapZone() {
+    const price = marketState.nifty;
+    const vwap  = marketState.vwap;
+    const poc   = marketState.poc?.poc;
+    if (!price || !vwap || !poc) {
+        return { active: false, label: 'Trap Zone — awaiting data' };
+    }
+    const bandHi    = Math.max(vwap, poc);
+    const bandLo    = Math.min(vwap, poc);
+    const bandWidth = bandHi - bandLo;
+    const TIGHT_BAND = 40;   // pts — VWAP/POC within this = a real chop pocket
+    const BUFFER     = 10;   // pts — price also has to be inside/near the band
+    const inBand = price >= (bandLo - BUFFER) && price <= (bandHi + BUFFER);
+    const active = bandWidth <= TIGHT_BAND && inBand;
+
+    return {
+        active, vwap, poc, bandLo: Math.round(bandLo), bandHi: Math.round(bandHi), bandWidth: Math.round(bandWidth),
+        label: active
+            ? `⚠️ Trap Zone — between VWAP (${vwap.toFixed(0)}) and POC (${poc.toFixed(0)}) — expect whipsaws, wait for breakout`
+            : `Clear — VWAP (${vwap.toFixed(0)}) / POC (${poc.toFixed(0)}) not forming a chop pocket`,
+    };
+}
+
+// ── Contradiction Score ──────────────────────────────────────────────────────
+// Per feedback: "Introduce a Contradiction Score" — instead of the many
+// correlated votes inside combineSignals() all blending into one tally,
+// this looks at 6 INDEPENDENT structural factors with fixed weights
+// (MTF 40% / PCR 15% / Delta 15% / VWAP 10% / POC 10% / ORB 10% = 100%) and
+// checks whether the bullish and bearish camps are BOTH substantial — i.e.
+// genuinely contradicting each other — rather than one clearly dominating.
+// When that happens, forcing a BUY CALL/BUY PUT out of the raw vote tally
+// is exactly the failure mode flagged externally: "Bullish internals overpower
+// bearish momentum" style false calls. Result: NO TRADE instead of a forced pick.
+function computeContradictionScore() {
+    const bullFactors = [], bearFactors = [];
+    let bullWeight = 0, bearWeight = 0;
+
+    // MTF — 40% (full weight if all 3 TF aligned, half if 2/3)
+    const mtf = marketState.mtf;
+    if (mtf?.aligned) {
+        if (mtf.signal === 'BUY CALL') { bullWeight += 40; bullFactors.push('MTF (3/3 aligned)'); }
+        else if (mtf.signal === 'BUY PUT') { bearWeight += 40; bearFactors.push('MTF (3/3 aligned)'); }
+    } else if (mtf?.bullCount === 2) { bullWeight += 20; bullFactors.push('MTF (2/3 bullish)'); }
+    else if (mtf?.bearCount === 2) { bearWeight += 20; bearFactors.push('MTF (2/3 bearish)'); }
+
+    // PCR — 15%
+    if (marketState.pcrSignal === 'BULLISH') { bullWeight += 15; bullFactors.push('PCR'); }
+    else if (marketState.pcrSignal === 'BEARISH') { bearWeight += 15; bearFactors.push('PCR'); }
+
+    // Delta — 15%
+    if (marketState.delta?.signal === 'BULLISH') { bullWeight += 15; bullFactors.push('Delta'); }
+    else if (marketState.delta?.signal === 'BEARISH') { bearWeight += 15; bearFactors.push('Delta'); }
+
+    // VWAP — 10%
+    if (marketState.nifty && marketState.vwap) {
+        if (marketState.nifty > marketState.vwap) { bullWeight += 10; bullFactors.push('Above VWAP'); }
+        else if (marketState.nifty < marketState.vwap) { bearWeight += 10; bearFactors.push('Below VWAP'); }
+    }
+
+    // POC — 10%
+    if (marketState.poc?.signal === 'ABOVE_POC') { bullWeight += 10; bullFactors.push('Above POC'); }
+    else if (marketState.poc?.signal === 'BELOW_POC') { bearWeight += 10; bearFactors.push('Below POC'); }
+
+    // ORB — 10%
+    if (marketState.orb?.status === 'BROKEN_UP') { bullWeight += 10; bullFactors.push('ORB Broken Up'); }
+    else if (marketState.orb?.status === 'BROKEN_DOWN') { bearWeight += 10; bearFactors.push('ORB Broken Down'); }
+
+    // Contradiction = BOTH sides carry substantial, conflicting weight —
+    // not just one side dominating with the other side quiet/neutral.
+    const contradiction = bullWeight >= 30 && bearWeight >= 30;
+    const diff   = bullWeight - bearWeight;
+    const result = contradiction ? 'NO_TRADE' : diff > 0 ? 'BULLISH' : diff < 0 ? 'BEARISH' : 'NEUTRAL';
+
+    return {
+        bullWeight, bearWeight, diff, bullFactors, bearFactors, contradiction, result,
+        generatedAt: new Date().toISOString(),
+    };
+}
+
 function combineSignals(indicators) {
     // ── Gate 1: safe time window (IST) ────────────────
     const ew = isSafeEntryWindow();
@@ -1499,6 +1690,16 @@ function combineSignals(indicators) {
         if (rawSignal === 'BUY CALL' && deltaPct < -25) qualityGate.deltaAligned = false;
     }
 
+    // ── Contradiction Score Gate — NEW ───────────────────────────────────────
+    // 6-factor weighted check (MTF 40 / PCR 15 / Delta 15 / VWAP 10 / POC 10 /
+    // ORB 10). If bullish and bearish camps are BOTH substantial (≥30 each),
+    // that's a genuine structural contradiction, not just noise — forcing a
+    // directional call out of the raw vote tally in that situation is exactly
+    // the false-signal pattern flagged externally. Block instead of forcing.
+    const contradictionScore = computeContradictionScore();
+    marketState.contradictionScore = contradictionScore;
+    qualityGate.contradictionOk = !(rawSignal !== 'WAIT' && contradictionScore.result === 'NO_TRADE');
+
     // Recompute passed HERE — srClear may have been flipped to false inside the gate block above.
     // Physics gates: physicsLaw1=null means UNKNOWN (early session) → allow through.
     //                physicsLaw1=false means confirmed counter-trend/sideways → block.
@@ -1509,12 +1710,18 @@ function combineSignals(indicators) {
                       && (qualityGate.physicsLaw1 !== false)
                       && (qualityGate.physicsLaw3 !== false)
                       && (qualityGate.pocClear   !== false)   // AT_POC or wrong side = block
-                      && qualityGate.deltaAligned;            // strong opposing delta = block
+                      && qualityGate.deltaAligned              // strong opposing delta = block
+                      && qualityGate.contradictionOk;          // both-sides-substantial = block
     marketState.qualityGate = qualityGate;
 
     if (rawSignal !== 'WAIT' && !qualityGate.deltaAligned) {
         signal = 'WAIT'; confidence = 0;
         reasons.push(`⛔ Delta ${deltaPct > 0 ? '+' : ''}${deltaPct}% strongly contradicts ${rawSignal} — order flow disagrees, wait for alignment`);
+    }
+
+    if (rawSignal !== 'WAIT' && !qualityGate.contradictionOk) {
+        signal = 'WAIT'; confidence = 0;
+        reasons.push(`⛔ Contradiction Score — Bullish ${contradictionScore.bullFactors.join('+')||'-'} (${contradictionScore.bullWeight}%) vs Bearish ${contradictionScore.bearFactors.join('+')||'-'} (${contradictionScore.bearWeight}%) — both sides substantial, NO TRADE`);
     }
 
     // ── Option Premium Filter — NEW ────────────────────────────────────────────
@@ -2389,7 +2596,12 @@ async function checkTelegramAlerts(newSignal) {
         try {
             const pcrState = getPCRState();
             strikeDataForAlert = pickStrikeAndPremium(newSignal, marketState.nifty, marketState.vix, pcrState);
+            if (strikeDataForAlert) strikeDataForAlert.coach = buildTradeCoach(strikeDataForAlert);
         } catch(e) { console.warn('[Strike] compute error:', e.message); }
+
+        if (strikeDataForAlert) {
+            startSignalPerformance(newSignal, strikeDataForAlert).catch(e => console.warn('[SignalPerf] start error:', e.message));
+        }
 
         await sendSignalAlert(marketState, prevSignal, strikeDataForAlert);
         lastSignalFiredPrice = marketState.nifty || 0;
@@ -2428,6 +2640,7 @@ async function checkTelegramAlerts(newSignal) {
         try {
             const pcrStateMtf = getPCRState();
             mtfStrikeData = pickStrikeAndPremium(marketState.mtf.signal, marketState.nifty, marketState.vix, pcrStateMtf);
+            if (mtfStrikeData) mtfStrikeData.coach = buildTradeCoach(mtfStrikeData);
         } catch(e) { console.warn('[MTF Strike] compute error:', e.message); }
         await sendMTFAlert(marketState, mtfStrikeData);
         lastMTFAlertAt     = Date.now();
@@ -2652,6 +2865,10 @@ async function updatePrice(price, change, changePct, source) {
     if (_deltaSrc !== 'websocket' && _deltaSrc !== 'fyers') {
         try { marketState.delta = computeDelta(); } catch(e) { console.warn('[Delta] error:', e.message); }
     }
+    // ── Trend Day vs Range Day + Trap Zone — informational strategy guidance ──
+    try { marketState.dayType  = computeDayType();  } catch(e) { console.warn('[DayType] error:', e.message); }
+    try { marketState.trapZone = computeTrapZone(); } catch(e) { console.warn('[TrapZone] error:', e.message); }
+    try { marketState.confidenceBreakdown = computeConfidenceBreakdown(); } catch(e) { console.warn('[ConfBreakdown] error:', e.message); }
     if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%) | POC:${marketState.poc?.poc??'--'} Delta:${marketState.delta?.deltaPct??'--'}%`);
     evaluateBTST();
     await checkTelegramAlerts(signal);
@@ -3437,6 +3654,10 @@ async function updateOpenTradesMTM() {
     const price = marketState.nifty;
     if (!price) return;
 
+    // Piggyback signal-performance tracking on this same 30s cadence —
+    // independent of the trades[] journal below.
+    updateSignalPerformance().catch(e => console.warn('[SignalPerf] update error:', e.message));
+
     const atmCE = marketState.optionFlow.atmCEpremium;
     const atmPE = marketState.optionFlow.atmPEpremium;
 
@@ -3603,6 +3824,34 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL signal_log table ready');
 
+        // ── signal_performance table — automatic outcome tracking ──────────────
+        // Unlike trade_history (manual journal, outcome set by user) and signal_log
+        // (fire-and-forget snapshot), this table AUTOMATICALLY tracks what happened
+        // AFTER each signal fired — no manual entry needed. Per feedback: "Every
+        // signal should later display: Entry, High, Target Hit, Time Taken" so
+        // accuracy can be published daily/weekly/monthly without relying on the
+        // trader having actually placed and logged the trade.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS signal_performance (
+                id             SERIAL PRIMARY KEY,
+                ts             TIMESTAMPTZ DEFAULT NOW(),
+                trade_date     DATE DEFAULT (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE,
+                signal         TEXT,       -- 'BUY CALL' | 'BUY PUT'
+                option_type    TEXT,       -- 'CE' | 'PE'
+                strike         INT,
+                entry          NUMERIC,
+                sl             NUMERIC,
+                target         NUMERIC,
+                high           NUMERIC,    -- best premium seen since entry (running)
+                target_hit     BOOLEAN DEFAULT FALSE,
+                sl_hit         BOOLEAN DEFAULT FALSE,
+                closed         BOOLEAN DEFAULT FALSE,
+                time_taken_min INT,
+                closed_at      TIMESTAMPTZ
+            )
+        `);
+        console.log('✅ PostgreSQL signal_performance table ready');
+
         // ── journal_trades table — manually entered trades from the Journal tab ──
         // Separate from trade_history (which is AI-suggested auto-saves).
         // Persists across Railway restarts — in-memory trades[] array does NOT.
@@ -3757,8 +4006,111 @@ async function saveSignalToLog(signal, prevSig) {
     }
 }
 
+// ── Signal Performance Tracking ──────────────────────────────────────────────
+// Automatic, no manual entry required. Per feedback: "Every signal should
+// later display: Entry, High, Target Hit, Time Taken" so accuracy can be
+// published (today/weekly/monthly) even for signals the trader never actually
+// placed a real order on. Independent of trade_history (manual journal) and
+// signal_log (fire-and-forget snapshot) — this one watches the live premium
+// after a signal fires and records what actually happened.
+async function startSignalPerformance(signal, strikeData) {
+    if (!strikeData || !strikeData.entry) return;
+    const rec = {
+        id: null,
+        signal, type: strikeData.type, strike: strikeData.strike,
+        entry: strikeData.entry, sl: strikeData.sl, target: strikeData.target,
+        high: strikeData.entry, startTs: Date.now(),
+    };
+    openPerfRecords.push(rec);
+    if (dbPool) {
+        try {
+            const r = await dbPool.query(
+                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry]
+            );
+            rec.id = r.rows[0]?.id ?? null;
+        } catch (e) { console.warn('[SignalPerf] insert error:', e.message); }
+    }
+}
+
+// Called every ~30s (piggybacks on updateOpenTradesMTM's cadence) — updates
+// running high, checks target/SL hit, and auto-closes stale records so a
+// signal that never resolved doesn't hang open forever.
+async function updateSignalPerformance() {
+    if (openPerfRecords.length === 0) return;
+    const atmCE = marketState.optionFlow?.atmCEpremium;
+    const atmPE = marketState.optionFlow?.atmPEpremium;
+    const stillOpen = [];
+
+    for (const rec of openPerfRecords) {
+        const live = rec.type === 'CE' ? atmCE : atmPE;
+        const elapsedMin = Math.round((Date.now() - rec.startTs) / 60000);
+
+        if (live) rec.high = Math.max(rec.high, live);
+
+        let targetHit = live && live >= rec.target;
+        let slHit     = live && live <= rec.sl;
+        const timedOut = elapsedMin >= PERF_AUTOCLOSE_MIN;
+
+        if (targetHit || slHit || timedOut) {
+            const closedAt = new Date().toISOString();
+            console.log(`📊 [SignalPerf] ${rec.signal} ${rec.strike}${rec.type} closed — ${targetHit ? 'TARGET HIT ✅' : slHit ? 'SL HIT ⛔' : 'TIMED OUT ⏳'} | Entry:${rec.entry} High:${rec.high} | ${elapsedMin} min`);
+            if (dbPool && rec.id) {
+                try {
+                    await dbPool.query(
+                        `UPDATE signal_performance SET high=$1, target_hit=$2, sl_hit=$3, closed=true, time_taken_min=$4, closed_at=$5 WHERE id=$6`,
+                        [rec.high, targetHit, slHit, elapsedMin, closedAt, rec.id]
+                    );
+                } catch (e) { console.warn('[SignalPerf] update error:', e.message); }
+            }
+        } else {
+            stillOpen.push(rec);
+        }
+    }
+    openPerfRecords = stillOpen;
+
+    // Expose today's open cards for the frontend (ChatGPT-style "Entry/High/Target Hit/Time Taken" card)
+    marketState.signalPerformance.open = openPerfRecords.map(r => ({
+        signal: r.signal, type: r.type, strike: r.strike,
+        entry: r.entry, high: r.high, sl: r.sl, target: r.target,
+        elapsedMin: Math.round((Date.now() - r.startTs) / 60000),
+    }));
+}
+
+// Daily/weekly/monthly accuracy rollup — per feedback: "Over time you can
+// publish: Today's accuracy, Weekly accuracy, Monthly accuracy."
+async function getSignalPerformanceSummary() {
+    if (!dbPool) return { today: null, weekly: null, monthly: null };
+    const q = async (whereClause) => {
+        const r = await dbPool.query(
+            `SELECT COUNT(*) AS total, SUM(CASE WHEN target_hit THEN 1 ELSE 0 END) AS hits,
+                    ROUND(AVG(time_taken_min)) AS avg_time
+             FROM signal_performance WHERE closed = true AND ${whereClause}`
+        );
+        const row = r.rows[0];
+        const total = parseInt(row.total) || 0;
+        if (total === 0) return { total: 0, accuracy: null, avgTimeMin: null };
+        return {
+            total, accuracy: Math.round((parseInt(row.hits) / total) * 100),
+            avgTimeMin: row.avg_time ? parseInt(row.avg_time) : null,
+        };
+    };
+    try {
+        return {
+            today  : await q(`trade_date = (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE`),
+            weekly : await q(`trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '7 days'`),
+            monthly: await q(`trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '30 days'`),
+        };
+    } catch (e) {
+        console.warn('[SignalPerf] summary error:', e.message);
+        return { today: null, weekly: null, monthly: null };
+    }
+}
+
 async function getWinRateFromHistory(signalType) {
     if (!dbPool) return null;
+
     try {
         // FIX: ORDER BY + LIMIT inside a plain aggregate is silently ignored by Postgres —
         // it still counts ALL matching rows. Use a subquery to select the 50 most recent
@@ -3928,6 +4280,48 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
     return { type, strike, entry: entryPremium, sl, target, slSource };
 }
 
+// ── AI Trade Coach ───────────────────────────────────────────────────────────
+// Per feedback: "Create an AI Trade Coach instead of just an AI signal."
+// Turns the raw entry/SL/target numbers from pickStrikeAndPremium() into
+// plain-language guidance a trader can act on immediately:
+//   1. An ideal entry ZONE (not a single price) + a hard "don't chase above"
+//      ceiling — chasing a premium that's already run past the sane entry
+//      band means most of the move is gone before you're even in.
+//   2. What to do if the entry zone is missed (wait for pullback, don't chase).
+//   3. A staged profit-management plan in plain % terms (move SL to cost,
+//      book partial, exit) — this is a PREVIEW shown alongside the signal,
+//      not a replacement for the R-multiple trailing-SL system that already
+//      manages live journaled trades in updateOpenTradesMTM().
+function buildTradeCoach(strikeData) {
+    if (!strikeData || !strikeData.entry) return null;
+    const { entry, sl, target } = strikeData;
+
+    // Ideal entry zone: tight band around the current live/estimated premium.
+    // Chase ceiling: hard cap — paying meaningfully more than current premium
+    // for the same setup means the easy part of the move is already captured.
+    const idealLow      = parseFloat((entry * 0.96).toFixed(2));
+    const idealHigh      = parseFloat((entry * 1.02).toFixed(2));
+    const chaseCeiling   = parseFloat((entry * 1.10).toFixed(2));
+
+    const risk = entry - sl;
+
+    return {
+        idealEntryLow  : idealLow,
+        idealEntryHigh : idealHigh,
+        idealEntryLabel: `₹${idealLow}–${idealHigh}`,
+        chaseCeiling,
+        chaseWarning   : `Do NOT chase above ₹${chaseCeiling}`,
+        ifMissed       : 'Missed the zone? Wait for a pullback — don\'t chase.',
+        plan: [
+            { atPct: 20, premium: parseFloat((entry * 1.20).toFixed(2)), action: 'Move SL to cost (breakeven)' },
+            { atPct: 30, premium: parseFloat((entry * 1.30).toFixed(2)), action: 'Book 50% of the position' },
+            { atPct: 40, premium: parseFloat((entry * 1.40).toFixed(2)), action: 'Exit remaining — full booking' },
+        ],
+        riskPerLot: parseFloat(risk.toFixed(2)),
+        note: 'Entry-zone guidance for a fresh trade. Once logged in the Journal, the R-multiple trailing-SL system takes over for actual exit alerts.',
+    };
+}
+
 // Simple Black-Scholes call/put price estimate
 function bsEstimate(S, K, T, sigma, type) {
     const r = 0.0625;  // RBI repo rate (updated June 2026 — was 0.065)
@@ -4045,6 +4439,7 @@ app.get('/api/trade-suggestion', async (req, res) => {
         const strikeData = marketState.qualityGate.passed && marketState.signal !== 'WAIT'
             ? pickStrikeAndPremium(marketState.signal, marketState.nifty, marketState.vix, pcrState)
             : null;
+        if (strikeData) strikeData.coach = buildTradeCoach(strikeData);
         const winRate = strikeData ? await getWinRateFromHistory(strikeData.type) : null;
 
         // If gate is passed but no AI suggestion cached yet, trigger one now
@@ -4095,6 +4490,18 @@ app.get('/api/trade-history', async (req, res) => {
         res.json({ rows: r.rows });
     } catch (e) {
         res.json({ rows: [], error: e.message });
+    }
+});
+
+// ── /api/signal-performance — automatic tracking, no manual entry needed ────
+// Returns today's live open cards (Entry/High/Target Hit/Time Taken) plus
+// today/weekly/monthly accuracy rollups.
+app.get('/api/signal-performance', async (req, res) => {
+    try {
+        const summary = await getSignalPerformanceSummary();
+        res.json({ open: marketState.signalPerformance.open, summary });
+    } catch (e) {
+        res.json({ open: [], summary: { today: null, weekly: null, monthly: null }, error: e.message });
     }
 });
 
