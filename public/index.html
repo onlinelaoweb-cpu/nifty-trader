@@ -3718,7 +3718,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
   <button class="btab active" id="btab-dashboard" onclick="switchTab('dashboard',this)"><span class="bi">📊</span>LIVE</button>
   <button class="btab" id="btab-physics" onclick="switchTab('physics',this)"><span class="bi">⚛️</span>PHYSICS</button>
   <button class="btab" id="btab-breadth" onclick="switchTab('breadth',this)"><span class="bi">📈</span>BREADTH</button>
-  <button class="btab" id="btab-global" onclick="switchTab('global',this)"><span class="bi">🌍</span>GLOBAL</button>
+  <button class="btab" id="btab-insights" onclick="switchTab('insights',this)"><span class="bi">🧠</span>INSIGHTS</button>
   <button class="btab" id="btab-more" onclick="toggleMoreMenu(this)"><span class="bi">☰</span>MORE</button>
 </div>
 
@@ -3730,7 +3730,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     <button class="more-item" onclick="switchTabFromMore('guard')"><span>🛡️</span>GUARD</button>
     <button class="more-item" onclick="switchTabFromMore('tools')"><span>🔧</span>TOOLS</button>
     <button class="more-item" onclick="switchTabFromMore('analytics')"><span>📊</span>ANALYTICS</button>
-    <button class="more-item" onclick="switchTabFromMore('insights')"><span>🧠</span>INSIGHTS</button>
+    <button class="more-item" onclick="switchTabFromMore('global')"><span>🌍</span>GLOBAL</button>
   </div>
 </div>
 
@@ -3747,6 +3747,7 @@ function _initDesktopLayout() {
     { id: 'dashboard', icon: '📊', label: 'LIVE' },
     { id: 'journal',   icon: '📔', label: 'JOURNAL' },
     { id: 'breadth',   icon: '📈', label: 'BREADTH' },
+    { id: 'insights',  icon: '🧠', label: 'INSIGHTS' },
     { id: 'global',    icon: '🌍', label: 'GLOBAL' },
     { id: 'chart',     icon: '🕯️', label: 'CHART' },
     { id: 'tools',     icon: '🔧', label: 'TOOLS' },
@@ -3768,7 +3769,7 @@ function _initDesktopLayout() {
     btn.dataset.tab = t.id;
     btn.innerHTML = `<span class="bi">${t.icon}</span>${t.label}`;
     btn.onclick = () => {
-      const primaryTabs = ['dashboard','physics','breadth','global'];
+      const primaryTabs = ['dashboard','physics','breadth','insights'];
       if (primaryTabs.includes(t.id)) {
         switchTab(t.id, document.getElementById('btab-' + t.id) || btn);
       } else {
@@ -5555,6 +5556,31 @@ function updateInsightsUI(s) {
       if (tzWrap) {
         tzWrap.style.borderColor = tz.active ? 'var(--amber)' : 'var(--border)';
         tzWrap.style.background  = tz.active ? 'rgba(255,187,0,0.08)' : 'var(--bg1)';
+      }
+    }
+
+    // Sequence Check (MTF→PCR→Delta→ORB→VWAP→Value Area)
+    const seq = s.agreementSequence;
+    if (seq) {
+      const stepsEl = document.getElementById('ins-seq-steps');
+      const resultEl2 = document.getElementById('ins-seq-result');
+      if (stepsEl) {
+        if (seq.steps && seq.steps.length) {
+          stepsEl.innerHTML = seq.steps.map(st => {
+            const isFail = seq.failedAt === st.step;
+            const color = st.dir === 'BULL' ? 'var(--green)' : st.dir === 'BEAR' ? 'var(--red)' : 'var(--dim)';
+            const bg = isFail ? 'rgba(255,68,68,0.15)' : 'rgba(255,255,255,0.03)';
+            const border = isFail ? '1px solid var(--red)' : '1px solid var(--border)';
+            return `<span style="padding:3px 8px;border-radius:6px;background:${bg};border:${border};font-size:11.5px;color:${color};">${st.step}: ${st.dir}${isFail ? ' ✗' : ''}</span>`;
+          }).join('');
+        } else {
+          stepsEl.innerHTML = '<span style="font-size:12px;color:var(--dim);">No active signal to check</span>';
+        }
+      }
+      if (resultEl2) {
+        if (!seq.steps || !seq.steps.length) { resultEl2.textContent = ''; }
+        else if (seq.passed) { resultEl2.textContent = '✅ All factors agree'; resultEl2.style.color = 'var(--green)'; }
+        else { resultEl2.textContent = `⛔ Failed at ${seq.failedAt} — NO TRADE`; resultEl2.style.color = 'var(--red)'; }
       }
     }
 
@@ -8733,6 +8759,13 @@ function _statRow(label, val) {
     <div id="ins-trapzone-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
       <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:6px;">⚠️ TRAP ZONE</div>
       <div id="ins-trapzone-label" style="font-size:13px;color:var(--text);">Awaiting data...</div>
+    </div>
+
+    <!-- Sequence Check -->
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">🔗 SEQUENCE CHECK (MTF→PCR→Delta→ORB→VWAP→Value Area)</div>
+      <div id="ins-seq-steps" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
+      <div id="ins-seq-result" style="font-size:13px;font-weight:600;">—</div>
     </div>
 
     <!-- Contradiction Score -->

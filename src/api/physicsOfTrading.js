@@ -86,7 +86,38 @@ function getSwingTrend(candles, lookback = 30) {
     if (lowerHigh && lowerLow) {
         return { trend: 'DOWNTREND', reason: `LH ${lastTwoHighs[0].price}→${lastTwoHighs[1].price}, LL ${lastTwoLows[0].price}→${lastTwoLows[1].price}` };
     }
-    return { trend: 'SIDEWAYS', reason: 'Mixed swing structure — no clean HH/HL or LH/LL' };
+
+    // ── FIX: majority-vote + net-direction fallback ──────────────────────────
+    // Comparing ONLY the last two swing highs/lows was too fragile: a single
+    // small bounce/consolidation candle right after a sharp, strong move (e.g.
+    // a fast crash) flips one pivot and the whole read falls through to
+    // SIDEWAYS — even while ADX is EXPLOSIVE and RSI is deep in oversold/
+    // overbought territory confirming a real, obvious trend. Real case seen:
+    // a -546pt / -2.2% one-directional session showed "No clear trend —
+    // choppy/sideways" here purely because the last 30min window (post-crash
+    // consolidation) had one counter-swing.
+    // Fallback: vote across ALL consecutive swing pairs in the window (not
+    // just the last one) AND require the net direction (first swing point vs
+    // last swing point) to agree — so an isolated bounce can't flip the read,
+    // but genuine range-bound chop (no net movement) still correctly shows
+    // SIDEWAYS.
+    const dir = (a, b) => a > b ? 'UP' : a < b ? 'DOWN' : 'FLAT';
+    const highPairs = swingHighs.slice(1).map((h, i) => dir(h.price, swingHighs[i].price));
+    const lowPairs  = swingLows.slice(1).map((l, i) => dir(l.price, swingLows[i].price));
+    const upVotes   = highPairs.filter(x => x === 'UP').length   + lowPairs.filter(x => x === 'UP').length;
+    const downVotes = highPairs.filter(x => x === 'DOWN').length + lowPairs.filter(x => x === 'DOWN').length;
+
+    const netHighDir = dir(swingHighs[swingHighs.length - 1].price, swingHighs[0].price);
+    const netLowDir   = dir(swingLows[swingLows.length - 1].price,  swingLows[0].price);
+
+    if (upVotes > downVotes && netHighDir !== 'DOWN' && netLowDir !== 'DOWN') {
+        return { trend: 'UPTREND', reason: `Majority swing vote UP (${upVotes} vs ${downVotes}) — net ${swingLows[0].price}→${swingHighs[swingHighs.length - 1].price}` };
+    }
+    if (downVotes > upVotes && netHighDir !== 'UP' && netLowDir !== 'UP') {
+        return { trend: 'DOWNTREND', reason: `Majority swing vote DOWN (${downVotes} vs ${upVotes}) — net ${swingHighs[0].price}→${swingLows[swingLows.length - 1].price}` };
+    }
+
+    return { trend: 'SIDEWAYS', reason: 'Mixed swing structure — no clean HH/HL or LH/LL, and no clear majority' };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
