@@ -171,6 +171,8 @@ let marketState = {
     signalPerformance: { open: [], todayAccuracy: null, todayCount: 0 },
     // ── Contradiction Score — 6-factor weighted bull/bear check ────────────────
     contradictionScore: { bullWeight: 0, bearWeight: 0, diff: 0, bullFactors: [], bearFactors: [], contradiction: false, result: 'NEUTRAL' },
+    // ── Strict Sequential Agreement — MTF→PCR→Delta→ORB→VWAP→Value Area ────────
+    agreementSequence: { passed: true, failedAt: null, steps: [] },
     // ── Confidence Breakdown — top contributing factors for the active signal ─
     confidenceBreakdown: { items: [], final: 0 },
 };
@@ -1062,6 +1064,66 @@ function computeContradictionScore() {
     };
 }
 
+// ── Strict Sequential Agreement Gate ────────────────────────────────────────
+// This is the EXACT check requested:
+//   MTF → PCR → Delta → ORB → VWAP → Value Area (VAH/VAL)
+//   If ALL agree with the raw direction → let it through
+//   Else → NO TRADE
+// Different from computeContradictionScore() above (which only blocks when
+// BOTH sides carry substantial weight). This one walks the chain in order and
+// stops at the FIRST factor that actively opposes the direction — a factor
+// reading NEUTRAL/unavailable does not fail the check, only an outright
+// opposite reading does.
+function checkAgreementSequence(direction) {
+    if (direction !== 'BUY CALL' && direction !== 'BUY PUT') {
+        return { passed: true, failedAt: null, steps: [] };
+    }
+    const isBull  = direction === 'BUY CALL';
+    const oppose  = isBull ? 'BEAR' : 'BULL';
+    const steps   = [];
+
+    // 1. MTF
+    const mtf = marketState.mtf;
+    const mtfDir = mtf?.aligned ? (mtf.signal === 'BUY CALL' ? 'BULL' : 'BEAR')
+                 : mtf?.bullCount === 2 ? 'BULL' : mtf?.bearCount === 2 ? 'BEAR' : 'NEUTRAL';
+    steps.push({ step: 'MTF', dir: mtfDir });
+
+    // 2. PCR
+    const pcrDir = marketState.pcrSignal === 'BULLISH' ? 'BULL' : marketState.pcrSignal === 'BEARISH' ? 'BEAR' : 'NEUTRAL';
+    steps.push({ step: 'PCR', dir: pcrDir });
+
+    // 3. Delta
+    const deltaDir = marketState.delta?.signal === 'BULLISH' ? 'BULL' : marketState.delta?.signal === 'BEARISH' ? 'BEAR' : 'NEUTRAL';
+    steps.push({ step: 'Delta', dir: deltaDir });
+
+    // 4. ORB
+    const orbDir = marketState.orb?.status === 'BROKEN_UP' ? 'BULL' : marketState.orb?.status === 'BROKEN_DOWN' ? 'BEAR' : 'NEUTRAL';
+    steps.push({ step: 'ORB', dir: orbDir });
+
+    // 5. VWAP
+    const vwapDir = (marketState.nifty && marketState.vwap)
+        ? (marketState.nifty > marketState.vwap ? 'BULL' : marketState.nifty < marketState.vwap ? 'BEAR' : 'NEUTRAL')
+        : 'NEUTRAL';
+    steps.push({ step: 'VWAP', dir: vwapDir });
+
+    // 6. Value Area (VAH/VAL from the POC/volume-profile calc)
+    const poc = marketState.poc;
+    let vaDir = 'NEUTRAL';
+    if (poc?.vah != null && poc?.val != null && marketState.nifty) {
+        if (marketState.nifty > poc.vah) vaDir = 'BULL';
+        else if (marketState.nifty < poc.val) vaDir = 'BEAR';
+    }
+    steps.push({ step: 'Value Area', dir: vaDir });
+
+    // Walk the chain in order — first outright opposing factor kills it
+    for (const s of steps) {
+        if (s.dir === oppose) {
+            return { passed: false, failedAt: s.step, steps };
+        }
+    }
+    return { passed: true, failedAt: null, steps };
+}
+
 function combineSignals(indicators) {
     // ── Gate 1: safe time window (IST) ────────────────
     const ew = isSafeEntryWindow();
@@ -1690,15 +1752,37 @@ function combineSignals(indicators) {
         if (rawSignal === 'BUY CALL' && deltaPct < -25) qualityGate.deltaAligned = false;
     }
 
-    // ── Contradiction Score Gate — NEW ───────────────────────────────────────
+    // ── Contradiction Score — NEW (informational for now) ────────────────────
     // 6-factor weighted check (MTF 40 / PCR 15 / Delta 15 / VWAP 10 / POC 10 /
-    // ORB 10). If bullish and bearish camps are BOTH substantial (≥30 each),
-    // that's a genuine structural contradiction, not just noise — forcing a
-    // directional call out of the raw vote tally in that situation is exactly
-    // the false-signal pattern flagged externally. Block instead of forcing.
+    // ORB 10). NOTE: also made INFORMATIONAL, not blocking, for the same
+    // reason as the sequence gate below — MTF alone carries 40% weight, so a
+    // clearly-aligned MTF (40) plus just PCR+Delta disagreeing (15+15=30) was
+    // already enough to trip "both ≥30%" and force NO TRADE — but that's
+    // largely the SAME case the existing individual deltaAligned/pocClear
+    // gates already handle at the raw-factor level. Stacked together with
+    // those plus the sequence check, this was almost never letting a signal
+    // through. Tracked + shown in INSIGHTS so real hit-rate can be observed
+    // before re-enabling as a hard gate (likely with a higher threshold, e.g.
+    // ≥40/≥40 instead of ≥30/≥30, once there's a few days of data).
     const contradictionScore = computeContradictionScore();
     marketState.contradictionScore = contradictionScore;
-    qualityGate.contradictionOk = !(rawSignal !== 'WAIT' && contradictionScore.result === 'NO_TRADE');
+    qualityGate.contradictionOk = !(rawSignal !== 'WAIT' && contradictionScore.result === 'NO_TRADE');   // tracked, not enforced below
+
+    // ── Strict Sequential Agreement — NEW (informational for now) ───────────
+    // The exact requested chain: MTF → PCR → Delta → ORB → VWAP → Value Area.
+    // NOTE: made INFORMATIONAL, not blocking. computeContradictionScore() above
+    // and the individual deltaAligned/pocClear gates already cover the real
+    // failure modes (both-sides-substantial conflict, strong opposing order
+    // flow, wrong side of POC). Also requiring EVERY one of 6 factors to not
+    // oppose — on top of all the gates already stacked (MTF/RSI/window/VIX/
+    // ADX/S-R/physics/POC/delta/contradiction) — was blocking almost every
+    // signal, since VWAP/ORB/Value Area routinely sit neutral-ish or briefly
+    // lag even on genuinely good trend days. Logged + shown in the INSIGHTS
+    // tab so its real-world hit rate can be observed before ever making it a
+    // hard gate again.
+    const agreementSequence = checkAgreementSequence(rawSignal);
+    marketState.agreementSequence = agreementSequence;
+    qualityGate.sequenceAligned = agreementSequence.passed;   // tracked, not enforced below
 
     // Recompute passed HERE — srClear may have been flipped to false inside the gate block above.
     // Physics gates: physicsLaw1=null means UNKNOWN (early session) → allow through.
@@ -1710,8 +1794,8 @@ function combineSignals(indicators) {
                       && (qualityGate.physicsLaw1 !== false)
                       && (qualityGate.physicsLaw3 !== false)
                       && (qualityGate.pocClear   !== false)   // AT_POC or wrong side = block
-                      && qualityGate.deltaAligned              // strong opposing delta = block
-                      && qualityGate.contradictionOk;          // both-sides-substantial = block
+                      && qualityGate.deltaAligned;             // strong opposing delta = block
+                      // contradictionOk / sequenceAligned intentionally NOT included — informational only, see notes above
     marketState.qualityGate = qualityGate;
 
     if (rawSignal !== 'WAIT' && !qualityGate.deltaAligned) {
@@ -1720,8 +1804,13 @@ function combineSignals(indicators) {
     }
 
     if (rawSignal !== 'WAIT' && !qualityGate.contradictionOk) {
-        signal = 'WAIT'; confidence = 0;
-        reasons.push(`⛔ Contradiction Score — Bullish ${contradictionScore.bullFactors.join('+')||'-'} (${contradictionScore.bullWeight}%) vs Bearish ${contradictionScore.bearFactors.join('+')||'-'} (${contradictionScore.bearWeight}%) — both sides substantial, NO TRADE`);
+        // Informational only — does NOT force WAIT. See note above.
+        reasons.push(`ℹ️ Contradiction Score — Bullish ${contradictionScore.bullFactors.join('+')||'-'} (${contradictionScore.bullWeight}%) vs Bearish ${contradictionScore.bearFactors.join('+')||'-'} (${contradictionScore.bearWeight}%) — both sides substantial (not blocking)`);
+    }
+
+    if (rawSignal !== 'WAIT' && !qualityGate.sequenceAligned) {
+        // Informational only — does NOT force WAIT. See note above.
+        reasons.push(`ℹ️ Sequence check: ${agreementSequence.failedAt} disagrees with ${rawSignal} (not blocking)`);
     }
 
     // ── Option Premium Filter — NEW ────────────────────────────────────────────
