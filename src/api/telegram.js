@@ -230,12 +230,27 @@ ${coachBlock}━━━━━━━━━━━━━━━━━━
         ? `${deltaEmoji} Delta:${deltaData.deltaPct > 0 ? '+' : ''}${deltaData.deltaPct}% (${deltaData.signal})${deltaData.divergence ? ' — REVERSAL WARNING' : ''}\n`
         : '';
 
+    // ── Main-engine status line ─────────────────────────────────────────────
+    // BUG FIX: this alert used to show `state.tradeQuality.grade` next to the
+    // MTF-tracker's OWN confidence (state.mtf.confidence) — but tradeQuality
+    // is computed from the MAIN gated signal, not this secondary MTF-only
+    // tracker. When the main engine was still on WAIT (gates not satisfied —
+    // e.g. Delta/POC/physics/contradiction checks), this alert still showed a
+    // full Entry/SL/Target/AI-Coach card looking fully actionable, mislabeled
+    // "Grade: — (No trade)" — confusing at best, unsafe at worst since it
+    // reads like a vetted trade. Now explicit about which engine is speaking.
+    const mainConfirms = state.signal === state.mtf.signal;
+    const statusLine = mainConfirms && state.tradeQuality
+        ? `📈 Confidence: ${state.mtf.confidence}% | Grade: ${state.tradeQuality.grade} (${state.tradeQuality.sizeHint})`
+        : `📈 Confidence: ${state.mtf.confidence}% (MTF-tracker only)
+⚠️ Main engine: ${state.signal === 'WAIT' ? 'NO TRADE — gates not yet met' : state.signal} — treat this as early/unconfirmed, size down or wait for main signal`;
+
     const msg = `
 ${alignTitle}
 ━━━━━━━━━━━━━━━━━━
 ${emoji} <b>${state.mtf.signal}</b> — ${state.mtf.strength}
 📊 NIFTY: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}
-📈 Confidence: ${state.mtf.confidence}%${state.tradeQuality ? ` | Grade: ${state.tradeQuality.grade} (${state.tradeQuality.sizeHint})` : ''}
+${statusLine}
 ━━━━━━━━━━━━━━━━━━
 5 MIN  : ${state.mtf.tf5m?.signal  || '--'}
 15 MIN : ${state.mtf.tf15m?.signal || '--'}
