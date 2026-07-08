@@ -134,9 +134,20 @@ async function fetchCandlesFromYahoo(intervalKey) {
         return cached.candles;
     }
 
+    // ── FIX: 5m/15m used to be range='1d' (TODAY ONLY) ──────────────────────
+    // MIN_BARS['5m']=22 bars = 110 min, MIN_BARS['15m']=20 bars = 300 min (5
+    // HOURS). With range='1d', both TFs were structurally incapable of being
+    // valid until that much of TODAY's session had elapsed — EVERY single
+    // day, restart or not. 15m in particular couldn't produce a signal until
+    // ~2:15 PM most days. Extended to range='5d' (same pattern already used
+    // successfully for 1h) so multi-day history satisfies MIN_BARS from the
+    // first candle of the day — RSI/EMA/ADX are standard rolling-window
+    // indicators and are fine spanning day boundaries; only VWAP needs a
+    // strict same-day reset, and that's handled separately via
+    // todaySessionCandles(), untouched by this change.
     const cfgMap = {
-        '5m' : { interval: '5m',  range: '1d'  },
-        '15m': { interval: '15m', range: '1d'  },
+        '5m' : { interval: '5m',  range: '5d'  },
+        '15m': { interval: '15m', range: '5d'  },
         '1h' : { interval: '60m', range: '5d'  },
     };
     const cfg = cfgMap[intervalKey];
@@ -149,10 +160,8 @@ async function fetchCandlesFromYahoo(intervalKey) {
         `https://query2.finance.yahoo.com/v8/finance/chart/${SYMBOL}?interval=${cfg.interval}&range=${cfg.range}&includePrePost=false`,
         // v7 chart endpoint — different path, sometimes bypasses rate-limit
         `https://query1.finance.yahoo.com/v7/finance/chart/${SYMBOL}?interval=${cfg.interval}&range=${cfg.range}&includePrePost=false`,
-        // Alternate range — try 2d for intraday TFs (sometimes one range is blocked, other isn't)
-        ...(cfg.range === '1d' ? [
-            `https://query2.finance.yahoo.com/v8/finance/chart/${SYMBOL}?interval=${cfg.interval}&range=2d&includePrePost=false`,
-        ] : []),
+        // Alternate range — try 10d as a different window (sometimes one range is rate-limited, other isn't)
+        `https://query2.finance.yahoo.com/v8/finance/chart/${SYMBOL}?interval=${cfg.interval}&range=10d&includePrePost=false`,
     ];
 
     for (const url of urls) {
