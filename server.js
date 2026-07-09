@@ -173,6 +173,8 @@ let marketState = {
     contradictionScore: { bullWeight: 0, bearWeight: 0, diff: 0, bullFactors: [], bearFactors: [], contradiction: false, result: 'NEUTRAL' },
     // ── Strict Sequential Agreement — MTF→PCR→Delta→ORB→VWAP→Value Area ────────
     agreementSequence: { passed: true, failedAt: null, steps: [] },
+    // ── Trend Conviction Mode — stacked structural bias, active gate ───────────
+    trendConviction: { active: null, bearConditions: [], bullConditions: [], bearCount: 0, bullCount: 0 },
     // ── Confidence Breakdown — top contributing factors for the active signal ─
     confidenceBreakdown: { items: [], final: 0 },
 };
@@ -1124,6 +1126,58 @@ function checkAgreementSequence(direction) {
     return { passed: true, failedAt: null, steps };
 }
 
+// ── Trend Conviction Mode ────────────────────────────────────────────────────
+// Per external audit feedback (authenticity-checked — see notes below):
+//   "Delta alone shouldn't reverse the trend" — a single strong-but-transient
+//   delta spike could flip the raw vote tally against an otherwise clearly
+//   one-directional structural picture (VWAP, Value Area, ORB, 15m/1H trend).
+//   "Confidence should increase as multiple bearish/bullish conditions keep
+//   strengthening" — instead of plateauing once the basic vote threshold
+//   is crossed.
+// This counts INDEPENDENT structural conditions (not correlated sub-votes of
+// the same underlying number) in each direction. When enough stack up in one
+// direction, that's "conviction" — strong enough that a raw signal pointing
+// the OPPOSITE way should be treated with suspicion unless MTF itself has
+// genuinely flipped (a real reversal), not just one factor (e.g. delta).
+function computeTrendConviction() {
+    const nifty = marketState.nifty;
+    const vwap  = marketState.vwap;
+    const val   = marketState.poc?.val;
+    const vah   = marketState.poc?.vah;
+    const delta = marketState.delta?.deltaPct;
+    const orbStatus = marketState.orb?.status;
+    const tf15m = marketState.mtf?.tf15m?.signal;
+    const tf1h  = marketState.mtf?.tf1h?.signal;
+
+    const bear = [], bull = [];
+
+    if (nifty && vwap) {
+        if (nifty < vwap) bear.push('Price below VWAP');
+        else if (nifty > vwap) bull.push('Price above VWAP');
+    }
+    if (tf15m === 'BEARISH') bear.push('15m Bearish');
+    if (tf15m === 'BULLISH') bull.push('15m Bullish');
+    if (tf1h === 'BEARISH') bear.push('1H Bearish');
+    if (tf1h === 'BULLISH') bull.push('1H Bullish');
+    if (delta != null && delta <= -40) bear.push(`Delta ${delta}%`);
+    if (delta != null && delta >=  40) bull.push(`Delta +${delta}%`);
+    if (val != null && nifty && nifty < val) bear.push('Price below VAL');
+    if (vah != null && nifty && nifty > vah) bull.push('Price above VAH');
+    if (orbStatus === 'BROKEN_DOWN') bear.push('ORB Breakdown');
+    if (orbStatus === 'BROKEN_UP')   bull.push('ORB Breakout');
+
+    const CONVICTION_THRESHOLD = 4;   // of 6 possible independent conditions
+    const active = bear.length >= CONVICTION_THRESHOLD ? 'BEARISH'
+                 : bull.length >= CONVICTION_THRESHOLD ? 'BULLISH'
+                 : null;
+
+    return {
+        active, bearConditions: bear, bullConditions: bull,
+        bearCount: bear.length, bullCount: bull.length,
+        generatedAt: new Date().toISOString(),
+    };
+}
+
 function combineSignals(indicators) {
     // ── Gate 1: safe time window (IST) ────────────────
     const ew = isSafeEntryWindow();
@@ -1784,6 +1838,21 @@ function combineSignals(indicators) {
     marketState.agreementSequence = agreementSequence;
     qualityGate.sequenceAligned = agreementSequence.passed;   // tracked, not enforced below
 
+    // ── Trend Conviction Mode — NEW (computed BEFORE qualityGate.passed uses it) ──
+    // Addresses a real gap: a single strong-but-transient factor (e.g. a delta
+    // spike) could flip the raw vote tally AGAINST an otherwise overwhelming
+    // structural picture (VWAP, Value Area, ORB, 15m/1H trend all one way).
+    // Block ONLY when conviction is strong (4+ of 6 independent conditions)
+    // AND MTF itself hasn't genuinely confirmed the counter-direction — i.e.
+    // this isn't a real reversal, just one factor outvoting a stacked trend.
+    const trendConviction = computeTrendConviction();
+    marketState.trendConviction = trendConviction;
+    const convictionOpposesSignal =
+        (trendConviction.active === 'BEARISH' && rawSignal === 'BUY CALL') ||
+        (trendConviction.active === 'BULLISH' && rawSignal === 'BUY PUT');
+    const mtfGenuinelyConfirms = marketState.mtf?.aligned && marketState.mtf?.signal === rawSignal;
+    qualityGate.convictionOk = !(convictionOpposesSignal && !mtfGenuinelyConfirms);
+
     // Recompute passed HERE — srClear may have been flipped to false inside the gate block above.
     // Physics gates: physicsLaw1=null means UNKNOWN (early session) → allow through.
     //                physicsLaw1=false means confirmed counter-trend/sideways → block.
@@ -1794,7 +1863,8 @@ function combineSignals(indicators) {
                       && (qualityGate.physicsLaw1 !== false)
                       && (qualityGate.physicsLaw3 !== false)
                       && (qualityGate.pocClear   !== false)   // AT_POC or wrong side = block
-                      && qualityGate.deltaAligned;             // strong opposing delta = block
+                      && qualityGate.deltaAligned              // strong opposing delta = block
+                      && qualityGate.convictionOk;              // stacked structural trend opposes signal = block
                       // contradictionOk / sequenceAligned intentionally NOT included — informational only, see notes above
     marketState.qualityGate = qualityGate;
 
@@ -1811,6 +1881,22 @@ function combineSignals(indicators) {
     if (rawSignal !== 'WAIT' && !qualityGate.sequenceAligned) {
         // Informational only — does NOT force WAIT. See note above.
         reasons.push(`ℹ️ Sequence check: ${agreementSequence.failedAt} disagrees with ${rawSignal} (not blocking)`);
+    }
+
+    // Trend Conviction — blocking message OR confidence boost (signal/confidence
+    // already finalized above, so this only adjusts the reasons/confidence, it
+    // does not need to touch qualityGate.passed again).
+    if (rawSignal !== 'WAIT' && !qualityGate.convictionOk) {
+        signal = 'WAIT'; confidence = 0;
+        const conds = trendConviction.active === 'BEARISH' ? trendConviction.bearConditions : trendConviction.bullConditions;
+        reasons.push(`⛔ Trend Conviction (${trendConviction.active}, ${conds.length}/6: ${conds.join(', ')}) contradicts ${rawSignal} without genuine MTF reversal — wait`);
+    } else if (rawSignal !== 'WAIT' && !convictionOpposesSignal &&
+               ((trendConviction.active === 'BEARISH' && rawSignal === 'BUY PUT') ||
+                (trendConviction.active === 'BULLISH' && rawSignal === 'BUY CALL'))) {
+        const conds = trendConviction.active === 'BEARISH' ? trendConviction.bearConditions : trendConviction.bullConditions;
+        const boost = Math.min((conds.length - 3) * 4, 15);   // +4 per condition past 3, capped +15
+        confidence = Math.min(confidence + boost, 98);
+        reasons.push(`🔥 Trend Conviction (${trendConviction.active}, ${conds.length}/6: ${conds.join(', ')}) — confidence boosted +${boost}%`);
     }
 
     // ── Option Premium Filter — NEW ────────────────────────────────────────────
