@@ -4278,8 +4278,13 @@ async function updateSignalPerformance() {
 
         if (live) rec.high = Math.max(rec.high, live);
 
-        let targetHit = live && live >= rec.target;
-        let slHit     = live && live <= rec.sl;
+        // FIX: `live && live >= rec.target` returns `live` itself (e.g. undefined/0/null)
+        // when live is falsy, not a real boolean — target_hit/sl_hit are BOOLEAN columns,
+        // so a falsy non-boolean landing there is fragile (works today only because pg
+        // happens to coerce it, but breaks the JS-side partialWin/outcomeLabel logic
+        // below which expects true/false). Force both to actual booleans.
+        let targetHit = !!(live && live >= rec.target);
+        let slHit     = !!(live && live <= rec.sl);
         const timedOut = elapsedMin >= PERF_AUTOCLOSE_MIN;
 
         // ── Max gain % + partial-win credit ──────────────────────────────────
