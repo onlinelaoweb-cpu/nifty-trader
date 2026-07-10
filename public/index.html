@@ -5647,21 +5647,28 @@ async function fetchSignalPerformance() {
     const r = await fetch('/api/signal-performance');
     if (!r.ok) return;
     const d = await r.json();
-    const fmt = (x) => x && x.total > 0 ? `${x.accuracy}% (${x.total})` : '—';
+    // Strict = official target technically touched. Real = also credits trades
+    // that reached the AI Coach's own +30%/"book 50%" stage before timing out —
+    // without this, a signal that ran +36% but never quite touched the full
+    // +50% target showed up as a flat 0% miss even though it was a genuinely
+    // profitable trade. Both numbers are shown so nothing is hidden either way.
+    const fmt = (x) => x && x.total > 0 ? `${x.realAccuracy}% (${x.total})` : '—';
+    const fmtStrict = (x) => x && x.total > 0 ? `${x.accuracy}% strict` : '';
     const tEl = document.getElementById('ins-acc-today');
     const wEl = document.getElementById('ins-acc-weekly');
     const mEl = document.getElementById('ins-acc-monthly');
-    if (tEl) tEl.textContent = fmt(d.summary?.today);
-    if (wEl) wEl.textContent = fmt(d.summary?.weekly);
-    if (mEl) mEl.textContent = fmt(d.summary?.monthly);
+    if (tEl) tEl.innerHTML = fmt(d.summary?.today) + (fmtStrict(d.summary?.today) ? `<div style="font-size:10px;color:var(--dim);font-weight:400;">${fmtStrict(d.summary?.today)}</div>` : '');
+    if (wEl) wEl.innerHTML = fmt(d.summary?.weekly) + (fmtStrict(d.summary?.weekly) ? `<div style="font-size:10px;color:var(--dim);font-weight:400;">${fmtStrict(d.summary?.weekly)}</div>` : '');
+    if (mEl) mEl.innerHTML = fmt(d.summary?.monthly) + (fmtStrict(d.summary?.monthly) ? `<div style="font-size:10px;color:var(--dim);font-weight:400;">${fmtStrict(d.summary?.monthly)}</div>` : '');
 
     const openEl = document.getElementById('ins-perf-open');
     if (openEl) {
       if (d.open && d.open.length) {
         openEl.innerHTML = d.open.map(o => {
           const color = o.signal === 'BUY CALL' ? 'var(--green)' : 'var(--red)';
+          const gainColor = o.gainPct > 0 ? 'var(--green)' : o.gainPct < 0 ? 'var(--red)' : 'var(--dim)';
           return `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
-            <div style="color:${color};font-weight:600;">${o.signal} ${o.strike}${o.type}</div>
+            <div style="color:${color};font-weight:600;">${o.signal} ${o.strike}${o.type} <span style="color:${gainColor};font-weight:600;">(${o.gainPct > 0 ? '+' : ''}${o.gainPct}%)</span></div>
             <div style="color:var(--dim);">Entry: ₹${o.entry} | High: ₹${o.high} | Target: ₹${o.target} | ${o.elapsedMin} min elapsed</div>
           </div>`;
         }).join('');

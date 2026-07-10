@@ -217,6 +217,20 @@ let orbHigh = null, orbLow = null, orbDate = null;
 // Used to detect "premium already overextended" before issuing a fresh entry.
 let atmCEpremiumOpen = null, atmPEpremiumOpen = null, premiumOpenDate = null;
 let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-direction MTF alerts
+// ── MTF-tracker reversal persistence (soft, informational-tier cooldown) ────
+// Problem observed live (10 Jul session): mtfSignalChanged bypasses the 60-min
+// cooldown entirely, so when the MTF vote whipsaws (CALL→PUT→CALL within
+// minutes — 12:31 PUT → 12:37 CALL → 12:55 PUT → 1:01 CALL → 1:21 PUT → 1:25
+// CALL, all same afternoon), every single flip fired its own Telegram alert.
+// This is ONLY a Telegram-noise fix — the Live/Insights tabs still show the
+// MTF vote updating in real time regardless. Fix: a reversal (direction
+// actually flips from the last alert's direction) must persist for
+// MTF_REVERSAL_CONFIRM_MS before it's allowed to fire a new alert. This is
+// deliberately soft (~10 min, not 20–30) and never blocks the FIRST alert of
+// the day or a same-direction re-confirmation after the normal 60-min
+// cooldown — only rapid direction flips are held back briefly.
+let pendingMTFFlipSignal = null, pendingMTFFlipSince = 0;
+const MTF_REVERSAL_CONFIRM_MS = 10 * 60 * 1000;
 let morningSummarySent=false, closeSummarySent=false, vixAlertSent=false;
 let nishanebaazAlertSent=false;  // one-shot: fired once at 14:00 per day
 let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:15
@@ -2810,7 +2824,34 @@ async function checkTelegramAlerts(newSignal) {
     const mtfSignalChanged = mtfSignalNow !== '' && mtfSignalNow !== lastMTFAlertSignal && lastMTFAlertSignal !== '';
     const mtfNeverFired = lastMTFAlertAt === 0;
     const mtfCooldownOk = mtfTimeOk || mtfSignalChanged || mtfNeverFired;
-    if (marketState.mtf.aligned && mtfInWindow && mtfCooldownOk) {
+
+    // ── Reversal-persistence check (soft, ~10 min) — see notes at variable decl ──
+    // A "reversal" here means mtfSignalChanged is the ONLY reason cooldown passed
+    // (i.e. mtfTimeOk is false — we're still within the normal 60-min window and
+    // would have been blocked, except the direction flipped). That's exactly the
+    // whipsaw case. If mtfTimeOk is already true, or this is the day's first
+    // alert, there's nothing to hold back — let it through immediately as before.
+    const mtfIsReversalBypass = mtfSignalChanged && !mtfTimeOk && !mtfNeverFired;
+    let mtfReversalConfirmed = true;
+    if (mtfIsReversalBypass) {
+        const now = Date.now();
+        if (pendingMTFFlipSignal !== mtfSignalNow) {
+            // New flip candidate — start the confirmation clock, hold this alert back.
+            pendingMTFFlipSignal = mtfSignalNow;
+            pendingMTFFlipSince = now;
+            mtfReversalConfirmed = false;
+        } else if (now - pendingMTFFlipSince < MTF_REVERSAL_CONFIRM_MS) {
+            mtfReversalConfirmed = false;
+        } else {
+            // Persisted past the confirm window — genuine flip, let it through.
+            pendingMTFFlipSignal = null; pendingMTFFlipSince = 0;
+        }
+    } else {
+        // Not a reversal-bypass case — clear any stale pending flip tracker.
+        pendingMTFFlipSignal = null; pendingMTFFlipSince = 0;
+    }
+
+    if (marketState.mtf.aligned && mtfInWindow && mtfCooldownOk && mtfReversalConfirmed) {
         let mtfStrikeData = null;
         try {
             const pcrStateMtf = getPCRState();
@@ -4022,9 +4063,22 @@ async function initDB() {
                 sl_hit         BOOLEAN DEFAULT FALSE,
                 closed         BOOLEAN DEFAULT FALSE,
                 time_taken_min INT,
-                closed_at      TIMESTAMPTZ
+                closed_at      TIMESTAMPTZ,
+                max_gain_pct   NUMERIC,    -- (high-entry)/entry*100 — best gain reached, whether or not target technically hit
+                partial_win    BOOLEAN DEFAULT FALSE  -- max_gain_pct crossed the coach's own "+30% book 50%" stage
             )
         `);
+        // ── Backward-compat for DBs created before this fix ─────────────────────
+        // Real-world gap found: a genuinely profitable signal (10:01 am BUY CALL,
+        // ₹148.2 → user manually booked ₹201, +36%) never technically touched the
+        // official +50% target before PERF_AUTOCLOSE_MIN, so it auto-closed with
+        // target_hit=false/sl_hit=false — counted as a flat miss in the accuracy
+        // stat even though it was a clearly profitable trade. Binary target/SL
+        // hides that. max_gain_pct + partial_win (crossing the AI Trade Coach's
+        // own +30%/"book 50%" stage, the same threshold already shown to the
+        // user) lets the summary report a realistic outcome instead of 0%.
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS max_gain_pct NUMERIC`).catch(()=>{});
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS partial_win BOOLEAN DEFAULT FALSE`).catch(()=>{});
         console.log('✅ PostgreSQL signal_performance table ready');
 
         // ── journal_trades table — manually entered trades from the Journal tab ──
@@ -4228,14 +4282,27 @@ async function updateSignalPerformance() {
         let slHit     = live && live <= rec.sl;
         const timedOut = elapsedMin >= PERF_AUTOCLOSE_MIN;
 
+        // ── Max gain % + partial-win credit ──────────────────────────────────
+        // Fixes a real gap: a signal that ran up nicely (e.g. +36%) but got
+        // auto-closed by PERF_AUTOCLOSE_MIN before technically touching the
+        // official +50% target was previously recorded as target_hit=false,
+        // sl_hit=false — a flat miss in the accuracy stat, even though it was
+        // a genuinely profitable trade a trader would have booked manually.
+        // partial_win uses the SAME +30% threshold the AI Trade Coach already
+        // shows the user ("+30% → book 50%"), so it reflects a stage the app
+        // itself already calls a good exit point, not an arbitrary number.
+        const maxGainPct = rec.entry > 0 ? Math.round(((rec.high - rec.entry) / rec.entry) * 1000) / 10 : 0;
+        const partialWin = !targetHit && !slHit && maxGainPct >= 30;
+
         if (targetHit || slHit || timedOut) {
             const closedAt = new Date().toISOString();
-            console.log(`📊 [SignalPerf] ${rec.signal} ${rec.strike}${rec.type} closed — ${targetHit ? 'TARGET HIT ✅' : slHit ? 'SL HIT ⛔' : 'TIMED OUT ⏳'} | Entry:${rec.entry} High:${rec.high} | ${elapsedMin} min`);
+            const outcomeLabel = targetHit ? 'TARGET HIT ✅' : slHit ? 'SL HIT ⛔' : partialWin ? `PARTIAL WIN 🟡 (+${maxGainPct}%)` : 'TIMED OUT ⏳';
+            console.log(`📊 [SignalPerf] ${rec.signal} ${rec.strike}${rec.type} closed — ${outcomeLabel} | Entry:${rec.entry} High:${rec.high} (+${maxGainPct}%) | ${elapsedMin} min`);
             if (dbPool && rec.id) {
                 try {
                     await dbPool.query(
-                        `UPDATE signal_performance SET high=$1, target_hit=$2, sl_hit=$3, closed=true, time_taken_min=$4, closed_at=$5 WHERE id=$6`,
-                        [rec.high, targetHit, slHit, elapsedMin, closedAt, rec.id]
+                        `UPDATE signal_performance SET high=$1, target_hit=$2, sl_hit=$3, closed=true, time_taken_min=$4, closed_at=$5, max_gain_pct=$6, partial_win=$7 WHERE id=$8`,
+                        [rec.high, targetHit, slHit, elapsedMin, closedAt, maxGainPct, partialWin, rec.id]
                     );
                 } catch (e) { console.warn('[SignalPerf] update error:', e.message); }
             }
@@ -4246,9 +4313,11 @@ async function updateSignalPerformance() {
     openPerfRecords = stillOpen;
 
     // Expose today's open cards for the frontend (ChatGPT-style "Entry/High/Target Hit/Time Taken" card)
+    // gainPct added so the UI can show running profit even before target/SL/timeout resolves it.
     marketState.signalPerformance.open = openPerfRecords.map(r => ({
         signal: r.signal, type: r.type, strike: r.strike,
         entry: r.entry, high: r.high, sl: r.sl, target: r.target,
+        gainPct: r.entry > 0 ? Math.round(((r.high - r.entry) / r.entry) * 1000) / 10 : 0,
         elapsedMin: Math.round((Date.now() - r.startTs) / 60000),
     }));
 }
@@ -4259,15 +4328,24 @@ async function getSignalPerformanceSummary() {
     if (!dbPool) return { today: null, weekly: null, monthly: null };
     const q = async (whereClause) => {
         const r = await dbPool.query(
-            `SELECT COUNT(*) AS total, SUM(CASE WHEN target_hit THEN 1 ELSE 0 END) AS hits,
+            `SELECT COUNT(*) AS total,
+                    SUM(CASE WHEN target_hit THEN 1 ELSE 0 END) AS hits,
+                    SUM(CASE WHEN target_hit OR partial_win THEN 1 ELSE 0 END) AS real_hits,
                     ROUND(AVG(time_taken_min)) AS avg_time
              FROM signal_performance WHERE closed = true AND ${whereClause}`
         );
         const row = r.rows[0];
         const total = parseInt(row.total) || 0;
-        if (total === 0) return { total: 0, accuracy: null, avgTimeMin: null };
+        if (total === 0) return { total: 0, accuracy: null, realAccuracy: null, avgTimeMin: null };
+        // accuracy = strict (only official target technically touched).
+        // realAccuracy = also credits trades that ran to the AI Coach's own
+        // +30%/"book 50%" stage before timing out — a truer picture of whether
+        // the signal was actually worth taking, not just whether it hit the
+        // full +50% number exactly. See updateSignalPerformance() for why.
         return {
-            total, accuracy: Math.round((parseInt(row.hits) / total) * 100),
+            total,
+            accuracy: Math.round((parseInt(row.hits) / total) * 100),
+            realAccuracy: Math.round((parseInt(row.real_hits) / total) * 100),
             avgTimeMin: row.avg_time ? parseInt(row.avg_time) : null,
         };
     };
