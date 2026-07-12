@@ -4295,11 +4295,8 @@ function startSSE() {
       }
       _lastState = s;
       if (s.lotSize && s.lotSize > 0) LOT_SIZE = s.lotSize;
-      // Update spread section live whenever physics panel is visible
-      if (document.getElementById('panel-physics') &&
-          document.getElementById('panel-physics').classList.contains('active')) {
-        try { renderSpreadStrategy(s); } catch(e) {}
-      }
+      // Spread/hedge strategy card DISABLED — pure option-buyer approach only
+      // (renderSpreadStrategy call removed; see spread-section div below)
       if (_splashDone) {
         try { renderDashboard(s); } catch(err) { console.warn('renderDashboard SSE:', err.message); }
       } else {
@@ -8442,8 +8439,7 @@ function updatePhysicsTab(s) {
       updEl.textContent = 'Last updated: '+String(ist.getHours()).padStart(2,'0')+':'+String(ist.getMinutes()).padStart(2,'0')+':'+String(ist.getSeconds()).padStart(2,'0')+' IST';
     } catch(e){}
   }
-  // Render spread strategy using latest state
-  if (window._lastState) renderSpreadStrategy(window._lastState);
+  // Spread strategy card DISABLED — pure option-buyer approach only
 }
 
 // ── Spread Strategy Renderer ──────────────────────────────────────────────────
@@ -8598,12 +8594,9 @@ function _statRow(label, val) {
       <div class="pot-check-row"><span id="pot-chk3-icon">⬜</span><span id="pot-chk3-txt" style="color:var(--dim);">CALL: pullback / PUT: bounce — in 38–62% zone (Law 3)</span></div>
     </div>
 
-    <!-- ── SPREAD STRATEGY SECTION ─────────────────────────────────────── -->
-    <div id="spread-section" style="margin-top:10px;background:rgba(15,31,48,0.7);border:1px solid rgba(0,255,136,0.12);border-radius:10px;padding:10px 12px;">
-      <div style="font-family:'Orbitron',monospace;font-size:11px;color:var(--green);letter-spacing:2px;margin-bottom:8px;">📊 SPREAD / HEDGE STRATEGY</div>
-      <div id="spread-body">
-        <div style="color:var(--dim);font-size:12px;text-align:center;padding:8px 0;">Awaiting market data…</div>
-      </div>
+    <!-- ── SPREAD STRATEGY SECTION — DISABLED (pure option-buyer approach) ── -->
+    <div id="spread-section" style="display:none;">
+      <div id="spread-body"></div>
     </div>
 
     <div id="pot-updated" style="font-size:10px;color:var(--dim);text-align:center;margin-top:8px;padding-bottom:100px;">Last updated: —</div>

@@ -30,7 +30,8 @@ const { fetchAdvanceDecline,
         injectAngelSession }        = require('./src/api/breadth');
 const { calculateSRLevels }         = require('./src/api/levels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo } = require('./src/api/physicsOfTrading');
-const { suggestSpreadStrategy }     = require('./src/api/spreadStrategy');
+// DISABLED (per decision to stay pure option-buyer, no selling/spread strategies):
+// const { suggestSpreadStrategy } = require('./src/api/spreadStrategy');
 const {
     injectDBPool      : injectHistDBPool,
     initHistoricalData,
@@ -2866,24 +2867,27 @@ async function checkTelegramAlerts(newSignal) {
     if (marketState.vix>20&&!vixAlertSent) { vixAlertSent=true; await sendVIXAlert(marketState.vix,marketState.vixNote); }
     if (marketState.vix<=20) vixAlertSent=false;
 
-    // ── Spread / Hedging Strategy Alert ──────────────────────────────────────
-    // Fires when market conditions warrant a spread trade instead of naked buy.
-    // Cooldown: once per 60 min, only during market hours, no repeat of same strategy.
-    const spreadIst  = getIST();
-    const spreadMins = spreadIst.getHours() * 60 + spreadIst.getMinutes();
-    const spreadInHours = spreadMins >= 555 && spreadMins <= 900; // 9:15–15:00
-    const spreadCooldownOk = (Date.now() - lastSpreadAlertAt) > 60 * 60 * 1000;
-    if (spreadInHours && spreadCooldownOk) {
-        try {
-            const spread = suggestSpreadStrategy(marketState);
-            if (spread && spread.strategy !== lastSpreadStrategy) {
-                await sendSpreadAlert(spread, marketState);
-                lastSpreadAlertAt  = Date.now();
-                lastSpreadStrategy = spread.strategy;
-                console.log(`📊 Spread alert sent: ${spread.strategy}`);
-            }
-        } catch(e) { console.error('[Spread] alert error:', e.message); }
-    }
+    // ── Spread / Hedging Strategy Alert — DISABLED ───────────────────────────
+    // Per explicit decision to stay pure option-buyer only. This block used to
+    // fire hourly Telegram alerts suggesting Iron Condor / Bull Call Spread /
+    // Bear Put Spread / Short Strangle — all option-SELLING strategies — which
+    // directly contradicted that decision. Kept commented (not deleted) in
+    // case this direction is revisited later.
+    // const spreadIst  = getIST();
+    // const spreadMins = spreadIst.getHours() * 60 + spreadIst.getMinutes();
+    // const spreadInHours = spreadMins >= 555 && spreadMins <= 900; // 9:15–15:00
+    // const spreadCooldownOk = (Date.now() - lastSpreadAlertAt) > 60 * 60 * 1000;
+    // if (spreadInHours && spreadCooldownOk) {
+    //     try {
+    //         const spread = suggestSpreadStrategy(marketState);
+    //         if (spread && spread.strategy !== lastSpreadStrategy) {
+    //             await sendSpreadAlert(spread, marketState);
+    //             lastSpreadAlertAt  = Date.now();
+    //             lastSpreadStrategy = spread.strategy;
+    //             console.log(`📊 Spread alert sent: ${spread.strategy}`);
+    //         }
+    //     } catch(e) { console.error('[Spread] alert error:', e.message); }
+    // }
     } catch(e) {
         // Without this catch, any thrown error here (e.g. accessing a property on an
         // undefined marketState field inside one of the message templates) propagated
