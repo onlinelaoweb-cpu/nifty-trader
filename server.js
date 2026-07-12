@@ -4535,7 +4535,17 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
         console.warn('[Strike] Fibo-structural SL failed, using VIX-% fallback:', e.message);
     }
 
-    return { type, strike, entry: entryPremium, sl, target, slSource };
+    // ── Break-Even Point (BEP) ────────────────────────────────────────────────
+    // Per CA Sumeet Mongia video review: buyer's BEP is the spot level Nifty
+    // must reach by expiry for this option to be worth exactly what was paid —
+    // CE: strike + premium, PE: strike - premium. Shown alongside entry/SL/
+    // target so a buyer sees the actual spot move required, not just the
+    // premium P&L, which is easy to lose sight of.
+    const bep = type === 'CE'
+        ? parseFloat((strike + entryPremium).toFixed(2))
+        : parseFloat((strike - entryPremium).toFixed(2));
+
+    return { type, strike, entry: entryPremium, sl, target, slSource, bep };
 }
 
 // ── AI Trade Coach ───────────────────────────────────────────────────────────

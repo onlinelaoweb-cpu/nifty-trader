@@ -5470,6 +5470,7 @@ async function fetchTradeSuggestion() {
     const entry      = ai.entry   || d.strikeData?.entry;
     const sl         = ai.sl      || d.strikeData?.sl;
     const target     = ai.target  || d.strikeData?.target;
+    const bep        = d.strikeData?.bep;
     const confidence = ai.confidence || d.confidence || '';
     const reasoning  = ai.reasoning  || ai.rationale || '';  // server uses 'reasoning'
     const coach      = d.strikeData?.coach;
@@ -5490,6 +5491,7 @@ async function fetchTradeSuggestion() {
       <div class="suggest-action" style="color:${ai.action.includes('CALL') ? 'var(--green)' : ai.action.includes('PUT') ? 'var(--red)' : 'var(--amber)'}">${ai.action}</div>
       ${strike ? `<div class="suggest-detail">Strike: <b>${strike}</b> | Entry: <b>₹${entry || '--'}</b></div>` : ''}
       ${sl ? `<div class="suggest-detail">SL: ₹${sl} | Target: ₹${target || '--'}</div>` : ''}
+      ${bep ? `<div class="suggest-detail" style="color:var(--dim);">⚖️ Break-Even: Nifty ${bep} by expiry</div>` : ''}
       ${reasoning ? `<div class="suggest-rationale">${reasoning}</div>` : ''}
       ${confidence ? `<div class="suggest-conf">Confidence: ${confidence}</div>` : ''}
       ${coachHtml}

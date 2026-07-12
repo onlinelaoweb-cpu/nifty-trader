@@ -123,7 +123,7 @@ async function sendSignalAlert(state, prevSignal, strikeData = null) {
 📥 Entry : ₹${strikeData.entry}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
-📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}`;
+📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep} (Nifty needs ${strikeData.type === 'CE' ? 'to reach' : 'to fall to'} this by expiry to break even)` : ''}`;
 
         // ── AI Trade Coach block — entry-zone + staged profit plan ───────────
         const coach = strikeData.coach;
@@ -167,6 +167,22 @@ ${state.orb?.label ? '\n' + state.orb.label : ''}
 ${strikeBlock}
 ━━━━━━━━━━━━━━━━━━
 ${mtfInfo}${state.marketHealth ? `\n📋 Market Health: ${state.marketHealth.total}/100 — ${state.marketHealth.label}` : ''}
+${(() => {
+    // ── Trend Conviction diagnostic — audit trail for contradiction cases ──
+    // Added after a Friday session where a BUY PUT fired while VWAP/Delta/ORB/
+    // 15m all looked bullish — impossible to verify after the fact from the
+    // Telegram message alone whether Trend Conviction actually evaluated this
+    // as opposing (and was overridden) or genuinely didn't reach the 4/6
+    // threshold at that tick. This line makes it directly checkable next time
+    // instead of requiring after-the-fact inference from other message fields.
+    const tc = state.trendConviction;
+    if (!tc || !tc.active) return '';
+    const oppose = (tc.active === 'BEARISH' && state.signal === 'BUY CALL') ||
+                   (tc.active === 'BULLISH' && state.signal === 'BUY PUT');
+    if (!oppose) return '';
+    const conds = tc.active === 'BEARISH' ? tc.bearConditions : tc.bullConditions;
+    return `\n🔍 Trend Conviction: ${tc.active} (${conds.length}/6: ${conds.join(', ')}) — convictionOk=${state.qualityGate?.convictionOk}`;
+})()}
 ━━━━━━━━━━━━━━━━━━
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
 <i>VardaanNifty AI</i>
@@ -205,7 +221,7 @@ async function sendMTFAlert(state, strikeData = null) {
 📥 Entry : ₹${strikeData.entry}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
-📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}
+📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep}` : ''}
 ${coachBlock}━━━━━━━━━━━━━━━━━━
 `;
     }
