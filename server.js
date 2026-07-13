@@ -30,6 +30,7 @@ const { fetchAdvanceDecline,
         injectAngelSession }        = require('./src/api/breadth');
 const { calculateSRLevels }         = require('./src/api/levels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo } = require('./src/api/physicsOfTrading');
+const { getRenkoAnalysis } = require('./src/api/renko');
 // DISABLED (per decision to stay pure option-buyer, no selling/spread strategies):
 // const { suggestSpreadStrategy } = require('./src/api/spreadStrategy');
 const {
@@ -2984,6 +2985,17 @@ async function updatePrice(price, change, changePct, source) {
                              : confidence >= 60   ? { grade: 'B',  sizeHint: '50% size',      pct: 50  }
                              : confidence >= 50   ? { grade: 'C',  sizeHint: '25% size',      pct: 25  }
                                                   : { grade: 'D',  sizeHint: 'Skip — too weak',pct: 0  };
+    // ── Expiry-day size cap — actually enforce the existing gamma-risk warning ──
+    // A "keep size smaller" note (see sweepReasons above) previously only ever
+    // showed as text; the real sizeHint/pct never changed. Grade letter still
+    // reflects genuine signal confidence — only the position-size suggestion
+    // is capped, since gamma risk on expiry is about position sizing, not
+    // about whether the signal itself is good.
+    if (signal !== 'WAIT' && isExpiryDay() && marketState.tradeQuality.pct > 50) {
+        marketState.tradeQuality.sizeHint = `${marketState.tradeQuality.pct}%→50% (expiry day gamma risk)`;
+        marketState.tradeQuality.pct = 50;
+        marketState.tradeQuality.expiryCapped = true;
+    }
     marketState.rsi=indicators.rsi; marketState.ema9=indicators.ema9;
     marketState.ema21=indicators.ema21; marketState.vwap=indicators.vwap;
     marketState.reason=reasons; marketState.lastUpdated=new Date().toISOString();
@@ -3354,6 +3366,16 @@ async function refreshMTF() {
 
         const d = await analyzeMultiTimeframe(marketState.vix ?? null);
         if (!d) return;
+
+        // ── Renko Trend Filter (informational only, does not gate anything) ──
+        // See src/api/renko.js header for full rationale. Computed here since
+        // it's the same natural cadence as the MTF refresh and uses the same
+        // 1m candle buffer that's already being read a few lines below.
+        try {
+            marketState.renko = getRenkoAnalysis(getCandleHistory(true));
+        } catch (e) {
+            console.warn('[Renko] compute error:', e.message);
+        }
 
         // ── Pre-market gate ────────────────────────────
         // Before 09:15 IST the candle history is overnight/multi-day data.
