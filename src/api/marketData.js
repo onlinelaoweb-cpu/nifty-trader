@@ -66,24 +66,33 @@ function buildVIX(vix, change, prevClose) {
 //     day) → use that row's own prev_close (yesterday vs the day before).
 //   • Otherwise (still mid-session, today's row not written yet) → use the
 //     latest row's close directly (that IS yesterday's close).
+// FIX #2 (real bug found via live discrepancy: app showed +44.30 change while
+// the actual broker chart showed -8.85 at the same live price ~24198 — a ~53pt
+// reference-point error, not a live-tick issue). The price-proximity heuristic
+// below (`Math.abs(currentPrice - latest.close) < 0.5`) was meant to detect
+// "today's EOD row already committed", but it's fragile: during normal
+// intraday trading the live price can coincidentally land within 0.5 points of
+// whatever the latest DB row's close happens to be, purely by chance — which
+// falsely triggers the "already committed" branch and skips back an EXTRA
+// trading day for prevClose. Replaced with a direct date comparison, which
+// can't misfire on coincidental price proximity and still handles weekends/
+// holidays correctly (any gap size still means latest.date < todayStr).
 async function getRealPrevClose(currentPrice) {
     try {
         const rows = await getHistoricalCandles(2);
         if (!rows || rows.length === 0) return null;
         const latest = rows[rows.length - 1];
-        // FIX: comparing dates (todayStr vs latest.date) never worked on a
-        // non-trading day — "today" (e.g. Saturday) never equals a trading-day
-        // row's date, so the date check always fell through to the wrong
-        // branch, returning latest.close as "prevClose" while the CURRENTLY
-        // DISPLAYED price (frozen at Friday's close) was ALSO Friday's close
-        // — giving change = 0. Compare against the actual price instead:
-        // if the current (possibly frozen) price already matches the latest
-        // committed daily close, that session IS already "yesterday" from
-        // the table's perspective — use ITS prev_close (the day before that).
-        // Otherwise, current price is a live/still-forming session — use the
-        // latest row's close as the correct "yesterday's close" reference.
-        const matchesLatestClose = currentPrice != null && Math.abs(currentPrice - latest.close) < 0.5;
-        return matchesLatestClose ? latest.prev_close : latest.close;
+        const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        const todayStr = `${istNow.getFullYear()}-${String(istNow.getMonth() + 1).padStart(2, '0')}-${String(istNow.getDate()).padStart(2, '0')}`;
+        if (latest.date === todayStr) {
+            // Today's own EOD row already exists in the table (e.g. querying
+            // after today's close was written) — yesterday is the day before that.
+            return latest.prev_close;
+        }
+        // latest.date is some earlier date (1 day back normally, up to 3 after
+        // a weekend) — either way it's the most recent trading day strictly
+        // before today, so its close IS the correct "yesterday's close".
+        return latest.close;
     } catch (e) {
         console.warn('[MarketData] getRealPrevClose failed:', e.message);
         return null;
