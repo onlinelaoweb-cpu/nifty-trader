@@ -3378,7 +3378,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
       </div>
     </div>
     <!-- USD/INR Weakness Alert -->
-    <div class="usdinr-alert" id="usdinr-alert">⚠️ <span>USD/INR &gt;97 — Rupee weakness detected! FII selling pressure likely.</span></div>
+    <div class="usdinr-alert" id="usdinr-alert">⚠️ <span id="usdinr-alert-text">Rupee weakness detected! FII selling pressure likely.</span></div>
     <div class="global-bias-card neut" id="global-bias-card">
       <div class="global-bias-label">🌍 GLOBAL MARKET BIAS</div>
       <div class="global-bias-value" id="global-bias-val" style="color:var(--amber);">NEUTRAL</div>
@@ -5379,9 +5379,21 @@ function updateGlobalUI(g) {
   if (scoreBadge) scoreBadge.textContent = Math.round(score / 10) + '/10 ' + (score > 60 ? '🟢' : score < 40 ? '🔴' : '🟡');
 
   // USD/INR alert — FIX: g.currency.usdinr is an OBJECT {price,changePct,...} not a number
+  // FIX #2: banner text used to hardcode ">97" regardless of the real trigger
+  // (actual condition below is price > 87) or the real price — e.g. showing
+  // ">97" while the live rate was 96.12 looked like a data glitch. Text is
+  // now built from the real numbers so it always matches what actually fired it.
   const usdData = g.currency?.usdinr;
   const usdEl = document.getElementById('usdinr-alert');
-  if (usdEl && usdData?.price != null) usdEl.classList.toggle('show', usdData.price > 87);
+  const usdTextEl = document.getElementById('usdinr-alert-text');
+  const USD_INR_ALERT_THRESHOLD = 87;
+  if (usdEl && usdData?.price != null) {
+    const triggered = usdData.price > USD_INR_ALERT_THRESHOLD;
+    usdEl.classList.toggle('show', triggered);
+    if (triggered && usdTextEl) {
+      usdTextEl.textContent = `USD/INR ₹${usdData.price} (>${USD_INR_ALERT_THRESHOLD}) — Rupee weakness detected! FII selling pressure likely.`;
+    }
+  }
 
   // Sectors — FIX: server sends camelCase keys (bankNifty, niftyIT…), not lowercase
   const sectors = g.sectors || {};
