@@ -119,8 +119,11 @@ async function sendSignalAlert(state, prevSignal, strikeData = null) {
         const tgtPct   = ((strikeData.target - strikeData.entry) / strikeData.entry * 100).toFixed(0);
         const slLoss   = Math.round((strikeData.entry - strikeData.sl) * LOT);
         const tgtGain  = Math.round((strikeData.target - strikeData.entry) * LOT);
+        const stalenessNote = (strikeData.premiumAgeSec != null && strikeData.premiumAgeSec > 90)
+            ? ` ⚠️ (quote ${Math.round(strikeData.premiumAgeSec/60)}min old — verify on broker before entry)`
+            : '';
         strikeBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
-📥 Entry : ₹${strikeData.entry}
+📥 Entry : ₹${strikeData.entry}${stalenessNote}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
 📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep} (Nifty needs ${strikeData.type === 'CE' ? 'to reach' : 'to fall to'} this by expiry to break even)` : ''}`;
@@ -217,8 +220,11 @@ async function sendMTFAlert(state, strikeData = null) {
         const coachBlock = coach
             ? `\n🧑‍🏫 <b>AI Trade Coach</b>\n✅ Ideal Entry: ${coach.idealEntryLabel} | ${coach.chaseWarning}\n📈 +20% SL→cost | +30% book 50% | +40% exit\n`
             : '';
+        const stalenessNote2 = (strikeData.premiumAgeSec != null && strikeData.premiumAgeSec > 90)
+            ? ` ⚠️ (quote ${Math.round(strikeData.premiumAgeSec/60)}min old — verify on broker before entry)`
+            : '';
         strikeBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
-📥 Entry : ₹${strikeData.entry}
+📥 Entry : ₹${strikeData.entry}${stalenessNote2}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
 📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep}` : ''}

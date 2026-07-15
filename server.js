@@ -4473,13 +4473,28 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
     // ATM±20 strikes, our OTM pick is only ±50 = 1 strike away).
     const dte = daysToNextExpiry();   // real days to next Tuesday expiry
     let entryPremium = null;
+    let premiumSource = 'bs';   // 'live' | 'bs' — surfaced to the trader below
+    let premiumAgeSec = null;
 
     if (strike === atm && pcrState && pcrState.atmCEpremium && pcrState.atmPEpremium) {
         entryPremium = type === 'CE' ? pcrState.atmCEpremium : pcrState.atmPEpremium;
+        premiumSource = 'live';
     } else if (pcrState?.records?.length) {
         const rec = pcrState.records.find(r => r.strikePrice === strike);
         const liveLtp = type === 'CE' ? rec?.CE?.lastPrice : rec?.PE?.lastPrice;
-        if (liveLtp > 0) entryPremium = liveLtp;
+        if (liveLtp > 0) { entryPremium = liveLtp; premiumSource = 'live'; }
+    }
+    // FIX: premium comes from getPCRState(), which refreshes on a 3-minute
+    // cycle (see refreshPCR interval) — not re-fetched live at signal time.
+    // During a fast reversal (exactly when a SIGNAL CHANGED alert is likely
+    // to fire), the real market premium can already have moved well past
+    // this cached value by the time the trader reads the alert. Rather than
+    // hitting the option-chain API on every signal (rate-limit risk, adds
+    // latency), surface the cache's age so the trader can judge for
+    // themselves — the AI Trade Coach's "Do NOT chase above ₹X" ceiling is
+    // the actual safety net for this; the age just makes the risk visible.
+    if (premiumSource === 'live' && pcrState?.fetchedAt) {
+        premiumAgeSec = Math.round((Date.now() - new Date(pcrState.fetchedAt).getTime()) / 1000);
     }
 
     // If no live premium available, use Black-Scholes with real DTE (not hardcoded 3 days)
@@ -4571,7 +4586,7 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
         ? parseFloat((strike + entryPremium).toFixed(2))
         : parseFloat((strike - entryPremium).toFixed(2));
 
-    return { type, strike, entry: entryPremium, sl, target, slSource, bep };
+    return { type, strike, entry: entryPremium, sl, target, slSource, bep, premiumAgeSec };
 }
 
 // ── AI Trade Coach ───────────────────────────────────────────────────────────
