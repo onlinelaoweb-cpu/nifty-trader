@@ -322,17 +322,24 @@ Status: ${note}
 
 // ── Market Close Summary ──────────────────────────────
 async function sendCloseSummary(state) {
-    // Priority for day's net change:
-    //   1. sessionOpenPrice — captured on the first valid tick of today (most accurate)
-    //   2. wsOpen — from WS Mode 2 (always 0 for the Nifty index, kept as fallback
-    //      in case a future token change does send OHLC)
-    //   3. nifty - change — last-tick delta as final fallback (can show 0.00% if
-    //      the last 2 ticks were identical near 15:30, which is the bug we're fixing)
-    const dayOpen   = state.sessionOpenPrice > 0 ? state.sessionOpenPrice
-                     : state.wsOpen > 0 ? state.wsOpen
-                     : (state.nifty - state.change);
-    const dayChange = dayOpen > 0 ? parseFloat((state.nifty - dayOpen).toFixed(2)) : state.change;
-    const dayPct    = dayOpen > 0 ? parseFloat(((dayChange / dayOpen) * 100).toFixed(2)) : state.changePct;
+    // FIX: this used to compute "day change" from TODAY'S OPEN (sessionOpenPrice),
+    // while the morning summary and every single intraday alert all along used
+    // PREVIOUS DAY'S CLOSE (state.change/state.changePct, powered by the
+    // prevClose fix in marketData.js). Those are two different numbers by
+    // definition — open-to-close move vs vs-yesterday move — and using the
+    // wrong one here made the EOD summary disagree with the broker's own
+    // chart and with every earlier message sent the same day. Reverted to
+    // state.change/state.changePct as the primary source (same as morning
+    // summary), keeping the prevClose-based recomputation only as a guard
+    // against the original problem this code was trying to solve: WS ticks
+    // going stale right at 15:30 and showing a false 0.00%.
+    let dayChange = state.change;
+    let dayPct    = state.changePct;
+    const looksStale = !dayChange || Math.abs(dayChange) < 0.01;
+    if (looksStale && state.prevClose > 0) {
+        dayChange = parseFloat((state.nifty - state.prevClose).toFixed(2));
+        dayPct    = parseFloat(((dayChange / state.prevClose) * 100).toFixed(2));
+    }
 
     const msg = `
 🔔 <b>MARKET CLOSED — End of Day</b>
