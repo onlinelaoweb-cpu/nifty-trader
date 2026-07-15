@@ -223,11 +223,21 @@ async function sendMTFAlert(state, strikeData = null) {
         const stalenessNote2 = (strikeData.premiumAgeSec != null && strikeData.premiumAgeSec > 90)
             ? ` ⚠️ (quote ${Math.round(strikeData.premiumAgeSec/60)}min old — verify on broker before entry)`
             : '';
+        const lq = strikeData.leadQuality;
+        const lqEmoji = lq ? (lq.label === 'Strong Confluence' ? '🟢' : lq.label === 'Moderate' ? '🟡' : '🔴') : '';
+        const lqBlock = lq
+            ? `\n${lqEmoji} <b>Lead Quality: ${lq.label}</b> (${lq.score}/4) — ${[
+                lq.isFull3 ? '3/3 TFs' : null,
+                lq.deltaMatches ? 'Delta confirms' : null,
+                lq.highConf ? 'High confidence' : null,
+                lq.mainConfluence ? 'Main engine agrees' : null,
+              ].filter(Boolean).join(', ') || 'no supporting factors — treat as noise'}`
+            : '';
         strikeBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
 📥 Entry : ₹${strikeData.entry}${stalenessNote2}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
-📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep}` : ''}
+📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep}` : ''}${lqBlock}
 ${coachBlock}━━━━━━━━━━━━━━━━━━
 `;
     }

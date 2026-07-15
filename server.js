@@ -191,6 +191,11 @@ const PERF_AUTOCLOSE_MIN = 90;  // auto-close untouched signals after 90 min (th
 
 // ── Helpers ───────────────────────────────────────────
 let historyLoaded=false, prevSignal='WAIT', prevMTFAligned=false;
+// ── Main-engine direction timestamps — for MTF-tracker "Lead Quality" badge ──
+// Tracks the most recent moment the main engine's own signal (not MTF-tracker)
+// was BUY CALL / BUY PUT, so an MTF-tracker alert can say "main engine agreed
+// with this direction Xmin ago" — real confluence, not just MTF voting alone.
+let lastMainCallAt = 0, lastMainPutAt = 0;
 // ── Trend Lock state (signal-flip prevention) ──────────────────────────────
 // External day-audit feedback flagged rapid CALL→PUT→CALL whipsaws (e.g. 12:50
 // PM BUY CALL → 1:02 PM BUY PUT, only 12 min apart) as the single biggest
@@ -2860,6 +2865,34 @@ async function checkTelegramAlerts(newSignal) {
             mtfStrikeData = pickStrikeAndPremium(marketState.mtf.signal, marketState.nifty, marketState.vix, pcrStateMtf);
             if (mtfStrikeData) mtfStrikeData.coach = buildTradeCoach(mtfStrikeData);
         } catch(e) { console.warn('[MTF Strike] compute error:', e.message); }
+
+        // ── Lead Quality badge — helps distinguish an actionable MTF-tracker
+        // alert from a weak/isolated one. Based on the 4-factor checklist worked
+        // out from a real example: the 9:15am 2/3-aligned 60% PUT (neutral
+        // Delta, isolated) never confirmed, while the 10:15am 3/3-aligned 81%
+        // PUT (Delta -49.9% matching, main engine had confirmed PUT 12 min
+        // earlier) went on to hit target. Purely informational — does not
+        // change whether the alert fires, only how it's labelled.
+        const isFull3       = marketState.mtf.bullCount === 3 || marketState.mtf.bearCount === 3;
+        const deltaPct      = marketState.delta?.deltaPct ?? 0;
+        const deltaMatches  = marketState.mtf.signal === 'BUY CALL' ? deltaPct >= 30
+                             : marketState.mtf.signal === 'BUY PUT'  ? deltaPct <= -30
+                             : false;
+        const highConf      = marketState.mtf.confidence >= 75;
+        const CONFLUENCE_WINDOW_MS = 45 * 60 * 1000;
+        const mainAgreesAt  = marketState.mtf.signal === 'BUY CALL' ? lastMainCallAt
+                             : marketState.mtf.signal === 'BUY PUT'  ? lastMainPutAt : 0;
+        const mainConfluence = mainAgreesAt > 0 && (Date.now() - mainAgreesAt) < CONFLUENCE_WINDOW_MS;
+
+        const factorsMet = [isFull3, deltaMatches, highConf, mainConfluence].filter(Boolean).length;
+        const leadQuality = {
+            score: factorsMet,
+            label: factorsMet >= 3 ? 'Strong Confluence' : factorsMet === 2 ? 'Moderate' : 'Weak / Isolated',
+            isFull3, deltaMatches, highConf, mainConfluence,
+        };
+        if (mtfStrikeData) mtfStrikeData.leadQuality = leadQuality;
+        marketState.mtf.leadQuality = leadQuality;
+
         await sendMTFAlert(marketState, mtfStrikeData);
         lastMTFAlertAt     = Date.now();
         lastMTFAlertSignal = mtfSignalNow;
@@ -3110,6 +3143,8 @@ async function updatePrice(price, change, changePct, source) {
     if (signal !== 'WAIT' && signal !== prevSignal) {
         saveSignalToLog(signal, prevSignal).catch(e => console.error('signal log:', e.message));
     }
+    if (signal === 'BUY CALL') lastMainCallAt = Date.now();
+    if (signal === 'BUY PUT')  lastMainPutAt  = Date.now();
     prevSignal=signal;
 }
 
