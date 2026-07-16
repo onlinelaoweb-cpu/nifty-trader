@@ -5726,6 +5726,45 @@ async function fetchSignalPerformance() {
         openEl.innerHTML = '<div style="text-align:center;color:var(--dim);font-size:12.5px;padding:0.5rem 0;">No open signals being tracked</div>';
       }
     }
+
+    // ── Lead Quality x Outcome breakdown ──────────────────────────────────
+    const lqEl = document.getElementById('ins-lead-quality-breakdown');
+    if (lqEl) {
+      const lq = d.summary?.byLeadQuality;
+      const tiers = ['Strong Confluence', 'Moderate', 'Weak / Isolated'];
+      const rows = tiers.filter(t => lq?.[t]?.total > 0);
+      if (rows.length) {
+        const tierColor = t => t === 'Strong Confluence' ? 'var(--green)' : t === 'Moderate' ? 'var(--amber, orange)' : 'var(--red)';
+        lqEl.innerHTML = rows.map(t => `
+          <div style="display:flex;justify-content:space-between;padding:4px 0;">
+            <span style="color:${tierColor(t)};">${t}</span>
+            <span style="color:var(--text);">${lq[t].realAccuracy}% <span style="color:var(--dim);">(${lq[t].total})</span></span>
+          </div>`).join('');
+      } else {
+        lqEl.textContent = 'Not enough closed MTF-tracker trades yet';
+      }
+    }
+
+    // ── Exit Warning validation ───────────────────────────────────────────
+    const ewEl = document.getElementById('ins-exit-warning-stats');
+    if (ewEl) {
+      const ew = d.summary?.exitWarningStats;
+      if (ew?.warned?.total > 0 || ew?.notWarned?.total > 0) {
+        const w  = ew.warned    || { total: 0 };
+        const nw = ew.notWarned || { total: 0 };
+        ewEl.innerHTML = `
+          <div style="display:flex;justify-content:space-between;padding:4px 0;">
+            <span style="color:var(--red);">Got warning</span>
+            <span style="color:var(--text);">${w.total > 0 ? `${w.realAccuracy}% won, ${w.slRate}% SL` : '—'} <span style="color:var(--dim);">(${w.total})</span></span>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:4px 0;">
+            <span style="color:var(--dim);">No warning</span>
+            <span style="color:var(--text);">${nw.total > 0 ? `${nw.realAccuracy}% won, ${nw.slRate}% SL` : '—'} <span style="color:var(--dim);">(${nw.total})</span></span>
+          </div>`;
+      } else {
+        ewEl.textContent = 'Not enough closed trades yet';
+      }
+    }
   } catch (e) { console.warn('fetchSignalPerformance:', e.message); }
 }
 
@@ -8902,6 +8941,14 @@ function _statRow(label, val) {
       <div id="ins-perf-open" style="max-height:260px;overflow-y:auto;">
         <div style="text-align:center;color:var(--dim);font-size:12.5px;padding:0.5rem 0;">No open signals being tracked</div>
       </div>
+    </div>
+
+    <!-- Lead Quality x Outcome + Exit Warning validation (30-day) -->
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">🎯 LEAD QUALITY vs OUTCOME <span style="font-size:9.5px;font-weight:400;">(30-day)</span></div>
+      <div id="ins-lead-quality-breakdown" style="font-size:12.5px;color:var(--dim);">Not enough closed MTF-tracker trades yet</div>
+      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin:12px 0 8px;">⚠️ EXIT WARNING VALIDATION <span style="font-size:9.5px;font-weight:400;">(30-day)</span></div>
+      <div id="ins-exit-warning-stats" style="font-size:12.5px;color:var(--dim);">Not enough closed trades yet</div>
     </div>
 
   </div>

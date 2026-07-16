@@ -4163,7 +4163,10 @@ async function initDB() {
                 time_taken_min INT,
                 closed_at      TIMESTAMPTZ,
                 max_gain_pct   NUMERIC,    -- (high-entry)/entry*100 — best gain reached, whether or not target technically hit
-                partial_win    BOOLEAN DEFAULT FALSE  -- max_gain_pct crossed the coach's own "+30% book 50%" stage
+                partial_win    BOOLEAN DEFAULT FALSE,  -- max_gain_pct crossed the coach's own "+30% book 50%" stage
+                source         TEXT,       -- 'main' | 'mtf' — which engine generated this lead
+                lead_quality   TEXT,       -- MTF-tracker leads only: 'Strong Confluence' | 'Moderate' | 'Weak / Isolated'
+                exit_warned    BOOLEAN DEFAULT FALSE   -- did a momentum-decay exit warning fire on this trade before it closed?
             )
         `);
         // ── Backward-compat for DBs created before this fix ─────────────────────
@@ -4177,6 +4180,14 @@ async function initDB() {
         // user) lets the summary report a realistic outcome instead of 0%.
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS max_gain_pct NUMERIC`).catch(()=>{});
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS partial_win BOOLEAN DEFAULT FALSE`).catch(()=>{});
+        // Lead Quality x Outcome correlation + Exit Warning loop-closing —
+        // added so we can eventually PROVE (not just assume) that Strong
+        // Confluence leads actually outperform Weak/Isolated ones, and that
+        // the momentum-decay exit warning is catching real fades rather than
+        // false-alarming on noise.
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS source TEXT`).catch(()=>{});
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS lead_quality TEXT`).catch(()=>{});
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS exit_warned BOOLEAN DEFAULT FALSE`).catch(()=>{});
         console.log('✅ PostgreSQL signal_performance table ready');
 
         // ── journal_trades table — manually entered trades from the Journal tab ──
@@ -4351,14 +4362,15 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
         entryDelta: marketState.delta?.deltaPct ?? null,
         entryRSI: marketState.rsi ?? null,
         source, exitWarned: false,
+        leadQuality: strikeData.leadQuality?.label ?? null,  // null for main-engine trades (no MTF lead-quality concept there)
     };
     openPerfRecords.push(rec);
     if (dbPool) {
         try {
             const r = await dbPool.query(
-                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry]
+                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high, source, lead_quality)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry, rec.source, rec.leadQuality]
             );
             rec.id = r.rows[0]?.id ?? null;
         } catch (e) { console.warn('[SignalPerf] insert error:', e.message); }
@@ -4422,12 +4434,12 @@ async function updateSignalPerformance() {
         if (targetHit || slHit || timedOut) {
             const closedAt = new Date().toISOString();
             const outcomeLabel = targetHit ? 'TARGET HIT ✅' : slHit ? 'SL HIT ⛔' : partialWin ? `PARTIAL WIN 🟡 (+${maxGainPct}%)` : 'TIMED OUT ⏳';
-            console.log(`📊 [SignalPerf] ${rec.signal} ${rec.strike}${rec.type} closed — ${outcomeLabel} | Entry:${rec.entry} High:${rec.high} (+${maxGainPct}%) | ${elapsedMin} min`);
+            console.log(`📊 [SignalPerf] ${rec.signal} ${rec.strike}${rec.type} closed — ${outcomeLabel} | Entry:${rec.entry} High:${rec.high} (+${maxGainPct}%) | ${elapsedMin} min${rec.exitWarned ? ' | ⚠️ had exit warning' : ''}`);
             if (dbPool && rec.id) {
                 try {
                     await dbPool.query(
-                        `UPDATE signal_performance SET high=$1, target_hit=$2, sl_hit=$3, closed=true, time_taken_min=$4, closed_at=$5, max_gain_pct=$6, partial_win=$7 WHERE id=$8`,
-                        [rec.high, targetHit, slHit, elapsedMin, closedAt, maxGainPct, partialWin, rec.id]
+                        `UPDATE signal_performance SET high=$1, target_hit=$2, sl_hit=$3, closed=true, time_taken_min=$4, closed_at=$5, max_gain_pct=$6, partial_win=$7, exit_warned=$8 WHERE id=$9`,
+                        [rec.high, targetHit, slHit, elapsedMin, closedAt, maxGainPct, partialWin, rec.exitWarned, rec.id]
                     );
                 } catch (e) { console.warn('[SignalPerf] update error:', e.message); }
             }
@@ -4475,10 +4487,60 @@ async function getSignalPerformanceSummary() {
         };
     };
     try {
+        // ── Lead Quality x Outcome breakdown (30-day window — enough sample
+        // to start being meaningful without diluting across too much history
+        // as the app's own logic keeps evolving). Answers the actual question:
+        // does "Strong Confluence" really perform better than "Weak/Isolated",
+        // or was that just a theory from two hand-picked examples?
+        const lqRows = await dbPool.query(
+            `SELECT lead_quality,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN target_hit OR partial_win THEN 1 ELSE 0 END) AS real_hits
+             FROM signal_performance
+             WHERE closed = true AND lead_quality IS NOT NULL
+               AND trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '30 days'
+             GROUP BY lead_quality`
+        );
+        const byLeadQuality = {};
+        for (const row of lqRows.rows) {
+            const total = parseInt(row.total) || 0;
+            byLeadQuality[row.lead_quality] = {
+                total,
+                realAccuracy: total > 0 ? Math.round((parseInt(row.real_hits) / total) * 100) : null,
+            };
+        }
+
+        // ── Exit Warning validation — did trades that got a mid-flight
+        // momentum-decay warning actually go on to do worse than trades that
+        // never got warned? If warned trades have similar or better outcomes,
+        // the decay thresholds (15pt Delta / 5pt RSI) are too trigger-happy
+        // and need loosening.
+        const ewRows = await dbPool.query(
+            `SELECT exit_warned,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN target_hit OR partial_win THEN 1 ELSE 0 END) AS real_hits,
+                    SUM(CASE WHEN sl_hit THEN 1 ELSE 0 END) AS losses
+             FROM signal_performance
+             WHERE closed = true
+               AND trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '30 days'
+             GROUP BY exit_warned`
+        );
+        const exitWarningStats = {};
+        for (const row of ewRows.rows) {
+            const total = parseInt(row.total) || 0;
+            exitWarningStats[row.exit_warned ? 'warned' : 'notWarned'] = {
+                total,
+                realAccuracy: total > 0 ? Math.round((parseInt(row.real_hits) / total) * 100) : null,
+                slRate: total > 0 ? Math.round((parseInt(row.losses) / total) * 100) : null,
+            };
+        }
+
         return {
             today  : await q(`trade_date = (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE`),
             weekly : await q(`trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '7 days'`),
             monthly: await q(`trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '30 days'`),
+            byLeadQuality,
+            exitWarningStats,
         };
     } catch (e) {
         console.warn('[SignalPerf] summary error:', e.message);
