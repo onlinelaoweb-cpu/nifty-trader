@@ -169,7 +169,7 @@ ${state.orb?.label ? '\n' + state.orb.label : ''}
 ━━━━━━━━━━━━━━━━━━
 ${strikeBlock}
 ━━━━━━━━━━━━━━━━━━
-${mtfInfo}${state.marketHealth ? `\n📋 Market Health: ${state.marketHealth.total}/100 — ${state.marketHealth.label}` : ''}
+${mtfInfo}${state.marketHealth ? `\n📋 Market Health: ${state.marketHealth.total}/100 — ${state.marketHealth.label}` : ''}${state.momentumDecayWarning ? `\n${state.momentumDecayWarning}` : ''}
 ${(() => {
     // ── Trend Conviction diagnostic — audit trail for contradiction cases ──
     // Added after a Friday session where a BUY PUT fired while VWAP/Delta/ORB/
@@ -237,7 +237,7 @@ async function sendMTFAlert(state, strikeData = null) {
 📥 Entry : ₹${strikeData.entry}${stalenessNote2}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
-📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep}` : ''}${lqBlock}
+📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep}` : ''}${lqBlock}${state.momentumDecayWarning ? `\n${state.momentumDecayWarning}` : ''}
 ${coachBlock}━━━━━━━━━━━━━━━━━━
 `;
     }
@@ -510,6 +510,29 @@ ${beLine ? beLine + '\n' : ''}🎯 Profit Zone: ${spread.profitZone}
     await sendMessage(msg);
 }
 
+// ── Exit warning for a still-open, auto-tracked signal (Signal Performance) ─
+// Different from sendExitAlert (which is for the manual trade-journal position
+// system with peak/trailSL tracking). This is a lightweight, ONE-TIME nudge:
+// the ORIGINAL reasons for the trade (Delta, RSI) have weakened since entry,
+// even though price hasn't hit SL or target yet. Purely a "conviction is
+// fading, use your own judgement" signal — never auto-closes or resizes
+// anything.
+async function sendMomentumExitWarning(rec, currentDelta, currentRSI) {
+    const dirLabel = rec.signal === 'BUY CALL' ? 'CALL' : 'PUT';
+    const msg = `
+⚠️ <b>EXIT WARNING — Setup Weakening</b>
+━━━━━━━━━━━━━━━━━━
+Your ${dirLabel} lead (${rec.strike}${rec.type}, entry ₹${rec.entry}) is still open, but the original conviction has faded:
+
+Delta: ${rec.entryDelta}% → ${currentDelta}%
+RSI: ${rec.entryRSI} → ${currentRSI}
+
+Price hasn't hit SL or target — this isn't an auto-exit. Just a heads-up to reassess: book partial, tighten SL, or hold with awareness.
+━━━━━━━━━━━━━━━━━━
+`.trim();
+    await sendMessage(msg);
+}
+
 module.exports = {
     sendSignalAlert,
     sendMTFAlert,
@@ -517,6 +540,7 @@ module.exports = {
     sendVIXAlert,
     sendCloseSummary,
     sendExitAlert,
+    sendMomentumExitWarning,
     sendNishanebaazAlert,
     sendSpreadAlert,
     sendRawMessage,

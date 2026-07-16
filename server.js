@@ -55,7 +55,7 @@ const {
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
-    sendCloseSummary, sendExitAlert,
+    sendCloseSummary, sendExitAlert, sendMomentumExitWarning,
     sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured
 }                                   = require('./src/api/telegram');
 
@@ -196,6 +196,30 @@ let historyLoaded=false, prevSignal='WAIT', prevMTFAligned=false;
 // was BUY CALL / BUY PUT, so an MTF-tracker alert can say "main engine agreed
 // with this direction Xmin ago" — real confluence, not just MTF voting alone.
 let lastMainCallAt = 0, lastMainPutAt = 0;
+// ── Momentum-decay tracking — flags a repeat same-direction signal whose
+// Delta/RSI have actually weakened since the LAST alert in that direction.
+// Prompted by a real case: 9:20 BUY CALL (Delta +80, RSI rising) was a good
+// signal, but 11:20 BUY CALL (Delta dropped to +50, RSI falling, price
+// failed near resistance) fired again as "STRONG 80%" despite momentum
+// visibly fading between the two. This doesn't block the repeat signal
+// (that's the over-filtering trap this app has hit before) — it just adds a
+// visible warning so the trader can judge for themselves rather than
+// assuming "STRONG" always means "as strong as last time".
+let lastCallSnapshot = null, lastPutSnapshot = null;   // {delta, rsi}
+function checkMomentumDecay(direction, delta, rsi) {
+    const prev = direction === 'BUY CALL' ? lastCallSnapshot : lastPutSnapshot;
+    let warning = null;
+    if (prev && delta != null && rsi != null && prev.delta != null && prev.rsi != null) {
+        const deltaWeaker = direction === 'BUY CALL' ? (delta < prev.delta - 15) : (delta > prev.delta + 15);
+        const rsiWeaker    = direction === 'BUY CALL' ? (rsi < prev.rsi - 5)     : (rsi > prev.rsi + 5);
+        if (deltaWeaker && rsiWeaker) {
+            warning = `⚠️ Momentum weakening since last ${direction} alert (Delta: ${prev.delta}%→${delta}%, RSI: ${prev.rsi}→${rsi})`;
+        }
+    }
+    if (direction === 'BUY CALL') lastCallSnapshot = { delta, rsi };
+    if (direction === 'BUY PUT')  lastPutSnapshot  = { delta, rsi };
+    return warning;
+}
 // ── Trend Lock state (signal-flip prevention) ──────────────────────────────
 // External day-audit feedback flagged rapid CALL→PUT→CALL whipsaws (e.g. 12:50
 // PM BUY CALL → 1:02 PM BUY PUT, only 12 min apart) as the single biggest
@@ -2799,6 +2823,10 @@ async function checkTelegramAlerts(newSignal) {
             startSignalPerformance(newSignal, strikeDataForAlert).catch(e => console.warn('[SignalPerf] start error:', e.message));
         }
 
+        marketState.momentumDecayWarning = (newSignal === 'BUY CALL' || newSignal === 'BUY PUT')
+            ? checkMomentumDecay(newSignal, marketState.delta?.deltaPct, marketState.rsi)
+            : null;
+
         await sendSignalAlert(marketState, prevSignal, strikeDataForAlert);
         lastSignalFiredPrice = marketState.nifty || 0;
 
@@ -2892,6 +2920,15 @@ async function checkTelegramAlerts(newSignal) {
         };
         if (mtfStrikeData) mtfStrikeData.leadQuality = leadQuality;
         marketState.mtf.leadQuality = leadQuality;
+        marketState.momentumDecayWarning = checkMomentumDecay(marketState.mtf.signal, deltaPct, marketState.rsi);
+
+        // Only track Strong Confluence (3-4/4) MTF-tracker leads for exit-warning
+        // purposes — tracking every Weak/Isolated ping as an "open position"
+        // would be noisy and meaningless (most of those were never actionable
+        // to begin with, per the Lead Quality distinction worked out earlier).
+        if (mtfStrikeData && leadQuality.score >= 3) {
+            startSignalPerformance(marketState.mtf.signal, mtfStrikeData, 'mtf').catch(e => console.warn('[SignalPerf] MTF start error:', e.message));
+        }
 
         await sendMTFAlert(marketState, mtfStrikeData);
         lastMTFAlertAt     = Date.now();
@@ -4303,13 +4340,17 @@ async function saveSignalToLog(signal, prevSig) {
 // placed a real order on. Independent of trade_history (manual journal) and
 // signal_log (fire-and-forget snapshot) — this one watches the live premium
 // after a signal fires and records what actually happened.
-async function startSignalPerformance(signal, strikeData) {
+async function startSignalPerformance(signal, strikeData, source = 'main') {
     if (!strikeData || !strikeData.entry) return;
     const rec = {
         id: null,
         signal, type: strikeData.type, strike: strikeData.strike,
         entry: strikeData.entry, sl: strikeData.sl, target: strikeData.target,
         high: strikeData.entry, startTs: Date.now(),
+        // ── For exit-warning decay detection (see updateSignalPerformance) ──
+        entryDelta: marketState.delta?.deltaPct ?? null,
+        entryRSI: marketState.rsi ?? null,
+        source, exitWarned: false,
     };
     openPerfRecords.push(rec);
     if (dbPool) {
@@ -4338,6 +4379,24 @@ async function updateSignalPerformance() {
         const elapsedMin = Math.round((Date.now() - rec.startTs) / 60000);
 
         if (live) rec.high = Math.max(rec.high, live);
+
+        // ── Exit warning: original setup weakening, still open ──────────────
+        // Same 15pt-Delta / 5pt-RSI decay thresholds as checkMomentumDecay,
+        // but comparing THIS trade's entry snapshot to the live market right
+        // now — not comparing two separate alerts. Fires at most once per
+        // trade (rec.exitWarned) so it doesn't spam every ~30s cycle.
+        if (!rec.exitWarned && rec.entryDelta != null && rec.entryRSI != null) {
+            const curDelta = marketState.delta?.deltaPct;
+            const curRSI   = marketState.rsi;
+            if (curDelta != null && curRSI != null) {
+                const deltaWeaker = rec.signal === 'BUY CALL' ? (curDelta < rec.entryDelta - 15) : (curDelta > rec.entryDelta + 15);
+                const rsiWeaker   = rec.signal === 'BUY CALL' ? (curRSI < rec.entryRSI - 5)       : (curRSI > rec.entryRSI + 5);
+                if (deltaWeaker && rsiWeaker) {
+                    rec.exitWarned = true;
+                    sendMomentumExitWarning(rec, curDelta, curRSI).catch(e => console.warn('[ExitWarning] send error:', e.message));
+                }
+            }
+        }
 
         // FIX: `live && live >= rec.target` returns `live` itself (e.g. undefined/0/null)
         // when live is falsy, not a real boolean — target_hit/sl_hit are BOOLEAN columns,
