@@ -29,6 +29,7 @@ const { fetchGlobalCues }           = require('./src/api/globalCues');
 const { fetchAdvanceDecline,
         injectAngelSession }        = require('./src/api/breadth');
 const { calculateSRLevels }         = require('./src/api/levels');
+const { computeDynamicLevels, classifyDynamicLevels } = require('./src/api/dynamicLevels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo } = require('./src/api/physicsOfTrading');
 const { getRenkoAnalysis } = require('./src/api/renko');
 // DISABLED (per decision to stay pure option-buyer, no selling/spread strategies):
@@ -169,6 +170,8 @@ let marketState = {
     dayType: { trendProbability: 0, rangeProbability: 0, recommendation: { favor: 'NEUTRAL', avoid: '', label: 'Awaiting data...' }, adx: null, mtfAligned: false, orbStatus: 'FORMING' },
     // ── Trap Zone — VWAP/POC chop pocket warning ──────────────────────────────
     trapZone: { active: false, label: 'Trap Zone — awaiting data' },
+    // ── Dynamic Levels — Punch-style ATR H1-H3/L1-L3 intraday bands ───────────
+    dynamicLevels: { available: false, label: 'Dynamic Levels — awaiting data' },
     // ── Signal Performance — today's live tracking cards ──────────────────────
     signalPerformance: { open: [], todayAccuracy: null, todayCount: 0 },
     // ── Contradiction Score — 6-factor weighted bull/bear check ────────────────
@@ -1038,6 +1041,14 @@ function computeConfidenceBreakdown() {
     if (isBull && rsi != null && rsi > 68) items.push({ label: `RSI Overbought (${rsi})`, pts: -5 });
     if (!isBull && rsi != null && rsi < 32) items.push({ label: `RSI Oversold (${rsi})`, pts: -5 });
 
+    // Dynamic Levels (Punch-style H1-H3/L1-L3) — same factor combineSignals() nudges on
+    const dl = marketState.dynamicLevels;
+    if (dl?.available) {
+        if (isBull && dl.aboveH3) items.push({ label: `Above Dynamic H3 (${dl.h3})`, pts: 5 });
+        else if (!isBull && dl.belowL3) items.push({ label: `Below Dynamic L3 (${dl.l3})`, pts: 5 });
+        else if (dl.noTradeZone) items.push({ label: `Inside Dynamic H1–L1 range pocket`, pts: -10 });
+    }
+
     return { items, final: marketState.confidence, generatedAt: new Date().toISOString() };
 }
 
@@ -1062,6 +1073,22 @@ function computeTrapZone() {
             ? `⚠️ Trap Zone — between VWAP (${vwap.toFixed(0)}) and POC (${poc.toFixed(0)}) — expect whipsaws, wait for breakout`
             : `Clear — VWAP (${vwap.toFixed(0)}) / POC (${poc.toFixed(0)}) not forming a chop pocket`,
     };
+}
+
+// ── Dynamic Levels — Punch-style ATR H1-H3/L1-L3 intraday bands ────────────
+// See src/api/dynamicLevels.js header for formula + rollout rationale.
+// Computed at MTF-refresh cadence (levels only move as ATR/day-range shift,
+// no need for per-tick recompute — same reasoning as Renko just above).
+function computeDynamicLevelsState() {
+    try {
+        const candles = getCandleHistory(true);
+        const levels  = computeDynamicLevels(candles, marketState.wsHigh, marketState.wsLow);
+        const zoneInfo = classifyDynamicLevels(levels, marketState.nifty);
+        return { ...levels, ...zoneInfo };
+    } catch (e) {
+        console.warn('[DynamicLevels] compute error:', e.message);
+        return marketState.dynamicLevels || { available: false, label: 'Dynamic Levels — error' };
+    }
 }
 
 // ── Contradiction Score ──────────────────────────────────────────────────────
@@ -1977,6 +2004,30 @@ function combineSignals(indicators) {
         const before = confidence;
         confidence = Math.min(confidence, 60);
         if (confidence < before) reasons.push(`⚠️ Confidence capped at 60% — ADX ${adxVal} < ${adxFloor1m + 5} (trend weak, full signal needs ADX ≥ ${adxFloor1m + 5})`);
+    }
+
+    // ── Dynamic Levels confluence (Punch-style H1-H3/L1-L3) ──────────────────
+    // Additive-only per project history with over-gating (see dynamicLevels.js
+    // header): starts as a soft confidence nudge, NOT a hard block. Price
+    // clearing the outer band (H3/L3) in the signal's own direction = genuine
+    // structural confirmation → small boost. Price still stuck inside the
+    // H1-L1 "range pocket" = false-breakout risk → cap, same pattern as the
+    // ADX/SoftAligned caps above.
+    {
+        const dl = marketState.dynamicLevels;
+        if (signal !== 'WAIT' && dl?.available) {
+            if (signal === 'BUY CALL' && dl.aboveH3) {
+                confidence = Math.min(confidence + 5, 98);
+                reasons.push(`🟢 Price above Dynamic H3 (${dl.h3}) — structural confluence, +5% confidence`);
+            } else if (signal === 'BUY PUT' && dl.belowL3) {
+                confidence = Math.min(confidence + 5, 98);
+                reasons.push(`🔴 Price below Dynamic L3 (${dl.l3}) — structural confluence, +5% confidence`);
+            } else if (dl.noTradeZone) {
+                const before = confidence;
+                confidence = Math.min(confidence, 55);
+                if (confidence < before) reasons.push(`⚠️ Confidence capped at 55% — price inside Dynamic H1(${dl.h1})–L1(${dl.l1}) range pocket, false-breakout risk higher`);
+            }
+        }
     }
 
     // ── SoftAligned confidence cap — 5m dissenting ───────────────────────────
@@ -3485,6 +3536,10 @@ async function refreshMTF() {
         } catch (e) {
             console.warn('[Renko] compute error:', e.message);
         }
+
+        // ── Dynamic Levels (Punch-style H1-H3/L1-L3, informational + light
+        // confidence nudge only — see combineSignals() and dynamicLevels.js) ──
+        marketState.dynamicLevels = computeDynamicLevelsState();
 
         // ── Pre-market gate ────────────────────────────
         // Before 09:15 IST the candle history is overnight/multi-day data.
@@ -5176,6 +5231,7 @@ app.get('/api/chart', async (req,res) => {
 app.get('/api/global',  (req,res) => res.json(marketState.global));
 app.get('/api/breadth', (req,res) => res.json(marketState.breadth));
 app.get('/api/levels',  (req,res) => res.json(marketState.srLevels));
+app.get('/api/dynamic-levels', (req,res) => res.json(marketState.dynamicLevels));
 
 app.get('/api/health',  (req,res) => res.json({
     status:marketState.connected?'live':'waiting',
