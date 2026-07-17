@@ -263,6 +263,15 @@ let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-d
 let pendingMTFFlipSignal = null, pendingMTFFlipSince = 0;
 const MTF_REVERSAL_CONFIRM_MS = 10 * 60 * 1000;
 let morningSummarySent=false, closeSummarySent=false, vixAlertSent=false;
+// ── VIX-spike size cap — daily baseline, reset each session ──────────────────
+// Same idea as the expiry-day gamma-risk size cap, but for a normal day where
+// VIX suddenly jumps intraday (news, global shock, etc.) — that's real risk
+// that isn't captured by expiry-day logic alone. Baseline = first valid VIX
+// reading of the day; cap triggers on a large jump from THAT baseline, not
+// just an absolute level, since "normal" VIX varies across market regimes.
+let sessionOpenVix = null;
+// ── Daily signal counters — for the EOD Telegram digest ─────────────────────
+let dailySignalCounts = { main: 0, mtfStrong: 0, mtfModerate: 0, mtfWeak: 0 };
 let nishanebaazAlertSent=false;  // one-shot: fired once at 14:00 per day
 let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:15
 let _pcrHistoryDate = null;  // IST date-string of the session pcrHistory currently belongs to
@@ -2765,11 +2774,18 @@ async function checkTelegramAlerts(newSignal) {
     if (h===15&&m>=30&&!closeSummarySent) {
         closeSummarySent=true;
         marketState.sessionOpenPrice = _sessionOpenPrice; // expose for accurate day-change calc
+        marketState.dailySignalCounts = dailySignalCounts;
+        try {
+            const perfSummary = await getSignalPerformanceSummary();
+            marketState.todaySignalPerf = perfSummary?.today ?? null;
+        } catch (e) { console.warn('[EOD Digest] perf summary error:', e.message); }
         await sendCloseSummary(marketState);
         setTimeout(() => {
             morningSummarySent=false; closeSummarySent=false; vixAlertSent=false;
             nishanebaazAlertSent=false; pcrClearedToday=false; btstSentToday=false;
             telegramAlertInFlight=false; ema920AlertSentToday=false;
+            sessionOpenVix = null;
+            dailySignalCounts = { main: 0, mtfStrong: 0, mtfModerate: 0, mtfWeak: 0 };
             // Reset intraday trades so yesterday's trades don't show on next morning's fresh session
             trades = [];
             console.log('[Daily Reset] Intraday trades cleared for next session');
@@ -2827,6 +2843,7 @@ async function checkTelegramAlerts(newSignal) {
             ? checkMomentumDecay(newSignal, marketState.delta?.deltaPct, marketState.rsi)
             : null;
 
+        dailySignalCounts.main++;
         await sendSignalAlert(marketState, prevSignal, strikeDataForAlert);
         lastSignalFiredPrice = marketState.nifty || 0;
 
@@ -2929,6 +2946,9 @@ async function checkTelegramAlerts(newSignal) {
         if (mtfStrikeData && leadQuality.score >= 3) {
             startSignalPerformance(marketState.mtf.signal, mtfStrikeData, 'mtf').catch(e => console.warn('[SignalPerf] MTF start error:', e.message));
         }
+        if (leadQuality.label === 'Strong Confluence') dailySignalCounts.mtfStrong++;
+        else if (leadQuality.label === 'Moderate') dailySignalCounts.mtfModerate++;
+        else dailySignalCounts.mtfWeak++;
 
         await sendMTFAlert(marketState, mtfStrikeData);
         lastMTFAlertAt     = Date.now();
@@ -3065,6 +3085,22 @@ async function updatePrice(price, change, changePct, source) {
         marketState.tradeQuality.sizeHint = `${marketState.tradeQuality.pct}%→50% (expiry day gamma risk)`;
         marketState.tradeQuality.pct = 50;
         marketState.tradeQuality.expiryCapped = true;
+    }
+    // ── VIX-spike size cap ────────────────────────────────────────────────────
+    // A sudden intraday VIX jump (news shock, global cue) is real risk on any
+    // day, not just expiry — premiums can move violently in both directions
+    // regardless of the signal's own confidence. Cap triggers on a RELATIVE
+    // jump from today's own baseline (not an absolute VIX level), since what
+    // counts as "elevated" varies by regime — a jump from 11→15 is a 36% spike
+    // even though 15 alone looks unremarkable in isolation.
+    if (signal !== 'WAIT' && sessionOpenVix > 0 && marketState.vix > 0) {
+        const vixJumpPct = ((marketState.vix - sessionOpenVix) / sessionOpenVix) * 100;
+        if (vixJumpPct >= 25 && marketState.tradeQuality.pct > 50) {
+            const beforePct = marketState.tradeQuality.pct;
+            marketState.tradeQuality.sizeHint = `${beforePct}%→50% (VIX spiked +${vixJumpPct.toFixed(0)}% today — ${sessionOpenVix}→${marketState.vix})`;
+            marketState.tradeQuality.pct = 50;
+            marketState.tradeQuality.vixCapped = true;
+        }
     }
     marketState.rsi=indicators.rsi; marketState.ema9=indicators.ema9;
     marketState.ema21=indicators.ema21; marketState.vwap=indicators.vwap;
@@ -3415,6 +3451,7 @@ async function refreshMarketData() {
     // ever reaching marketState — VIX has a meaningful "last close" value
     // too (e.g. "VIX closed 11.8 Friday"), so apply it regardless of trading day.
     if (vixData) { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.strikeRange; }
+    if (isMarketOpen() && vixData?.vix > 0 && sessionOpenVix === null) sessionOpenVix = vixData.vix;
     if (!isTradingDay) return; // rest of this function is live-market-only from here
     if (niftyData?.closes?.length>0&&!historyLoaded) { initializeHistory(niftyData.closes,niftyData.candles); historyLoaded=true; console.log(`History: ${niftyData.closes.length} candles`); }
     if (niftyData?.price>0 && isMarketOpen()) {

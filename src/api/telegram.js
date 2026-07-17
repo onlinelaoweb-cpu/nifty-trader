@@ -357,6 +357,25 @@ async function sendCloseSummary(state) {
         dayPct    = parseFloat(((dayChange / state.prevClose) * 100).toFixed(2));
     }
 
+    // ── Daily digest — how many signals fired today, and how today's tracked
+    // trades resolved. Previously the only way to get this was manually
+    // screenshotting the day's Telegram history for an audit; now it's a
+    // built-in daily report card.
+    const dc = state.dailySignalCounts;
+    const digestLines = [];
+    if (dc && (dc.main || dc.mtfStrong || dc.mtfModerate || dc.mtfWeak)) {
+        digestLines.push(`\n📋 <b>Today's Signals</b>`);
+        if (dc.main) digestLines.push(`Main engine: ${dc.main}`);
+        if (dc.mtfStrong || dc.mtfModerate || dc.mtfWeak) {
+            digestLines.push(`MTF-tracker: 🟢${dc.mtfStrong} Strong · 🟡${dc.mtfModerate} Moderate · 🔴${dc.mtfWeak} Weak`);
+        }
+    }
+    const perf = state.todaySignalPerf;
+    if (perf && perf.total > 0) {
+        digestLines.push(`Closed today: ${perf.total} | Real accuracy: ${perf.realAccuracy}% (strict: ${perf.accuracy}%)`);
+    }
+    const digestBlock = digestLines.length ? `\n━━━━━━━━━━━━━━━━━━${digestLines.join('\n')}` : '';
+
     const msg = `
 🔔 <b>MARKET CLOSED — End of Day</b>
 ━━━━━━━━━━━━━━━━━━
@@ -364,7 +383,7 @@ async function sendCloseSummary(state) {
 ${dayChange >= 0 ? '▲' : '▼'} ${Math.abs(dayChange).toFixed(2)} (${dayPct.toFixed(2)}%)
 
 VIX: ${state.vix || '--'}
-RSI: ${state.rsi || '--'}
+RSI: ${state.rsi || '--'}${digestBlock}
 ━━━━━━━━━━━━━━━━━━
 <i>VardaanNifty AI — See you tomorrow!</i>
 `.trim();
