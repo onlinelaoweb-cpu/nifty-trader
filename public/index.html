@@ -5604,6 +5604,19 @@ function updateInsightsUI(s) {
       }
     }
 
+    // Premarket/Opening Gap (prev close vs today's open, via Fyers)
+    const pg = s.premarketGap;
+    if (pg) {
+      const gapWrap  = document.getElementById('ins-gap-wrap');
+      const gapLabel = document.getElementById('ins-gap-label');
+      if (gapLabel) gapLabel.textContent = pg.label || 'Awaiting data...';
+      if (gapWrap) {
+        gapWrap.style.borderColor = pg.zone === 'GAP_UP' ? 'var(--green)'
+                                  : pg.zone === 'GAP_DOWN' ? 'var(--red)'
+                                  : 'var(--border)';
+      }
+    }
+
     // Trend Conviction Mode
     const tc = s.trendConviction;
     if (tc) {
@@ -5723,9 +5736,12 @@ async function fetchSignalPerformance() {
     // that reached the AI Coach's own +30%/"book 50%" stage before timing out —
     // without this, a signal that ran +36% but never quite touched the full
     // +50% target showed up as a flat 0% miss even though it was a genuinely
-    // profitable trade. Both numbers are shown so nothing is hidden either way.
+    // profitable trade. Directional = did it move the right way AT ALL, the
+    // truest "was the call right" number (17 Jul audit: a ~90%-correct day
+    // showed "accuracy: 33%" because that only measures the strict number).
+    // All three are shown so nothing is hidden either way.
     const fmt = (x) => x && x.total > 0 ? `${x.realAccuracy}% (${x.total})` : '—';
-    const fmtStrict = (x) => x && x.total > 0 ? `${x.accuracy}% strict` : '';
+    const fmtStrict = (x) => x && x.total > 0 ? `Dir: ${x.directionalAccuracy}% · Target: ${x.accuracy}% · SL: ${x.slRate}%` : '';
     const tEl = document.getElementById('ins-acc-today');
     const wEl = document.getElementById('ins-acc-weekly');
     const mEl = document.getElementById('ins-acc-monthly');
@@ -8899,6 +8915,12 @@ function _statRow(label, val) {
       <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">📐 DYNAMIC LEVELS (H1-H3 / L1-L3) <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(ATR bands — light confidence nudge, not a hard gate)</span></div>
       <div id="ins-dynlevels-label" style="font-size:13px;color:var(--text);margin-bottom:8px;">Awaiting data...</div>
       <div id="ins-dynlevels-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;"></div>
+    </div>
+
+    <!-- Premarket/Opening Gap (prev close vs today's open, via Fyers) -->
+    <div id="ins-gap-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">🌅 OPENING GAP <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(today's open vs prev close — +3% confidence nudge only)</span></div>
+      <div id="ins-gap-label" style="font-size:13px;color:var(--text);">Awaiting data...</div>
     </div>
 
     <!-- Trend Conviction Mode -->

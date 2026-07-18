@@ -83,6 +83,14 @@ app.use(express.json());
 app.use(express.static('public', { etag: false, maxAge: 0 }));
 
 const PORT    = process.env.PORT || 8080;
+// ── Dynamic Levels hard-gate toggle ──────────────────────────────────────────
+// Default OFF (soft nudge only — see dynamicLevels.js). Flip to 'true' in
+// Railway env vars once you've watched a few weeks of live signals and are
+// convinced the "no-trade range pocket" cap should actually block trades
+// instead of just capping confidence at 55%. Same rollout discipline as
+// Contradiction Score / Sequence Check, which caused a "zero trades" bug
+// when made hard-blocking too early.
+const DYNAMIC_LEVELS_HARD_GATE = String(process.env.DYNAMIC_LEVELS_HARD_GATE || '').toLowerCase() === 'true';
 const LOT_SIZE = 65;   // Nifty 50 lot size (revised Jan 2026 by NSE: 75 → 65)
 
 // ── Market State ──────────────────────────────────────
@@ -172,6 +180,8 @@ let marketState = {
     trapZone: { active: false, label: 'Trap Zone — awaiting data' },
     // ── Dynamic Levels — Punch-style ATR H1-H3/L1-L3 intraday bands ───────────
     dynamicLevels: { available: false, label: 'Dynamic Levels — awaiting data' },
+    // ── Premarket/Opening Gap — prev close vs today's open, via Fyers ─────────
+    premarketGap: { available: false, label: 'Opening Gap — awaiting data' },
     // ── Signal Performance — today's live tracking cards ──────────────────────
     signalPerformance: { open: [], todayAccuracy: null, todayCount: 0 },
     // ── Contradiction Score — 6-factor weighted bull/bear check ────────────────
@@ -209,18 +219,37 @@ let lastMainCallAt = 0, lastMainPutAt = 0;
 // visible warning so the trader can judge for themselves rather than
 // assuming "STRONG" always means "as strong as last time".
 let lastCallSnapshot = null, lastPutSnapshot = null;   // {delta, rsi}
-function checkMomentumDecay(direction, delta, rsi) {
+// ── Momentum Decay / Exit Warning ────────────────────────────────────────────
+// External day-audit (17 Jul) flagged: "the system kept issuing repeated exit
+// warnings throughout the day" — root cause was a loose 2-of-2 AND (Delta
+// drop >15 AND RSI drop >5) recomputed every ~3min MTF cycle against a
+// sliding baseline (whatever was last checked, not a fixed reference), so
+// small back-and-forth noise kept re-tripping it. Audit's fix, applied here:
+// widen to 4 possible signals (Delta drop >20, RSI drop >15, price crosses
+// VWAP against the position, 5m trend flips against the position) and only
+// warn when 2+ of the 4 agree — a single noisy leg is no longer enough.
+function checkMomentumDecay(direction, delta, rsi, vwapSide, tf5mSignal) {
     const prev = direction === 'BUY CALL' ? lastCallSnapshot : lastPutSnapshot;
     let warning = null;
     if (prev && delta != null && rsi != null && prev.delta != null && prev.rsi != null) {
-        const deltaWeaker = direction === 'BUY CALL' ? (delta < prev.delta - 15) : (delta > prev.delta + 15);
-        const rsiWeaker    = direction === 'BUY CALL' ? (rsi < prev.rsi - 5)     : (rsi > prev.rsi + 5);
-        if (deltaWeaker && rsiWeaker) {
-            warning = `⚠️ Momentum weakening since last ${direction} alert (Delta: ${prev.delta}%→${delta}%, RSI: ${prev.rsi}→${rsi})`;
+        const deltaWeaker = direction === 'BUY CALL' ? (delta < prev.delta - 20) : (delta > prev.delta + 20);
+        const rsiWeaker   = direction === 'BUY CALL' ? (rsi   < prev.rsi   - 15) : (rsi   > prev.rsi   + 15);
+        const vwapFlip    = direction === 'BUY CALL' ? (vwapSide === 'BELOW')    : (vwapSide === 'ABOVE');
+        const wasOwnDir   = direction === 'BUY CALL' ? 'BULLISH' : 'BEARISH';
+        const tf5mFlip    = prev.tf5m === wasOwnDir && tf5mSignal && tf5mSignal !== wasOwnDir && tf5mSignal !== 'INSUFFICIENT';
+
+        const hits = [deltaWeaker, rsiWeaker, vwapFlip, tf5mFlip].filter(Boolean).length;
+        if (hits >= 2) {
+            const parts = [];
+            if (deltaWeaker) parts.push(`Delta ${prev.delta}%→${delta}%`);
+            if (rsiWeaker)   parts.push(`RSI ${prev.rsi}→${rsi}`);
+            if (vwapFlip)    parts.push(`price now ${vwapSide} VWAP`);
+            if (tf5mFlip)    parts.push(`5m trend flipped to ${tf5mSignal}`);
+            warning = `⚠️ Momentum weakening (${hits}/4: ${parts.join(', ')}) since last ${direction} check`;
         }
     }
-    if (direction === 'BUY CALL') lastCallSnapshot = { delta, rsi };
-    if (direction === 'BUY PUT')  lastPutSnapshot  = { delta, rsi };
+    if (direction === 'BUY CALL') lastCallSnapshot = { delta, rsi, tf5m: tf5mSignal };
+    if (direction === 'BUY PUT')  lastPutSnapshot  = { delta, rsi, tf5m: tf5mSignal };
     return warning;
 }
 // ── Trend Lock state (signal-flip prevention) ──────────────────────────────
@@ -1049,6 +1078,13 @@ function computeConfidenceBreakdown() {
         else if (dl.noTradeZone) items.push({ label: `Inside Dynamic H1–L1 range pocket`, pts: -10 });
     }
 
+    // Premarket/Opening Gap — same factor combineSignals() nudges on
+    const pg = marketState.premarketGap;
+    if (pg?.available) {
+        if (isBull && pg.zone === 'GAP_UP') items.push({ label: `Gap-up open (+${pg.gapPct}%)`, pts: 3 });
+        else if (!isBull && pg.zone === 'GAP_DOWN') items.push({ label: `Gap-down open (${pg.gapPct}%)`, pts: 3 });
+    }
+
     return { items, final: marketState.confidence, generatedAt: new Date().toISOString() };
 }
 
@@ -1225,6 +1261,7 @@ function computeTrendConviction() {
     const vwap  = marketState.vwap;
     const val   = marketState.poc?.val;
     const vah   = marketState.poc?.vah;
+    const pocSig = marketState.poc?.signal;
     const delta = marketState.delta?.deltaPct;
     const orbStatus = marketState.orb?.status;
     const tf15m = marketState.mtf?.tf15m?.signal;
@@ -1244,10 +1281,16 @@ function computeTrendConviction() {
     if (delta != null && delta >=  40) bull.push(`Delta +${delta}%`);
     if (val != null && nifty && nifty < val) bear.push('Price below VAL');
     if (vah != null && nifty && nifty > vah) bull.push('Price above VAH');
+    // Explicit POC direction — added per 17 Jul audit, which specifically
+    // wanted "Price below/above POC" as its own required factor rather than
+    // relying only on VAL/VAH as a proxy (POC can sit between them and move
+    // independently as volume profile updates intraday).
+    if (pocSig === 'BELOW_POC') bear.push('Price below POC');
+    if (pocSig === 'ABOVE_POC') bull.push('Price above POC');
     if (orbStatus === 'BROKEN_DOWN') bear.push('ORB Breakdown');
     if (orbStatus === 'BROKEN_UP')   bull.push('ORB Breakout');
 
-    const CONVICTION_THRESHOLD = 4;   // of 6 possible independent conditions
+    const CONVICTION_THRESHOLD = 4;   // of 7 possible independent conditions
     const active = bear.length >= CONVICTION_THRESHOLD ? 'BEARISH'
                  : bull.length >= CONVICTION_THRESHOLD ? 'BULLISH'
                  : null;
@@ -1877,14 +1920,20 @@ function combineSignals(indicators) {
     // missed this because price wasn't at a session high/low at the time. This
     // is a direct veto: real-time order-flow delta is one of the freshest, most
     // reliable inputs (updates every tick), so a signal that directly opposes a
-    // STRONG delta reading (>25% either way) should not fire — the underlying
+    // STRONG delta reading (>20% either way) should not fire — the underlying
     // votes (PCR, global cues, FII/DII — all lagging/daily-granularity data)
     // are being outweighed by what large intraday buyers/sellers are doing right now.
+    //
+    // Threshold tightened 25% → 20% after 17 Jul audit: a 1:56 PM BUY PUT fired
+    // with Delta +21.9% (clearly bullish, 1H also Bullish) — it slipped through
+    // this gate by just 3.1 points since 21.9 < 25. That was the single false
+    // signal of an otherwise 9/10 day (audit: "This should never have been
+    // generated... a genuine intraday pullback, not a reversal").
     const deltaPct = marketState.delta?.deltaPct ?? null;
     qualityGate.deltaAligned = true;
-    if (rawSignal !== 'WAIT' && deltaPct !== null && Math.abs(deltaPct) >= 25) {
-        if (rawSignal === 'BUY PUT'  && deltaPct >  25) qualityGate.deltaAligned = false;
-        if (rawSignal === 'BUY CALL' && deltaPct < -25) qualityGate.deltaAligned = false;
+    if (rawSignal !== 'WAIT' && deltaPct !== null && Math.abs(deltaPct) >= 20) {
+        if (rawSignal === 'BUY PUT'  && deltaPct >  20) qualityGate.deltaAligned = false;
+        if (rawSignal === 'BUY CALL' && deltaPct < -20) qualityGate.deltaAligned = false;
     }
 
     // ── Contradiction Score — NEW (informational for now) ────────────────────
@@ -2011,8 +2060,8 @@ function combineSignals(indicators) {
     // header): starts as a soft confidence nudge, NOT a hard block. Price
     // clearing the outer band (H3/L3) in the signal's own direction = genuine
     // structural confirmation → small boost. Price still stuck inside the
-    // H1-L1 "range pocket" = false-breakout risk → cap, same pattern as the
-    // ADX/SoftAligned caps above.
+    // H1-L1 "range pocket" = false-breakout risk → cap (or hard WAIT if
+    // DYNAMIC_LEVELS_HARD_GATE=true is set — off by default, see const above).
     {
         const dl = marketState.dynamicLevels;
         if (signal !== 'WAIT' && dl?.available) {
@@ -2023,9 +2072,34 @@ function combineSignals(indicators) {
                 confidence = Math.min(confidence + 5, 98);
                 reasons.push(`🔴 Price below Dynamic L3 (${dl.l3}) — structural confluence, +5% confidence`);
             } else if (dl.noTradeZone) {
-                const before = confidence;
-                confidence = Math.min(confidence, 55);
-                if (confidence < before) reasons.push(`⚠️ Confidence capped at 55% — price inside Dynamic H1(${dl.h1})–L1(${dl.l1}) range pocket, false-breakout risk higher`);
+                if (DYNAMIC_LEVELS_HARD_GATE) {
+                    reasons.push(`⛔ WAIT — price inside Dynamic H1(${dl.h1})–L1(${dl.l1}) range pocket (hard gate ON)`);
+                    signal = 'WAIT';
+                } else {
+                    const before = confidence;
+                    confidence = Math.min(confidence, 55);
+                    if (confidence < before) reasons.push(`⚠️ Confidence capped at 55% — price inside Dynamic H1(${dl.h1})–L1(${dl.l1}) range pocket, false-breakout risk higher`);
+                }
+            }
+        }
+    }
+
+    // ── Premarket/Opening Gap Gate (prev close → today's open, via Fyers) ────
+    // True sub-9:15 GIFT Nifty premarket isn't used here — no verified Fyers
+    // symbol for it (guessing one risks repeating the silent "NSE:NIFTY-I"
+    // symbol bug already documented in nseData.js). This uses the SAME Fyers
+    // pipeline PCR already relies on (fetchFyersQuote → open/prev_close),
+    // just reads the gap between yesterday's close and today's actual open —
+    // the real informational content those "premarket lines" were capturing.
+    {
+        const pg = marketState.premarketGap;
+        if (signal !== 'WAIT' && pg?.available) {
+            if (signal === 'BUY CALL' && pg.zone === 'GAP_UP') {
+                confidence = Math.min(confidence + 3, 98);
+                reasons.push(`📈 Gap-up open (+${pg.gapPct}%) — sentiment confluence, +3% confidence`);
+            } else if (signal === 'BUY PUT' && pg.zone === 'GAP_DOWN') {
+                confidence = Math.min(confidence + 3, 98);
+                reasons.push(`📉 Gap-down open (${pg.gapPct}%) — sentiment confluence, +3% confidence`);
             }
         }
     }
@@ -2891,7 +2965,11 @@ async function checkTelegramAlerts(newSignal) {
         }
 
         marketState.momentumDecayWarning = (newSignal === 'BUY CALL' || newSignal === 'BUY PUT')
-            ? checkMomentumDecay(newSignal, marketState.delta?.deltaPct, marketState.rsi)
+            ? checkMomentumDecay(
+                newSignal, marketState.delta?.deltaPct, marketState.rsi,
+                (marketState.nifty > marketState.vwap) ? 'ABOVE' : 'BELOW',
+                marketState.mtf?.tf5m?.signal
+              )
             : null;
 
         dailySignalCounts.main++;
@@ -2988,7 +3066,11 @@ async function checkTelegramAlerts(newSignal) {
         };
         if (mtfStrikeData) mtfStrikeData.leadQuality = leadQuality;
         marketState.mtf.leadQuality = leadQuality;
-        marketState.momentumDecayWarning = checkMomentumDecay(marketState.mtf.signal, deltaPct, marketState.rsi);
+        marketState.momentumDecayWarning = checkMomentumDecay(
+            marketState.mtf.signal, deltaPct, marketState.rsi,
+            (marketState.nifty > marketState.vwap) ? 'ABOVE' : 'BELOW',
+            marketState.mtf?.tf5m?.signal
+        );
 
         // Only track Strong Confluence (3-4/4) MTF-tracker leads for exit-warning
         // purposes — tracking every Weak/Isolated ping as an "open position"
@@ -3866,6 +3948,39 @@ async function refreshFyersVolume() {
     } catch(e) { console.error('[Fyers Volume]', e.message); }
 }
 
+// ── Premarket/Opening Gap (prev close → today's open, via Fyers) ────────────
+// See combineSignals() note on why true sub-9:15 GIFT Nifty premarket isn't
+// used — no verified Fyers symbol for it. This reuses the exact same
+// fetchFyersQuote() pipeline PCR/Volume already depend on, reading the INDEX
+// quote specifically (not the futures contract, which carries basis premium
+// that would distort the gap). Runs on a slower cadence (60s) since the gap
+// is fixed once today's open prints and doesn't need per-tick refresh.
+async function computePremarketGap() {
+    if (!isNSEMarketDay()) return;
+    try {
+        const q = await fetchFyersQuote('NSE:NIFTY50-INDEX');
+        if (!q || !q.open || !q.close) {
+            return; // today's open not printed yet (pre-9:15) or token issue — stay "awaiting data"
+        }
+        const gapPts = parseFloat((q.open - q.close).toFixed(2));
+        const gapPct = parseFloat(((gapPts / q.close) * 100).toFixed(2));
+        const zone = gapPct > 0.15 ? 'GAP_UP' : gapPct < -0.15 ? 'GAP_DOWN' : 'FLAT';
+        const label = zone === 'GAP_UP'
+            ? `📈 Gap-up open: +${gapPts}pt (+${gapPct}%) vs prev close ${q.close}`
+            : zone === 'GAP_DOWN'
+                ? `📉 Gap-down open: ${gapPts}pt (${gapPct}%) vs prev close ${q.close}`
+                : `↔️ Flat open: ${gapPts}pt (${gapPct}%) vs prev close ${q.close}`;
+
+        marketState.premarketGap = {
+            available: true, open: q.open, prevClose: q.close,
+            gapPts, gapPct, zone, label,
+            updatedAt: new Date().toISOString(),
+        };
+    } catch (e) {
+        console.warn('[PremarketGap] compute error:', e.message);
+    }
+}
+
 // ── FII/DII Sync (runs always — not gated by market hours) ───────────────────
 // refreshPCR() is skipped when market is closed, so FII data never syncs after 15:30.
 // This standalone function runs every 20 min and ensures FII/DII always shows on breadth tab.
@@ -4225,10 +4340,25 @@ async function initDB() {
                 prev_signal TEXT,          -- what signal was before this
                 quality_gate BOOLEAN,
                 entry_window TEXT,
-                reasons     TEXT           -- JSON array of reason strings
+                reasons     TEXT,          -- JSON array of reason strings
+                dyn_zone    TEXT,          -- Dynamic Levels zone at fire time: ABOVE_H3/H1_H3/INSIDE/L1_L3/BELOW_L3
+                dyn_atr     NUMERIC,       -- ATR(14) used for that zone's H/L bands
+                gap_zone    TEXT,          -- Premarket/Opening Gap zone at fire time: GAP_UP/FLAT/GAP_DOWN
+                gap_pct     NUMERIC        -- Opening gap % vs prev close
             )
         `);
         console.log('✅ PostgreSQL signal_log table ready');
+
+        // Backfill columns for tables created before this feature was added —
+        // CREATE TABLE IF NOT EXISTS above is a no-op on an existing table, so
+        // older deployments need an explicit ALTER to pick up the new columns.
+        await dbPool.query(`
+            ALTER TABLE signal_log
+                ADD COLUMN IF NOT EXISTS dyn_zone TEXT,
+                ADD COLUMN IF NOT EXISTS dyn_atr  NUMERIC,
+                ADD COLUMN IF NOT EXISTS gap_zone TEXT,
+                ADD COLUMN IF NOT EXISTS gap_pct  NUMERIC
+        `);
 
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
@@ -4280,6 +4410,13 @@ async function initDB() {
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS source TEXT`).catch(()=>{});
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS lead_quality TEXT`).catch(()=>{});
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS exit_warned BOOLEAN DEFAULT FALSE`).catch(()=>{});
+        // Dynamic Levels / Opening Gap zone at entry — lets us later PROVE
+        // (not assume) whether the "no-trade range pocket" soft cap actually
+        // correlates with worse outcomes before ever flipping
+        // DYNAMIC_LEVELS_HARD_GATE=true. Same evidence-first discipline as
+        // the Lead Quality columns just above.
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS dyn_zone TEXT`).catch(()=>{});
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS gap_zone TEXT`).catch(()=>{});
         console.log('✅ PostgreSQL signal_performance table ready');
 
         // ── journal_trades table — manually entered trades from the Journal tab ──
@@ -4415,15 +4552,17 @@ async function saveSignalToLog(signal, prevSig) {
             `INSERT INTO signal_log
               (signal, confidence, nifty, rsi, ema9, ema21, vwap, vix, pcr, atm_pcr,
                adx, mtf_signal, mtf_aligned, breadth_sig, prev_signal,
-               quality_gate, entry_window, reasons)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+               quality_gate, entry_window, reasons, dyn_zone, dyn_atr, gap_zone, gap_pct)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
             [
                 signal, s.confidence, s.nifty, s.rsi, s.ema9, s.ema21, s.vwap,
                 s.vix, s.pcr, s.atmPcr, s.adx?.adx ?? null,
                 s.mtf?.signal ?? null, s.mtf?.aligned ?? false,
                 s.breadth?.breadthSignal ?? null, prevSig,
                 s.qualityGate?.passed ?? false, s.entryWindow?.label ?? null,
-                JSON.stringify((s.reason || []).slice(0, 12))
+                JSON.stringify((s.reason || []).slice(0, 12)),
+                s.dynamicLevels?.zone ?? null, s.dynamicLevels?.atr ?? null,
+                s.premarketGap?.zone ?? null, s.premarketGap?.gapPct ?? null
             ]
         );
         console.log(`📝 Signal logged: ${signal} @ ₹${s.nifty} (conf:${s.confidence}%)`);
@@ -4455,14 +4594,16 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
         entryRSI: marketState.rsi ?? null,
         source, exitWarned: false,
         leadQuality: strikeData.leadQuality?.label ?? null,  // null for main-engine trades (no MTF lead-quality concept there)
+        dynZone: marketState.dynamicLevels?.zone ?? null,
+        gapZone: marketState.premarketGap?.zone ?? null,
     };
     openPerfRecords.push(rec);
     if (dbPool) {
         try {
             const r = await dbPool.query(
-                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high, source, lead_quality)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry, rec.source, rec.leadQuality]
+                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high, source, lead_quality, dyn_zone, gap_zone)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry, rec.source, rec.leadQuality, rec.dynZone, rec.gapZone]
             );
             rec.id = r.rows[0]?.id ?? null;
         } catch (e) { console.warn('[SignalPerf] insert error:', e.message); }
@@ -4553,6 +4694,22 @@ async function updateSignalPerformance() {
 
 // Daily/weekly/monthly accuracy rollup — per feedback: "Over time you can
 // publish: Today's accuracy, Weekly accuracy, Monthly accuracy."
+//
+// 17 Jul audit flagged this exact conflation: a day with ~90% directionally
+// correct signals still showed "accuracy: 33%" on the dashboard, because
+// "accuracy" only counted whether the OPTION PREMIUM technically touched the
+// full +50% target — a signal that correctly called the market direction but
+// only ran +15-20% before timing out (a genuine pullback, not a wrong call)
+// counted as a flat miss. Now reporting three separate numbers instead of
+// one blended one, per audit recommendation:
+//   directionalAccuracy — did the trade move in the predicted direction AT
+//                          ALL (max_gain_pct > 0)? Answers "was the call right".
+//   accuracy            — strict: full official target technically touched.
+//                          Answers "would a mechanical target-order have filled".
+//   slRate               — % of trades that hit the stop-loss. Answers "how
+//                          often was the call flat-out wrong".
+// realAccuracy (already existed) sits between directional and strict: also
+// credits the AI Coach's own partial-book stage, not just the full target.
 async function getSignalPerformanceSummary() {
     if (!dbPool) return { today: null, weekly: null, monthly: null };
     const q = async (whereClause) => {
@@ -4560,12 +4717,14 @@ async function getSignalPerformanceSummary() {
             `SELECT COUNT(*) AS total,
                     SUM(CASE WHEN target_hit THEN 1 ELSE 0 END) AS hits,
                     SUM(CASE WHEN target_hit OR partial_win THEN 1 ELSE 0 END) AS real_hits,
+                    SUM(CASE WHEN max_gain_pct > 0 THEN 1 ELSE 0 END) AS directional_hits,
+                    SUM(CASE WHEN sl_hit THEN 1 ELSE 0 END) AS sl_hits,
                     ROUND(AVG(time_taken_min)) AS avg_time
              FROM signal_performance WHERE closed = true AND ${whereClause}`
         );
         const row = r.rows[0];
         const total = parseInt(row.total) || 0;
-        if (total === 0) return { total: 0, accuracy: null, realAccuracy: null, avgTimeMin: null };
+        if (total === 0) return { total: 0, accuracy: null, realAccuracy: null, directionalAccuracy: null, slRate: null, avgTimeMin: null };
         // accuracy = strict (only official target technically touched).
         // realAccuracy = also credits trades that ran to the AI Coach's own
         // +30%/"book 50%" stage before timing out — a truer picture of whether
@@ -4575,6 +4734,8 @@ async function getSignalPerformanceSummary() {
             total,
             accuracy: Math.round((parseInt(row.hits) / total) * 100),
             realAccuracy: Math.round((parseInt(row.real_hits) / total) * 100),
+            directionalAccuracy: Math.round((parseInt(row.directional_hits) / total) * 100),
+            slRate: Math.round((parseInt(row.sl_hits) / total) * 100),
             avgTimeMin: row.avg_time ? parseInt(row.avg_time) : null,
         };
     };
@@ -5232,6 +5393,7 @@ app.get('/api/global',  (req,res) => res.json(marketState.global));
 app.get('/api/breadth', (req,res) => res.json(marketState.breadth));
 app.get('/api/levels',  (req,res) => res.json(marketState.srLevels));
 app.get('/api/dynamic-levels', (req,res) => res.json(marketState.dynamicLevels));
+app.get('/api/premarket-gap', (req,res) => res.json(marketState.premarketGap));
 
 app.get('/api/health',  (req,res) => res.json({
     status:marketState.connected?'live':'waiting',
@@ -5497,6 +5659,7 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
     setTimeout(() => setInterval(refreshFyersVolume,      15*1000), 20*1000);   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
+    setTimeout(() => setInterval(computePremarketGap,     60*1000), 20*1000);   // opening gap vs prev close, via Fyers (see combineSignals note)
     setTimeout(() => setInterval(syncFIIToMarketState, 20*60*1000), 5*1000);    // FIX: sync FII always, even after market close
     setTimeout(() => setInterval(fetchCalendarEvents, 60*60*1000), 180*1000); // refresh calendar hourly
 

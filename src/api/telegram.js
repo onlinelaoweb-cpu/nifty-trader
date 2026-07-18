@@ -166,6 +166,8 @@ ${pcrInfo}${volInfo ? '\n' + volInfo : ''}
 ${pocInfo}
 ${deltaInfo}
 ${state.orb?.label ? '\n' + state.orb.label : ''}
+${state.dynamicLevels?.available ? `\n📐 ${state.dynamicLevels.label}` : ''}
+${state.premarketGap?.available ? `\n${state.premarketGap.label}` : ''}
 ━━━━━━━━━━━━━━━━━━
 ${strikeBlock}
 ━━━━━━━━━━━━━━━━━━
@@ -372,7 +374,10 @@ async function sendCloseSummary(state) {
     }
     const perf = state.todaySignalPerf;
     if (perf && perf.total > 0) {
-        digestLines.push(`Closed today: ${perf.total} | Real accuracy: ${perf.realAccuracy}% (strict: ${perf.accuracy}%)`);
+        // Three separate numbers, not one blended one — see getSignalPerformanceSummary()
+        // header for why (17 Jul audit: "accuracy: 33%" looked bad on a day that was
+        // ~90% directionally correct, purely because target_hit is strict pass/fail).
+        digestLines.push(`Closed today: ${perf.total} | Direction: ${perf.directionalAccuracy}% · Target hit: ${perf.accuracy}% · SL hit: ${perf.slRate}%`);
     }
     const digestBlock = digestLines.length ? `\n━━━━━━━━━━━━━━━━━━${digestLines.join('\n')}` : '';
 
