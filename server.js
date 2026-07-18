@@ -182,6 +182,14 @@ let marketState = {
     dynamicLevels: { available: false, label: 'Dynamic Levels — awaiting data' },
     // ── Premarket/Opening Gap — prev close vs today's open, via Fyers ─────────
     premarketGap: { available: false, label: 'Opening Gap — awaiting data' },
+    // ── Data Health / Self-Diagnosis ───────────────────────────────────────────
+    dataHealth: { healthy: true, issues: [], penalty: 0, label: 'Data Health — awaiting first check' },
+    // ── Economic Event Countdown ───────────────────────────────────────────────
+    eventCountdown: { available: false, label: 'Event Countdown — awaiting data' },
+    // ── Probability Engine (Bullish/Bearish/Sideways) ──────────────────────────
+    probabilityEngine: { bullish: 33, bearish: 33, sideways: 34, label: 'Probability Engine — awaiting data' },
+    // ── Confidence History (rolling last-30-signals accuracy) ─────────────────
+    signalHistory: null,
     // ── Signal Performance — today's live tracking cards ──────────────────────
     signalPerformance: { open: [], todayAccuracy: null, todayCount: 0 },
     // ── Contradiction Score — 6-factor weighted bull/bear check ────────────────
@@ -1302,6 +1310,111 @@ function computeTrendConviction() {
     };
 }
 
+// ── Data Health / Self-Diagnosis ─────────────────────────────────────────────
+// ChatGPT audit ("Self-Diagnosis"): "If data is missing or unreliable —
+// confidence should reduce automatically. This prevents false confidence."
+// Checks the core real-time feeds this engine actually depends on (PCR,
+// Delta, VIX, Breadth) and applies a small, capped confidence penalty in
+// combineSignals() when one or more are degraded — informational label +
+// soft cap, same rollout discipline as every other new gate in this file.
+function computeDataHealth() {
+    const issues = [];
+    if (marketState.pcr === null)                              issues.push('PCR unavailable');
+    if (marketState.vix === null)                              issues.push('India VIX unavailable');
+    if (!marketState.delta || /awaiting/i.test(marketState.delta.label || '')) issues.push('Delta unavailable');
+    if (!marketState.breadth?.updatedAt)                        issues.push('Market breadth unavailable');
+
+    const healthy = issues.length === 0;
+    const penalty = Math.min(issues.length * 8, 25);   // capped — same scale as other soft caps in this file
+    return {
+        healthy, issues, penalty,
+        label: healthy ? '✅ All data feeds healthy' : `⚠️ ${issues.length} feed(s) degraded: ${issues.join(', ')}`,
+        generatedAt: new Date().toISOString(),
+    };
+}
+
+// ── Economic Event Countdown ─────────────────────────────────────────────────
+// ChatGPT audit ("Economic Event Countdown"): show time-to-next-high-impact
+// event and automatically reduce confidence as it approaches. Reuses
+// marketState.calendarEvents (already fetched via fetchCalendarEvents() /
+// Finnhub + hardcoded India events) — no new data source needed.
+function computeEventCountdown() {
+    const events = marketState.calendarEvents || [];
+    const ist = getIST();
+    const nowMs = ist.getTime();
+    let nearest = null, minDiffMs = Infinity;
+
+    for (const ev of events) {
+        if (ev.impact !== 'high') continue;
+        const timeStr = (ev.time && ev.time !== '--:--') ? ev.time : '00:00';
+        const evMs = new Date(`${ev.date}T${timeStr}:00+05:30`).getTime();
+        const diff = evMs - nowMs;
+        if (diff > 0 && diff < minDiffMs) { minDiffMs = diff; nearest = ev; }
+    }
+
+    if (!nearest) return { available: false, label: 'No high-impact event in next 7 days' };
+
+    const hoursRemaining = minDiffMs / 3600000;
+    const h = Math.floor(hoursRemaining);
+    const m = Math.floor((hoursRemaining - h) * 60);
+    const withinCautionWindow = hoursRemaining <= 3;   // caution window before major event
+
+    return {
+        available: true, title: nearest.title, date: nearest.date, time: nearest.time,
+        hoursRemaining: parseFloat(hoursRemaining.toFixed(2)), withinCautionWindow,
+        label: withinCautionWindow
+            ? `⏳ ${nearest.title} in ${h}h ${m}m — reduce size / avoid fresh entries`
+            : `⏳ ${nearest.title} in ${h}h ${m}m`,
+        generatedAt: new Date().toISOString(),
+    };
+}
+
+// ── Probability Engine (Bullish / Bearish / Sideways %) ──────────────────────
+// ChatGPT audit ("Probability Engine — Game Changer"): "Instead of just
+// 'BUY CALL', show probabilities — users understand uncertainty better than
+// a single signal." This is an ILLUSTRATIVE derived split — not a separately
+// trained statistical model — built from the same signal/confidence/Trend
+// Conviction numbers already on screen, re-expressed as a 3-way view. Labelled
+// honestly as such below so it isn't mistaken for independent forecasting.
+function computeProbabilityEngine() {
+    const sig  = marketState.signal;
+    const conf = marketState.confidence || 50;
+    const tc   = marketState.trendConviction;
+    let bullish, bearish, sideways;
+
+    if (sig === 'BUY CALL') {
+        bullish  = conf;
+        bearish  = Math.round((100 - conf) * 0.4);
+        sideways = 100 - bullish - bearish;
+    } else if (sig === 'BUY PUT') {
+        bearish  = conf;
+        bullish  = Math.round((100 - conf) * 0.4);
+        sideways = 100 - bullish - bearish;
+    } else {
+        const bc = tc?.bullCount ?? 0, brc = tc?.bearCount ?? 0;
+        const denom = bc + brc + 2;   // +2 damping so a 0/0 read doesn't divide by zero or look falsely extreme
+        bullish  = Math.round((bc  / denom) * 100);
+        bearish  = Math.round((brc / denom) * 100);
+        sideways = 100 - bullish - bearish;
+    }
+
+    // Clamp then re-normalize so the three always sum to exactly 100
+    bullish  = Math.max(2, Math.min(96, bullish));
+    bearish  = Math.max(2, Math.min(96, bearish));
+    sideways = Math.max(2, 100 - bullish - bearish);
+    const sum = bullish + bearish + sideways;
+    bullish  = Math.round((bullish  / sum) * 100);
+    bearish  = Math.round((bearish  / sum) * 100);
+    sideways = 100 - bullish - bearish;
+
+    return {
+        bullish, bearish, sideways,
+        label: `📊 Bullish ${bullish}% · Bearish ${bearish}% · Sideways ${sideways}%`,
+        note: 'Derived from current signal confidence + Trend Conviction condition counts — an illustrative split, not an independent statistical model.',
+        generatedAt: new Date().toISOString(),
+    };
+}
+
 function combineSignals(indicators) {
     // ── Gate 1: safe time window (IST) ────────────────
     const ew = isSafeEntryWindow();
@@ -2102,6 +2215,27 @@ function combineSignals(indicators) {
                 reasons.push(`📉 Gap-down open (${pg.gapPct}%) — sentiment confluence, +3% confidence`);
             }
         }
+    }
+
+    // ── Data Health / Self-Diagnosis ──────────────────────────────────────────
+    // ChatGPT audit: "If data is missing or unreliable, confidence should
+    // reduce automatically — this prevents false confidence." Soft, capped
+    // penalty (max -25%) — informational label always shown regardless.
+    if (signal !== 'WAIT') {
+        const dh = computeDataHealth();
+        if (!dh.healthy && dh.penalty > 0) {
+            confidence = Math.max(confidence - dh.penalty, 5);
+            reasons.push(`⚠️ Confidence -${dh.penalty}% — ${dh.issues.join(', ')}`);
+        }
+    }
+
+    // ── Economic Event Countdown cap ──────────────────────────────────────────
+    // ChatGPT audit: "Automatically reduce confidence before major events."
+    // Reuses the already-fetched calendar (Finnhub + hardcoded India events).
+    if (signal !== 'WAIT' && marketState.eventCountdown?.available && marketState.eventCountdown.withinCautionWindow) {
+        const before = confidence;
+        confidence = Math.min(confidence, 60);
+        if (confidence < before) reasons.push(`⚠️ Confidence capped at 60% — ${marketState.eventCountdown.title} in ${Math.floor(marketState.eventCountdown.hoursRemaining)}h, expect volatility`);
     }
 
     // ── SoftAligned confidence cap — 5m dissenting ───────────────────────────
@@ -3339,6 +3473,8 @@ async function updatePrice(price, change, changePct, source) {
     // ── Trend Day vs Range Day + Trap Zone — informational strategy guidance ──
     try { marketState.dayType  = computeDayType();  } catch(e) { console.warn('[DayType] error:', e.message); }
     try { marketState.trapZone = computeTrapZone(); } catch(e) { console.warn('[TrapZone] error:', e.message); }
+    try { marketState.dataHealth = computeDataHealth(); } catch(e) { console.warn('[DataHealth] error:', e.message); }
+    try { marketState.probabilityEngine = computeProbabilityEngine(); } catch(e) { console.warn('[ProbabilityEngine] error:', e.message); }
     try { marketState.confidenceBreakdown = computeConfidenceBreakdown(); } catch(e) { console.warn('[ConfBreakdown] error:', e.message); }
     if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%) | POC:${marketState.poc?.poc??'--'} Delta:${marketState.delta?.deltaPct??'--'}%`);
     evaluateBTST();
@@ -3622,6 +3758,10 @@ async function refreshMTF() {
         // ── Dynamic Levels (Punch-style H1-H3/L1-L3, informational + light
         // confidence nudge only — see combineSignals() and dynamicLevels.js) ──
         marketState.dynamicLevels = computeDynamicLevelsState();
+
+        // ── Economic Event Countdown — see combineSignals() for the caution-
+        // window confidence cap this feeds ──────────────────────────────────
+        try { marketState.eventCountdown = computeEventCountdown(); } catch(e) { console.warn('[EventCountdown] error:', e.message); }
 
         // ── Pre-market gate ────────────────────────────
         // Before 09:15 IST the candle history is overnight/multi-day data.
@@ -4801,6 +4941,58 @@ async function getSignalPerformanceSummary() {
     }
 }
 
+// ── Confidence History (rolling last-30-signals accuracy) ───────────────────
+// ChatGPT audit: "Track your engine's recent performance — Last 30 Signals:
+// Correct/Wrong/Accuracy. Also show accuracy by market type (Trending/Range/
+// High VIX)." Reuses the dyn_zone column already logged per-trade (see
+// server.js signal_performance ALTER) as the regime proxy: ABOVE_H3/BELOW_L3
+// = trending breakout, INSIDE = range/chop — no new columns needed.
+async function getRecentSignalHistory() {
+    if (!dbPool) return null;
+    try {
+        const r = await dbPool.query(
+            `SELECT target_hit, partial_win, sl_hit, dyn_zone
+             FROM signal_performance
+             WHERE closed = true
+             ORDER BY id DESC
+             LIMIT 30`
+        );
+        const rows = r.rows;
+        const total = rows.length;
+        if (total === 0) return { total: 0, correct: 0, wrong: 0, accuracy: null, byRegime: {} };
+
+        const isWin = row => row.target_hit || row.partial_win;
+        const correct = rows.filter(isWin).length;
+        const wrong = total - correct;
+
+        const regimeOf = zone => (zone === 'ABOVE_H3' || zone === 'BELOW_L3') ? 'Trending'
+                                : (zone === 'INSIDE') ? 'Range'
+                                : null;
+        const byRegime = {};
+        for (const row of rows) {
+            const regime = regimeOf(row.dyn_zone);
+            if (!regime) continue;
+            if (!byRegime[regime]) byRegime[regime] = { total: 0, correct: 0 };
+            byRegime[regime].total++;
+            if (isWin(row)) byRegime[regime].correct++;
+        }
+        for (const k of Object.keys(byRegime)) {
+            byRegime[k].accuracy = Math.round((byRegime[k].correct / byRegime[k].total) * 100);
+        }
+
+        return {
+            total, correct, wrong,
+            accuracy: Math.round((correct / total) * 100),
+            byRegime,
+            label: `Last ${total} signals: ${correct} correct, ${wrong} wrong (${Math.round((correct/total)*100)}%)`,
+            generatedAt: new Date().toISOString(),
+        };
+    } catch (e) {
+        console.warn('[SignalHistory] error:', e.message);
+        return null;
+    }
+}
+
 async function getWinRateFromHistory(signalType) {
     if (!dbPool) return null;
 
@@ -5394,6 +5586,10 @@ app.get('/api/breadth', (req,res) => res.json(marketState.breadth));
 app.get('/api/levels',  (req,res) => res.json(marketState.srLevels));
 app.get('/api/dynamic-levels', (req,res) => res.json(marketState.dynamicLevels));
 app.get('/api/premarket-gap', (req,res) => res.json(marketState.premarketGap));
+app.get('/api/data-health', (req,res) => res.json(marketState.dataHealth));
+app.get('/api/event-countdown', (req,res) => res.json(marketState.eventCountdown));
+app.get('/api/probability', (req,res) => res.json(marketState.probabilityEngine));
+app.get('/api/signal-history', (req,res) => res.json(marketState.signalHistory));
 
 app.get('/api/health',  (req,res) => res.json({
     status:marketState.connected?'live':'waiting',
@@ -5660,6 +5856,10 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
     setTimeout(() => setInterval(refreshFyersVolume,      15*1000), 20*1000);   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
     setTimeout(() => setInterval(computePremarketGap,     60*1000), 20*1000);   // opening gap vs prev close, via Fyers (see combineSignals note)
+    setTimeout(() => setInterval(async () => {
+        try { marketState.signalHistory = await getRecentSignalHistory(); }
+        catch (e) { console.warn('[SignalHistory] refresh error:', e.message); }
+    }, 5*60*1000), 30*1000);   // Confidence History card — DB query, 5min cadence is plenty
     setTimeout(() => setInterval(syncFIIToMarketState, 20*60*1000), 5*1000);    // FIX: sync FII always, even after market close
     setTimeout(() => setInterval(fetchCalendarEvents, 60*60*1000), 180*1000); // refresh calendar hourly
 

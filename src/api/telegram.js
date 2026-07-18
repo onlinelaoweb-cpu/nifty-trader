@@ -168,6 +168,8 @@ ${deltaInfo}
 ${state.orb?.label ? '\n' + state.orb.label : ''}
 ${state.dynamicLevels?.available ? `\n📐 ${state.dynamicLevels.label}` : ''}
 ${state.premarketGap?.available ? `\n${state.premarketGap.label}` : ''}
+${(state.eventCountdown?.available && state.eventCountdown.withinCautionWindow) ? `\n${state.eventCountdown.label}` : ''}
+${state.dataHealth && !state.dataHealth.healthy ? `\n${state.dataHealth.label}` : ''}
 ━━━━━━━━━━━━━━━━━━
 ${strikeBlock}
 ━━━━━━━━━━━━━━━━━━
