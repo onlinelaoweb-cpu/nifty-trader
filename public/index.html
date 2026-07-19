@@ -5662,6 +5662,20 @@ function updateInsightsUI(s) {
       }
     }
 
+    // News Sentiment Engine
+    const nsd = s.newsSentiment;
+    if (nsd) {
+      const newsWrap  = document.getElementById('ins-news-wrap');
+      const newsLabel = document.getElementById('ins-news-label');
+      if (newsLabel) newsLabel.textContent = nsd.label || 'Awaiting first fetch...';
+      if (newsWrap) {
+        newsWrap.style.borderColor = nsd.volatilityFlag ? 'var(--red)'
+                                   : nsd.sentimentLabel === 'Bullish' ? 'var(--green)'
+                                   : nsd.sentimentLabel === 'Bearish' ? 'var(--red)'
+                                   : 'var(--border)';
+      }
+    }
+
     // Trend Conviction Mode
     const tc = s.trendConviction;
     if (tc) {
@@ -8992,6 +9006,12 @@ function _statRow(label, val) {
       <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">📈 CONFIDENCE HISTORY <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(last 30 closed signals)</span></div>
       <div id="ins-confhist-label" style="font-size:13px;color:var(--text);margin-bottom:6px;">Awaiting data...</div>
       <div id="ins-confhist-regime" style="font-size:12px;color:var(--dim);"></div>
+    </div>
+
+    <!-- News Sentiment Engine -->
+    <div id="ins-news-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">📰 NEWS SENTIMENT <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(confidence modifier only, never a trigger)</span></div>
+      <div id="ins-news-label" style="font-size:13px;color:var(--text);">Awaiting first fetch...</div>
     </div>
 
     <!-- Trend Conviction Mode -->

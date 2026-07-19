@@ -190,6 +190,8 @@ let marketState = {
     probabilityEngine: { bullish: 33, bearish: 33, sideways: 34, label: 'Probability Engine — awaiting data' },
     // ── Confidence History (rolling last-30-signals accuracy) ─────────────────
     signalHistory: null,
+    // ── News Sentiment Engine — via NewsAPI + Claude scoring ───────────────────
+    newsSentiment: { available: false, label: 'News Sentiment — awaiting first fetch' },
     // ── Signal Performance — today's live tracking cards ──────────────────────
     signalPerformance: { open: [], todayAccuracy: null, todayCount: 0 },
     // ── Contradiction Score — 6-factor weighted bull/bear check ────────────────
@@ -1093,6 +1095,18 @@ function computeConfidenceBreakdown() {
         else if (!isBull && pg.zone === 'GAP_DOWN') items.push({ label: `Gap-down open (${pg.gapPct}%)`, pts: 3 });
     }
 
+    // Smart Money Bias — same factor combineSignals() nudges on
+    const sm = marketState.smartMoney;
+    if (sm) {
+        const bullish = sm.bias === 'BULLISH' || sm.bias === 'STRONGLY_BULLISH';
+        const bearish = sm.bias === 'BEARISH' || sm.bias === 'STRONGLY_BEARISH';
+        const strong  = sm.bias === 'STRONGLY_BULLISH' || sm.bias === 'STRONGLY_BEARISH';
+        if (isBull && bullish) items.push({ label: `Smart Money ${sm.bias.replace('_',' ')} (${sm.score})`, pts: strong ? 8 : 4 });
+        else if (!isBull && bearish) items.push({ label: `Smart Money ${sm.bias.replace('_',' ')} (${sm.score})`, pts: strong ? 8 : 4 });
+        else if (isBull && bearish) items.push({ label: `Smart Money ${sm.bias.replace('_',' ')} contradicts (${sm.score})`, pts: strong ? -15 : -8 });
+        else if (!isBull && bullish) items.push({ label: `Smart Money ${sm.bias.replace('_',' ')} contradicts (${sm.score})`, pts: strong ? -15 : -8 });
+    }
+
     return { items, final: marketState.confidence, generatedAt: new Date().toISOString() };
 }
 
@@ -1413,6 +1427,87 @@ function computeProbabilityEngine() {
         note: 'Derived from current signal confidence + Trend Conviction condition counts — an illustrative split, not an independent statistical model.',
         generatedAt: new Date().toISOString(),
     };
+}
+
+// ── News Sentiment Engine ─────────────────────────────────────────────────────
+// ChatGPT audit: "Your app should have a News & Macro Intelligence Engine
+// that adjusts confidence based on live events... use ONLY as a confidence
+// modifier, not a direct buy/sell trigger."
+//
+// Data source: NewsAPI.org (NEWSAPI_KEY) — free tier, 100 req/day. Polled
+// every 20 min during market hours, well within budget (~19 calls/day).
+// Scoring: reuses the SAME Claude call already wired for the AI Trade Coach
+// (ANTHROPIC_API_KEY) — no new LLM provider/key needed, one prompt scores
+// ALL headlines at once (cheap: ~1 call per 20min, not per-headline).
+async function fetchNewsHeadlines() {
+    const NEWSAPI_KEY = (process.env.NEWSAPI_KEY || '').trim();
+    if (!NEWSAPI_KEY) return [];
+    try {
+        const query = encodeURIComponent('Nifty OR Sensex OR RBI OR "FII" OR "DII" OR "Indian stock market" OR Budget OR "Reliance Industries"');
+        const url = `https://newsapi.org/v2/everything?q=${query}&language=en&sortBy=publishedAt&pageSize=15&apiKey=${NEWSAPI_KEY}`;
+        const r = await axios.get(url, { timeout: 10000 });
+        const articles = r.data?.articles || [];
+        return articles.map(a => a.title).filter(Boolean).slice(0, 15);
+    } catch (e) {
+        console.warn('[NewsSentiment] fetch error:', e.message);
+        return [];
+    }
+}
+
+async function computeNewsSentiment() {
+    if (!process.env.NEWSAPI_KEY)     return { available: false, label: 'News Sentiment — NEWSAPI_KEY not set' };
+    if (!process.env.ANTHROPIC_API_KEY) return { available: false, label: 'News Sentiment — ANTHROPIC_API_KEY not set' };
+
+    const headlines = await fetchNewsHeadlines();
+    if (headlines.length === 0) return { available: false, label: 'News Sentiment — no headlines fetched this cycle' };
+
+    try {
+        const prompt = `You are scoring Indian stock market (Nifty 50) news sentiment for a trading app.
+
+Today's latest headlines:
+${headlines.map((h, i) => `${i + 1}. ${h}`).join('\n')}
+
+Score the OVERALL sentiment for Nifty 50 / Indian equity markets on a scale of
+-100 (extremely bearish) to +100 (extremely bullish), 0 = neutral. Weigh
+RBI/macro policy, FII/DII flows, corporate earnings, geopolitical risk, and
+global cues. Flag volatilityFlag=true only for genuinely market-moving news
+(war, rate surprise, major earnings miss/beat, crash/circuit event) — not
+routine headlines.
+
+Reply ONLY in this exact JSON format (no extra text, no markdown):
+{"score": <number -100 to 100>, "label": "Bullish/Bearish/Neutral", "reason": "one sentence on the key driver", "volatilityFlag": true or false}`;
+
+        const res = await axios.post('https://api.anthropic.com/v1/messages', {
+            model: 'claude-sonnet-4-6',
+            max_tokens: 200,
+            messages: [{ role: 'user', content: prompt }]
+        }, {
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': process.env.ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01'
+            },
+            timeout: 15000
+        });
+
+        const text = res.data?.content?.[0]?.text || '';
+        const cleaned = text.replace(/```json|```/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+
+        return {
+            available: true,
+            score: parsed.score,
+            sentimentLabel: parsed.label,
+            reason: parsed.reason,
+            volatilityFlag: !!parsed.volatilityFlag,
+            headlineCount: headlines.length,
+            label: `📰 News: ${parsed.label} (${parsed.score > 0 ? '+' : ''}${parsed.score}) — ${parsed.reason}`,
+            generatedAt: new Date().toISOString(),
+        };
+    } catch (e) {
+        console.warn('[NewsSentiment] scoring error:', e.message);
+        return { available: false, label: 'News Sentiment — scoring error' };
+    }
 }
 
 function combineSignals(indicators) {
@@ -2236,6 +2331,72 @@ function combineSignals(indicators) {
         const before = confidence;
         confidence = Math.min(confidence, 60);
         if (confidence < before) reasons.push(`⚠️ Confidence capped at 60% — ${marketState.eventCountdown.title} in ${Math.floor(marketState.eventCountdown.hoursRemaining)}h, expect volatility`);
+    }
+
+    // ── News Sentiment Engine — confidence modifier only, never a trigger ────
+    // ChatGPT audit: "Use this engine ONLY as a confidence modifier, not a
+    // direct buy/sell trigger." Contradicting news → proportional penalty
+    // (scaled by how strong the contradicting sentiment is, capped at -25,
+    // same scale as every other soft cap in this file). Confirming news →
+    // small +5 confluence boost. Genuinely market-moving news (volatilityFlag)
+    // → hard cap regardless of direction, per the audit's own worked example
+    // (Technical 78% + News -22 → Final 58%, "reduce position size").
+    if (signal !== 'WAIT' && marketState.newsSentiment?.available) {
+        const ns = marketState.newsSentiment;
+        const contradicting = (signal === 'BUY CALL' && ns.score < 0) || (signal === 'BUY PUT' && ns.score > 0);
+        const confirming     = (signal === 'BUY CALL' && ns.score > 0) || (signal === 'BUY PUT' && ns.score < 0);
+
+        if (contradicting) {
+            const penalty = Math.min(Math.round(Math.abs(ns.score) * 0.3), 25);
+            if (penalty > 0) {
+                confidence = Math.max(confidence - penalty, 5);
+                reasons.push(`📰 News sentiment contradicts (${ns.sentimentLabel} ${ns.score}) — confidence -${penalty}%: ${ns.reason}`);
+            }
+        } else if (confirming && Math.abs(ns.score) >= 40) {
+            confidence = Math.min(confidence + 5, 98);
+            reasons.push(`📰 News sentiment confirms (${ns.sentimentLabel} ${ns.score > 0 ? '+' : ''}${ns.score}) — confluence +5%: ${ns.reason}`);
+        }
+
+        if (ns.volatilityFlag) {
+            const before = confidence;
+            confidence = Math.min(confidence, 65);
+            if (confidence < before) reasons.push(`⚠️ Market-moving news flagged — confidence capped at 65%, reduce position size: ${ns.reason}`);
+        }
+    }
+
+    // ── Smart Money Bias confluence ───────────────────────────────────────────
+    // computeSmartMoneyBias() (OI Buildup + FII/DII flow + PCR extremes + ATM
+    // CE/PE ratio — see function definition above, score -8 to +8) was already
+    // being computed every cycle into marketState.smartMoney for DISPLAY, but
+    // was never fed into combineSignals() — a fully-built "Options Flow
+    // Intelligence" aggregator sitting unused in the decision engine. Wiring
+    // it in now with the same soft confluence/contradiction pattern as every
+    // other gate in this file — no new data source, just connecting what was
+    // already there.
+    if (signal !== 'WAIT' && marketState.smartMoney) {
+        const sm = marketState.smartMoney;
+        const bullish = sm.bias === 'BULLISH' || sm.bias === 'STRONGLY_BULLISH';
+        const bearish = sm.bias === 'BEARISH' || sm.bias === 'STRONGLY_BEARISH';
+        const strong  = sm.bias === 'STRONGLY_BULLISH' || sm.bias === 'STRONGLY_BEARISH';
+        const bias    = sm.bias.replace('_', ' ');
+
+        if (signal === 'BUY CALL' && bullish) {
+            const boost = strong ? 8 : 4;
+            confidence = Math.min(confidence + boost, 98);
+            reasons.push(`💰 Smart Money ${bias} (score ${sm.score}) — confluence +${boost}%`);
+        } else if (signal === 'BUY PUT' && bearish) {
+            const boost = strong ? 8 : 4;
+            confidence = Math.min(confidence + boost, 98);
+            reasons.push(`💰 Smart Money ${bias} (score ${sm.score}) — confluence +${boost}%`);
+        } else if (signal === 'BUY CALL' && bearish) {
+            const penalty = strong ? 15 : 8;
+            confidence = Math.max(confidence - penalty, 5);
+            reasons.push(`⚠️ Smart Money ${bias} (score ${sm.score}) contradicts — confidence -${penalty}%`);
+        } else if (signal === 'BUY PUT' && bullish) {
+            const penalty = strong ? 15 : 8;
+            confidence = Math.max(confidence - penalty, 5);
+            reasons.push(`⚠️ Smart Money ${bias} (score ${sm.score}) contradicts — confidence -${penalty}%`);
+        }
     }
 
     // ── SoftAligned confidence cap — 5m dissenting ───────────────────────────
@@ -5590,6 +5751,7 @@ app.get('/api/data-health', (req,res) => res.json(marketState.dataHealth));
 app.get('/api/event-countdown', (req,res) => res.json(marketState.eventCountdown));
 app.get('/api/probability', (req,res) => res.json(marketState.probabilityEngine));
 app.get('/api/signal-history', (req,res) => res.json(marketState.signalHistory));
+app.get('/api/news-sentiment', (req,res) => res.json(marketState.newsSentiment));
 
 app.get('/api/health',  (req,res) => res.json({
     status:marketState.connected?'live':'waiting',
@@ -5860,6 +6022,10 @@ function startPollingIntervals() {
         try { marketState.signalHistory = await getRecentSignalHistory(); }
         catch (e) { console.warn('[SignalHistory] refresh error:', e.message); }
     }, 5*60*1000), 30*1000);   // Confidence History card — DB query, 5min cadence is plenty
+    setTimeout(() => setInterval(async () => {
+        try { marketState.newsSentiment = await computeNewsSentiment(); }
+        catch (e) { console.warn('[NewsSentiment] refresh error:', e.message); }
+    }, 20*60*1000), 40*1000);   // NewsAPI free tier = 100/day; 20min cadence ≈ 19 calls/day, safe margin
     setTimeout(() => setInterval(syncFIIToMarketState, 20*60*1000), 5*1000);    // FIX: sync FII always, even after market close
     setTimeout(() => setInterval(fetchCalendarEvents, 60*60*1000), 180*1000); // refresh calendar hourly
 
