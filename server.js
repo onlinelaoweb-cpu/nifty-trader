@@ -30,7 +30,8 @@ const { fetchAdvanceDecline,
         injectAngelSession }        = require('./src/api/breadth');
 const { calculateSRLevels }         = require('./src/api/levels');
 const { computeDynamicLevels, classifyDynamicLevels } = require('./src/api/dynamicLevels');
-const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo } = require('./src/api/physicsOfTrading');
+const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo, detectBOSCHOCH } = require('./src/api/physicsOfTrading');
+const { computeOptionGreeksDashboard } = require('./src/api/optionGreeks');
 const { getRenkoAnalysis } = require('./src/api/renko');
 // DISABLED (per decision to stay pure option-buyer, no selling/spread strategies):
 // const { suggestSpreadStrategy } = require('./src/api/spreadStrategy');
@@ -132,6 +133,7 @@ let marketState = {
     fiboCard: null,
     physicsOfTrading: {
         swingTrend: null,       // { direction:'UP'|'DOWN'|'SIDEWAYS', hhhl: bool, reason: str }
+        bosChoch: { event: 'NONE', label: 'BOS/CHOCH — awaiting data' },
         reactionGate: null,     // { zone:'REACTION'|'ACTION'|'REVERSAL_RISK', score: num, reason: str }
         law1: { status:'WAIT', label:'Awaiting candle data…', direction:null },
         law2: { status:'WAIT', label:'Awaiting force data…', bullish:false, bearish:false, bits:[] },
@@ -192,6 +194,8 @@ let marketState = {
     signalHistory: null,
     // ── News Sentiment Engine — via NewsAPI + Claude scoring ───────────────────
     newsSentiment: { available: false, label: 'News Sentiment — awaiting first fetch' },
+    // ── Option Greeks Dashboard — real Black-Scholes Delta/Gamma/Theta/Vega/GEX ──
+    optionGreeks: { available: false, label: 'Option Greeks — awaiting data' },
     // ── Signal Performance — today's live tracking cards ──────────────────────
     signalPerformance: { open: [], todayAccuracy: null, todayCount: 0 },
     // ── Contradiction Score — 6-factor weighted bull/bear check ────────────────
@@ -1105,6 +1109,15 @@ function computeConfidenceBreakdown() {
         else if (!isBull && bearish) items.push({ label: `Smart Money ${sm.bias.replace('_',' ')} (${sm.score})`, pts: strong ? 8 : 4 });
         else if (isBull && bearish) items.push({ label: `Smart Money ${sm.bias.replace('_',' ')} contradicts (${sm.score})`, pts: strong ? -15 : -8 });
         else if (!isBull && bullish) items.push({ label: `Smart Money ${sm.bias.replace('_',' ')} contradicts (${sm.score})`, pts: strong ? -15 : -8 });
+    }
+
+    // BOS / CHOCH — same factor combineSignals() nudges on
+    const bc = marketState.physicsOfTrading?.bosChoch;
+    if (bc && bc.event !== 'NONE') {
+        if (isBull && bc.event === 'BOS_BULLISH') items.push({ label: `BOS Bullish (above ${bc.level})`, pts: 5 });
+        else if (!isBull && bc.event === 'BOS_BEARISH') items.push({ label: `BOS Bearish (below ${bc.level})`, pts: 5 });
+        else if (isBull && bc.event === 'CHOCH_BEARISH') items.push({ label: `CHOCH Bearish (below ${bc.level})`, pts: -12 });
+        else if (!isBull && bc.event === 'CHOCH_BULLISH') items.push({ label: `CHOCH Bullish (above ${bc.level})`, pts: -12 });
     }
 
     return { items, final: marketState.confidence, generatedAt: new Date().toISOString() };
@@ -2576,6 +2589,33 @@ function combineSignals(indicators) {
                 qs -= 5; scoreBreakdown.push(`Law1-Trend:-5 (${swing.trend} AGAINST ${signal})`);
                 reasons.push(`⚛️ Law1 ❌ Swing ${swing.trend} AGAINST ${signal} — counter-trend blocked`);
             }
+
+            // ── BOS / CHOCH — Smart Money Concepts structure break ────────────
+            // ChatGPT audit ("Smart Money Tracker"): track Break of Structure /
+            // Change of Character. Reuses the SAME swing points computed just
+            // above for Law 1 — CHOCH catches the exact price level where a
+            // counter-trend move first violates the established structure,
+            // which is a sharper, earlier signal than the smoothed swing-trend
+            // vote alone (see detectBOSCHOCH() header in physicsOfTrading.js).
+            // This is the same class of "false reversal pullback" the 17 Jul
+            // audit's 1:56 PM false PUT was — an additional, independent check
+            // for exactly that failure mode.
+            const bosChoch = detectBOSCHOCH(candlesForPhysics, 30);
+            marketState.physicsOfTrading.bosChoch = bosChoch;
+            if (signal === 'BUY CALL' && bosChoch.event === 'BOS_BULLISH') {
+                confidence = Math.min(confidence + 5, 98);
+                reasons.push(`${bosChoch.label} — structural confluence, +5% confidence`);
+            } else if (signal === 'BUY PUT' && bosChoch.event === 'BOS_BEARISH') {
+                confidence = Math.min(confidence + 5, 98);
+                reasons.push(`${bosChoch.label} — structural confluence, +5% confidence`);
+            } else if (signal === 'BUY CALL' && bosChoch.event === 'CHOCH_BEARISH') {
+                confidence = Math.max(confidence - 12, 5);
+                reasons.push(`${bosChoch.label} — confidence -12%`);
+            } else if (signal === 'BUY PUT' && bosChoch.event === 'CHOCH_BULLISH') {
+                confidence = Math.max(confidence - 12, 5);
+                reasons.push(`${bosChoch.label} — confidence -12%`);
+            }
+
             // Law 3 hard gate: ON_ACTION = chasing a candle that already ran = block
             qualityGate.physicsLaw3 = (reactionGate.zone !== 'ON_ACTION');
             if (reactionGate.zone === 'ON_ACTION') {
@@ -4099,6 +4139,21 @@ async function refreshPCR() {
                 });
                 marketState.srLevels.levels.sort((a, b) => b.price - a.price);
             }
+        }
+
+        // ── Option Greeks Dashboard (Delta/Gamma/Theta/Vega/GEX) ───────────────
+        // Reuses pcrState.records (same option-chain array OI-Buildup/Max Pain
+        // already use) + India VIX as IV proxy — see optionGreeks.js header.
+        // Display/explanatory only, NOT wired into combineSignals() — the
+        // audit's own framing was "explain why options move", not a new
+        // buy/sell factor, so this stays purely informational.
+        try {
+            const daysToExp = daysToNextExpiry();
+            marketState.optionGreeks = computeOptionGreeksDashboard(
+                pcrState.records, marketState.nifty, marketState.vix, daysToExp, LOT_SIZE
+            );
+        } catch (e) {
+            console.warn('[OptionGreeks] compute error:', e.message);
         }
 
         // ── Early Momentum — sync from nseData internal state ─────────────────
@@ -5752,6 +5807,8 @@ app.get('/api/event-countdown', (req,res) => res.json(marketState.eventCountdown
 app.get('/api/probability', (req,res) => res.json(marketState.probabilityEngine));
 app.get('/api/signal-history', (req,res) => res.json(marketState.signalHistory));
 app.get('/api/news-sentiment', (req,res) => res.json(marketState.newsSentiment));
+app.get('/api/bos-choch', (req,res) => res.json(marketState.physicsOfTrading?.bosChoch));
+app.get('/api/option-greeks', (req,res) => res.json(marketState.optionGreeks));
 
 app.get('/api/health',  (req,res) => res.json({
     status:marketState.connected?'live':'waiting',

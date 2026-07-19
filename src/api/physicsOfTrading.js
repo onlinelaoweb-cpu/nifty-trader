@@ -372,8 +372,77 @@ function getReactionZoneGate(price, vwap, candles, signalDirection) {
     };
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// BOS / CHOCH — Smart Money Concepts structure break detection
+// ─────────────────────────────────────────────────────────────────────────
+// Reuses the SAME swing points findSwingPoints()/getSwingTrend() already
+// compute above — no new candle logic, just a different, more specific
+// read of the same structure:
+//
+//   BOS   (Break of Structure)  = price closes beyond the last swing point
+//                                 IN THE DIRECTION of the established trend
+//                                 → trend continuation confirmed
+//   CHOCH (Change of Character) = price closes beyond the last swing point
+//                                 AGAINST the established trend → the
+//                                 FIRST specific warning sign of a possible
+//                                 reversal, at a precise price level
+//
+// Why this is more than what getSwingTrend() alone already gives: the
+// existing UPTREND/DOWNTREND/SIDEWAYS classification is a smoothed,
+// majority-vote read across the whole lookback window — useful as a
+// standing regime check, but it only updates once enough swing pairs
+// accumulate. CHOCH fires the INSTANT price actually violates the most
+// recent swing level, which is a sharper, earlier, and more falsifiable
+// signal — exactly the kind of concrete level-break event that would flag
+// a counter-trend pullback attempting to reverse the trend, rather than
+// just "the last few swings looked mixed".
+function detectBOSCHOCH(candles, lookback = 30) {
+    if (!candles || candles.length < 10) {
+        return { event: 'NONE', label: 'BOS/CHOCH — not enough candles' };
+    }
+
+    const { trend } = getSwingTrend(candles, lookback);
+    const { swingHighs, swingLows } = findSwingPoints(candles, lookback);
+    if (swingHighs.length === 0 || swingLows.length === 0) {
+        return { event: 'NONE', label: 'BOS/CHOCH — no swing points yet', trend };
+    }
+
+    const lastHigh  = swingHighs[swingHighs.length - 1];
+    const lastLow   = swingLows[swingLows.length - 1];
+    const lastClose = candles[candles.length - 1].close;
+
+    let event = 'NONE', label = 'BOS/CHOCH — no structure break yet', level = null;
+
+    if (trend === 'UPTREND') {
+        if (lastClose > lastHigh.price) {
+            event = 'BOS_BULLISH'; level = lastHigh.price;
+            label = `🟢 BOS (Bullish) — closed above swing high ${lastHigh.price}, uptrend continuation`;
+        } else if (lastClose < lastLow.price) {
+            event = 'CHOCH_BEARISH'; level = lastLow.price;
+            label = `⚠️ CHOCH (Bearish) — closed below swing low ${lastLow.price}, uptrend structure broken — possible reversal`;
+        }
+    } else if (trend === 'DOWNTREND') {
+        if (lastClose < lastLow.price) {
+            event = 'BOS_BEARISH'; level = lastLow.price;
+            label = `🔴 BOS (Bearish) — closed below swing low ${lastLow.price}, downtrend continuation`;
+        } else if (lastClose > lastHigh.price) {
+            event = 'CHOCH_BULLISH'; level = lastHigh.price;
+            label = `⚠️ CHOCH (Bullish) — closed above swing high ${lastHigh.price}, downtrend structure broken — possible reversal`;
+        }
+    }
+    // SIDEWAYS/UNKNOWN trend: no established direction to break FOR or
+    // AGAINST, so no BOS/CHOCH is meaningful — leave as NONE.
+
+    return {
+        event, label, level, trend,
+        lastHigh: lastHigh.price, lastLow: lastLow.price,
+        generatedAt: new Date().toISOString(),
+    };
+}
+
 module.exports = {
     getSwingTrend,
+    detectBOSCHOCH,
     calcForceLabel,
     calcFibonacciLevels,
     getLatestImpulseFibo,

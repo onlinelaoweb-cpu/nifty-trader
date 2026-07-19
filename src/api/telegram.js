@@ -171,6 +171,8 @@ ${state.premarketGap?.available ? `\n${state.premarketGap.label}` : ''}
 ${(state.eventCountdown?.available && state.eventCountdown.withinCautionWindow) ? `\n${state.eventCountdown.label}` : ''}
 ${state.newsSentiment?.available ? `\n${state.newsSentiment.label}` : ''}
 ${state.smartMoney && state.smartMoney.bias !== 'NEUTRAL' ? `\n${state.smartMoney.label}` : ''}
+${state.physicsOfTrading?.bosChoch?.event && state.physicsOfTrading.bosChoch.event !== 'NONE' ? `\n${state.physicsOfTrading.bosChoch.label}` : ''}
+${state.optionGreeks?.available ? `\n${state.optionGreeks.label}` : ''}
 ${state.dataHealth && !state.dataHealth.healthy ? `\n${state.dataHealth.label}` : ''}
 ━━━━━━━━━━━━━━━━━━
 ${strikeBlock}

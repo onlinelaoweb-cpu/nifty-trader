@@ -5676,6 +5676,38 @@ function updateInsightsUI(s) {
       }
     }
 
+    // BOS / CHOCH — Smart Money Concepts structure break
+    const bcd = s.physicsOfTrading?.bosChoch;
+    if (bcd) {
+      const bcWrap  = document.getElementById('ins-boschoch-wrap');
+      const bcLabel = document.getElementById('ins-boschoch-label');
+      if (bcLabel) bcLabel.textContent = bcd.label || 'Awaiting data...';
+      if (bcWrap) {
+        bcWrap.style.borderColor = (bcd.event === 'BOS_BULLISH') ? 'var(--green)'
+                                  : (bcd.event === 'BOS_BEARISH') ? 'var(--red)'
+                                  : (bcd.event === 'CHOCH_BEARISH' || bcd.event === 'CHOCH_BULLISH') ? 'var(--amber)'
+                                  : 'var(--border)';
+      }
+    }
+
+    // Option Greeks Dashboard
+    const og = s.optionGreeks;
+    if (og) {
+      const greeksGrid   = document.getElementById('ins-greeks-grid');
+      const greeksRegime = document.getElementById('ins-greeks-regime');
+      if (greeksGrid) {
+        greeksGrid.innerHTML = og.available ? `
+          <div style="color:var(--dim);">ATM CE Δ/Γ</div><div style="color:var(--text);">${og.atmCE.delta} / ${og.atmCE.gamma}</div>
+          <div style="color:var(--dim);">ATM PE Δ/Γ</div><div style="color:var(--text);">${og.atmPE.delta} / ${og.atmPE.gamma}</div>
+          <div style="color:var(--dim);">ATM Theta (CE/PE)</div><div style="color:var(--text);">₹${og.atmCE.theta} / ₹${og.atmPE.theta} per day</div>
+          <div style="color:var(--dim);">GEX</div><div style="color:${og.totalGEX>=0?'var(--green)':'var(--red)'};">₹${og.gexCr} Cr</div>
+          <div style="color:var(--dim);">Max Gamma Strike</div><div style="color:var(--text);">${og.maxGammaStrike ?? '--'}</div>
+          <div style="color:var(--dim);">Gamma Flip Level</div><div style="color:var(--text);">${og.gammaFlipLevel ?? '--'}</div>
+        ` : '';
+      }
+      if (greeksRegime) greeksRegime.textContent = og.available ? og.regime : (og.label || 'Awaiting data...');
+    }
+
     // Trend Conviction Mode
     const tc = s.trendConviction;
     if (tc) {
@@ -9012,6 +9044,19 @@ function _statRow(label, val) {
     <div id="ins-news-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
       <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">📰 NEWS SENTIMENT <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(confidence modifier only, never a trigger)</span></div>
       <div id="ins-news-label" style="font-size:13px;color:var(--text);">Awaiting first fetch...</div>
+    </div>
+
+    <!-- BOS / CHOCH — Smart Money Concepts structure break -->
+    <div id="ins-boschoch-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">🧱 BOS / CHOCH <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(structure break — trend continuation vs early reversal warning)</span></div>
+      <div id="ins-boschoch-label" style="font-size:13px;color:var(--text);">Awaiting data...</div>
+    </div>
+
+    <!-- Option Greeks Dashboard -->
+    <div id="ins-greeks-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">🔬 OPTION GREEKS <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(explanatory only — not a signal input)</span></div>
+      <div id="ins-greeks-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;margin-bottom:6px;"></div>
+      <div id="ins-greeks-regime" style="font-size:12px;color:var(--dim);">Awaiting data...</div>
     </div>
 
     <!-- Trend Conviction Mode -->
