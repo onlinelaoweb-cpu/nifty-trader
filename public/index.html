@@ -5582,13 +5582,30 @@ function updateInsightsUI(s) {
       }
     }
 
+    // Shared "how fresh is this card" helper — different cards refresh at very
+    // different natural cadences (price ticks every few sec, News Sentiment
+    // every 20min, Confidence History every 5min via DB query) since they
+    // reflect real-world data that changes at different speeds. Showing an
+    // explicit "updated Xs/m ago" on every new card makes that visible instead
+    // of leaving the user to guess whether two cards are in sync.
+    const timeAgo = (iso) => {
+      if (!iso) return '';
+      const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+      if (secs < 0) return '';
+      if (secs < 60) return `${secs}s ago`;
+      const mins = Math.floor(secs / 60);
+      if (mins < 60) return `${mins}m ago`;
+      return `${Math.floor(mins / 60)}h ago`;
+    };
+    const ageTag = (iso) => iso ? ` <span style="color:var(--dim);font-size:10.5px;">· updated ${timeAgo(iso)}</span>` : '';
+
     // Dynamic Levels (Punch-style H1-H3/L1-L3 ATR bands)
     const dl = s.dynamicLevels;
     if (dl) {
       const dlWrap  = document.getElementById('ins-dynlevels-wrap');
       const dlLabel = document.getElementById('ins-dynlevels-label');
       const dlGrid  = document.getElementById('ins-dynlevels-grid');
-      if (dlLabel) dlLabel.textContent = dl.label || 'Awaiting data...';
+      if (dlLabel) dlLabel.innerHTML = (dl.label || 'Awaiting data...') + ageTag(dl.updatedAt);
       if (dlGrid) {
         dlGrid.innerHTML = dl.available ? `
           <div style="color:var(--red);">H3: ${dl.h3}</div><div style="color:var(--green);">L1: ${dl.l1}</div>
@@ -5609,7 +5626,7 @@ function updateInsightsUI(s) {
     if (pg) {
       const gapWrap  = document.getElementById('ins-gap-wrap');
       const gapLabel = document.getElementById('ins-gap-label');
-      if (gapLabel) gapLabel.textContent = pg.label || 'Awaiting data...';
+      if (gapLabel) gapLabel.innerHTML = (pg.label || 'Awaiting data...') + ageTag(pg.updatedAt);
       if (gapWrap) {
         gapWrap.style.borderColor = pg.zone === 'GAP_UP' ? 'var(--green)'
                                   : pg.zone === 'GAP_DOWN' ? 'var(--red)'
@@ -5622,7 +5639,7 @@ function updateInsightsUI(s) {
     if (pe) {
       const probBar   = document.getElementById('ins-prob-bar');
       const probLabel = document.getElementById('ins-prob-label');
-      if (probLabel) probLabel.textContent = pe.label || 'Awaiting data...';
+      if (probLabel) probLabel.innerHTML = (pe.label || 'Awaiting data...') + ageTag(pe.generatedAt);
       if (probBar) {
         probBar.innerHTML = `
           <div style="width:${pe.bullish}%;background:var(--green);display:flex;align-items:center;justify-content:center;font-size:10px;color:#000;font-weight:600;">${pe.bullish>=10?pe.bullish+'%':''}</div>
@@ -5637,7 +5654,7 @@ function updateInsightsUI(s) {
     if (dh) {
       const dhWrap  = document.getElementById('ins-datahealth-wrap');
       const dhLabel = document.getElementById('ins-datahealth-label');
-      if (dhLabel) dhLabel.textContent = dh.label || 'Awaiting first check...';
+      if (dhLabel) dhLabel.innerHTML = (dh.label || 'Awaiting first check...') + ageTag(dh.generatedAt);
       if (dhWrap) dhWrap.style.borderColor = dh.healthy ? 'var(--border)' : 'var(--amber)';
     }
 
@@ -5646,7 +5663,7 @@ function updateInsightsUI(s) {
     if (ec) {
       const ecWrap  = document.getElementById('ins-eventcd-wrap');
       const ecLabel = document.getElementById('ins-eventcd-label');
-      if (ecLabel) ecLabel.textContent = ec.available ? ec.label : (ec.label || 'No high-impact event in next 7 days');
+      if (ecLabel) ecLabel.innerHTML = (ec.available ? ec.label : (ec.label || 'No high-impact event in next 7 days')) + ageTag(ec.generatedAt);
       if (ecWrap) ecWrap.style.borderColor = (ec.available && ec.withinCautionWindow) ? 'var(--red)' : 'var(--border)';
     }
 
@@ -5655,7 +5672,7 @@ function updateInsightsUI(s) {
     if (ch) {
       const chLabel  = document.getElementById('ins-confhist-label');
       const chRegime = document.getElementById('ins-confhist-regime');
-      if (chLabel) chLabel.textContent = ch.total > 0 ? ch.label : 'Not enough closed signals yet';
+      if (chLabel) chLabel.innerHTML = (ch.total > 0 ? ch.label : 'Not enough closed signals yet') + ageTag(ch.generatedAt);
       if (chRegime) {
         const parts = Object.entries(ch.byRegime || {}).map(([k,v]) => `${k}: ${v.accuracy}% (${v.total})`);
         chRegime.textContent = parts.join(' · ');
@@ -5667,7 +5684,7 @@ function updateInsightsUI(s) {
     if (nsd) {
       const newsWrap  = document.getElementById('ins-news-wrap');
       const newsLabel = document.getElementById('ins-news-label');
-      if (newsLabel) newsLabel.textContent = nsd.label || 'Awaiting first fetch...';
+      if (newsLabel) newsLabel.innerHTML = (nsd.label || 'Awaiting first fetch...') + ageTag(nsd.generatedAt);
       if (newsWrap) {
         newsWrap.style.borderColor = nsd.volatilityFlag ? 'var(--red)'
                                    : nsd.sentimentLabel === 'Bullish' ? 'var(--green)'
@@ -5681,7 +5698,7 @@ function updateInsightsUI(s) {
     if (bcd) {
       const bcWrap  = document.getElementById('ins-boschoch-wrap');
       const bcLabel = document.getElementById('ins-boschoch-label');
-      if (bcLabel) bcLabel.textContent = bcd.label || 'Awaiting data...';
+      if (bcLabel) bcLabel.innerHTML = (bcd.label || 'Awaiting data...') + ageTag(bcd.generatedAt);
       if (bcWrap) {
         bcWrap.style.borderColor = (bcd.event === 'BOS_BULLISH') ? 'var(--green)'
                                   : (bcd.event === 'BOS_BEARISH') ? 'var(--red)'
@@ -5705,7 +5722,7 @@ function updateInsightsUI(s) {
           <div style="color:var(--dim);">Gamma Flip Level</div><div style="color:var(--text);">${og.gammaFlipLevel ?? '--'}</div>
         ` : '';
       }
-      if (greeksRegime) greeksRegime.textContent = og.available ? og.regime : (og.label || 'Awaiting data...');
+      if (greeksRegime) greeksRegime.innerHTML = (og.available ? og.regime : (og.label || 'Awaiting data...')) + ageTag(og.generatedAt);
     }
 
     // Market Regime Classifier
@@ -5714,7 +5731,7 @@ function updateInsightsUI(s) {
       const regimeWrap   = document.getElementById('ins-regime-wrap');
       const regimeLabel  = document.getElementById('ins-regime-label');
       const regimeDetail = document.getElementById('ins-regime-detail');
-      if (regimeLabel) regimeLabel.textContent = mr.label || 'Awaiting data...';
+      if (regimeLabel) regimeLabel.innerHTML = (mr.label || 'Awaiting data...') + ageTag(mr.generatedAt);
       if (regimeDetail) regimeDetail.textContent = mr.detail || '';
       if (regimeWrap) {
         const caution = mr.tags && mr.tags.some(t => t !== 'NORMAL' && t !== 'TRENDING');

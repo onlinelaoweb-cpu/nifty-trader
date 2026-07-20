@@ -2477,6 +2477,47 @@ function combineSignals(indicators) {
         }
     }
 
+    // ── BOS / CHOCH — Smart Money Concepts structure break ────────────────────
+    // ChatGPT audit ("Smart Money Tracker"): track Break of Structure / Change
+    // of Character. CHOCH catches the exact price level where a counter-trend
+    // move first violates the established swing structure — a sharper,
+    // earlier signal than the smoothed swing-trend vote (Law 1, further down
+    // this function) alone gives. Same class of "false reversal pullback" the
+    // 17 Jul audit's 1:56 PM false PUT was — an independent check for exactly
+    // that failure mode.
+    //
+    // BUG FIX: this block originally lived inside the Law 1/Law 3 quality-gate
+    // section further down this function, which runs AFTER the minimum-
+    // confidence-65% WAIT gate below — a CHOCH penalty there could silently
+    // drop confidence under 65% without the signal ever being converted to
+    // WAIT, and a BOS boost could never rescue a signal already converted to
+    // WAIT. Moved here, alongside every other confidence-modifying gate, so
+    // it actually has a chance to affect the final WAIT/no-WAIT decision.
+    if (signal !== 'WAIT') {
+        try {
+            const bosChochCandles = getSessionCandles();
+            const bosChoch = detectBOSCHOCH(bosChochCandles, 30);
+            marketState.physicsOfTrading = marketState.physicsOfTrading || {};
+            marketState.physicsOfTrading.bosChoch = bosChoch;
+
+            if (signal === 'BUY CALL' && bosChoch.event === 'BOS_BULLISH') {
+                confidence = Math.min(confidence + 5, 98);
+                reasons.push(`${bosChoch.label} — structural confluence, +5% confidence`);
+            } else if (signal === 'BUY PUT' && bosChoch.event === 'BOS_BEARISH') {
+                confidence = Math.min(confidence + 5, 98);
+                reasons.push(`${bosChoch.label} — structural confluence, +5% confidence`);
+            } else if (signal === 'BUY CALL' && bosChoch.event === 'CHOCH_BEARISH') {
+                confidence = Math.max(confidence - 12, 5);
+                reasons.push(`${bosChoch.label} — confidence -12%`);
+            } else if (signal === 'BUY PUT' && bosChoch.event === 'CHOCH_BULLISH') {
+                confidence = Math.max(confidence - 12, 5);
+                reasons.push(`${bosChoch.label} — confidence -12%`);
+            }
+        } catch (e) {
+            console.warn('[BOS/CHOCH] error:', e.message);
+        }
+    }
+
     // ── SoftAligned confidence cap — 5m dissenting ───────────────────────────
     // When 15m+1h agree but 5m is still choppy (morning pattern), gate is passed
     // but conviction is limited. Cap at 55% — below the 65% minimum threshold,
@@ -2653,32 +2694,6 @@ function combineSignals(indicators) {
             } else if (swingAgainst) {
                 qs -= 5; scoreBreakdown.push(`Law1-Trend:-5 (${swing.trend} AGAINST ${signal})`);
                 reasons.push(`⚛️ Law1 ❌ Swing ${swing.trend} AGAINST ${signal} — counter-trend blocked`);
-            }
-
-            // ── BOS / CHOCH — Smart Money Concepts structure break ────────────
-            // ChatGPT audit ("Smart Money Tracker"): track Break of Structure /
-            // Change of Character. Reuses the SAME swing points computed just
-            // above for Law 1 — CHOCH catches the exact price level where a
-            // counter-trend move first violates the established structure,
-            // which is a sharper, earlier signal than the smoothed swing-trend
-            // vote alone (see detectBOSCHOCH() header in physicsOfTrading.js).
-            // This is the same class of "false reversal pullback" the 17 Jul
-            // audit's 1:56 PM false PUT was — an additional, independent check
-            // for exactly that failure mode.
-            const bosChoch = detectBOSCHOCH(candlesForPhysics, 30);
-            marketState.physicsOfTrading.bosChoch = bosChoch;
-            if (signal === 'BUY CALL' && bosChoch.event === 'BOS_BULLISH') {
-                confidence = Math.min(confidence + 5, 98);
-                reasons.push(`${bosChoch.label} — structural confluence, +5% confidence`);
-            } else if (signal === 'BUY PUT' && bosChoch.event === 'BOS_BEARISH') {
-                confidence = Math.min(confidence + 5, 98);
-                reasons.push(`${bosChoch.label} — structural confluence, +5% confidence`);
-            } else if (signal === 'BUY CALL' && bosChoch.event === 'CHOCH_BEARISH') {
-                confidence = Math.max(confidence - 12, 5);
-                reasons.push(`${bosChoch.label} — confidence -12%`);
-            } else if (signal === 'BUY PUT' && bosChoch.event === 'CHOCH_BULLISH') {
-                confidence = Math.max(confidence - 12, 5);
-                reasons.push(`${bosChoch.label} — confidence -12%`);
             }
 
             // Law 3 hard gate: ON_ACTION = chasing a candle that already ran = block
