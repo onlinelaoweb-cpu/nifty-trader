@@ -186,6 +186,9 @@ let marketState = {
     premarketGap: { available: false, label: 'Opening Gap — awaiting data' },
     // ── Data Health / Self-Diagnosis ───────────────────────────────────────────
     dataHealth: { healthy: true, issues: [], penalty: 0, label: 'Data Health — awaiting first check' },
+    // ── Market Regime Classifier — consolidation/transparency only, see
+    // computeMarketRegime() header for why this doesn't introduce new gates ──
+    marketRegime: { tags: ['NORMAL'], label: 'Regime — awaiting data', detail: '' },
     // ── Economic Event Countdown ───────────────────────────────────────────────
     eventCountdown: { available: false, label: 'Event Countdown — awaiting data' },
     // ── Probability Engine (Bullish/Bearish/Sideways) ──────────────────────────
@@ -1336,6 +1339,68 @@ function computeTrendConviction() {
         generatedAt: new Date().toISOString(),
     };
 }
+
+// ── Data Health / Self-Diagnosis ─────────────────────────────────────────────
+// ChatGPT audit ("Self-Diagnosis"): "If data is missing or unreliable —
+// confidence should reduce automatically. This prevents false confidence."
+// Checks the core real-time feeds this engine actually depends on (PCR,
+// Delta, VIX, Breadth) and applies a small, capped confidence penalty in
+// combineSignals() when one or more are degraded — informational label +
+// soft cap, same rollout discipline as every other new gate in this file.
+// ── Market Regime Classifier ─────────────────────────────────────────────────
+// ChatGPT audit ("Regime-Based Rules"): "The AI should switch logic depending
+// on the market: Trending → momentum rules, Sideways → mean reversion rules,
+// Expiry → gamma-aware rules, Event day → conservative rules — instead of one
+// algorithm for every day."
+//
+// ⚠️ DESIGN NOTE — read before changing thresholds based on this label:
+// This app ALREADY has extensive regime-specific handling, just scattered
+// rather than named as such: isExpiryDay() lot-size caps, the VIX-spike size
+// cap, Murarka zone threshold widening on expiry, Dynamic Levels' no-trade
+// range-pocket cap, and the Event Countdown confidence cap. A full rewrite
+// into one unified regime-switch (separate threshold sets per regime) would
+// mean touching most of combineSignals() at once — high risk of breaking the
+// many already-tuned interactions between existing gates, on an engine this
+// app's own daily audits already score 8.5-9.5/10. This app also has a
+// documented history of "zero trades" incidents from over-gating (see
+// Contradiction Score / Sequence Check comments elsewhere in this file).
+//
+// So this function deliberately does NOT introduce new overriding thresholds.
+// It CONSOLIDATES the existing regime signals into one clear, human-readable
+// label — transparency ("why is the system being cautious right now") rather
+// than a new decision layer. If you want to graduate specific regimes to
+// actual new rules later, do it one regime at a time with live data to
+// justify each threshold, the same way every other gate in this file earned
+// its place.
+function computeMarketRegime() {
+    const dt = marketState.dayType;
+    const expiry = isExpiryDay();
+    const vixSpike = !!marketState.tradeQuality?.vixCapped;
+    const eventCaution = !!(marketState.eventCountdown?.available && marketState.eventCountdown.withinCautionWindow);
+
+    const tags = [];
+    if (expiry) tags.push('EXPIRY');
+    if (eventCaution) tags.push('EVENT_DAY');
+    if (vixSpike) tags.push('HIGH_VIX');
+    if (dt?.trendProbability >= 60) tags.push('TRENDING');
+    else if (dt?.rangeProbability >= 60) tags.push('RANGE');
+    if (tags.length === 0) tags.push('NORMAL');
+
+    const activeRules = [];
+    if (tags.includes('EXPIRY'))     activeRules.push('A+/A grade size capped 50% (Tuesday expiry)');
+    if (tags.includes('EVENT_DAY'))  activeRules.push(`Confidence capped 60% (${marketState.eventCountdown?.title || 'high-impact event'} approaching)`);
+    if (tags.includes('HIGH_VIX'))   activeRules.push('Size capped 50% (VIX spiked vs today\'s open)');
+    if (tags.includes('RANGE'))      activeRules.push('Dynamic Levels no-trade range-pocket cap active');
+    if (tags.includes('TRENDING'))   activeRules.push('Momentum/breakout confluence factors weighted normally');
+
+    return {
+        tags, activeRules,
+        label: `🗺️ Regime: ${tags.join(' + ')}`,
+        detail: activeRules.length ? activeRules.join(' · ') : 'No regime-specific overrides active right now',
+        generatedAt: new Date().toISOString(),
+    };
+}
+
 
 // ── Data Health / Self-Diagnosis ─────────────────────────────────────────────
 // ChatGPT audit ("Self-Diagnosis"): "If data is missing or unreliable —
@@ -3676,6 +3741,7 @@ async function updatePrice(price, change, changePct, source) {
     try { marketState.trapZone = computeTrapZone(); } catch(e) { console.warn('[TrapZone] error:', e.message); }
     try { marketState.dataHealth = computeDataHealth(); } catch(e) { console.warn('[DataHealth] error:', e.message); }
     try { marketState.probabilityEngine = computeProbabilityEngine(); } catch(e) { console.warn('[ProbabilityEngine] error:', e.message); }
+    try { marketState.marketRegime = computeMarketRegime(); } catch(e) { console.warn('[MarketRegime] error:', e.message); }
     try { marketState.confidenceBreakdown = computeConfidenceBreakdown(); } catch(e) { console.warn('[ConfBreakdown] error:', e.message); }
     if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%) | POC:${marketState.poc?.poc??'--'} Delta:${marketState.delta?.deltaPct??'--'}%`);
     evaluateBTST();
@@ -5809,6 +5875,7 @@ app.get('/api/signal-history', (req,res) => res.json(marketState.signalHistory))
 app.get('/api/news-sentiment', (req,res) => res.json(marketState.newsSentiment));
 app.get('/api/bos-choch', (req,res) => res.json(marketState.physicsOfTrading?.bosChoch));
 app.get('/api/option-greeks', (req,res) => res.json(marketState.optionGreeks));
+app.get('/api/market-regime', (req,res) => res.json(marketState.marketRegime));
 
 app.get('/api/health',  (req,res) => res.json({
     status:marketState.connected?'live':'waiting',

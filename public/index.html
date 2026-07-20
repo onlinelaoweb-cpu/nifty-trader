@@ -5708,6 +5708,20 @@ function updateInsightsUI(s) {
       if (greeksRegime) greeksRegime.textContent = og.available ? og.regime : (og.label || 'Awaiting data...');
     }
 
+    // Market Regime Classifier
+    const mr = s.marketRegime;
+    if (mr) {
+      const regimeWrap   = document.getElementById('ins-regime-wrap');
+      const regimeLabel  = document.getElementById('ins-regime-label');
+      const regimeDetail = document.getElementById('ins-regime-detail');
+      if (regimeLabel) regimeLabel.textContent = mr.label || 'Awaiting data...';
+      if (regimeDetail) regimeDetail.textContent = mr.detail || '';
+      if (regimeWrap) {
+        const caution = mr.tags && mr.tags.some(t => t !== 'NORMAL' && t !== 'TRENDING');
+        regimeWrap.style.borderColor = caution ? 'var(--amber)' : 'var(--border)';
+      }
+    }
+
     // Trend Conviction Mode
     const tc = s.trendConviction;
     if (tc) {
@@ -9057,6 +9071,13 @@ function _statRow(label, val) {
       <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">🔬 OPTION GREEKS <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(explanatory only — not a signal input)</span></div>
       <div id="ins-greeks-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;margin-bottom:6px;"></div>
       <div id="ins-greeks-regime" style="font-size:12px;color:var(--dim);">Awaiting data...</div>
+    </div>
+
+    <!-- Market Regime Classifier -->
+    <div id="ins-regime-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">🗺️ MARKET REGIME <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(consolidates existing gates — not a new rule set)</span></div>
+      <div id="ins-regime-label" style="font-size:13px;color:var(--text);margin-bottom:6px;">Awaiting data...</div>
+      <div id="ins-regime-detail" style="font-size:12px;color:var(--dim);"></div>
     </div>
 
     <!-- Trend Conviction Mode -->

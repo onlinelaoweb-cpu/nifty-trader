@@ -173,6 +173,7 @@ ${state.newsSentiment?.available ? `\n${state.newsSentiment.label}` : ''}
 ${state.smartMoney && state.smartMoney.bias !== 'NEUTRAL' ? `\n${state.smartMoney.label}` : ''}
 ${state.physicsOfTrading?.bosChoch?.event && state.physicsOfTrading.bosChoch.event !== 'NONE' ? `\n${state.physicsOfTrading.bosChoch.label}` : ''}
 ${state.optionGreeks?.available ? `\n${state.optionGreeks.label}` : ''}
+${state.marketRegime && !state.marketRegime.tags?.includes('NORMAL') ? `\n${state.marketRegime.label}` : ''}
 ${state.dataHealth && !state.dataHealth.healthy ? `\n${state.dataHealth.label}` : ''}
 ━━━━━━━━━━━━━━━━━━
 ${strikeBlock}
