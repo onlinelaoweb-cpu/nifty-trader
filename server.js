@@ -2486,20 +2486,31 @@ function combineSignals(indicators) {
     // 17 Jul audit's 1:56 PM false PUT was — an independent check for exactly
     // that failure mode.
     //
-    // BUG FIX: this block originally lived inside the Law 1/Law 3 quality-gate
-    // section further down this function, which runs AFTER the minimum-
+    // BUG FIX #1: this block originally lived inside the Law 1/Law 3 quality-
+    // gate section further down this function, which runs AFTER the minimum-
     // confidence-65% WAIT gate below — a CHOCH penalty there could silently
     // drop confidence under 65% without the signal ever being converted to
     // WAIT, and a BOS boost could never rescue a signal already converted to
     // WAIT. Moved here, alongside every other confidence-modifying gate, so
     // it actually has a chance to affect the final WAIT/no-WAIT decision.
-    if (signal !== 'WAIT') {
-        try {
-            const bosChochCandles = getSessionCandles();
-            const bosChoch = detectBOSCHOCH(bosChochCandles, 30);
-            marketState.physicsOfTrading = marketState.physicsOfTrading || {};
-            marketState.physicsOfTrading.bosChoch = bosChoch;
+    //
+    // BUG FIX #2 (found via live video review 20 Jul): the display update
+    // (marketState.physicsOfTrading.bosChoch) was ALSO gated behind
+    // `signal !== 'WAIT'` — so on a day/session that stays WAIT for a while,
+    // the Insights card froze on its literal init placeholder ("awaiting
+    // data") forever, never showing the real computed "no structure break
+    // yet" state, even though the underlying swing structure is perfectly
+    // computable regardless of whether a trade signal is currently active.
+    // Display now updates EVERY cycle unconditionally; only the confidence
+    // nudge below stays gated to signal !== 'WAIT' (correctly, since that's
+    // only meaningful when there's an actual signal to adjust).
+    try {
+        const bosChochCandles = getSessionCandles();
+        const bosChoch = detectBOSCHOCH(bosChochCandles, 30);
+        marketState.physicsOfTrading = marketState.physicsOfTrading || {};
+        marketState.physicsOfTrading.bosChoch = bosChoch;
 
+        if (signal !== 'WAIT') {
             if (signal === 'BUY CALL' && bosChoch.event === 'BOS_BULLISH') {
                 confidence = Math.min(confidence + 5, 98);
                 reasons.push(`${bosChoch.label} — structural confluence, +5% confidence`);
@@ -2513,9 +2524,9 @@ function combineSignals(indicators) {
                 confidence = Math.max(confidence - 12, 5);
                 reasons.push(`${bosChoch.label} — confidence -12%`);
             }
-        } catch (e) {
-            console.warn('[BOS/CHOCH] error:', e.message);
         }
+    } catch (e) {
+        console.warn('[BOS/CHOCH] error:', e.message);
     }
 
     // ── SoftAligned confidence cap — 5m dissenting ───────────────────────────
