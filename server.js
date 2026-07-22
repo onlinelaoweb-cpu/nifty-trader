@@ -4817,12 +4817,24 @@ async function initDB() {
         // Backfill columns for tables created before this feature was added —
         // CREATE TABLE IF NOT EXISTS above is a no-op on an existing table, so
         // older deployments need an explicit ALTER to pick up the new columns.
+        //
+        // BUG FOUND (July 22): breadth_sig was added to the CREATE TABLE schema
+        // above and to the INSERT/SELECT statements below, but was NEVER added
+        // to this backfill block. On any Railway DB where signal_log was first
+        // created before breadth_sig existed (i.e. this deployment), every
+        // saveSignalToLog() INSERT has been throwing "column breadth_sig does
+        // not exist", caught silently by the catch block — meaning signal_log
+        // has likely NOT been recording ANY new signals, while Telegram alerts
+        // (a separate code path) kept firing fine. This matches the "0 signals
+        // / No signals today yet" seen on the Signal Timeline despite live
+        // Telegram BUY PUT alerts firing the same morning.
         await dbPool.query(`
             ALTER TABLE signal_log
-                ADD COLUMN IF NOT EXISTS dyn_zone TEXT,
-                ADD COLUMN IF NOT EXISTS dyn_atr  NUMERIC,
-                ADD COLUMN IF NOT EXISTS gap_zone TEXT,
-                ADD COLUMN IF NOT EXISTS gap_pct  NUMERIC
+                ADD COLUMN IF NOT EXISTS dyn_zone    TEXT,
+                ADD COLUMN IF NOT EXISTS dyn_atr     NUMERIC,
+                ADD COLUMN IF NOT EXISTS gap_zone    TEXT,
+                ADD COLUMN IF NOT EXISTS gap_pct     NUMERIC,
+                ADD COLUMN IF NOT EXISTS breadth_sig TEXT
         `);
 
         // ── signal_performance table — automatic outcome tracking ──────────────
@@ -4853,7 +4865,8 @@ async function initDB() {
                 partial_win    BOOLEAN DEFAULT FALSE,  -- max_gain_pct crossed the coach's own "+30% book 50%" stage
                 source         TEXT,       -- 'main' | 'mtf' — which engine generated this lead
                 lead_quality   TEXT,       -- MTF-tracker leads only: 'Strong Confluence' | 'Moderate' | 'Weak / Isolated'
-                exit_warned    BOOLEAN DEFAULT FALSE   -- did a momentum-decay exit warning fire on this trade before it closed?
+                exit_warned    BOOLEAN DEFAULT FALSE,  -- did a momentum-decay exit warning fire on this trade before it closed?
+                breadth_sig    TEXT        -- A/D breadthSignal at entry: 'BULLISH'|'BEARISH'|'NEUTRAL' — lets us later PROVE whether breadth-agreeing signals actually outperform, same evidence-first approach as dyn_zone below
             )
         `);
         // ── Backward-compat for DBs created before this fix ─────────────────────
@@ -4882,6 +4895,12 @@ async function initDB() {
         // the Lead Quality columns just above.
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS dyn_zone TEXT`).catch(()=>{});
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS gap_zone TEXT`).catch(()=>{});
+        // Breadth-vs-outcome tracking — informational only for now (no gate change).
+        // Goal: in the early-August audit (same one reviewing Dynamic Levels),
+        // check whether signals where breadth agreed actually outperform ones
+        // where it opposed, before ever considering it for anything more than
+        // the existing ±2 soft vote it already gets in combineSignals().
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS breadth_sig TEXT`).catch(()=>{});
         console.log('✅ PostgreSQL signal_performance table ready');
 
         // ── journal_trades table — manually entered trades from the Journal tab ──
@@ -5061,14 +5080,15 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
         leadQuality: strikeData.leadQuality?.label ?? null,  // null for main-engine trades (no MTF lead-quality concept there)
         dynZone: marketState.dynamicLevels?.zone ?? null,
         gapZone: marketState.premarketGap?.zone ?? null,
+        breadthSig: marketState.breadth?.breadthSignal ?? null,
     };
     openPerfRecords.push(rec);
     if (dbPool) {
         try {
             const r = await dbPool.query(
-                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high, source, lead_quality, dyn_zone, gap_zone)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry, rec.source, rec.leadQuality, rec.dynZone, rec.gapZone]
+                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high, source, lead_quality, dyn_zone, gap_zone, breadth_sig)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry, rec.source, rec.leadQuality, rec.dynZone, rec.gapZone, rec.breadthSig]
             );
             rec.id = r.rows[0]?.id ?? null;
         } catch (e) { console.warn('[SignalPerf] insert error:', e.message); }
@@ -5276,7 +5296,7 @@ async function getRecentSignalHistory() {
     if (!dbPool) return null;
     try {
         const r = await dbPool.query(
-            `SELECT target_hit, partial_win, sl_hit, dyn_zone
+            `SELECT signal, target_hit, partial_win, sl_hit, dyn_zone, breadth_sig
              FROM signal_performance
              WHERE closed = true
              ORDER BY id DESC
@@ -5284,7 +5304,7 @@ async function getRecentSignalHistory() {
         );
         const rows = r.rows;
         const total = rows.length;
-        if (total === 0) return { total: 0, correct: 0, wrong: 0, accuracy: null, byRegime: {} };
+        if (total === 0) return { total: 0, correct: 0, wrong: 0, accuracy: null, byRegime: {}, byBreadthAlignment: {} };
 
         const isWin = row => row.target_hit || row.partial_win;
         const correct = rows.filter(isWin).length;
@@ -5305,10 +5325,31 @@ async function getRecentSignalHistory() {
             byRegime[k].accuracy = Math.round((byRegime[k].correct / byRegime[k].total) * 100);
         }
 
+        // Breadth-vs-outcome — informational only, feeds the same August audit
+        // as byRegime above. Not used for any gate decision yet.
+        const breadthAlignmentOf = row => {
+            if (!row.breadth_sig || row.breadth_sig === 'NEUTRAL') return null;
+            const agrees = (row.signal === 'BUY CALL' && row.breadth_sig === 'BULLISH')
+                        || (row.signal === 'BUY PUT'  && row.breadth_sig === 'BEARISH');
+            return agrees ? 'Agreed' : 'Opposed';
+        };
+        const byBreadthAlignment = {};
+        for (const row of rows) {
+            const align = breadthAlignmentOf(row);
+            if (!align) continue;
+            if (!byBreadthAlignment[align]) byBreadthAlignment[align] = { total: 0, correct: 0 };
+            byBreadthAlignment[align].total++;
+            if (isWin(row)) byBreadthAlignment[align].correct++;
+        }
+        for (const k of Object.keys(byBreadthAlignment)) {
+            byBreadthAlignment[k].accuracy = Math.round((byBreadthAlignment[k].correct / byBreadthAlignment[k].total) * 100);
+        }
+
         return {
             total, correct, wrong,
             accuracy: Math.round((correct / total) * 100),
             byRegime,
+            byBreadthAlignment,
             label: `Last ${total} signals: ${correct} correct, ${wrong} wrong (${Math.round((correct/total)*100)}%)`,
             generatedAt: new Date().toISOString(),
         };
