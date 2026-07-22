@@ -376,7 +376,13 @@ async function sendCloseSummary(state) {
         digestLines.push(`\n📋 <b>Today's Signals</b>`);
         if (dc.main) digestLines.push(`Main engine: ${dc.main}`);
         if (dc.mtfStrong || dc.mtfModerate || dc.mtfWeak) {
-            digestLines.push(`MTF-tracker: 🟢${dc.mtfStrong} Strong · 🟡${dc.mtfModerate} Moderate · 🔴${dc.mtfWeak} Weak`);
+            // Only Strong Confluence leads actually fire an alert (see server.js
+            // "sure shot" gating change, 22 Jul) — Moderate/Weak are suppressed
+            // silently. Showing all three tiers here (not just the sent ones)
+            // so you can see how much the gate is filtering without having to
+            // watch the noisy leads yourself.
+            const suppressed = dc.mtfModerate + dc.mtfWeak;
+            digestLines.push(`MTF-tracker: 🟢${dc.mtfStrong} Strong (sent) · 🟡${dc.mtfModerate} Moderate + 🔴${dc.mtfWeak} Weak (${suppressed} suppressed, not sent)`);
         }
     }
     const perf = state.todaySignalPerf;

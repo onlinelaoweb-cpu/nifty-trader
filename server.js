@@ -3509,9 +3509,26 @@ async function checkTelegramAlerts(newSignal) {
         else if (leadQuality.label === 'Moderate') dailySignalCounts.mtfModerate++;
         else dailySignalCounts.mtfWeak++;
 
-        await sendMTFAlert(marketState, mtfStrikeData);
-        lastMTFAlertAt     = Date.now();
-        lastMTFAlertSignal = mtfSignalNow;
+        // ── Alert-firing gate — CHANGED per user request (22 Jul): "I want the
+        // sure shot lead." Previously sendMTFAlert() fired for EVERY lead
+        // quality tier including Weak/Isolated (0-1/4 factors), purely
+        // informational, "does not change whether the alert fires" (see
+        // comment above). A live-video audit caught a concrete case of the
+        // exact documented failure mode this created: a 1:42pm BUY CALL with
+        // 1H Bearish + Delta -19.9% (both contradicting) still fired as an
+        // alert, just labelled "weak" — and per this file's own historical
+        // example, that 9:15am-style 0-1/4 pattern "never confirmed" while
+        // only 3-4/4 Strong Confluence leads reliably hit target. So Weak and
+        // Moderate leads are now suppressed entirely — only genuinely
+        // high-quality (Strong Confluence, score>=3) leads are sent. Counts
+        // above (mtfWeak/mtfModerate/mtfStrong) still track ALL tiers for
+        // analytics even though only Strong fires, so you can still audit how
+        // often each tier occurs.
+        if (leadQuality.score >= 3) {
+            await sendMTFAlert(marketState, mtfStrikeData);
+            lastMTFAlertAt     = Date.now();
+            lastMTFAlertSignal = mtfSignalNow;
+        }
     }
     prevMTFAligned = marketState.mtf.aligned;
     if (marketState.vix>20&&!vixAlertSent) { vixAlertSent=true; await sendVIXAlert(marketState.vix,marketState.vixNote); }
