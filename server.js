@@ -3483,12 +3483,17 @@ async function checkTelegramAlerts(newSignal) {
         const mainAgreesAt  = marketState.mtf.signal === 'BUY CALL' ? lastMainCallAt
                              : marketState.mtf.signal === 'BUY PUT'  ? lastMainPutAt : 0;
         const mainConfluence = mainAgreesAt > 0 && (Date.now() - mainAgreesAt) < CONFLUENCE_WINDOW_MS;
+        // Elapsed minutes since main engine last agreed — surfaced in the badge
+        // text so "Main engine agrees" can't be misread as live/simultaneous
+        // agreement when it may actually be 30-40 min stale (main engine could
+        // have already gone back to NO TRADE by the time this MTF alert fires).
+        const mainAgreesMinAgo = mainConfluence ? Math.round((Date.now() - mainAgreesAt) / 60000) : null;
 
         const factorsMet = [isFull3, deltaMatches, highConf, mainConfluence].filter(Boolean).length;
         const leadQuality = {
             score: factorsMet,
             label: factorsMet >= 3 ? 'Strong Confluence' : factorsMet === 2 ? 'Moderate' : 'Weak / Isolated',
-            isFull3, deltaMatches, highConf, mainConfluence,
+            isFull3, deltaMatches, highConf, mainConfluence, mainAgreesMinAgo,
         };
         if (mtfStrikeData) mtfStrikeData.leadQuality = leadQuality;
         marketState.mtf.leadQuality = leadQuality;

@@ -239,7 +239,7 @@ async function sendMTFAlert(state, strikeData = null) {
                 lq.isFull3 ? '3/3 TFs' : null,
                 lq.deltaMatches ? 'Delta confirms' : null,
                 lq.highConf ? 'High confidence' : null,
-                lq.mainConfluence ? 'Main engine agrees' : null,
+                lq.mainConfluence ? `Main engine agreed ${lq.mainAgreesMinAgo}m ago` : null,
               ].filter(Boolean).join(', ') || 'no supporting factors — treat as noise'}`
             : '';
         strikeBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
