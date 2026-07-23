@@ -40,6 +40,12 @@
 
 'use strict';
 const axios = require('axios');
+let _telegram = null;
+try { _telegram = require('./telegram'); } catch (e) { /* optional — nseData can run without it in tests */ }
+
+// One alert per calendar day — same dedup pattern as ema920AlertSentToday in
+// server.js. Resets automatically since it's keyed off today's date string.
+let _fyersAlertSentForDate = null;
 
 // ── Angel One session ─────────────────────────────────────────────────────────
 let _angelSession = null;
@@ -152,6 +158,26 @@ async function autoRefreshFyersToken() {
         } else {
             console.warn(`[Fyers] ⚠️  Token refresh error (${e.response?.status || e.message}): ${body}`);
             console.warn('[Fyers] Using existing FYERS_ACCESS_TOKEN — update manually at myapi.fyers.in if PCR fails.');
+            if (!FYERS_SECRET_ID) {
+                console.warn('[Fyers] 🔎 Diagnosis hint: FYERS_SECRET_ID is not set, so appIdHash was sent empty. ' +
+                    'Fyers\' refresh API requires SHA256(app_id:secret_id) — an empty/wrong hash produces exactly ' +
+                    'this "invalid refresh token" error even when the refresh token itself is fine. Get the Secret ' +
+                    'ID from myapi.fyers.in → your app → and set FYERS_SECRET_ID in Railway Variables before assuming the refresh token needs regenerating.');
+            }
+            // Alert once per day, not once per restart, so a redeploy-heavy morning
+            // doesn't spam Telegram — but the FIRST failure each day still reaches
+            // Prabhash proactively instead of only being discovered when PCR breaks.
+            const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+            if (_telegram && _fyersAlertSentForDate !== todayStr) {
+                _fyersAlertSentForDate = todayStr;
+                _telegram.sendRawMessage(
+                    `⚠️ <b>Fyers token refresh failed</b>\n` +
+                    `${body}\n\n` +
+                    (FYERS_SECRET_ID
+                        ? `Using existing FYERS_ACCESS_TOKEN as fallback. If PCR stops updating, regenerate at myapi.fyers.in.`
+                        : `🔎 FYERS_SECRET_ID is not set in Railway — this is the likely cause, not an expired refresh token. Add it before regenerating anything.`)
+                ).catch(() => {});
+            }
         }
     }
 }
