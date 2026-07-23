@@ -417,7 +417,39 @@ RSI: ${state.rsi || '--'}${digestBlock}
     await sendMessage(msg);
 }
 
-// ── Exit Alert (SL / Target hit) ──────────────────────
+// ── Scalp Plan Alert — alternate fast-exit plan, SAME confirmed signal ──────
+// Fires right alongside sendSignalAlert() for the exact same trade — not a
+// new signal, not a new gate. Deliberately different visual identity (⚡⚡⚡
+// border instead of ━━━, no "SIGNAL" wording in the title) so it can never be
+// mistaken for a new/separate trade the way tonight's MTF-vs-main confusion
+// happened. This is "same trade, here's a quicker way to exit it" — nothing more.
+async function sendScalpAlert(state, strikeData, scalpPlan) {
+    if (!strikeData || !scalpPlan) return;
+    const emoji = state.signal === 'BUY CALL' ? '🟢' : '🔴';
+
+    const msg = `
+⚡⚡⚡ SCALP EXIT PLAN ⚡⚡⚡
+(same trade as above — optional quick-exit alternative)
+⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡
+${emoji} <b>${strikeData.strike} ${strikeData.type}</b> @ ₹${scalpPlan.entry}
+
+🎯 Scalp Target: ₹${scalpPlan.scalpTarget} (+${scalpPlan.scalpTgtPct}%)
+🛑 Scalp SL    : ₹${scalpPlan.scalpSL} (-${scalpPlan.scalpSlPct}%)
+
+⏱ Review at ${scalpPlan.reviewByLabel} · <b>Hard exit by ${scalpPlan.hardExitByLabel}</b> regardless of P&L
+
+💡 This is NOT a bigger/better target than the main plan above — it's a
+smaller, faster one for when you just want in-and-out within 10-20 min
+instead of riding the full swing target.
+⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
+<i>VardaanNifty AI</i>
+`.trim();
+
+    await sendMessage(msg);
+}
+
+
 // Called when a live premium crosses a stop-loss or target threshold.
 // trade        : the trade object from the trades[] array
 // reason       : 'STOP_LOSS' | 'TARGET_1R' | 'TARGET_1_5R'
@@ -581,6 +613,7 @@ Price hasn't hit SL or target — this isn't an auto-exit. Just a heads-up to re
 module.exports = {
     sendSignalAlert,
     sendMTFAlert,
+    sendScalpAlert,
     sendMorningSummary,
     sendVIXAlert,
     sendCloseSummary,

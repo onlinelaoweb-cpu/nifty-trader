@@ -58,7 +58,8 @@ const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
     sendCloseSummary, sendExitAlert, sendMomentumExitWarning,
-    sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured
+    sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured,
+    sendScalpAlert,
 }                                   = require('./src/api/telegram');
 
 const app    = express();
@@ -3490,6 +3491,17 @@ async function checkTelegramAlerts(newSignal) {
         await sendSignalAlert(marketState, prevSignal, strikeDataForAlert);
         lastSignalFiredPrice = marketState.nifty || 0;
 
+        // ── Scalp Plan alert — same confirmed signal, alternate fast-exit plan ──
+        // Toggle: SCALP_ALERTS_ENABLED=false in Railway to turn off without a
+        // redeploy. Default ON since it's purely additive (no gate, no new
+        // trade, no DB row) — just a second message alongside the one above.
+        if (process.env.SCALP_ALERTS_ENABLED !== 'false' && strikeDataForAlert) {
+            try {
+                const scalpPlan = buildScalpPlan(strikeDataForAlert);
+                if (scalpPlan) await sendScalpAlert(marketState, strikeDataForAlert, scalpPlan);
+            } catch (e) { console.warn('[Scalp] alert error:', e.message); }
+        }
+
         // ── Trigger AI suggestion on fresh signal (costs 1 API call here only) ──
         if (marketState.qualityGate.passed && strikeDataForAlert) {
             try {
@@ -5691,7 +5703,40 @@ function buildTradeCoach(strikeData) {
     };
 }
 
-// Simple Black-Scholes call/put price estimate
+// ── Scalp Plan — alternate fast-exit plan for the SAME confirmed signal ─────
+// User request (23 July): "want a strong one to just buy, get profit and exit"
+// — same trigger as the existing confirmed BUY CALL/PUT (no new gate, no new
+// signal), just a smaller/faster target with a hard time-box so it can be
+// closed in 10-20 minutes instead of riding the full swing target for ~90 min.
+// Purely additive: does NOT replace the main target/SL, does NOT create a
+// second signal_performance row (it's the same trade, just an optional exit
+// style) — this is one alert alongside the existing one, nothing more.
+function buildScalpPlan(strikeData) {
+    if (!strikeData || !strikeData.entry) return null;
+    const { entry } = strikeData;
+
+    // +18% / -10% — deliberately smaller than the main +50%/-25% plan so it's
+    // realistically reachable within 10-20 min rather than needing a full
+    // trend move. R:R ~1.8:1, tighter than the main plan's 1:2 but the whole
+    // point here is speed over ratio.
+    const scalpTarget = parseFloat((entry * 1.18).toFixed(2));
+    const scalpSL     = parseFloat((entry * 0.90).toFixed(2));
+
+    const now = new Date();
+    const reviewBy   = new Date(now.getTime() + 10 * 60 * 1000);
+    const hardExitBy = new Date(now.getTime() + 20 * 60 * 1000);
+    const fmt = d => d.toLocaleTimeString('en-IN', { hour12: true, hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+
+    return {
+        entry,
+        scalpTarget, scalpSL,
+        scalpTgtPct: 18, scalpSlPct: 10,
+        reviewByLabel: fmt(reviewBy),
+        hardExitByLabel: fmt(hardExitBy),
+    };
+}
+
+
 function bsEstimate(S, K, T, sigma, type) {
     const r = 0.0625;  // RBI repo rate (updated June 2026 — was 0.065)
     if (T <= 0) return Math.max(0, type === 'CE' ? S - K : K - S);
