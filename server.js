@@ -2282,6 +2282,94 @@ function combineSignals(indicators) {
                       && qualityGate.deltaAligned              // strong opposing delta = block
                       && qualityGate.convictionOk;              // stacked structural trend opposes signal = block
                       // contradictionOk / sequenceAligned intentionally NOT included — informational only, see notes above
+
+    // ── EXPERIMENT (July 23): ALL_FACTORS_HARD_GATE ──────────────────────────
+    // User request: wire every currently-informational factor into the hard
+    // gate as an additional AND-condition, accept far fewer signals/day (1-2)
+    // in exchange for each one being maximally filtered. Off by default —
+    // behavior above this block is completely unchanged unless the env var
+    // is explicitly set. To try it: set ALL_FACTORS_HARD_GATE=true in Railway.
+    // TO REVERT: delete the env var (or set to anything else) and restart —
+    // no code change needed, goes back to exactly the gate above.
+    //
+    // ⚠️ Expectation, based on this file's own history: contradictionOk +
+    // sequenceAligned ALONE were already "almost never letting a signal
+    // through" when tried as hard gates (see notes above, 17 Jul audit).
+    // Stacking 7 MORE independent factors on top of that is very likely to
+    // produce ZERO signals on most days rather than the desired 1-2 strong
+    // ones — each additional AND-condition can only narrow the pass rate
+    // further, never widen it. Tracked explicitly below so it's visible
+    // *why* nothing fired, instead of a silent all-day WAIT.
+    const ALL_FACTORS_HARD_GATE = process.env.ALL_FACTORS_HARD_GATE === 'true';
+    if (ALL_FACTORS_HARD_GATE && rawSignal !== 'WAIT') {
+        const bullish = rawSignal === 'BUY CALL';
+
+        const breadthSig = marketState.breadth?.breadthSignal;
+        qualityGate.breadthAligned = !breadthSig || breadthSig === 'NEUTRAL'
+            || (bullish ? breadthSig === 'BULLISH' : breadthSig === 'BEARISH');
+
+        const dynZone = marketState.dynamicLevels?.zone;
+        qualityGate.dynLevelsClear = !dynZone || dynZone === 'UNKNOWN'
+            ? true
+            : dynZone !== 'INSIDE'
+                && !(bullish  && (dynZone === 'BELOW_L3' || dynZone === 'L1_L3'))
+                && !(!bullish && (dynZone === 'ABOVE_H3' || dynZone === 'H1_H3'));
+
+        const renkoTrend = marketState.renko?.trend;
+        qualityGate.renkoAligned = !renkoTrend || renkoTrend === 'INSUFFICIENT'
+            ? true
+            : renkoTrend !== 'MIXED' && renkoTrend !== 'NOISY'
+                && !(bullish  && renkoTrend === 'BEARISH')
+                && !(!bullish && renkoTrend === 'BULLISH');
+
+        const gapZone = marketState.premarketGap?.zone;
+        qualityGate.gapClear = !gapZone || gapZone === 'FLAT'
+            ? true
+            : !(bullish  && gapZone === 'GAP_DOWN')
+                && !(!bullish && gapZone === 'GAP_UP');
+
+        const regimeTags = marketState.marketRegime?.tags || [];
+        qualityGate.regimeClear = !regimeTags.includes('RANGE');
+
+        const bosEvent = marketState.physicsOfTrading?.bosChoch?.event;
+        qualityGate.bosChochAligned = !bosEvent || bosEvent === 'NONE'
+            ? true
+            : !(bullish  && (bosEvent === 'BOS_BEARISH' || bosEvent === 'CHOCH_BEARISH'))
+                && !(!bullish && (bosEvent === 'BOS_BULLISH' || bosEvent === 'CHOCH_BULLISH'));
+
+        const newsScore = marketState.newsSentiment?.available ? marketState.newsSentiment.score : 0;
+        qualityGate.newsClear = Math.abs(newsScore) < 40
+            || (bullish ? newsScore > 0 : newsScore < 0);
+
+        const allFactorsPassed = qualityGate.contradictionOk && qualityGate.sequenceAligned
+            && qualityGate.breadthAligned && qualityGate.dynLevelsClear
+            && qualityGate.renkoAligned   && qualityGate.gapClear
+            && qualityGate.regimeClear    && qualityGate.bosChochAligned
+            && qualityGate.newsClear;
+
+        marketState.allFactorsExperiment = {
+            enabled: true, passed: allFactorsPassed,
+            checks: {
+                contradictionOk: qualityGate.contradictionOk, sequenceAligned: qualityGate.sequenceAligned,
+                breadthAligned: qualityGate.breadthAligned, dynLevelsClear: qualityGate.dynLevelsClear,
+                renkoAligned: qualityGate.renkoAligned, gapClear: qualityGate.gapClear,
+                regimeClear: qualityGate.regimeClear, bosChochAligned: qualityGate.bosChochAligned,
+                newsClear: qualityGate.newsClear,
+            },
+            failedFactors: Object.entries({
+                contradictionOk: qualityGate.contradictionOk, sequenceAligned: qualityGate.sequenceAligned,
+                breadthAligned: qualityGate.breadthAligned, dynLevelsClear: qualityGate.dynLevelsClear,
+                renkoAligned: qualityGate.renkoAligned, gapClear: qualityGate.gapClear,
+                regimeClear: qualityGate.regimeClear, bosChochAligned: qualityGate.bosChochAligned,
+                newsClear: qualityGate.newsClear,
+            }).filter(([,v]) => !v).map(([k]) => k),
+        };
+
+        if (!allFactorsPassed) {
+            reasons.push(`🧪 ALL_FACTORS_HARD_GATE blocked this ${rawSignal} — failed: ${marketState.allFactorsExperiment.failedFactors.join(', ')}`);
+        }
+        qualityGate.passed = qualityGate.passed && allFactorsPassed;
+    }
     marketState.qualityGate = qualityGate;
 
     if (rawSignal !== 'WAIT' && !qualityGate.deltaAligned) {
