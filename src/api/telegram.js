@@ -215,89 +215,97 @@ async function sendMTFAlert(state, strikeData = null) {
             ? '🔥 STRONG SIGNAL — ALL 3 ALIGNED!'
             : `⚡ SIGNAL — ${validCount}/3 TFs ALIGNED (15m warming up)`;
 
-    // ── Strike SL/Target block (same logic as sendSignalAlert) ────────────────
-    const LOT = 65;  // FIX: was hardcoded 75 (pre-Jan-2026 lot size) — caused wrong
-                      // ₹/lot amounts in "ALL 3 ALIGNED" messages while sendSignalAlert
-                      // correctly used 65. Now matches LOT_SIZE in server.js.
-    let strikeBlock = '';
+    const LOT = 65;  // Nifty lot size, revised Jan 2026: 75 → 65
+    const lq = strikeData?.leadQuality;
+
+    // ── Main-engine status (unchanged logic) ─────────────────────────────────
+    const mainConfirms = state.signal === state.mtf.signal;
+
+    // ── Plain-English verdict — leads the message so the reader doesn't have
+    // to parse jargon to know what to do. Tiered off the same mainConfirms /
+    // leadQuality data that already existed, just surfaced up front instead
+    // of buried after 15 lines of technical fields.
+    const verdictLine = mainConfirms && state.tradeQuality
+        ? `✅ <b>TAKE — main engine confirms this trade right now</b> (Grade ${state.tradeQuality.grade}, ${state.tradeQuality.sizeHint})`
+        : lq?.label === 'Strong Confluence'
+            ? `🟡 <b>WATCH ONLY</b> — strong setup on the MTF tracker, but the main engine still says WAIT. Size down or skip until it confirms.`
+            : lq?.label === 'Moderate'
+                ? `🟠 <b>WEAK</b> — only partial confluence. Skip unless you have your own confirmation.`
+                : `⚪ <b>LOW CONVICTION</b> — treat as background noise, no action needed.`;
+
+    // ── Range-pocket / structure warning — same label the Insights tab and
+    // sendSignalAlert already use (src/api/dynamicLevels.js), but this alert
+    // type never showed it before. This is the exact context that explained
+    // why today's two "Strong Confluence" MTF trades (24000PE @152.3, @157.75)
+    // both stalled at +15-19% instead of reaching target — both fired with
+    // dyn_zone=INSIDE (a range pocket), which this line now surfaces up front
+    // instead of only being visible later in the DB audit.
+    const rangeWarning = state.dynamicLevels?.available
+        ? `\n📐 ${state.dynamicLevels.label}`
+        : '';
+
+    // ── Trade levels — plain numbers first, no jargon ────────────────────────
+    let levelsBlock = '';
+    let detailsBlock = '';
     if (strikeData && strikeData.entry > 0) {
         const slPct   = ((strikeData.entry - strikeData.sl) / strikeData.entry * 100).toFixed(0);
         const tgtPct  = ((strikeData.target - strikeData.entry) / strikeData.entry * 100).toFixed(0);
         const slLoss  = Math.round((strikeData.entry - strikeData.sl) * LOT);
         const tgtGain = Math.round((strikeData.target - strikeData.entry) * LOT);
         const coach = strikeData.coach;
-        const coachBlock = coach
-            ? `\n🧑‍🏫 <b>AI Trade Coach</b>\n✅ Ideal Entry: ${coach.idealEntryLabel} | ${coach.chaseWarning}\n📈 +20% SL→cost | +30% book 50% | +40% exit\n`
-            : '';
         const stalenessNote2 = (strikeData.premiumAgeSec != null && strikeData.premiumAgeSec > 90)
             ? ` ⚠️ (quote ${Math.round(strikeData.premiumAgeSec/60)}min old — verify on broker before entry)`
             : '';
-        const lq = strikeData.leadQuality;
+
+        levelsBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
+📥 Entry : ₹${strikeData.entry}${stalenessNote2}
+🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
+🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)`;
+
+        const coachBlock = coach
+            ? `\n\n🧑‍🏫 <b>AI Trade Coach</b>\n✅ Ideal Entry: ${coach.idealEntryLabel} | ${coach.chaseWarning}\n📈 +20% SL→cost | +30% book 50% | +40% exit`
+            : '';
+        levelsBlock += coachBlock;
+
+        // ── Details — technical fields moved here, below the actionable info,
+        // for anyone who wants to see the full reasoning. Nothing removed,
+        // just reordered so it doesn't block the "what do I do" answer.
         const lqEmoji = lq ? (lq.label === 'Strong Confluence' ? '🟢' : lq.label === 'Moderate' ? '🟡' : '🔴') : '';
-        const lqBlock = lq
-            ? `\n${lqEmoji} <b>Lead Quality: ${lq.label}</b> (${lq.score}/4) — ${[
+        const lqLine = lq
+            ? `${lqEmoji} Lead Quality: ${lq.label} (${lq.score}/4) — ${[
                 lq.isFull3 ? '3/3 TFs' : null,
                 lq.deltaMatches ? 'Delta confirms' : null,
                 lq.highConf ? 'High confidence' : null,
                 lq.mainConfluence ? `Main engine agreed ${lq.mainAgreesMinAgo}m ago` : null,
               ].filter(Boolean).join(', ') || 'no supporting factors — treat as noise'}`
             : '';
-        strikeBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
-📥 Entry : ₹${strikeData.entry}${stalenessNote2}
-🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
-🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
-📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep}` : ''}${lqBlock}${state.momentumDecayWarning ? `\n${state.momentumDecayWarning}` : ''}
-${coachBlock}━━━━━━━━━━━━━━━━━━
-`;
+
+        const pocData  = state.poc;
+        const pocLine  = pocData?.poc
+            ? `POC:${pocData.poc} | VAH:${pocData.vah} | VAL:${pocData.val} (${pocData.signal.replace('_',' ')})`
+            : '';
+        const deltaData = state.delta;
+        const deltaLine = deltaData?.deltaPct !== undefined
+            ? `Delta:${deltaData.deltaPct > 0 ? '+' : ''}${deltaData.deltaPct}% (${deltaData.signal})${deltaData.divergence ? ' — REVERSAL WARNING' : ''}`
+            : '';
+
+        detailsBlock = `\n🔍 <b>Why this fired</b>
+5m: ${state.mtf.tf5m?.signal || '--'} · 15m: ${state.mtf.tf15m?.signal || '--'} · 1H: ${state.mtf.tf1h?.signal || '--'}
+${pocLine}
+${deltaLine}
+📊 R:R 1:2${strikeData.slSource?.startsWith('fibo') ? ' (SL basis: swing structure)' : ''}${strikeData.bep ? ` | BEP: ${strikeData.bep}` : ''}
+${lqLine}${state.momentumDecayWarning ? `\n${state.momentumDecayWarning}` : ''}`;
     }
-
-    // ── POC + Delta block (same as sendSignalAlert) ────────────────────────────
-    const pocData  = state.poc;
-    const pocEmoji = !pocData || pocData.signal === 'INSUFFICIENT' ? '⏳'
-                   : pocData.signal === 'AT_POC'    ? '🟡'
-                   : pocData.signal === 'ABOVE_POC' ? '🟢'
-                   :                                   '🔴';
-    const pocInfo  = pocData?.poc
-        ? `${pocEmoji} POC:${pocData.poc} | VAH:${pocData.vah} | VAL:${pocData.val} (${pocData.signal.replace('_',' ')})\n`
-        : '';
-
-    const deltaData = state.delta;
-    const deltaEmoji = !deltaData ? '⏳'
-                     : deltaData.divergence      ? '⚠️'
-                     : deltaData.signal === 'BULLISH' ? '🟢'
-                     : deltaData.signal === 'BEARISH' ? '🔴'
-                     :                                   '⚪';
-    const deltaInfo = deltaData?.deltaPct !== undefined
-        ? `${deltaEmoji} Delta:${deltaData.deltaPct > 0 ? '+' : ''}${deltaData.deltaPct}% (${deltaData.signal})${deltaData.divergence ? ' — REVERSAL WARNING' : ''}\n`
-        : '';
-
-    // ── Main-engine status line ─────────────────────────────────────────────
-    // BUG FIX: this alert used to show `state.tradeQuality.grade` next to the
-    // MTF-tracker's OWN confidence (state.mtf.confidence) — but tradeQuality
-    // is computed from the MAIN gated signal, not this secondary MTF-only
-    // tracker. When the main engine was still on WAIT (gates not satisfied —
-    // e.g. Delta/POC/physics/contradiction checks), this alert still showed a
-    // full Entry/SL/Target/AI-Coach card looking fully actionable, mislabeled
-    // "Grade: — (No trade)" — confusing at best, unsafe at worst since it
-    // reads like a vetted trade. Now explicit about which engine is speaking.
-    const mainConfirms = state.signal === state.mtf.signal;
-    const statusLine = mainConfirms && state.tradeQuality
-        ? `📈 Confidence: ${state.mtf.confidence}% | Grade: ${state.tradeQuality.grade} (${state.tradeQuality.sizeHint})`
-        : `📈 Confidence: ${state.mtf.confidence}% (MTF-tracker only)
-⚠️ Main engine: ${state.signal === 'WAIT' ? 'NO TRADE — gates not yet met' : state.signal} — treat this as early/unconfirmed, size down or wait for main signal`;
 
     const msg = `
 ${alignTitle}
 ━━━━━━━━━━━━━━━━━━
-${emoji} <b>${state.mtf.signal}</b> — ${state.mtf.strength}
-📊 NIFTY: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}
-${statusLine}
+${verdictLine}
+${emoji} <b>${state.mtf.signal}</b> — ${state.mtf.strength} | NIFTY: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}${rangeWarning}
 ━━━━━━━━━━━━━━━━━━
-5 MIN  : ${state.mtf.tf5m?.signal  || '--'}
-15 MIN : ${state.mtf.tf15m?.signal || '--'}
-1 HOUR : ${state.mtf.tf1h?.signal  || '--'}
-━━━━━━━━━━━━━━━━━━
-${pocInfo}${deltaInfo}${pocInfo || deltaInfo ? '━━━━━━━━━━━━━━━━━━\n' : ''}${strikeBlock}⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
+${levelsBlock}
+━━━━━━━━━━━━━━━━━━${detailsBlock}
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
 <i>VardaanNifty AI</i>
 `.trim();
 
