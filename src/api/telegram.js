@@ -8,6 +8,28 @@ function isConfigured() {
     return BOT_TOKEN && CHAT_ID;
 }
 
+// ── HTML sanitizer for Telegram parse_mode:'HTML' ─────────────────────────
+// BUG FOUND (23 July, from production logs): a literal '<' inside generated
+// label text — e.g. ORB's "Broken Down (<23825)" or PCR's "0.65 < 0.75" —
+// gets sent as-is under parse_mode:'HTML'. Telegram's parser reads "<23825"
+// as an attempted tag and rejects the WHOLE message: "Bad Request: can't
+// parse entities: Unsupported start tag". The alert silently fails to send.
+// Fixed the two known label sources, but adding this as a permanent net so
+// the entire bug class can't recur from some other label text later: shield
+// our own small set of intentional tags behind placeholders, escape every
+// other stray < and >, then restore the real tags.
+const ALLOWED_TAG_RE = /<\/?(?:b|i|u|code|pre)>/gi;
+function sanitizeForTelegramHTML(text) {
+    const shielded = [];
+    let out = text.replace(ALLOWED_TAG_RE, (match) => {
+        shielded.push(match);
+        return `\u0000${shielded.length - 1}\u0000`;
+    });
+    out = out.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    out = out.replace(/\u0000(\d+)\u0000/g, (_, i) => shielded[parseInt(i, 10)]);
+    return out;
+}
+
 // ── Send message ──────────────────────────────────────
 async function sendMessage(text) {
     if (!isConfigured()) {
@@ -15,12 +37,14 @@ async function sendMessage(text) {
         return;
     }
 
+    const safeText = sanitizeForTelegramHTML(text);
+
     try {
         const res = await axios.post(
             `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
             {
                 chat_id   : CHAT_ID,
-                text      : text,
+                text      : safeText,
                 parse_mode: 'HTML'
             },
             { timeout: 8000 }
@@ -66,10 +90,17 @@ async function sendSignalAlert(state, prevSignal, strikeData = null) {
 
     const strikeInfo = state.strikeRange || 'ATM ±200';
 
-    // Volume info from Angel One WS (wsVolume = session cumulative)
-    const volInfo = state.wsVolume > 0
-        ? `📦 Volume: ${(state.wsVolume / 1e6).toFixed(2)}M (session)`
-        : null;  // omit entirely if no WS volume (Yahoo mode)
+    // Volume info — prefer RVOL (decision-relevant: "is this move on real volume?")
+    // over the old raw session cumulative number, which told the reader nothing
+    // about whether today's volume was high or low (23 July audit: too many
+    // raw numbers without context). Falls back to session total if RVOL isn't
+    // available yet (Yahoo fallback mode, or <5 candles of history).
+    const rvolData = state.volumeRVOL;
+    const volInfo = rvolData?.reliable
+        ? `📦 Volume: ${rvolData.rvol}x average${rvolData.rvol >= 2.0 ? ' — spike ⚡' : ''}`
+        : state.wsVolume > 0
+            ? `📦 Volume: ${(state.wsVolume / 1e6).toFixed(2)}M (session)`
+            : null;  // omit entirely if no volume data at all
 
     // FIX: old label only showed bullCount regardless of signal direction —
     // produced "SIGNAL: BUY CALL ... MTF: 0/3 Bullish" which looks contradictory.
@@ -155,7 +186,15 @@ ${state.change >= 0 ? '▲' : '▼'} ${Math.abs(state.change).toFixed(2)} (${sta
 
 ⚡ <b>SIGNAL: ${state.signal}</b>
 📈 Confidence: ${state.confidence}%${state.tradeQuality ? ` | Grade: ${state.tradeQuality.grade} (${state.tradeQuality.sizeHint})` : ''}
-
+${(() => {
+    // ── Engine Checklist — highest-priority feature from both audits ────────
+    // "Immediately users know why." Directly reflects qualityGate, so it can
+    // never say something different from what actually gated this signal.
+    const cl = state.engineChecklist;
+    if (!cl || !cl.items?.length) return '';
+    const lines = cl.items.map(i => `${i.passed ? '✅' : '❌'} ${i.label}`).join('\n');
+    return `\n📋 <b>ENGINE CHECKLIST</b>\n${lines}\n<b>${cl.summary}</b>\n`;
+})()}
 🎯 Strike Zone: ${strikeInfo}
 ━━━━━━━━━━━━━━━━━━
 ${rsiInfo}
@@ -288,19 +327,23 @@ async function sendMTFAlert(state, strikeData = null) {
         const deltaLine = deltaData?.deltaPct !== undefined
             ? `Delta:${deltaData.deltaPct > 0 ? '+' : ''}${deltaData.deltaPct}% (${deltaData.signal})${deltaData.divergence ? ' — REVERSAL WARNING' : ''}`
             : '';
+        const rvolLine = state.volumeRVOL?.reliable
+            ? `📊 Volume: ${state.volumeRVOL.rvol}x average${state.volumeRVOL.rvol >= 2.0 ? ' — spike ⚡' : ''}`
+            : '';
 
         detailsBlock = `\n🔍 <b>Why this fired</b>
 5m: ${state.mtf.tf5m?.signal || '--'} · 15m: ${state.mtf.tf15m?.signal || '--'} · 1H: ${state.mtf.tf1h?.signal || '--'}
 ${pocLine}
 ${deltaLine}
+${rvolLine}
 📊 R:R 1:2${strikeData.slSource?.startsWith('fibo') ? ' (SL basis: swing structure)' : ''}${strikeData.bep ? ` | BEP: ${strikeData.bep}` : ''}
 ${lqLine}${state.momentumDecayWarning ? `\n${state.momentumDecayWarning}` : ''}`;
     }
 
     const msg = `
-${alignTitle}
-━━━━━━━━━━━━━━━━━━
 ${verdictLine}
+━━━━━━━━━━━━━━━━━━
+${alignTitle}
 ${emoji} <b>${state.mtf.signal}</b> — ${state.mtf.strength} | NIFTY: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}${rangeWarning}
 ━━━━━━━━━━━━━━━━━━
 ${levelsBlock}

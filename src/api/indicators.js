@@ -183,19 +183,33 @@ function calcVWAP() {
 //
 // The spike flag is passed through processIndicators() and used in server.js
 // to add +1 point when spike direction matches the emerging signal.
-function calcVolumeSpike() {
-    if (!currentCandle) return false;
+// ── Relative Volume (RVOL) ────────────────────────────
+// Upgraded from the old calcVolumeSpike() boolean (July 23 audit request:
+// "volume should be a numeric decision input, not just spike/no-spike").
+// Returns the actual ratio so a 2.0x spike and a 5.0x breakout can be told
+// apart, instead of both just tripping the same true/false flag.
+function calcRVOL() {
+    if (!currentCandle) return { rvol: null, avgVol: null, reliable: false };
 
     const recent = candleHistory.slice(-10);
-    if (recent.length < 5) return false;   // not enough history yet
+    if (recent.length < 5) return { rvol: null, avgVol: null, reliable: false };  // not enough history yet
 
     const avgVol = recent.reduce((s, c) => s + c.volume, 0) / recent.length;
 
     // Guard: if average volume ≤ 2 ticks, we're on Yahoo fallback (1 tick/poll).
-    // Spikes are meaningless on polling data — return false to avoid false signals.
-    if (avgVol <= 2) return false;
+    // RVOL is meaningless on polling data — mark unreliable so callers skip it
+    // entirely rather than voting on phantom "spikes".
+    if (avgVol <= 2) return { rvol: null, avgVol, reliable: false };
 
-    return currentCandle.volume >= avgVol * 2.0;
+    const rvol = parseFloat((currentCandle.volume / avgVol).toFixed(2));
+    return { rvol, avgVol: Math.round(avgVol), reliable: true };
+}
+
+// Backward-compatible boolean wrapper — same 2.0x threshold as before,
+// used anywhere that only needs a yes/no (e.g. physicsOfTrading force label).
+function calcVolumeSpike() {
+    const { rvol, reliable } = calcRVOL();
+    return reliable && rvol >= 2.0;
 }
 
 // ── Momentum confirmation gate ────────────────────────
@@ -325,9 +339,10 @@ function processIndicators(price, bnLeadSignal) {
     const ema9        = calcEMA(9);
     const ema21       = calcEMA(21);
     const vwap        = calcVWAP();
-    const volumeSpike = calcVolumeSpike();   // ← NEW: true when current candle volume ≥ 1.5× avg
+    const volumeSpike = calcVolumeSpike();   // true when current candle volume ≥ 2.0× avg (backward-compat)
+    const volumeRVOL  = calcRVOL();          // { rvol, avgVol, reliable } — numeric magnitude, July 23 upgrade
     const { signal, confidence, reasons } = getIndicatorSignal(price, rsi, ema9, ema21, vwap, bnLeadSignal);
-    return { rsi, ema9, ema21, vwap, volumeSpike, signal, confidence, reasons, priceCount: priceHistory.length, initialized };
+    return { rsi, ema9, ema21, vwap, volumeSpike, volumeRVOL, signal, confidence, reasons, priceCount: priceHistory.length, initialized };
 }
 
 // ✅ Export candle history for chart (multi-day — used by /api/candles)

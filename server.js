@@ -410,8 +410,8 @@ function computeMurarkaZone(pcr, spot, vwap, isExpiry) {
     const bearThr = isExpiry ? 0.80 : 0.75;
     let zone, label, color;
     if (pcr === null) { zone = 'AVOID'; label = 'PCR N/A — Awaiting data'; color = 'amber'; }
-    else if (pcr > bullThr)  { zone = 'BULL'; label = `PCR ${pcr.toFixed(2)} > ${bullThr} — BUY CE Zone ✅`; color = 'green'; }
-    else if (pcr < bearThr)  { zone = 'BEAR'; label = `PCR ${pcr.toFixed(2)} < ${bearThr} — BUY PE Zone 🔻`; color = 'red'; }
+    else if (pcr > bullThr)  { zone = 'BULL'; label = `PCR ${pcr.toFixed(2)} &gt; ${bullThr} — BUY CE Zone ✅`; color = 'green'; }
+    else if (pcr < bearThr)  { zone = 'BEAR'; label = `PCR ${pcr.toFixed(2)} &lt; ${bearThr} — BUY PE Zone 🔻`; color = 'red'; }
     else                     { zone = 'AVOID'; label = `PCR ${pcr !== null ? pcr.toFixed(2) : '--'} in ${bearThr}–${bullThr} — AVOID ⚠️`; color = 'amber'; }
 
     // Murarka Entry Alert: PCR in actionable zone + spot within ±0.2% of VWAP
@@ -987,8 +987,8 @@ function getORBStatus(price) {
     if (orbHigh === null || orbLow === null) {
         return { status: 'FORMING', label: '⏳ Opening range forming (need 15 min)', high: null, low: null };
     }
-    if (price > orbHigh) return { status: 'BROKEN_UP',   label: `🔼 ORB Broken Up (>${orbHigh.toFixed(0)})`,   high: orbHigh, low: orbLow };
-    if (price < orbLow)  return { status: 'BROKEN_DOWN', label: `🔽 ORB Broken Down (<${orbLow.toFixed(0)})`, high: orbHigh, low: orbLow };
+    if (price > orbHigh) return { status: 'BROKEN_UP',   label: `🔼 ORB Broken Up (&gt;${orbHigh.toFixed(0)})`,   high: orbHigh, low: orbLow };
+    if (price < orbLow)  return { status: 'BROKEN_DOWN', label: `🔽 ORB Broken Down (&lt;${orbLow.toFixed(0)})`, high: orbHigh, low: orbLow };
     return { status: 'INSIDE', label: `↔️ Inside Opening Range (${orbLow.toFixed(0)}–${orbHigh.toFixed(0)})`, high: orbHigh, low: orbLow };
 }
 
@@ -1795,11 +1795,19 @@ function combineSignals(indicators) {
     // A volume spike in the direction of the signal adds genuine conviction:
     // a bull breakout on rising volume = real buying pressure, not thin-book noise.
     // Only meaningful on the Angel One WebSocket feed (tick volume is a real proxy).
-    // On Yahoo fallback all candles have volume ≈ 1, so calcVolumeSpike() returns
-    // false and this block never fires — no phantom votes on polling data.
-    if (indicators.volumeSpike) {
-        if      (indicators.signal === 'BUY CALL') { bull += 1; reasons.push('📊 Volume spike — buying pressure confirmed ✅'); }
-        else if (indicators.signal === 'BUY PUT')  { bear += 1; reasons.push('📊 Volume spike — selling pressure confirmed ✅'); }
+    // On Yahoo fallback all candles have volume ≈ 1, so reliable=false and this
+    // block never fires — no phantom votes on polling data.
+    //
+    // UPGRADED (23 July audit): weight now scales with actual RVOL magnitude
+    // instead of a flat +1 for any spike ≥2.0x. A genuine breakout (≥3.0x)
+    // carries more conviction than a borderline 2.1x tick and should count
+    // for more — same principle as Lead Quality distinguishing -47% from -79%
+    // Delta instead of treating both as a flat pass/fail.
+    const rvolData = indicators.volumeRVOL;
+    if (rvolData?.reliable && rvolData.rvol >= 2.0) {
+        const volWeight = rvolData.rvol >= 3.0 ? 2 : 1;
+        if      (indicators.signal === 'BUY CALL') { bull += volWeight; reasons.push(`📊 Volume: ${rvolData.rvol}x avg — buying pressure confirmed ✅`); }
+        else if (indicators.signal === 'BUY PUT')  { bear += volWeight; reasons.push(`📊 Volume: ${rvolData.rvol}x avg — selling pressure confirmed ✅`); }
     }
 
     // ── DII (Domestic Institutional Investors) ────────────────────────────────
@@ -2368,10 +2376,21 @@ function combineSignals(indicators) {
 
         if (!allFactorsPassed) {
             reasons.push(`🧪 ALL_FACTORS_HARD_GATE blocked this ${rawSignal} — failed: ${marketState.allFactorsExperiment.failedFactors.join(', ')}`);
+            // BUG FIX (23 July): this line was missing. Every other gate in this
+            // function (deltaAligned, convictionOk, etc.) explicitly sets
+            // signal='WAIT' at its own check site — qualityGate.passed alone is
+            // just a bookkeeping/display field, NOT something read later to
+            // control the actual signal. Without this line, the experiment was
+            // cosmetic: it correctly recorded which factors failed, but never
+            // actually stopped the signal from firing. This is why a signal
+            // fired on 23 July despite the toggle being on.
+            signal = 'WAIT';
+            confidence = 0;
         }
         qualityGate.passed = qualityGate.passed && allFactorsPassed;
     }
     marketState.qualityGate = qualityGate;
+    marketState.engineChecklist = buildEngineChecklist(qualityGate, ALL_FACTORS_HARD_GATE && rawSignal !== 'WAIT');
 
     if (rawSignal !== 'WAIT' && !qualityGate.deltaAligned) {
         signal = 'WAIT'; confidence = 0;
@@ -3785,6 +3804,7 @@ async function updatePrice(price, change, changePct, source) {
     }
     marketState.rsi=indicators.rsi; marketState.ema9=indicators.ema9;
     marketState.ema21=indicators.ema21; marketState.vwap=indicators.vwap;
+    marketState.volumeRVOL=indicators.volumeRVOL;
     marketState.reason=reasons; marketState.lastUpdated=new Date().toISOString();
     // ── NO TRADE mode — concise digest for WAIT states ────────────────────────
     // Per feedback: "Avoiding bad trades often improves results more than
@@ -5733,6 +5753,61 @@ function buildScalpPlan(strikeData) {
         scalpTgtPct: 18, scalpSlPct: 10,
         reviewByLabel: fmt(reviewBy),
         hardExitByLabel: fmt(hardExitBy),
+    };
+}
+
+// ── Engine Checklist ──────────────────────────────────────────────────────
+// Highest-priority feature from both the 17 Jul and 23 Jul ChatGPT audits:
+// "Immediately users know why." This is deliberately NOT a new calculation —
+// it's a plain-English readout of the exact same qualityGate object that
+// already decides BUY CALL/PUT vs NO TRADE (see combineSignals()), so the
+// checklist can never drift out of sync with what the engine actually did.
+// Extra rows only appear when ALL_FACTORS_HARD_GATE is active, so the
+// checklist always matches exactly which gates were actually enforced.
+function buildEngineChecklist(qualityGate, allFactorsActive) {
+    if (!qualityGate) return null;
+
+    const core = [
+        { key: 'mtfAligned',    label: 'MTF Aligned (5m/15m/1H)' },
+        { key: 'deltaAligned',  label: 'Delta Confirms' },
+        { key: 'adxTrend',      label: 'ADX Trending' },
+        { key: 'vixSafe',       label: 'VIX Safe Zone' },
+        { key: 'rsiClean',      label: 'RSI Clean' },
+        { key: 'safeWindow',    label: 'Safe Entry Window' },
+        { key: 'srClear',       label: 'Clear of S/R Wall' },
+        { key: 'physicsLaw1',   label: 'Trend Structure (Physics Law-1)' },
+        { key: 'physicsLaw3',   label: 'Not Chasing (Physics Law-3)' },
+        { key: 'pocClear',      label: 'Clear of POC' },
+        { key: 'convictionOk',  label: 'Trend Conviction' },
+    ];
+    const extra = [
+        { key: 'contradictionOk',  label: 'Contradiction Score Clear' },
+        { key: 'sequenceAligned',  label: 'Sequence Check Aligned' },
+        { key: 'breadthAligned',   label: 'Market Breadth Aligned' },
+        { key: 'dynLevelsClear',   label: 'Clear of Range Pocket' },
+        { key: 'renkoAligned',     label: 'Renko Trend Aligned' },
+        { key: 'gapClear',         label: 'Opening Gap Aligned' },
+        { key: 'regimeClear',      label: 'Not Range Regime' },
+        { key: 'bosChochAligned',  label: 'Structure (BOS/CHOCH) Aligned' },
+        { key: 'newsClear',        label: 'News Sentiment Clear' },
+    ];
+
+    const rows = core.concat(allFactorsActive ? extra : []);
+    // A gate value of null/undefined means "not evaluated / unknown at this
+    // point in the session" (e.g. physicsLaw1 before enough candles exist) —
+    // treated as passed for display, matching how qualityGate.passed itself
+    // already treats `!== false` as a pass. Only an explicit false counts
+    // against the checklist, same semantics as the real gate.
+    const items = rows
+        .filter(r => qualityGate[r.key] !== undefined)
+        .map(r => ({ label: r.label, passed: qualityGate[r.key] !== false }));
+
+    const passedCount = items.filter(i => i.passed).length;
+    return {
+        items,
+        passedCount,
+        totalCount: items.length,
+        summary: `${passedCount} / ${items.length} Passed`,
     };
 }
 
