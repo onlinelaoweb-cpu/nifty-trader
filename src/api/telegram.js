@@ -272,6 +272,22 @@ async function sendMTFAlert(state, strikeData = null) {
                 ? `🟠 <b>WEAK</b> — only partial confluence. Skip unless you have your own confirmation.`
                 : `⚪ <b>LOW CONVICTION</b> — treat as background noise, no action needed.`;
 
+    // ── "Main Engine blocked by" — requested independently across three audits
+    // (17 Jul, and three separate times on 25 Jul: "show exactly what is
+    // preventing the main engine from confirming" / "Pending confirmations" /
+    // "Waiting For"). Not a new calculation — engineChecklist is already
+    // computed live on every tick regardless of whether a trade actually
+    // fires, so this just surfaces what already exists instead of leaving
+    // "main engine still says WAIT" unexplained. Only shown when NOT already
+    // confirmed, and only lists the failing checks (not all 11) to stay short.
+    let blockedByLine = '';
+    if (!mainConfirms && state.engineChecklist?.items?.length) {
+        const failing = state.engineChecklist.items.filter(i => !i.passed);
+        if (failing.length) {
+            blockedByLine = `\n🔒 <b>Main Engine blocked by:</b> ${failing.map(i => i.label).join(', ')} (${state.engineChecklist.summary})`;
+        }
+    }
+
     // ── Range-pocket / structure warning — same label the Insights tab and
     // sendSignalAlert already use (src/api/dynamicLevels.js), but this alert
     // type never showed it before. This is the exact context that explained
@@ -341,7 +357,7 @@ ${lqLine}${state.momentumDecayWarning ? `\n${state.momentumDecayWarning}` : ''}`
     }
 
     const msg = `
-${verdictLine}
+${verdictLine}${blockedByLine}
 ━━━━━━━━━━━━━━━━━━
 ${alignTitle}
 ${emoji} <b>${state.mtf.signal}</b> — ${state.mtf.strength} | NIFTY: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}${rangeWarning}

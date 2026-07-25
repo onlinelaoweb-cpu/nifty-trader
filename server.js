@@ -322,6 +322,7 @@ let morningSummarySent=false, closeSummarySent=false, vixAlertSent=false;
 let sessionOpenVix = null;
 // ── Daily signal counters — for the EOD Telegram digest ─────────────────────
 let dailySignalCounts = { main: 0, mtfStrong: 0, mtfModerate: 0, mtfWeak: 0 };
+let dailySignalCountsDirty = false;  // set true on every increment, cleared by the periodic DB flush
 let nishanebaazAlertSent=false;  // one-shot: fired once at 14:00 per day
 let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:15
 let _pcrHistoryDate = null;  // IST date-string of the session pcrHistory currently belongs to
@@ -1798,16 +1799,26 @@ function combineSignals(indicators) {
     // On Yahoo fallback all candles have volume ≈ 1, so reliable=false and this
     // block never fires — no phantom votes on polling data.
     //
-    // UPGRADED (23 July audit): weight now scales with actual RVOL magnitude
-    // instead of a flat +1 for any spike ≥2.0x. A genuine breakout (≥3.0x)
-    // carries more conviction than a borderline 2.1x tick and should count
-    // for more — same principle as Lead Quality distinguishing -47% from -79%
-    // Delta instead of treating both as a flat pass/fail.
+    // CONTEXT-DEPENDENT WEIGHTING (25 July audit): by this point Global cues,
+    // BankNifty lead, Breadth, and MTF 3-timeframe alignment have all already
+    // voted, so the existing bull/bear gap is a genuine proxy for "how much
+    // confluence already exists" — exactly what the audit asked to condition
+    // on. When other factors already strongly agree, a real move can start
+    // before volume catches up, so volume should confirm more easily but
+    // count for less. When confluence is thin/mixed, volume needs to work
+    // harder to add conviction, so the bar is higher but the payoff is bigger.
     const rvolData = indicators.volumeRVOL;
-    if (rvolData?.reliable && rvolData.rvol >= 2.0) {
-        const volWeight = rvolData.rvol >= 3.0 ? 2 : 1;
-        if      (indicators.signal === 'BUY CALL') { bull += volWeight; reasons.push(`📊 Volume: ${rvolData.rvol}x avg — buying pressure confirmed ✅`); }
-        else if (indicators.signal === 'BUY PUT')  { bear += volWeight; reasons.push(`📊 Volume: ${rvolData.rvol}x avg — selling pressure confirmed ✅`); }
+    if (rvolData?.reliable) {
+        const strongConfluenceAlready = Math.abs(bull - bear) >= 4;
+        const rvolThreshold = strongConfluenceAlready ? 1.3 : 2.0;
+        const maxVoteWeight = strongConfluenceAlready ? 1 : 2;
+
+        if (rvolData.rvol >= rvolThreshold) {
+            const volWeight = Math.min(rvolData.rvol >= 3.0 ? 2 : 1, maxVoteWeight);
+            const note = strongConfluenceAlready ? ' (light weight — other factors already strong)' : '';
+            if      (indicators.signal === 'BUY CALL') { bull += volWeight; reasons.push(`📊 Volume: ${rvolData.rvol}x avg — buying pressure confirmed ✅${note}`); }
+            else if (indicators.signal === 'BUY PUT')  { bear += volWeight; reasons.push(`📊 Volume: ${rvolData.rvol}x avg — selling pressure confirmed ✅${note}`); }
+        }
     }
 
     // ── DII (Domestic Institutional Investors) ────────────────────────────────
@@ -1906,6 +1917,29 @@ function combineSignals(indicators) {
         else if (orb.status === 'BROKEN_DOWN') { bear += 1; reasons.push(`${orb.label} ⚠️`); }
         else                                    reasons.push(orb.label);
     } catch (e) { console.warn('[ORB] error:', e.message); }
+
+    // ── GEX (Gamma Exposure) — wired into confidence (23 July logic-gates
+    // discussion flagged this as the one "Stage 4 weighted" factor that was
+    // still purely informational, unlike PCR/Volume/News which already feed
+    // the tally). GEX itself has no inherent bull/bear direction — it only
+    // describes HOW moves tend to behave (amplified vs dampened) — so instead
+    // of picking a side, it adds or drags against whichever side the tally
+    // already leads on other factors. Deliberately soft (±1 vote, same order
+    // as Volume's base tier) since GEX is context, not a trigger by itself.
+    const gexData = marketState.optionGreeks;
+    if (gexData?.available) {
+        if (gexData.gexCr <= -300) {
+            // Negative GEX: dealers net-short gamma → moves tend to amplify.
+            // Supports whatever direction is already leading, doesn't create one.
+            if      (bull > bear) { bull += 1; reasons.push(`🔬 GEX ₹${gexData.gexCr}Cr — negative, moves tend to amplify (supports bullish lean)`); }
+            else if (bear > bull) { bear += 1; reasons.push(`🔬 GEX ₹${gexData.gexCr}Cr — negative, moves tend to amplify (supports bearish lean)`); }
+        } else if (gexData.gexCr >= 300) {
+            // Positive GEX: dealers net-long gamma → moves tend to stay range-bound.
+            // Mild drag against whichever direction is currently leading.
+            if      (bull > bear) { bear += 1; reasons.push(`🔬 GEX ₹${gexData.gexCr}Cr — positive, dealers dampen moves (drag on bullish lean)`); }
+            else if (bear > bull) { bull += 1; reasons.push(`🔬 GEX ₹${gexData.gexCr}Cr — positive, dealers dampen moves (drag on bearish lean)`); }
+        }
+    }
 
     // Raw directional intention from the vote tally
     const total = bull + bear;
@@ -3506,7 +3540,7 @@ async function checkTelegramAlerts(newSignal) {
               )
             : null;
 
-        dailySignalCounts.main++;
+        dailySignalCounts.main++; dailySignalCountsDirty = true;
         await sendSignalAlert(marketState, prevSignal, strikeDataForAlert);
         lastSignalFiredPrice = marketState.nifty || 0;
 
@@ -3632,6 +3666,7 @@ async function checkTelegramAlerts(newSignal) {
         if (leadQuality.label === 'Strong Confluence') dailySignalCounts.mtfStrong++;
         else if (leadQuality.label === 'Moderate') dailySignalCounts.mtfModerate++;
         else dailySignalCounts.mtfWeak++;
+        dailySignalCountsDirty = true;
 
         // ── Alert-firing gate — CHANGED per user request (22 Jul): "I want the
         // sure shot lead." Previously sendMTFAlert() fired for EVERY lead
@@ -5070,6 +5105,35 @@ async function initDB() {
         await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_pcr_intraday_date ON pcr_intraday_history(trade_date)`);
         console.log('✅ PostgreSQL pcr_intraday_history table ready');
 
+        // ── daily_signal_counts — BUG FIX (24 Jul): dailySignalCounts used to be
+        // in-memory only (`let dailySignalCounts = {...}` at module scope), so
+        // ANY Railway restart mid-day silently zeroed it, making the EOD digest
+        // undercount everything before the last restart (confirmed 24 Jul:
+        // showed "1 Strong sent" when 3 had actually fired that day). Keyed by
+        // date so each day gets its own row — also gives a free historical log.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS daily_signal_counts (
+                trade_date   DATE PRIMARY KEY DEFAULT (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE,
+                main         INT DEFAULT 0,
+                mtf_strong   INT DEFAULT 0,
+                mtf_moderate INT DEFAULT 0,
+                mtf_weak     INT DEFAULT 0,
+                updated_at   TIMESTAMPTZ DEFAULT NOW()
+            )
+        `);
+        console.log('✅ PostgreSQL daily_signal_counts table ready');
+
+        // Restore today's counts on startup/restart instead of starting from zero.
+        try {
+            const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+            const r = await dbPool.query('SELECT main, mtf_strong, mtf_moderate, mtf_weak FROM daily_signal_counts WHERE trade_date = $1', [todayIST]);
+            if (r.rows.length > 0) {
+                const row = r.rows[0];
+                dailySignalCounts = { main: row.main, mtfStrong: row.mtf_strong, mtfModerate: row.mtf_moderate, mtfWeak: row.mtf_weak };
+                console.log(`✅ Restored today's signal counts from DB: main=${row.main}, strong=${row.mtf_strong}, moderate=${row.mtf_moderate}, weak=${row.mtf_weak}`);
+            }
+        } catch (e) { console.warn('[DailyCounts] restore error:', e.message); }
+
         // ── Inject DB pool into historical data module ────────────────────────
         injectHistDBPool(dbPool);
         console.log('✅ Historical data module connected to DB');
@@ -5181,6 +5245,30 @@ async function saveSignalToLog(signal, prevSig) {
             qualityGate: s.qualityGate?.passed ?? false, ts: new Date().toISOString() });
     } catch (e) {
         console.error('saveSignalToLog error:', e.message);
+    }
+}
+
+// ── Flush dailySignalCounts to DB, only when dirty ───────────────────────────
+// Paired with the dailySignalCountsDirty flag set at each increment site.
+// Runs every 30s via startPollingIntervals() — bounds DB writes to at most
+// once per 30s regardless of tick frequency, while capping restart data-loss
+// to under 30s (vs previously losing the whole day on any mid-session restart).
+async function flushDailySignalCountsIfDirty() {
+    if (!dailySignalCountsDirty || !dbPool) return;
+    const wasDirty = dailySignalCountsDirty;
+    dailySignalCountsDirty = false;  // clear optimistically; a failed write just gets picked up by the next dirty increment anyway
+    try {
+        const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        await dbPool.query(
+            `INSERT INTO daily_signal_counts (trade_date, main, mtf_strong, mtf_moderate, mtf_weak, updated_at)
+             VALUES ($1, $2, $3, $4, $5, NOW())
+             ON CONFLICT (trade_date) DO UPDATE SET
+                main = $2, mtf_strong = $3, mtf_moderate = $4, mtf_weak = $5, updated_at = NOW()`,
+            [todayIST, dailySignalCounts.main, dailySignalCounts.mtfStrong, dailySignalCounts.mtfModerate, dailySignalCounts.mtfWeak]
+        );
+    } catch (e) {
+        console.warn('[DailyCounts] flush error:', e.message);
+        dailySignalCountsDirty = wasDirty;  // retry on next interval
     }
 }
 
@@ -6439,6 +6527,10 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
     setTimeout(() => setInterval(refreshFyersVolume,      15*1000), 20*1000);   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
     setTimeout(() => setInterval(computePremarketGap,     60*1000), 20*1000);   // opening gap vs prev close, via Fyers (see combineSignals note)
+    // Flush dailySignalCounts to DB only when dirty, at most every 30s — bounds
+    // DB writes regardless of tick frequency (mtfWeak alone can increment
+    // thousands of times/day) while keeping restart data-loss to under 30s.
+    setTimeout(() => setInterval(flushDailySignalCountsIfDirty, 30*1000), 25*1000);
     setTimeout(() => setInterval(async () => {
         try { marketState.signalHistory = await getRecentSignalHistory(); }
         catch (e) { console.warn('[SignalHistory] refresh error:', e.message); }
@@ -6700,6 +6792,14 @@ server.listen(PORT, () => {
 // These handlers log the full stack so the cause is visible in Railway logs.
 process.on('unhandledRejection', (reason, promise) => {
     console.error('⚠️ Unhandled Rejection at:', promise, '— reason:', reason);
+});
+// Bonus safety net: Railway sends SIGTERM before restarting/redeploying a
+// service. The 30s periodic flush is the main guard, but this catches the
+// last few seconds of activity right before a deploy too, when possible.
+process.on('SIGTERM', async () => {
+    console.log('[Shutdown] SIGTERM received — flushing daily signal counts before exit');
+    try { await flushDailySignalCountsIfDirty(); } catch (e) { /* best-effort only */ }
+    process.exit(0);
 });
 process.on('uncaughtException', (err) => {
     console.error('💥 Uncaught Exception:', err.message, err.stack);

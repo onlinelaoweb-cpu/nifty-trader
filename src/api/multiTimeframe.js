@@ -201,7 +201,13 @@ async function fetchCandlesFromYahoo(intervalKey) {
                 return trimmed;
             }
         } catch (err) {
+            const is429 = err.response?.status === 429;
             console.warn(`[MTF Yahoo direct] ${intervalKey} ${url.includes('query1') ? 'q1' : url.includes('v7') ? 'v7' : 'q2'} failed: ${err.message}`);
+            // Stagger specifically on rate-limit responses — hitting Yahoo again
+            // immediately after a 429 just makes the next attempt more likely to
+            // also get rejected. No point waiting after timeouts/other errors
+            // though, since a delay wouldn't fix those.
+            if (is429) await new Promise(r => setTimeout(r, 600));
         }
     }
 

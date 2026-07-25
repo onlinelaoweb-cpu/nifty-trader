@@ -182,7 +182,13 @@ async function autoRefreshFyersToken() {
     }
 }
 // Run on startup (non-blocking)
-autoRefreshFyersToken();
+// DISABLED (25 July, per user request): user updates FYERS_ACCESS_TOKEN manually
+// on Railway every day, so this refresh-token flow has no role in their actual
+// workflow — it was only generating a daily "Fyers token refresh failed" Telegram
+// alert for a mechanism that isn't being relied on. Function left intact (unused)
+// in case FYERS_REFRESH_TOKEN + FYERS_SECRET_ID ever get sorted out and this
+// becomes worth re-enabling — just uncomment the line below.
+// autoRefreshFyersToken();
 
 // FII/DII uses a longer timeout because Railway→NSE latency spikes more on this endpoint
 const FIIDII_TIMEOUT_MS  = 20_000;   // 20s dedicated timeout for FII/DII
