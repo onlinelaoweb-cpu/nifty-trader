@@ -194,6 +194,16 @@ ${(() => {
     if (!cl || !cl.items?.length) return '';
     const lines = cl.items.map(i => `${i.passed ? '✅' : '❌'} ${i.label}`).join('\n');
     return `\n📋 <b>ENGINE CHECKLIST</b>\n${lines}\n<b>${cl.summary}</b>\n`;
+})()}${(() => {
+    // ── Probability Meter — requested 22 Jul and 25 Jul audits: "Historical
+    // win rate of similar setups." Real signal_performance data, grouped by
+    // same direction + same dyn_zone as THIS signal — not an invented number.
+    // Stays honest when there isn't enough history yet rather than showing a
+    // misleading "100%" off 1-2 samples.
+    const st = state.similarSetupStats;
+    if (!st) return '';
+    if (!st.enough) return `\n📊 <b>Probability Meter:</b> not enough history yet for this exact setup (${st.total} sample${st.total === 1 ? '' : 's'})\n`;
+    return `\n📊 <b>Probability Meter:</b> ${st.winRate}% — similar setups historically (${st.wins} of ${st.total})\n`;
 })()}
 🎯 Strike Zone: ${strikeInfo}
 ━━━━━━━━━━━━━━━━━━
@@ -508,6 +518,40 @@ instead of riding the full swing target.
     await sendMessage(msg);
 }
 
+// ── Live Signal Timeline ──────────────────────────────────────────────────
+// Requested in the very first audit (22 Jul): "Signal generated →
+// Confirmation → Entry → Exit → Final verdict." Fires the moment a trade
+// actually closes (see updateSignalPerformance in server.js) — genuinely
+// live, not a batched end-of-day summary. Uses only data already tracked on
+// the record (rec.startTs, rec.entry, rec.exitWarned) — nothing new computed,
+// same principle as the Engine Checklist: surface what already exists.
+async function sendSignalTimeline(rec, outcomeLabel, maxGainPct, elapsedMin, closedAt, maxAdverseExcursionPct) {
+    if (!rec) return;
+    const fmt = ts => new Date(ts).toLocaleTimeString('en-IN', { hour12: true, hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+    const emoji = rec.signal === 'BUY CALL' ? '🟢' : '🔴';
+    const sourceLabel = rec.source === 'main' ? 'Main Engine' : 'MTF Tracker';
+    // MAE (25 Jul audit): the worst point BEFORE the final outcome — a trade
+    // that hit target after first dipping -20% carried real risk the target
+    // hit alone doesn't show. Only worth mentioning when it actually went
+    // underwater (0 means it never dipped below entry at all).
+    const maeLine = (maxAdverseExcursionPct != null && maxAdverseExcursionPct < 0)
+        ? ` · Worst point: ${maxAdverseExcursionPct}%`
+        : '';
+
+    const msg = `
+📍 <b>SIGNAL TIMELINE</b> — ${rec.strike}${rec.type} (${sourceLabel})
+━━━━━━━━━━━━━━━━━━
+🟢 Generated   ${fmt(rec.startTs)}
+📥 Entry       ₹${rec.entry} (same moment)
+${rec.exitWarned ? `⚠️ Weakened    conviction faded before this closed — you got a heads-up at the time\n` : ''}🏁 Closed      ${fmt(new Date(closedAt).getTime())} — <b>${outcomeLabel}</b>
+━━━━━━━━━━━━━━━━━━
+⏱ Duration: ${elapsedMin} min · Best price reached: +${maxGainPct}%${maeLine}
+<i>VardaanNifty AI</i>
+`.trim();
+
+    await sendMessage(msg);
+}
+
 
 // Called when a live premium crosses a stop-loss or target threshold.
 // trade        : the trade object from the trades[] array
@@ -673,6 +717,7 @@ module.exports = {
     sendSignalAlert,
     sendMTFAlert,
     sendScalpAlert,
+    sendSignalTimeline,
     sendMorningSummary,
     sendVIXAlert,
     sendCloseSummary,

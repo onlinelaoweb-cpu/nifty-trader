@@ -59,7 +59,7 @@ const {
     sendMorningSummary, sendVIXAlert,
     sendCloseSummary, sendExitAlert, sendMomentumExitWarning,
     sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured,
-    sendScalpAlert,
+    sendScalpAlert, sendSignalTimeline,
 }                                   = require('./src/api/telegram');
 
 const app    = express();
@@ -3541,6 +3541,7 @@ async function checkTelegramAlerts(newSignal) {
             : null;
 
         dailySignalCounts.main++; dailySignalCountsDirty = true;
+        marketState.similarSetupStats = await getSimilarSetupStats(newSignal, marketState.dynamicLevels?.zone).catch(e => { console.warn('[SimilarSetup] error:', e.message); return null; });
         await sendSignalAlert(marketState, prevSignal, strikeDataForAlert);
         lastSignalFiredPrice = marketState.nifty || 0;
 
@@ -5015,13 +5016,15 @@ async function initDB() {
                 entry          NUMERIC,
                 sl             NUMERIC,
                 target         NUMERIC,
-                high           NUMERIC,    -- best premium seen since entry (running)
+                high           NUMERIC,    -- best premium seen since entry (running) — MFE
+                low            NUMERIC,    -- worst premium seen since entry (running) — MAE
                 target_hit     BOOLEAN DEFAULT FALSE,
                 sl_hit         BOOLEAN DEFAULT FALSE,
                 closed         BOOLEAN DEFAULT FALSE,
                 time_taken_min INT,
                 closed_at      TIMESTAMPTZ,
                 max_gain_pct   NUMERIC,    -- (high-entry)/entry*100 — best gain reached, whether or not target technically hit
+                max_adverse_pct NUMERIC,   -- (low-entry)/entry*100 — worst drawdown reached before the final outcome (0 or negative)
                 partial_win    BOOLEAN DEFAULT FALSE,  -- max_gain_pct crossed the coach's own "+30% book 50%" stage
                 source         TEXT,       -- 'main' | 'mtf' — which engine generated this lead
                 lead_quality   TEXT,       -- MTF-tracker leads only: 'Strong Confluence' | 'Moderate' | 'Weak / Isolated'
@@ -5061,6 +5064,13 @@ async function initDB() {
         // where it opposed, before ever considering it for anything more than
         // the existing ±2 soft vote it already gets in combineSignals().
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS breadth_sig TEXT`).catch(()=>{});
+        // MAE tracking — requested 25 July audit alongside the MFE (high/max_gain_pct)
+        // that already existed. Added via the same immediate CREATE+ALTER pairing
+        // this file now always uses, specifically because of the breadth_sig
+        // incident where a column existed in CREATE TABLE but was missing from
+        // this backfill block on an already-deployed DB.
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS low NUMERIC`).catch(()=>{});
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS max_adverse_pct NUMERIC`).catch(()=>{});
         console.log('✅ PostgreSQL signal_performance table ready');
 
         // ── journal_trades table — manually entered trades from the Journal tab ──
@@ -5285,7 +5295,7 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
         id: null,
         signal, type: strikeData.type, strike: strikeData.strike,
         entry: strikeData.entry, sl: strikeData.sl, target: strikeData.target,
-        high: strikeData.entry, startTs: Date.now(),
+        high: strikeData.entry, low: strikeData.entry, startTs: Date.now(),
         // ── For exit-warning decay detection (see updateSignalPerformance) ──
         entryDelta: marketState.delta?.deltaPct ?? null,
         entryRSI: marketState.rsi ?? null,
@@ -5299,9 +5309,9 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
     if (dbPool) {
         try {
             const r = await dbPool.query(
-                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high, source, lead_quality, dyn_zone, gap_zone, breadth_sig)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry, rec.source, rec.leadQuality, rec.dynZone, rec.gapZone, rec.breadthSig]
+                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high, low, source, lead_quality, dyn_zone, gap_zone, breadth_sig)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry, strikeData.entry, rec.source, rec.leadQuality, rec.dynZone, rec.gapZone, rec.breadthSig]
             );
             rec.id = r.rows[0]?.id ?? null;
         } catch (e) { console.warn('[SignalPerf] insert error:', e.message); }
@@ -5321,7 +5331,7 @@ async function updateSignalPerformance() {
         const live = rec.type === 'CE' ? atmCE : atmPE;
         const elapsedMin = Math.round((Date.now() - rec.startTs) / 60000);
 
-        if (live) rec.high = Math.max(rec.high, live);
+        if (live) { rec.high = Math.max(rec.high, live); rec.low = Math.min(rec.low, live); }
 
         // ── Exit warning: original setup weakening, still open ──────────────
         // Same 15pt-Delta / 5pt-RSI decay thresholds as checkMomentumDecay,
@@ -5362,15 +5372,29 @@ async function updateSignalPerformance() {
         const maxGainPct = rec.entry > 0 ? Math.round(((rec.high - rec.entry) / rec.entry) * 1000) / 10 : 0;
         const partialWin = !targetHit && !slHit && maxGainPct >= 30;
 
+        // ── Maximum Adverse Excursion (MAE) — requested 25 Jul audit alongside
+        // MFE (which `high`/maxGainPct already capture). Shows the worst point
+        // a trade went through BEFORE its final outcome — a trade that hit
+        // +50% target after first dipping to -20% carried real risk the target
+        // hit alone doesn't reveal. Negative or zero; 0 means it never went
+        // below entry.
+        const maxAdverseExcursionPct = rec.entry > 0 ? Math.round(((rec.low - rec.entry) / rec.entry) * 1000) / 10 : 0;
+
         if (targetHit || slHit || timedOut) {
             const closedAt = new Date().toISOString();
             const outcomeLabel = targetHit ? 'TARGET HIT ✅' : slHit ? 'SL HIT ⛔' : partialWin ? `PARTIAL WIN 🟡 (+${maxGainPct}%)` : 'TIMED OUT ⏳';
-            console.log(`📊 [SignalPerf] ${rec.signal} ${rec.strike}${rec.type} closed — ${outcomeLabel} | Entry:${rec.entry} High:${rec.high} (+${maxGainPct}%) | ${elapsedMin} min${rec.exitWarned ? ' | ⚠️ had exit warning' : ''}`);
+            console.log(`📊 [SignalPerf] ${rec.signal} ${rec.strike}${rec.type} closed — ${outcomeLabel} | Entry:${rec.entry} High:${rec.high} (+${maxGainPct}%) Low:${rec.low} (${maxAdverseExcursionPct}%) | ${elapsedMin} min${rec.exitWarned ? ' | ⚠️ had exit warning' : ''}`);
+            // Live Signal Timeline — requested in the very first audit (22 Jul):
+            // "Signal generated → Confirmation → Entry → Exit → Final verdict."
+            // Fires the moment a trade actually closes, not batched into the EOD
+            // digest — genuinely "live." Uses only data already tracked on rec,
+            // nothing new computed.
+            sendSignalTimeline(rec, outcomeLabel, maxGainPct, elapsedMin, closedAt, maxAdverseExcursionPct).catch(e => console.warn('[SignalTimeline] send error:', e.message));
             if (dbPool && rec.id) {
                 try {
                     await dbPool.query(
-                        `UPDATE signal_performance SET high=$1, target_hit=$2, sl_hit=$3, closed=true, time_taken_min=$4, closed_at=$5, max_gain_pct=$6, partial_win=$7, exit_warned=$8 WHERE id=$9`,
-                        [rec.high, targetHit, slHit, elapsedMin, closedAt, maxGainPct, partialWin, rec.exitWarned, rec.id]
+                        `UPDATE signal_performance SET high=$1, low=$2, target_hit=$3, sl_hit=$4, closed=true, time_taken_min=$5, closed_at=$6, max_gain_pct=$7, max_adverse_pct=$8, partial_win=$9, exit_warned=$10 WHERE id=$11`,
+                        [rec.high, rec.low, targetHit, slHit, elapsedMin, closedAt, maxGainPct, maxAdverseExcursionPct, partialWin, rec.exitWarned, rec.id]
                     );
                 } catch (e) { console.warn('[SignalPerf] update error:', e.message); }
             }
@@ -5382,10 +5406,12 @@ async function updateSignalPerformance() {
 
     // Expose today's open cards for the frontend (ChatGPT-style "Entry/High/Target Hit/Time Taken" card)
     // gainPct added so the UI can show running profit even before target/SL/timeout resolves it.
+    // drawdownPct (MAE, 25 Jul) mirrors gainPct on the downside — live worst-point so far.
     marketState.signalPerformance.open = openPerfRecords.map(r => ({
         signal: r.signal, type: r.type, strike: r.strike,
-        entry: r.entry, high: r.high, sl: r.sl, target: r.target,
+        entry: r.entry, high: r.high, low: r.low, sl: r.sl, target: r.target,
         gainPct: r.entry > 0 ? Math.round(((r.high - r.entry) / r.entry) * 1000) / 10 : 0,
+        drawdownPct: r.entry > 0 ? Math.round(((r.low - r.entry) / r.entry) * 1000) / 10 : 0,
         elapsedMin: Math.round((Date.now() - r.startTs) / 60000),
     }));
 }
@@ -5505,6 +5531,35 @@ async function getSignalPerformanceSummary() {
 // High VIX)." Reuses the dyn_zone column already logged per-trade (see
 // server.js signal_performance ALTER) as the regime proxy: ABOVE_H3/BELOW_L3
 // = trending breakout, INSIDE = range/chop — no new columns needed.
+// ── Similar Setup Stats — "Probability Meter" ────────────────────────────────
+// Requested twice (22 Jul and 25 Jul audits): "Probability meter: 63% —
+// Historical win rate of similar setups." Uses real signal_performance data,
+// not an invented number. "Similar" = same direction (BUY CALL/PUT) + same
+// dyn_zone (same structural context — e.g. both firing inside a range pocket,
+// or both firing below Dynamic L3). Requires a minimum sample size before
+// showing a percentage, since a 2-sample "100%" would be misleading noise
+// dressed up as statistics.
+async function getSimilarSetupStats(signal, dynZone) {
+    if (!dbPool || (signal !== 'BUY CALL' && signal !== 'BUY PUT')) return null;
+    const MIN_SAMPLE = 3;
+    try {
+        const r = await dbPool.query(
+            `SELECT target_hit, partial_win FROM signal_performance
+             WHERE closed = true AND signal = $1 AND dyn_zone IS NOT DISTINCT FROM $2`,
+            [signal, dynZone ?? null]
+        );
+        const rows = r.rows;
+        const total = rows.length;
+        if (total < MIN_SAMPLE) return { total, enough: false };
+        const wins = rows.filter(row => row.target_hit || row.partial_win).length;
+        return { total, wins, winRate: Math.round((wins / total) * 100), enough: true };
+    } catch (e) {
+        console.warn('[SimilarSetup] error:', e.message);
+        return null;
+    }
+}
+
+
 async function getRecentSignalHistory() {
     if (!dbPool) return null;
     try {
