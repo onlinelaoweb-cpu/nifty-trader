@@ -185,7 +185,7 @@ ${emoji} <b>SIGNAL CHANGED!</b>
 ${state.change >= 0 ? '▲' : '▼'} ${Math.abs(state.change).toFixed(2)} (${state.changePct.toFixed(2)}%)
 
 ⚡ <b>SIGNAL: ${state.signal}</b>
-📈 Confidence: ${state.confidence}%${state.tradeQuality ? ` | Grade: ${state.tradeQuality.grade} (${state.tradeQuality.sizeHint})` : ''}
+📈 Confidence: ${state.confidence}%${state.tradeQuality ? ` | Grade: ${state.tradeQuality.grade}${state.tradeQuality.stars ? ` ${state.tradeQuality.stars}` : ''} (${state.tradeQuality.sizeHint})` : ''}
 ${(() => {
     // ── Engine Checklist — highest-priority feature from both audits ────────
     // "Immediately users know why." Directly reflects qualityGate, so it can
@@ -275,7 +275,7 @@ async function sendMTFAlert(state, strikeData = null) {
     // leadQuality data that already existed, just surfaced up front instead
     // of buried after 15 lines of technical fields.
     const verdictLine = mainConfirms && state.tradeQuality
-        ? `✅ <b>TAKE — main engine confirms this trade right now</b> (Grade ${state.tradeQuality.grade}, ${state.tradeQuality.sizeHint})`
+        ? `✅ <b>TAKE — main engine confirms this trade right now</b> (Grade ${state.tradeQuality.grade}${state.tradeQuality.stars ? ` ${state.tradeQuality.stars}` : ''}, ${state.tradeQuality.sizeHint})`
         : lq?.label === 'Strong Confluence'
             ? `🟡 <b>WATCH ONLY</b> — strong setup on the MTF tracker, but the main engine still says WAIT. Size down or skip until it confirms.`
             : lq?.label === 'Moderate'
@@ -697,8 +697,15 @@ ${beLine ? beLine + '\n' : ''}🎯 Profit Zone: ${spread.profitZone}
 // even though price hasn't hit SL or target yet. Purely a "conviction is
 // fading, use your own judgement" signal — never auto-closes or resizes
 // anything.
-async function sendMomentumExitWarning(rec, currentDelta, currentRSI) {
+async function sendMomentumExitWarning(rec, currentDelta, currentRSI, decayedConfidence) {
     const dirLabel = rec.signal === 'BUY CALL' ? 'CALL' : 'PUT';
+    // Confidence Decay (25 Jul audit): shows how much conviction has actually
+    // worn off, not just direction — only included when we have a real entry
+    // confidence to compare against (main-engine trades always do; MTF-tracker
+    // leads do too since 25 Jul, older records may not).
+    const confLine = (decayedConfidence != null && rec.entryConfidence != null)
+        ? `\nConfidence: ${rec.entryConfidence}% → ${decayedConfidence}%\n`
+        : '';
     const msg = `
 ⚠️ <b>EXIT WARNING — Setup Weakening</b>
 ━━━━━━━━━━━━━━━━━━
@@ -706,8 +713,33 @@ Your ${dirLabel} lead (${rec.strike}${rec.type}, entry ₹${rec.entry}) is still
 
 Delta: ${rec.entryDelta}% → ${currentDelta}%
 RSI: ${rec.entryRSI} → ${currentRSI}
-
+${confLine}
 Price hasn't hit SL or target — this isn't an auto-exit. Just a heads-up to reassess: book partial, tighten SL, or hold with awareness.
+━━━━━━━━━━━━━━━━━━
+`.trim();
+    await sendMessage(msg);
+}
+
+// ── Smart Partial Profit Book ─────────────────────────────────────────────
+// Requested 25 Jul audit: "instead of only a static +30% price threshold,
+// trigger off R:R already banked + Delta weakening + RSI crossing back
+// toward neutral." Fires from the SAME momentum-decay detection as the Exit
+// Warning above (see updateSignalPerformance in server.js) — this is the
+// version shown when the trade already has real R:R banked, so the framing
+// is positive ("lock some in") rather than defensive ("reassess").
+async function sendPartialProfitAlert(rec, currentPremium, gainPct, rrAchieved, decayedConfidence) {
+    const dirLabel = rec.signal === 'BUY CALL' ? 'CALL' : 'PUT';
+    const confLine = (decayedConfidence != null && rec.entryConfidence != null)
+        ? `\nConfidence: ${rec.entryConfidence}% → ${decayedConfidence}%\n`
+        : '';
+    const msg = `
+🟡 <b>PARTIAL PROFIT BOOK — Consider Locking Some In</b>
+━━━━━━━━━━━━━━━━━━
+Your ${dirLabel} lead (${rec.strike}${rec.type}, entry ₹${rec.entry}) is up <b>+${gainPct}%</b> (₹${currentPremium}), already ${rrAchieved}:1 on risk — but momentum is starting to fade:
+
+Delta and RSI have both moved back toward neutral since entry.
+${confLine}
+This isn't a target hit or an auto-exit. But with this much R:R already banked and conviction cooling, booking part of the position now is usually smarter than waiting for a fixed price target that may not come.
 ━━━━━━━━━━━━━━━━━━
 `.trim();
     await sendMessage(msg);
@@ -718,6 +750,7 @@ module.exports = {
     sendMTFAlert,
     sendScalpAlert,
     sendSignalTimeline,
+    sendPartialProfitAlert,
     sendMorningSummary,
     sendVIXAlert,
     sendCloseSummary,

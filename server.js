@@ -59,7 +59,7 @@ const {
     sendMorningSummary, sendVIXAlert,
     sendCloseSummary, sendExitAlert, sendMomentumExitWarning,
     sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured,
-    sendScalpAlert, sendSignalTimeline,
+    sendScalpAlert, sendSignalTimeline, sendPartialProfitAlert,
 }                                   = require('./src/api/telegram');
 
 const app    = express();
@@ -3805,12 +3805,14 @@ async function updatePrice(price, change, changePct, source) {
     // Per feedback: a bare "Confidence: 65%" number doesn't tell a trader how
     // much size to put on. A letter grade with a suggested size multiplier is
     // faster to act on, especially on mobile mid-session.
-    marketState.tradeQuality = signal === 'WAIT' ? { grade: '—', sizeHint: 'No trade', pct: 0 }
-                             : confidence >= 80   ? { grade: 'A+', sizeHint: 'Full size',    pct: 100 }
-                             : confidence >= 70   ? { grade: 'A',  sizeHint: '75% size',      pct: 75  }
-                             : confidence >= 60   ? { grade: 'B',  sizeHint: '50% size',      pct: 50  }
-                             : confidence >= 50   ? { grade: 'C',  sizeHint: '25% size',      pct: 25  }
-                                                  : { grade: 'D',  sizeHint: 'Skip — too weak',pct: 0  };
+    // Stars added 25 Jul (22 Jul audit ask): "⭐⭐⭐⭐⭐ A+ Setup" / "Avoid" reads
+    // faster at a glance than a bare letter grade, same information underneath.
+    marketState.tradeQuality = signal === 'WAIT' ? { grade: '—', sizeHint: 'No trade',        pct: 0,   stars: '' }
+                             : confidence >= 80   ? { grade: 'A+', sizeHint: 'Full size',      pct: 100, stars: '⭐⭐⭐⭐⭐' }
+                             : confidence >= 70   ? { grade: 'A',  sizeHint: '75% size',       pct: 75,  stars: '⭐⭐⭐⭐' }
+                             : confidence >= 60   ? { grade: 'B',  sizeHint: '50% size',       pct: 50,  stars: '⭐⭐⭐' }
+                             : confidence >= 50   ? { grade: 'C',  sizeHint: '25% size',       pct: 25,  stars: '⭐⭐' }
+                                                  : { grade: 'D',  sizeHint: 'Skip — too weak',pct: 0,   stars: 'Avoid' };
     // ── Expiry-day size cap — actually enforce the existing gamma-risk warning ──
     // A "keep size smaller" note (see sweepReasons above) previously only ever
     // showed as text; the real sizeHint/pct never changed. Grade letter still
@@ -5299,6 +5301,7 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
         // ── For exit-warning decay detection (see updateSignalPerformance) ──
         entryDelta: marketState.delta?.deltaPct ?? null,
         entryRSI: marketState.rsi ?? null,
+        entryConfidence: source === 'main' ? (marketState.confidence ?? null) : (marketState.mtf?.confidence ?? null),
         source, exitWarned: false,
         leadQuality: strikeData.leadQuality?.label ?? null,  // null for main-engine trades (no MTF lead-quality concept there)
         dynZone: marketState.dynamicLevels?.zone ?? null,
@@ -5333,11 +5336,17 @@ async function updateSignalPerformance() {
 
         if (live) { rec.high = Math.max(rec.high, live); rec.low = Math.min(rec.low, live); }
 
-        // ── Exit warning: original setup weakening, still open ──────────────
-        // Same 15pt-Delta / 5pt-RSI decay thresholds as checkMomentumDecay,
-        // but comparing THIS trade's entry snapshot to the live market right
-        // now — not comparing two separate alerts. Fires at most once per
-        // trade (rec.exitWarned) so it doesn't spam every ~30s cycle.
+        // ── Momentum decay while open: Smart Partial Profit Book vs generic
+        // Exit Warning. Same proven 15pt-Delta / 5pt-RSI decay thresholds as
+        // checkMomentumDecay, comparing THIS trade's entry snapshot to the
+        // live market right now. Branches which message fires (25 Jul audit:
+        // "instead of only a static +30% price threshold, trigger off R:R
+        // already banked + Delta weakening + RSI crossing back toward
+        // neutral"): if R:R≥1.5 is already banked when momentum weakens,
+        // that's good news worth an actionable "lock some in" alert;
+        // otherwise it's the same generic heads-up as before. Fires at most
+        // once per trade either way (rec.exitWarned) so it doesn't spam
+        // every ~30s cycle.
         if (!rec.exitWarned && rec.entryDelta != null && rec.entryRSI != null) {
             const curDelta = marketState.delta?.deltaPct;
             const curRSI   = marketState.rsi;
@@ -5346,7 +5355,15 @@ async function updateSignalPerformance() {
                 const rsiWeaker   = rec.signal === 'BUY CALL' ? (curRSI < rec.entryRSI - 5)       : (curRSI > rec.entryRSI + 5);
                 if (deltaWeaker && rsiWeaker) {
                     rec.exitWarned = true;
-                    sendMomentumExitWarning(rec, curDelta, curRSI).catch(e => console.warn('[ExitWarning] send error:', e.message));
+                    const risk = rec.entry - rec.sl;
+                    const rrAchieved = (live && risk > 0) ? (live - rec.entry) / risk : 0;
+                    const decayedConf = computeDecayedConfidence(rec.entryConfidence, rec.entryDelta, rec.entryRSI, curDelta, curRSI, rec.signal);
+                    if (live && rrAchieved >= 1.5) {
+                        const gainPct = Math.round(((live - rec.entry) / rec.entry) * 1000) / 10;
+                        sendPartialProfitAlert(rec, live, gainPct, Math.round(rrAchieved * 10) / 10, decayedConf).catch(e => console.warn('[PartialProfit] send error:', e.message));
+                    } else {
+                        sendMomentumExitWarning(rec, curDelta, curRSI, decayedConf).catch(e => console.warn('[ExitWarning] send error:', e.message));
+                    }
                 }
             }
         }
@@ -5407,11 +5424,14 @@ async function updateSignalPerformance() {
     // Expose today's open cards for the frontend (ChatGPT-style "Entry/High/Target Hit/Time Taken" card)
     // gainPct added so the UI can show running profit even before target/SL/timeout resolves it.
     // drawdownPct (MAE, 25 Jul) mirrors gainPct on the downside — live worst-point so far.
+    // currentConfidence (25 Jul) — live decaying confidence instead of a static number, see computeDecayedConfidence.
     marketState.signalPerformance.open = openPerfRecords.map(r => ({
         signal: r.signal, type: r.type, strike: r.strike,
         entry: r.entry, high: r.high, low: r.low, sl: r.sl, target: r.target,
         gainPct: r.entry > 0 ? Math.round(((r.high - r.entry) / r.entry) * 1000) / 10 : 0,
         drawdownPct: r.entry > 0 ? Math.round(((r.low - r.entry) / r.entry) * 1000) / 10 : 0,
+        entryConfidence: r.entryConfidence,
+        currentConfidence: computeDecayedConfidence(r.entryConfidence, r.entryDelta, r.entryRSI, marketState.delta?.deltaPct, marketState.rsi, r.signal),
         elapsedMin: Math.round((Date.now() - r.startTs) / 60000),
     }));
 }
@@ -5954,6 +5974,29 @@ function buildEngineChecklist(qualityGate, allFactorsActive) {
     };
 }
 
+// ── Confidence Decay ──────────────────────────────────────────────────────
+// Requested 25 Jul audit: "Confidence could decay automatically as trend
+// weakens instead of remaining static." The alert shows a fixed confidence %
+// at entry, but nothing updates that number as the trade plays out. This
+// gives OPEN trades a live, smoothly-decaying confidence instead of a flat
+// number — decay only applies to momentum moving AGAINST the trade's
+// direction (still-improving momentum doesn't get penalized), ramps smoothly
+// rather than snapping at a threshold, and floors at 30% of the original so
+// it never implies "zero conviction left" while the trade is still open —
+// that's what the binary Exit Warning / Partial Profit alerts are already for.
+function computeDecayedConfidence(entryConfidence, entryDelta, entryRSI, curDelta, curRSI, direction) {
+    if (entryConfidence == null || entryDelta == null || entryRSI == null || curDelta == null || curRSI == null) return entryConfidence;
+    const deltaMoveAgainst = direction === 'BUY CALL' ? Math.max(0, entryDelta - curDelta) : Math.max(0, curDelta - entryDelta);
+    const rsiMoveAgainst   = direction === 'BUY CALL' ? Math.max(0, entryRSI - curRSI)     : Math.max(0, curRSI - entryRSI);
+    // Smooth ramp: fully decayed (capped at 70% reduction) at a 30pt Delta swing
+    // or a 20pt RSI swing — twice the Exit Warning's 15pt/5pt thresholds, so this
+    // decays gradually well before those binary alerts would fire.
+    const deltaDecay = Math.min(1, deltaMoveAgainst / 30);
+    const rsiDecay    = Math.min(1, rsiMoveAgainst / 20);
+    const overallDecay = Math.max(deltaDecay, rsiDecay);
+    const decayed = Math.round(entryConfidence * (1 - overallDecay * 0.7));
+    return Math.max(decayed, Math.round(entryConfidence * 0.3));
+}
 
 function bsEstimate(S, K, T, sigma, type) {
     const r = 0.0625;  // RBI repo rate (updated June 2026 — was 0.065)
