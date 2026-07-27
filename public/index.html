@@ -9032,6 +9032,12 @@ function _statRow(label, val) {
       <div id="ins-daytype-label" style="font-size:13px;color:var(--text);">Awaiting data...</div>
     </div>
 
+    <!-- Advanced Data — Group 1: structural/gap context (22 Jul audit: "too
+    many numbers... highlight only 4-5 decision variables, collapse the rest") -->
+    <details style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;">
+      <summary style="cursor:pointer;padding:12px;font-size:12px;color:var(--dim);letter-spacing:1px;list-style:none;">▸ ADVANCED: STRUCTURE &amp; GAP CONTEXT</summary>
+      <div style="padding:0 12px 12px;">
+
     <!-- Trap Zone -->
     <div id="ins-trapzone-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
       <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:6px;">⚠️ TRAP ZONE</div>
@@ -9046,10 +9052,13 @@ function _statRow(label, val) {
     </div>
 
     <!-- Premarket/Opening Gap (prev close vs today's open, via Fyers) -->
-    <div id="ins-gap-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+    <div id="ins-gap-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;">
       <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">🌅 OPENING GAP <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(today's open vs prev close — +3% confidence nudge only)</span></div>
       <div id="ins-gap-label" style="font-size:13px;color:var(--text);">Awaiting data...</div>
     </div>
+
+      </div>
+    </details>
 
     <!-- Probability Engine -->
     <div id="ins-prob-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
@@ -9057,6 +9066,12 @@ function _statRow(label, val) {
       <div id="ins-prob-bar" style="display:flex;height:22px;border-radius:6px;overflow:hidden;margin-bottom:6px;"></div>
       <div id="ins-prob-label" style="font-size:12px;color:var(--text);">Awaiting data...</div>
     </div>
+
+    <!-- Advanced Data — Group 2: diagnostics/context modifiers (Data Health,
+    Event Countdown, Confidence History, News, BOS/CHOCH, Option Greeks) -->
+    <details style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;">
+      <summary style="cursor:pointer;padding:12px;font-size:12px;color:var(--dim);letter-spacing:1px;list-style:none;">▸ ADVANCED: DIAGNOSTICS &amp; CONTEXT MODIFIERS</summary>
+      <div style="padding:0 12px 12px;">
 
     <!-- Data Health / Self-Diagnosis -->
     <div id="ins-datahealth-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
@@ -9090,11 +9105,14 @@ function _statRow(label, val) {
     </div>
 
     <!-- Option Greeks Dashboard -->
-    <div id="ins-greeks-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+    <div id="ins-greeks-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;">
       <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">🔬 OPTION GREEKS <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(explanatory only — not a signal input)</span></div>
       <div id="ins-greeks-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;margin-bottom:6px;"></div>
       <div id="ins-greeks-regime" style="font-size:12px;color:var(--dim);">Awaiting data...</div>
     </div>
+
+      </div>
+    </details>
 
     <!-- Market Regime Classifier -->
     <div id="ins-regime-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
@@ -9102,6 +9120,12 @@ function _statRow(label, val) {
       <div id="ins-regime-label" style="font-size:13px;color:var(--text);margin-bottom:6px;">Awaiting data...</div>
       <div id="ins-regime-detail" style="font-size:12px;color:var(--dim);"></div>
     </div>
+
+    <!-- Advanced Data — Group 3: confluence internals (Trend Conviction,
+    Renko, Sequence Check, Contradiction Score) -->
+    <details style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;">
+      <summary style="cursor:pointer;padding:12px;font-size:12px;color:var(--dim);letter-spacing:1px;list-style:none;">▸ ADVANCED: CONFLUENCE INTERNALS</summary>
+      <div style="padding:0 12px 12px;">
 
     <!-- Trend Conviction Mode -->
     <div id="ins-conviction-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
@@ -9125,7 +9149,7 @@ function _statRow(label, val) {
     </div>
 
     <!-- Contradiction Score -->
-    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;">
       <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">⚖️ CONTRADICTION SCORE</div>
       <div style="display:flex;gap:14px;margin-bottom:6px;">
         <div style="flex:1;">
@@ -9141,6 +9165,9 @@ function _statRow(label, val) {
       </div>
       <div id="ins-contra-result" style="font-size:13px;color:var(--text);font-weight:600;">—</div>
     </div>
+
+      </div>
+    </details>
 
     <!-- Confidence Breakdown -->
     <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
@@ -9174,13 +9201,21 @@ function _statRow(label, val) {
       </div>
     </div>
 
+    <!-- Advanced Data — Group 4: 30-day audit stats -->
+    <details style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;">
+      <summary style="cursor:pointer;padding:12px;font-size:12px;color:var(--dim);letter-spacing:1px;list-style:none;">▸ ADVANCED: LEAD QUALITY &amp; EXIT WARNING AUDIT (30-DAY)</summary>
+      <div style="padding:0 12px 12px;">
+
     <!-- Lead Quality x Outcome + Exit Warning validation (30-day) -->
-    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;">
       <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:8px;">🎯 LEAD QUALITY vs OUTCOME <span style="font-size:9.5px;font-weight:400;">(30-day)</span></div>
       <div id="ins-lead-quality-breakdown" style="font-size:12.5px;color:var(--dim);">Not enough closed MTF-tracker trades yet</div>
       <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin:12px 0 8px;">⚠️ EXIT WARNING VALIDATION <span style="font-size:9.5px;font-weight:400;">(30-day)</span></div>
       <div id="ins-exit-warning-stats" style="font-size:12.5px;color:var(--dim);">Not enough closed trades yet</div>
     </div>
+
+      </div>
+    </details>
 
   </div>
 </div>

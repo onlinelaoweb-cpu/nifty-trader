@@ -1379,11 +1379,19 @@ function computeMarketRegime() {
     const expiry = isExpiryDay();
     const vixSpike = !!marketState.tradeQuality?.vixCapped;
     const eventCaution = !!(marketState.eventCountdown?.available && marketState.eventCountdown.withinCautionWindow);
+    // GAP_DAY — 4th named day-type from the 22 Jul audit ("Trend Day / Range
+    // Day / Gap Day / Expiry Day"). Uses a meaningfully larger threshold
+    // (0.5%) than premarketGap's own 0.15% zone split, since that smaller
+    // threshold is tuned for the confidence-nudge use case and fires on most
+    // ordinary days — a "regime," by contrast, should mean something the
+    // trader should actually adjust their read of the day for.
+    const gapDay = Math.abs(marketState.premarketGap?.gapPct ?? 0) >= 0.5;
 
     const tags = [];
     if (expiry) tags.push('EXPIRY');
     if (eventCaution) tags.push('EVENT_DAY');
     if (vixSpike) tags.push('HIGH_VIX');
+    if (gapDay) tags.push('GAP_DAY');
     if (dt?.trendProbability >= 60) tags.push('TRENDING');
     else if (dt?.rangeProbability >= 60) tags.push('RANGE');
     if (tags.length === 0) tags.push('NORMAL');
@@ -1392,6 +1400,7 @@ function computeMarketRegime() {
     if (tags.includes('EXPIRY'))     activeRules.push('A+/A grade size capped 50% (Tuesday expiry)');
     if (tags.includes('EVENT_DAY'))  activeRules.push(`Confidence capped 60% (${marketState.eventCountdown?.title || 'high-impact event'} approaching)`);
     if (tags.includes('HIGH_VIX'))   activeRules.push('Size capped 50% (VIX spiked vs today\'s open)');
+    if (tags.includes('GAP_DAY'))    activeRules.push(`Large ${marketState.premarketGap?.zone === 'GAP_UP' ? 'gap-up' : 'gap-down'} open (${marketState.premarketGap?.gapPct}%) — first-hour moves less reliable, gap-fill risk both ways`);
     if (tags.includes('RANGE'))      activeRules.push('Dynamic Levels no-trade range-pocket cap active');
     if (tags.includes('TRENDING'))   activeRules.push('Momentum/breakout confluence factors weighted normally');
 
