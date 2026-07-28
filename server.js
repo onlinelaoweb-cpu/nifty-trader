@@ -3693,7 +3693,27 @@ async function checkTelegramAlerts(newSignal) {
         // above (mtfWeak/mtfModerate/mtfStrong) still track ALL tiers for
         // analytics even though only Strong fires, so you can still audit how
         // often each tier occurs.
-        if (leadQuality.score >= 3) {
+        // ── Market-open settling window (28 Jul) — a DIFFERENT failure mode from
+        // the 22 Jul score-based fix above (that targeted low-confluence leads;
+        // this is about data freshness regardless of score). Confirmed by a real
+        // incident: a genuine 3/4 Strong Confluence BUY CALL fired at 9:15:18 AM
+        // — 18 seconds after open — and hit SL within 3 minutes, -53.4% worst
+        // point. Root cause: at that point (a) today's own 5m/15m/1H candles
+        // structurally cannot exist yet (a 5m candle alone needs 5 min to even
+        // complete), so the "3/3 TFs aligned" reading was necessarily built on
+        // leftover pre-market/previous-session classification, and (b) the
+        // option premium is a stale snapshot from the last 3-min PCR cycle,
+        // effectively a pre-market price by the time continuous trading starts.
+        // Suppressing here (not deleting) — the data becomes genuinely usable
+        // once real candles exist, so this is a short, deliberate wait, not a
+        // permanent restriction.
+        const _ist = getIST();
+        const _minsSinceOpen = (_ist.getHours() * 60 + _ist.getMinutes()) - 555;  // 555 = 9:15 AM
+        const _inSettlingWindow = _minsSinceOpen >= 0 && _minsSinceOpen < 5;
+
+        if (leadQuality.score >= 3 && _inSettlingWindow) {
+            console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
+        } else if (leadQuality.score >= 3) {
             await sendMTFAlert(marketState, mtfStrikeData);
             lastMTFAlertAt     = Date.now();
             lastMTFAlertSignal = mtfSignalNow;
