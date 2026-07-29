@@ -3550,8 +3550,20 @@ async function checkTelegramAlerts(newSignal) {
             : null;
 
         dailySignalCounts.main++; dailySignalCountsDirty = true;
-        marketState.similarSetupStats = await getSimilarSetupStats(newSignal, marketState.dynamicLevels?.zone).catch(e => { console.warn('[SimilarSetup] error:', e.message); return null; });
-        await sendSignalAlert(marketState, prevSignal, strikeDataForAlert);
+        // FIX (29 Jul): freeze a snapshot of marketState BEFORE the async DB
+        // lookup below. getSimilarSetupStats() awaits a real Postgres query,
+        // and Node's event loop can interleave a NEWER WebSocket tick's
+        // combineSignals() run during that await — which would overwrite
+        // marketState.engineChecklist/qualityGate with that later tick's data
+        // (e.g. RSI having since moved enough to flip rsiClean) before
+        // sendSignalAlert ever reads it. Confirmed in production 29 Jul: a
+        // checklist showed "❌ RSI Clean" on a signal that could only have
+        // fired with rsiClean=true (that gate forces WAIT otherwise — see the
+        // early cascade above). Snapshotting here guarantees the alert always
+        // reflects the exact tick that actually fired it, not a later one.
+        const alertSnapshot = { ...marketState };
+        alertSnapshot.similarSetupStats = await getSimilarSetupStats(newSignal, marketState.dynamicLevels?.zone).catch(e => { console.warn('[SimilarSetup] error:', e.message); return null; });
+        await sendSignalAlert(alertSnapshot, prevSignal, strikeDataForAlert);
         lastSignalFiredPrice = marketState.nifty || 0;
 
         // ── Scalp Plan alert — same confirmed signal, alternate fast-exit plan ──
@@ -3561,7 +3573,7 @@ async function checkTelegramAlerts(newSignal) {
         if (process.env.SCALP_ALERTS_ENABLED !== 'false' && strikeDataForAlert) {
             try {
                 const scalpPlan = buildScalpPlan(strikeDataForAlert);
-                if (scalpPlan) await sendScalpAlert(marketState, strikeDataForAlert, scalpPlan);
+                if (scalpPlan) await sendScalpAlert(alertSnapshot, strikeDataForAlert, scalpPlan);
             } catch (e) { console.warn('[Scalp] alert error:', e.message); }
         }
 
