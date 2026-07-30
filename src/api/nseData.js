@@ -1442,7 +1442,12 @@ async function fetchFyersQuote(symbol = 'NSE:NIFTY50-INDEX') {
 
         const v = d.d[0]?.v;
         if (!v || !v.lp) {
-            console.warn('[Fyers Quote] No quote data in response');
+            // DIAGNOSTIC IMPROVEMENT (29 Jul): "No quote data in response" alone
+            // gave zero visibility into WHY — logging the raw value object here
+            // so the next occurrence shows exactly what Fyers returned (e.g. a
+            // differently-named price field for futures vs index quotes, a
+            // present-but-zero lp, or a genuinely empty v) instead of guessing.
+            console.warn(`[Fyers Quote] No quote data in response for ${symbol} | raw v: ${JSON.stringify(v)} | full d.d[0]: ${JSON.stringify(d.d[0])?.slice(0, 500)}`);
             return null;
         }
 
