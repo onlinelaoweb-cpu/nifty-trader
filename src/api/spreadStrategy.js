@@ -16,8 +16,14 @@ const { daysToNextExpiry } = (() => {
         const now = new Date();
         const ist = new Date(now.getTime() + 5.5 * 3600000);
         const day = ist.getDay(); // 0=Sun,1=Mon,...,6=Sat
-        // Next Thursday (NSE weekly expiry)
-        let daysAhead = (4 - day + 7) % 7 || 7;
+        // FIX (30 Jul 2026): weekly NSE index expiry moved from Thursday to
+        // Tuesday, effective 1 Sept 2025 (SEBI circular) — same bug class as
+        // the getCurrentFyersFutSymbol() fix in nseData.js. This was still
+        // targeting the old Thursday, which would silently corrupt every DTE
+        // value fed into the Black-Scholes estimate and the near-expiry
+        // theta-decay flag below (nearExpiry = dte<=2).
+        // Next Tuesday (NSE weekly expiry)
+        let daysAhead = (2 - day + 7) % 7 || 7;
         const expiry = new Date(ist);
         expiry.setDate(ist.getDate() + daysAhead);
         expiry.setHours(15, 30, 0, 0);
@@ -67,7 +73,7 @@ function suggestSpreadStrategy(marketState) {
     const isBearish      = mtfSig === 'BUY PUT'  && swing === 'DOWNTREND';
     const vixLow         = vix < 14;
     const vixVeryLow     = vix < 12;
-    const nearExpiry     = dte <= 2;   // Thursday/Wednesday — theta decay fast
+    const nearExpiry     = dte <= 2;   // Monday/Tuesday — theta decay fast
 
     // ── Strategy selection ────────────────────────────────────────────────────
 
