@@ -1385,23 +1385,33 @@ async function fetchPCRFromAngel(spotPrice) {
 // symbol was never valid in the first place, so it always fell through.
 //
 // Fyers' real format is: NSE:NIFTY{YY}{MMM}FUT, e.g. NSE:NIFTY26JULFUT.
-// Contracts roll on the monthly expiry (last Thursday of the month) — this
-// rolls the symbol to next month once we're past that Thursday.
+// Contracts roll on the monthly expiry.
+//
+// FIX (30 Jul 2026): SEBI's Oct-2024 circular moved ALL NSE index F&O expiry
+// (weekly + monthly) from Thursday to Tuesday, effective 1 Sept 2025 — NSE
+// contracts now expire on the LAST TUESDAY of the month, not last Thursday.
+// The old lastThursday()-based check computed July 2026's "expiry" as
+// Thu 30-Jul, but the real expiry was Tue 28-Jul — so on 29/30-Jul this
+// function kept returning the already-expired NIFTY26JULFUT, which Fyers
+// rejects with "Please provide a valid symbol" (code -300), and volume
+// fell through to the index-only 0-volume fallback. This is exactly the
+// stuck-volume bug — same symptom as the earlier "NSE:NIFTY-I" bug above,
+// different cause (stale expiry day, not a bad alias).
 function getCurrentFyersFutSymbol() {
     const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const y = istNow.getFullYear();
     const m = istNow.getMonth(); // 0-indexed
 
-    // Last Thursday of a given (year, month)
-    const lastThursday = (year, month) => {
+    // Last Tuesday of a given (year, month) — NSE's current monthly expiry day.
+    const lastTuesday = (year, month) => {
         const d = new Date(year, month + 1, 0); // last calendar day of month
-        const diff = (d.getDay() - 4 + 7) % 7;   // 4 = Thursday
+        const diff = (d.getDay() - 2 + 7) % 7;   // 2 = Tuesday
         d.setDate(d.getDate() - diff);
         return d;
     };
 
     let targetY = y, targetM = m;
-    const thisMonthExpiry = lastThursday(y, m);
+    const thisMonthExpiry = lastTuesday(y, m);
     // If today is past this month's expiry date, roll to next month's contract.
     if (istNow.getDate() > thisMonthExpiry.getDate()) {
         targetM = m + 1;
