@@ -3781,6 +3781,34 @@ async function updatePrice(price, change, changePct, source) {
     }
 
     const indicators=processIndicators(price, marketState.global?.bankNiftyLeadSignal ?? null);
+
+    // ── POC — MOVED HERE (same staleness bug as Delta, fixed 1 Aug) ──────────
+    // Must run BEFORE combineSignals(), not after. combineSignals() reads
+    // marketState.poc to compute qualityGate.pocClear; computing POC afterward
+    // meant the gate used the PREVIOUS tick's stale value while the Telegram
+    // message displayed the freshly-recomputed value — identical pattern to
+    // the Delta bug above, just never independently reported/confirmed the
+    // way the Delta case was. Fixing proactively since the root cause is
+    // exactly the same ordering issue.
+    try { marketState.poc = computePOC(); } catch(e) { console.warn('[POC] error:', e.message); }
+
+    // ── Delta — MOVED HERE (Bug-2 fix, 1 Aug) ─────────────────────────────────
+    // Must run BEFORE combineSignals(), not after. combineSignals() reads
+    // marketState.delta to compute qualityGate.deltaAligned; computing delta
+    // afterward meant the gate used the PREVIOUS tick's stale value while the
+    // Telegram message (built later in this same function) displayed the
+    // freshly-recomputed value — the two could disagree, so the "Delta
+    // Confirms" checklist item could show ✅ using old data even when the
+    // live delta shown in the message actually contradicted the signal.
+    // Confirmed in production: 2:36pm BUY PUT + Delta +40.2% (BULLISH) still
+    // passed the gate; same pattern repeated at 3:17pm (+36.7% BULLISH).
+    // Priority: websocket (true buy/sell qty) > fyers (volume-weighted proxy)
+    // > candle-body proxy (weakest, only used when neither live source is available).
+    const _deltaSrc = marketState.delta?.source ?? '';
+    if (_deltaSrc !== 'websocket' && _deltaSrc !== 'fyers') {
+        try { marketState.delta = computeDelta(); } catch(e) { console.warn('[Delta] error:', e.message); }
+    }
+
     let { signal, confidence, reasons }=combineSignals(indicators);
 
     // ── Trend Lock — block instant CALL↔PUT reversals until confirmed ────────
@@ -3972,19 +4000,7 @@ async function updatePrice(price, change, changePct, source) {
     marketState.candleSource=getCandleSource();
     // ── Smart Money Bias ──────────────────────────────────────────────────────
     marketState.smartMoney = computeSmartMoneyBias();
-    // ── POC + Delta — computed from today's session candles ───────────────────
-    // Run on every price tick so qualityGate and Telegram can use fresh values.
-    // computePOC/Delta read getSessionCandles() internally — no extra args needed.
-    try { marketState.poc   = computePOC();   } catch(e) { console.warn('[POC] error:', e.message); }
-    // Only run candle-body proxy delta when neither WS nor Fyers has provided
-    // real volume data yet. Priority: websocket (true buy/sell qty, when Angel
-    // sends it for non-index tokens) > fyers (volume-weighted range-position
-    // proxy, real session volume) > candle-body proxy (weakest signal, only
-    // used when neither live source is available).
-    const _deltaSrc = marketState.delta?.source ?? '';
-    if (_deltaSrc !== 'websocket' && _deltaSrc !== 'fyers') {
-        try { marketState.delta = computeDelta(); } catch(e) { console.warn('[Delta] error:', e.message); }
-    }
+    // (POC and Delta now computed earlier, before combineSignals() — see fixes above.)
     // ── Trend Day vs Range Day + Trap Zone — informational strategy guidance ──
     try { marketState.dayType  = computeDayType();  } catch(e) { console.warn('[DayType] error:', e.message); }
     try { marketState.trapZone = computeTrapZone(); } catch(e) { console.warn('[TrapZone] error:', e.message); }

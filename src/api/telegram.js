@@ -242,7 +242,17 @@ ${(() => {
                    (tc.active === 'BULLISH' && state.signal === 'BUY PUT');
     if (!oppose) return '';
     const conds = tc.active === 'BEARISH' ? tc.bearConditions : tc.bullConditions;
-    return `\n🔍 Trend Conviction: ${tc.active} (${conds.length}/6: ${conds.join(', ')}) — convictionOk=${state.qualityGate?.convictionOk}`;
+    // BUG FIX (1 Aug, per Bug-1 audit): was interpolating the raw internal
+    // `convictionOk` variable directly into the user-facing message. This
+    // printed literal "undefined" whenever marketState.qualityGate was one
+    // of the reduced fallback shapes (e.g. the Liquidity Sweep Reversal /
+    // theta-zone exception path, which doesn't set a convictionOk key at
+    // all) — confirmed from production Telegram messages at 2:36pm and
+    // 3:17pm on 31 Jul. Now shows a clean, always-defined label instead.
+    const convictionGateLabel = state.qualityGate?.convictionOk === undefined
+        ? 'N/A (reduced gate set active)'
+        : (state.qualityGate.convictionOk ? 'PASSED (overridden)' : 'BLOCKED');
+    return `\n🔍 Trend Conviction: ${tc.active} (${conds.length}/6: ${conds.join(', ')}) — Gate: ${convictionGateLabel}`;
 })()}
 ━━━━━━━━━━━━━━━━━━
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
