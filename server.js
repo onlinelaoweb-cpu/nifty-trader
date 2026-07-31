@@ -2869,8 +2869,10 @@ function combineSignals(indicators) {
 
         // Normalize back to 0–100 scale: max raw score is now 120
         // (100 original components + 15 Law3-Reaction + 5 Law1-Trend).
+        // Clamped at 0 — Law1 counter-trend penalty (-5) can push qsRaw negative,
+        // which without the clamp showed as a negative score (e.g. "-4/100").
         const qsRaw = qs;
-        qs = Math.round((qsRaw / 120) * 100);
+        qs = Math.max(0, Math.round((qsRaw / 120) * 100));
 
         const grade = qs >= 80 ? 'A+' : qs >= 65 ? 'A' : qs >= 50 ? 'B' : qs >= 35 ? 'C' : 'D';
         const gradeColor = qs >= 80 ? '🟢' : qs >= 65 ? '🟢' : qs >= 50 ? '🟡' : '🔴';
@@ -6278,7 +6280,7 @@ function requireToken(req, res, next) {
 // ── Routes ────────────────────────────────────────────
 // Throttle MTM updates — no need to recalc P&L 20×/min.
 // Premium values (atmCEpremium/atmPEpremium) change at the option-chain refresh cadence
-// (~3 min), so running on every 3s frontend poll is pure CPU waste.
+// (~60s, see PCR_INTERVAL_MS in nseData.js), so running on every 3s frontend poll is pure CPU waste.
 let _lastMTMRun = 0;
 // Login probe — frontend uses this to verify password without exposing data
 app.get('/api/auth/check', requireToken, (req, res) => res.json({ ok: true }));
@@ -6550,7 +6552,7 @@ app.get('/api/trades', (req,res) => {
 });
 
 // ── EVENTS CALENDAR ───────────────────────────────────
-app.post('/api/event', (req,res) => {
+app.post('/api/event', requireToken, (req,res) => {
     const {time,title,impact}=req.body;
     events.push({id:Date.now(),time,title,impact:impact||'medium'});
     events.sort((a,b)=>a.time.localeCompare(b.time));
@@ -6559,7 +6561,7 @@ app.post('/api/event', (req,res) => {
 
 app.get('/api/events', (req,res) => res.json(events));
 
-app.delete('/api/event/:id', (req,res) => {
+app.delete('/api/event/:id', requireToken, (req,res) => {
     events=events.filter(e=>e.id!==parseInt(req.params.id));
     res.json({success:true});
 });
