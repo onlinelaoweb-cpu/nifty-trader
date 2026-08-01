@@ -1318,11 +1318,6 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .mtf-sig{font-family:'Orbitron',monospace;font-size:11px;font-weight:700;margin-bottom:4px;}
 .mtf-stats{font-size:12px;color:var(--dim);line-height:1.6;}
 .mtf-rsi{font-family:'Share Tech Mono',monospace;color:var(--text);}
-.align-bar{display:flex;gap:4px;margin-top:8px;height:5px;}
-.align-seg{flex:1;border-radius:3px;background:var(--border);transition:background 0.5s;}
-.align-seg.bull{background:var(--green);box-shadow:0 0 8px var(--green);}
-.align-seg.bear{background:var(--red);box-shadow:0 0 8px var(--red);}
-.align-label{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-top:3px;padding:0 2px;font-family:'Share Tech Mono',monospace;}
 
 /* PCR VIX */
 .pcr-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding:0 12px;margin-bottom:8px;}
@@ -2423,8 +2418,6 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
       <div class="mtf-card" id="mtf-15m"><div class="mtf-tf">15 MIN</div><div class="mtf-sig sig-neut" id="mtf-15m-sig">NEUTRAL</div><div class="mtf-stats"><div>RSI:<span class="mtf-rsi" id="mtf-15m-rsi">--</span></div><div>EMA:<span class="mtf-rsi" id="mtf-15m-ema">--</span></div><div>VWAP:<span class="mtf-rsi" id="mtf-15m-vwap">--</span></div></div></div>
       <div class="mtf-card" id="mtf-1h"><div class="mtf-tf">1 HR</div><div class="mtf-sig sig-neut" id="mtf-1h-sig">NEUTRAL</div><div class="mtf-stats"><div>RSI:<span class="mtf-rsi" id="mtf-1h-rsi">--</span></div><div>EMA:<span class="mtf-rsi" id="mtf-1h-ema">--</span></div><div>VWAP:<span class="mtf-rsi" id="mtf-1h-vwap">--</span></div></div></div>
     </div>
-    <div class="align-bar"><div class="align-seg" id="align-5m"></div><div class="align-seg" id="align-15m"></div><div class="align-seg" id="align-1h"></div></div>
-    <div class="align-label"><span>5M</span><span>15M</span><span>1H</span></div>
   </div>
 
   <div class="sec-label">OPTIONS DATA</div>
@@ -3245,8 +3238,6 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
           <span style="color:var(--green);" id="ad-bull-pct">50%</span>
         </div>
       </div>
-      <!-- hidden bar elements kept for JS compat -->
-      <div style="display:none"><div id="ad-bar-bull"></div><div id="ad-bar-bear"></div></div>
       <div><span class="ad-signal" id="ad-signal" style="background:rgba(255,187,0,0.1);color:var(--amber);border:1px solid var(--amber);">NEUTRAL</span></div>
       <div style="text-align:center;margin-top:4px;"><span id="breadth-source-badge" style="font-size:11px;color:var(--dim);letter-spacing:1px;font-family:monospace;"></span></div>
       <div style="text-align:center;margin-top:6px;font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.75;">

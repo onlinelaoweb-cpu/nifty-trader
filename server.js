@@ -4281,7 +4281,19 @@ async function refreshMarketData() {
     // even on closed days, but the early `return` below prevented it from
     // ever reaching marketState — VIX has a meaningful "last close" value
     // too (e.g. "VIX closed 11.8 Friday"), so apply it regardless of trading day.
-    if (vixData) { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.strikeRange; }
+    // BUG FIX (1 Aug 2026, found during frontend/GUI audit): buildVIX() in
+    // marketData.js returns the VIX-based strike-width suggestion under the
+    // key `range` (e.g. 'ATM ±150' for low VIX, 'ATM ±300' for very high VIX)
+    // — this was reading `vixData.strikeRange`, a key that doesn't exist on
+    // that object, so marketState.strikeRange was always undefined and every
+    // display (Telegram + dashboard) silently fell back to the hardcoded
+    // 'ATM ±200' default no matter what VIX actually was. Confirmed from
+    // production: 31 Jul messages showed VIX 11.8–12.16 (VERY LOW) alongside
+    // "ATM ±200" instead of the correct "ATM ±150". Purely a display label —
+    // vixData.range never fed pickStrikeAndPremium, combineSignals, or any
+    // entry/target/SL/confidence calculation, so this never affected trading
+    // decisions, only the informational strike-width text.
+    if (vixData) { marketState.vix=vixData.vix; marketState.vixChange=vixData.change; marketState.vixSignal=vixData.signal; marketState.vixNote=vixData.note; marketState.strikeRange=vixData.range; }
     if (isMarketOpen() && vixData?.vix > 0 && sessionOpenVix === null) sessionOpenVix = vixData.vix;
     if (!isTradingDay) return; // rest of this function is live-market-only from here
     if (niftyData?.closes?.length>0&&!historyLoaded) { initializeHistory(niftyData.closes,niftyData.candles); historyLoaded=true; console.log(`History: ${niftyData.closes.length} candles`); }
