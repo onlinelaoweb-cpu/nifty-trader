@@ -2940,6 +2940,9 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
         <div class="pnl-big-label">REALIZED P&L TODAY</div>
         <div class="pnl-big-val" id="j-pnl" style="color:var(--dim);">₹0</div>
       </div>
+      <div id="j-slippage-wrap" style="display:none;padding:6px 14px 2px;font-size:12px;color:var(--dim);text-align:center;">
+        ⚖️ Avg slippage vs suggested entry: <span id="j-slippage" style="font-weight:700;">--</span>
+      </div>
     </div>
 
     <!-- Add Trade -->
@@ -5493,6 +5496,15 @@ async function fetchTradeSuggestion() {
     const sl         = ai.sl      || d.strikeData?.sl;
     const target     = ai.target  || d.strikeData?.target;
     const bep        = d.strikeData?.bep;
+    // Cache the last suggestion so addTrade() can attach it as suggestedEntry
+    // when the trader logs a fill for this exact strike+type — this is what
+    // makes Slippage tracking possible without changing the manual Journal
+    // form itself. Cleared implicitly by being overwritten on the next fetch;
+    // if the trader logs a trade for a DIFFERENT strike/type than the last
+    // suggestion, addTrade() below simply won't attach it (no false match).
+    if (ai.action && ai.action !== 'WAIT' && strike && entry) {
+        window._lastAISuggestion = { type: (ai.action.includes('CALL') ? 'CE' : 'PE'), strike, entry };
+    }
     const confidence = ai.confidence || d.confidence || '';
     const reasoning  = ai.reasoning  || ai.rationale || '';  // server uses 'reasoning'
     const coach      = d.strikeData?.coach;
@@ -5514,6 +5526,7 @@ async function fetchTradeSuggestion() {
       ${strike ? `<div class="suggest-detail">Strike: <b>${strike}</b> | Entry: <b>₹${entry || '--'}</b></div>` : ''}
       ${sl ? `<div class="suggest-detail">SL: ₹${sl} | Target: ₹${target || '--'}</div>` : ''}
       ${bep ? `<div class="suggest-detail" style="color:var(--dim);">⚖️ Break-Even: Nifty ${bep} by expiry</div>` : ''}
+      ${d.strikeData?.lowLiquidity ? `<div class="suggest-detail" style="color:var(--amber);">⚠️ Low liquidity: OI ${Math.round((d.strikeData.strikeOI||0)/1000)}K, Vol ${Math.round((d.strikeData.strikeVolume||0)/1000)}K — check spread before entry</div>` : ''}
       ${reasoning ? `<div class="suggest-rationale">${reasoning}</div>` : ''}
       ${confidence ? `<div class="suggest-conf">Confidence: ${confidence}</div>` : ''}
       ${coachHtml}
@@ -6682,6 +6695,9 @@ function _normServerTrade(t) {
     notes     : t.notes || '',
     status    : t.status || (t.exitPremium != null ? 'CLOSED' : 'OPEN'),
     currentPnl: t.currentPnl ?? null,
+    suggestedEntry: t.suggestedEntry ?? null,
+    slippage      : t.slippage ?? null,
+    slippagePct   : t.slippagePct ?? null,
   };
 }
 
@@ -6709,10 +6725,18 @@ function getTradeSummaryLocal() {
   const open        = todayTrades.filter(t => t.exit == null);
   const pnl         = realized.reduce((sum, t) => sum + (t.pnl || 0), 0);
   const wins        = realized.filter(t => (t.pnl || 0) > 0).length;
+  // Slippage: across ALL logged trades (not just today) that have a matched
+  // suggestedEntry — small daily sample sizes make a same-day-only average
+  // noisy, so this is a running average since tracking started.
+  const withSlippage = _trades.filter(t => t.slippagePct != null);
+  const avgSlippagePct = withSlippage.length
+    ? parseFloat((withSlippage.reduce((s,t)=>s+t.slippagePct,0) / withSlippage.length).toFixed(1))
+    : null;
   return {
     total: todayTrades.length, open: open.length, realized: realized.length,
     realizedPnl: pnl,
-    winRate: realized.length > 0 ? Math.round((wins / realized.length) * 100) : 0
+    winRate: realized.length > 0 ? Math.round((wins / realized.length) * 100) : 0,
+    avgSlippagePct, slippageSampleSize: withSlippage.length
   };
 }
 
@@ -6726,6 +6750,17 @@ function _renderJournal() {
   j('j-pnl', (summary.realizedPnl >= 0 ? '₹+' : '₹') + summary.realizedPnl.toFixed(0));
   const pnlEl = document.getElementById('j-pnl');
   if (pnlEl) pnlEl.style.color = summary.realizedPnl > 0 ? 'var(--green)' : summary.realizedPnl < 0 ? 'var(--red)' : 'var(--dim)';
+  const slipWrap = document.getElementById('j-slippage-wrap');
+  const slipEl   = document.getElementById('j-slippage');
+  if (slipWrap && slipEl) {
+    if (summary.avgSlippagePct != null && summary.slippageSampleSize >= 1) {
+      slipWrap.style.display = 'block';
+      slipEl.textContent = (summary.avgSlippagePct >= 0 ? '+' : '') + summary.avgSlippagePct + '% (n=' + summary.slippageSampleSize + ')';
+      slipEl.style.color = Math.abs(summary.avgSlippagePct) >= 5 ? 'var(--red)' : 'var(--text)';
+    } else {
+      slipWrap.style.display = 'none';
+    }
+  }
 
   const tbody = document.getElementById('trade-list-body');
   if (!tbody) return;
@@ -6798,6 +6833,13 @@ function _renderJournal() {
         + '<span style="font-size:11px;color:var(--dim);">' + timeStr + '</span>'
         + exitBtn
         + '</div>';
+      if (t.slippagePct != null) {
+        const slipColor = Math.abs(t.slippagePct) >= 5 ? 'var(--red)' : 'var(--dim)';
+        html += '<div style="padding:1px 14px 6px;font-size:11px;color:' + slipColor + ';">'
+          + '⚖️ Suggested ₹' + t.suggestedEntry + ' → Filled ₹' + t.premium
+          + ' (slippage ' + (t.slippage >= 0 ? '+' : '') + t.slippage + ', ' + (t.slippagePct >= 0 ? '+' : '') + t.slippagePct + '%)'
+          + '</div>';
+      }
     });
   }
   tbody.innerHTML = html;
@@ -6821,9 +6863,15 @@ async function addTrade() {
   const sl      = parseFloat(document.getElementById('t-sl').value) || 0;
   if (!strike || !premium) { alert('Please enter strike and premium'); return; }
 
+  // Slippage tracking: only attach suggestedEntry if it matches this exact
+  // strike+type — otherwise we'd be comparing the fill against an unrelated
+  // suggestion (e.g. trader logging a different strike than what was last shown).
+  const lastSugg = window._lastAISuggestion;
+  const suggestedEntry = (lastSugg && lastSugg.type === type && lastSugg.strike === strike) ? lastSugg.entry : null;
+
   // Optimistic local add for instant feedback
   const tempId   = Date.now();
-  const tempTrade = { id: tempId, type, strike, lots, premium, sl, time: new Date().toISOString(), exit: null, pnl: null, status: 'OPEN' };
+  const tempTrade = { id: tempId, type, strike, lots, premium, sl, time: new Date().toISOString(), exit: null, pnl: null, status: 'OPEN', suggestedEntry, slippage: suggestedEntry != null ? parseFloat((premium - suggestedEntry).toFixed(2)) : null, slippagePct: suggestedEntry != null ? parseFloat((((premium - suggestedEntry) / suggestedEntry) * 100).toFixed(1)) : null };
   _trades.push(tempTrade);
   localStorage.setItem('vn_trades', JSON.stringify(_trades));
   _renderJournal();
@@ -6835,7 +6883,7 @@ async function addTrade() {
 
   // Persist to server — replace temp trade with server trade on success
   try {
-    const { trade } = await _apiPost('/api/trade/add', { type, strike, premium, lots, sl });
+    const { trade } = await _apiPost('/api/trade/add', { type, strike, premium, lots, sl, suggestedEntry });
     const idx = _trades.findIndex(t => t.id === tempId);
     if (idx !== -1) _trades[idx] = _normServerTrade(trade);
     localStorage.setItem('vn_trades', JSON.stringify(_trades));

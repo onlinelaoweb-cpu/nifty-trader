@@ -153,11 +153,14 @@ async function sendSignalAlert(state, prevSignal, strikeData = null) {
         const stalenessNote = (strikeData.premiumAgeSec != null && strikeData.premiumAgeSec > 90)
             ? ` ⚠️ (quote ${Math.round(strikeData.premiumAgeSec/60)}min old — verify on broker before entry)`
             : '';
+        const liquidityNote = strikeData.lowLiquidity
+            ? `\n⚠️ Low liquidity: OI ${Math.round(strikeData.strikeOI/1000)}K, Vol ${Math.round(strikeData.strikeVolume/1000)}K — check bid-ask spread before entry, slippage risk`
+            : '';
         strikeBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
 📥 Entry : ₹${strikeData.entry}${stalenessNote}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
-📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep} (Nifty needs ${strikeData.type === 'CE' ? 'to reach' : 'to fall to'} this by expiry to break even)` : ''}`;
+📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep} (Nifty needs ${strikeData.type === 'CE' ? 'to reach' : 'to fall to'} this by expiry to break even)` : ''}${liquidityNote}`;
 
         // ── AI Trade Coach block — entry-zone + staged profit plan ───────────
         const coach = strikeData.coach;
@@ -365,11 +368,14 @@ async function sendMTFAlert(state, strikeData = null) {
         const stalenessNote2 = (strikeData.premiumAgeSec != null && strikeData.premiumAgeSec > 90)
             ? ` ⚠️ (quote ${Math.round(strikeData.premiumAgeSec/60)}min old — verify on broker before entry)`
             : '';
+        const liquidityNote2 = strikeData.lowLiquidity
+            ? `\n⚠️ Low liquidity: OI ${Math.round(strikeData.strikeOI/1000)}K, Vol ${Math.round(strikeData.strikeVolume/1000)}K — check bid-ask spread before entry, slippage risk`
+            : '';
 
         levelsBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
 📥 Entry : ₹${strikeData.entry}${stalenessNote2}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
-🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)`;
+🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)${liquidityNote2}`;
 
         const coachBlock = coach
             ? `\n\n🧑‍🏫 <b>AI Trade Coach</b>\n✅ Ideal Entry: ${coach.idealEntryLabel} | ${coach.chaseWarning}\n📈 +20% SL→cost | +30% book 50% | +40% exit`

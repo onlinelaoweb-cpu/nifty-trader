@@ -219,6 +219,15 @@ let events       = [];
 // ── Signal Performance Tracking (automatic, independent of Journal) ─────────
 let openPerfRecords = [];   // records currently being tracked toward target/SL
 const PERF_AUTOCLOSE_MIN = 90;  // auto-close untouched signals after 90 min (theta eats the edge past this)
+// ── Liquidity/OI filter thresholds (pickStrikeAndPremium) ───────────────────
+// NIFTY weekly options: ATM/near-ATM strikes normally carry OI in the several-
+// lakh range and volume in the tens-of-thousands intraday. These thresholds
+// are set well below "healthy ATM" levels — they exist to catch the genuinely
+// thin cases (post-expiry-roll strikes, far-from-ATM picks on a quiet VIX<13
+// day, or a stale/glitched OI read), not to second-guess a normal ATM pick.
+// Tune via Railway env vars if real trade data shows these are mis-calibrated.
+const MIN_STRIKE_OI     = parseInt(process.env.MIN_STRIKE_OI)     || 50000;   // contracts
+const MIN_STRIKE_VOLUME = parseInt(process.env.MIN_STRIKE_VOLUME) || 10000;   // contracts traded so far today
 
 // ── Helpers ───────────────────────────────────────────
 let historyLoaded=false, prevSignal='WAIT', prevMTFAligned=false;
@@ -4890,7 +4899,14 @@ function getTradeSummary() {
     const losers   = closed.filter(t=>t.pnl<0).length;
     const winRate  = (winners+losers)>0 ? Math.round((winners/(winners+losers))*100) : 0;
     const openPnl  = trades.filter(t=>t.status==='OPEN'&&t.currentPnl!=null).reduce((s,t)=>s+(t.currentPnl||0),0);
-    return { totalPnl, openPnl, winners, losers, winRate, totalTrades:trades.length, openTrades:trades.filter(t=>t.status==='OPEN').length };
+    // Slippage summary — only over trades logged against an actual AI suggestion
+    // (suggestedEntry != null); trades entered with no matching suggestion are
+    // excluded rather than counted as zero slippage.
+    const withSlippage = trades.filter(t => t.slippagePct != null);
+    const avgSlippagePct = withSlippage.length
+        ? parseFloat((withSlippage.reduce((s,t)=>s+t.slippagePct, 0) / withSlippage.length).toFixed(1))
+        : null;
+    return { totalPnl, openPnl, winners, losers, winRate, totalTrades:trades.length, openTrades:trades.filter(t=>t.status==='OPEN').length, avgSlippagePct, slippageSampleSize: withSlippage.length };
 }
 
 // ── Exit monitor — runs every time live premiums arrive ──
@@ -5141,7 +5157,11 @@ async function initDB() {
                 source         TEXT,       -- 'main' | 'mtf' — which engine generated this lead
                 lead_quality   TEXT,       -- MTF-tracker leads only: 'Strong Confluence' | 'Moderate' | 'Weak / Isolated'
                 exit_warned    BOOLEAN DEFAULT FALSE,  -- did a momentum-decay exit warning fire on this trade before it closed?
-                breadth_sig    TEXT        -- A/D breadthSignal at entry: 'BULLISH'|'BEARISH'|'NEUTRAL' — lets us later PROVE whether breadth-agreeing signals actually outperform, same evidence-first approach as dyn_zone below
+                dyn_zone       TEXT,       -- Dynamic Levels zone at entry: ABOVE_H3/H1_H3/INSIDE/L1_L3/BELOW_L3
+                gap_zone       TEXT,       -- Opening Gap zone at entry
+                breadth_sig    TEXT,       -- A/D breadthSignal at entry: 'BULLISH'|'BEARISH'|'NEUTRAL' — lets us later PROVE whether breadth-agreeing signals actually outperform, same evidence-first approach as dyn_zone below
+                strike_oi      NUMERIC,    -- picked strike's open interest at signal time (Liquidity/OI filter, added 1 Aug)
+                strike_volume  NUMERIC     -- picked strike's traded volume at signal time — pair with target_hit/sl_hit later to check if MIN_STRIKE_OI/MIN_STRIKE_VOLUME (currently 50K/10K guesses) actually correlate with worse outcomes
             )
         `);
         // ── Backward-compat for DBs created before this fix ─────────────────────
@@ -5183,6 +5203,14 @@ async function initDB() {
         // this backfill block on an already-deployed DB.
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS low NUMERIC`).catch(()=>{});
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS max_adverse_pct NUMERIC`).catch(()=>{});
+        // Liquidity/OI filter data collection (1 Aug) — MIN_STRIKE_OI (50K) and
+        // MIN_STRIKE_VOLUME (10K) in pickStrikeAndPremium() are reasoned defaults,
+        // NOT measured from real signals. Logging strike_oi/strike_volume against
+        // every signal now means in 2-3 weeks we can query actual win-rate for
+        // low-liquidity vs normal signals and tune the real numbers from evidence,
+        // same discipline as the dyn_zone/gap_zone columns above.
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS strike_oi NUMERIC`).catch(()=>{});
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS strike_volume NUMERIC`).catch(()=>{});
         console.log('✅ PostgreSQL signal_performance table ready');
 
         // ── journal_trades table — manually entered trades from the Journal tab ──
@@ -5203,10 +5231,20 @@ async function initDB() {
                 exit_premium NUMERIC,
                 exit_time    TEXT,
                 pnl          NUMERIC,
-                status       TEXT DEFAULT 'OPEN'
+                status       TEXT DEFAULT 'OPEN',
+                suggested_entry NUMERIC,   -- system's AI-suggested entry premium at signal time, if this trade was logged against an active suggestion (Slippage tracking, added 1 Aug)
+                slippage     NUMERIC,      -- premium (actual fill) - suggested_entry — positive = paid more than suggested
+                slippage_pct NUMERIC       -- slippage as % of suggested_entry
             )
         `);
         console.log('✅ PostgreSQL journal_trades table ready');
+        // Backfill for DBs created before slippage tracking existed
+        await dbPool.query(`
+            ALTER TABLE journal_trades
+                ADD COLUMN IF NOT EXISTS suggested_entry NUMERIC,
+                ADD COLUMN IF NOT EXISTS slippage        NUMERIC,
+                ADD COLUMN IF NOT EXISTS slippage_pct    NUMERIC
+        `);
 
         // ── pcr_intraday_history table — every PCR tick of the day, persisted ──
         // In-memory marketState.pcrHistory is capped/reset on Railway restarts.
@@ -5417,14 +5455,16 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
         dynZone: marketState.dynamicLevels?.zone ?? null,
         gapZone: marketState.premarketGap?.zone ?? null,
         breadthSig: marketState.breadth?.breadthSignal ?? null,
+        strikeOI: strikeData.strikeOI ?? null,
+        strikeVolume: strikeData.strikeVolume ?? null,
     };
     openPerfRecords.push(rec);
     if (dbPool) {
         try {
             const r = await dbPool.query(
-                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high, low, source, lead_quality, dyn_zone, gap_zone, breadth_sig)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry, strikeData.entry, rec.source, rec.leadQuality, rec.dynZone, rec.gapZone, rec.breadthSig]
+                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high, low, source, lead_quality, dyn_zone, gap_zone, breadth_sig, strike_oi, strike_volume)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry, strikeData.entry, rec.source, rec.leadQuality, rec.dynZone, rec.gapZone, rec.breadthSig, rec.strikeOI, rec.strikeVolume]
             );
             rec.id = r.rows[0]?.id ?? null;
         } catch (e) { console.warn('[SignalPerf] insert error:', e.message); }
@@ -5871,6 +5911,32 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
 
     if (!entryPremium || entryPremium <= 0) return null;
 
+    // ── Liquidity/OI filter ────────────────────────────────────────────────
+    // Strike selection above is purely premium/greeks driven — it never checks
+    // whether the picked strike actually has enough open interest and today's
+    // trading volume to be easily fillable. A signal on a thin strike can look
+    // identical to one on a liquid strike right up until the trader tries to
+    // place the order and gets a bad fill or a wide spread. This doesn't block
+    // the signal (that's the agent's earlier "soft nudge, not hard gate" rule
+    // for new unproven checks) — it surfaces a visible warning so the trader
+    // can judge for themselves, same pattern as the premium-staleness warning.
+    let strikeOI = 0, strikeVolume = 0, lowLiquidity = false;
+    if (pcrState?.records?.length) {
+        const rec = pcrState.records.find(r => r.strikePrice === strike);
+        const side = rec ? (type === 'CE' ? rec.CE : rec.PE) : null;
+        if (side) {
+            strikeOI     = side.openInterest || 0;
+            strikeVolume = side.volume || 0;
+            // Only flag when we actually have OI data to judge — a record with
+            // OI=0 AND volume=0 usually means the field wasn't populated by
+            // this data source (not that the strike is untraded), so we don't
+            // false-flag every alert when running on a source that lacks volume.
+            if (strikeOI > 0 && (strikeOI < MIN_STRIKE_OI || strikeVolume < MIN_STRIKE_VOLUME)) {
+                lowLiquidity = true;
+            }
+        }
+    }
+
     const sigma = effectiveVix / 100;
     const T     = dte / 365;
 
@@ -5951,7 +6017,7 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
         ? parseFloat((strike + entryPremium).toFixed(2))
         : parseFloat((strike - entryPremium).toFixed(2));
 
-    return { type, strike, entry: entryPremium, sl, target, slSource, bep, premiumAgeSec };
+    return { type, strike, entry: entryPremium, sl, target, slSource, bep, premiumAgeSec, strikeOI, strikeVolume, lowLiquidity };
 }
 
 // ── AI Trade Coach ───────────────────────────────────────────────────────────
@@ -6540,20 +6606,33 @@ app.post('/api/optionflow', requireToken, (req,res) => {
 
 // ── TRADE JOURNAL ─────────────────────────────────────
 app.post('/api/trade/add', requireToken, async (req,res) => {
-    const {type,strike,premium,lots,sl,notes}=req.body;
+    const {type,strike,premium,lots,sl,notes,suggestedEntry}=req.body;
     const ist=getIST();
     const time=`${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
+
+    // ── Slippage tracking ────────────────────────────────────────────────────
+    // suggestedEntry (if sent) is the AI Suggestion Card's entry premium for
+    // this exact strike+type at the moment the trader clicked "log trade" —
+    // frontend caches the last fetched suggestion and only forwards it when
+    // strike+type match, so this is never a mismatched comparison. Everything
+    // downstream (Entry/Target/SL/tracked win-rate) is based on this
+    // theoretical premium, but the ACTUAL fill can differ, especially on thin
+    // strikes — this is what the audit flagged as unmeasured.
+    const suggEntry = (suggestedEntry != null && suggestedEntry > 0) ? parseFloat(suggestedEntry) : null;
+    const actualPremium = parseFloat(premium);
+    const slippage = suggEntry != null ? parseFloat((actualPremium - suggEntry).toFixed(2)) : null;
+    const slippagePct = (suggEntry != null && suggEntry > 0) ? parseFloat(((slippage / suggEntry) * 100).toFixed(1)) : null;
 
     // ── Persist to DB first (if available) so trade survives a Railway restart ──
     let dbId = null;
     if (dbPool) {
         try {
             const r = await dbPool.query(
-                `INSERT INTO journal_trades (time,type,strike,premium,lots,sl,notes,nifty_entry,status)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN') RETURNING id`,
-                [time, type, parseInt(strike), parseFloat(premium),
+                `INSERT INTO journal_trades (time,type,strike,premium,lots,sl,notes,nifty_entry,status,suggested_entry,slippage,slippage_pct)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,$10,$11) RETURNING id`,
+                [time, type, parseInt(strike), actualPremium,
                  parseInt(lots)||1, parseFloat(sl)||0, notes||'',
-                 marketState.nifty||0]
+                 marketState.nifty||0, suggEntry, slippage, slippagePct]
             );
             dbId = r.rows[0].id;
         } catch(e) {
@@ -6564,14 +6643,15 @@ app.post('/api/trade/add', requireToken, async (req,res) => {
     const trade = {
         id: dbId ?? tradeCounter++,   // use DB id when available
         time, type, strike:parseInt(strike),
-        premium:parseFloat(premium), lots:parseInt(lots)||1,
+        premium:actualPremium, lots:parseInt(lots)||1,
         sl:parseFloat(sl)||0, exitPremium:null, pnl:null,
         status:'OPEN', notes:notes||'',
         niftyAtEntry:marketState.nifty,
-        niftyCurrent:marketState.nifty, niftyMove:0
+        niftyCurrent:marketState.nifty, niftyMove:0,
+        suggestedEntry: suggEntry, slippage, slippagePct
     };
     trades.push(trade);
-    console.log(`📔 Trade saved: ${type} ${strike} @₹${premium} × ${parseInt(lots)||1}lots (DB id:${dbId??'none'})`);
+    console.log(`📔 Trade saved: ${type} ${strike} @₹${premium} × ${parseInt(lots)||1}lots (DB id:${dbId??'none'})${slippage != null ? ` | slippage: ${slippage>=0?'+':''}₹${slippage} (${slippagePct}%)` : ''}`);
     res.json({success:true, trade});
 });
 
@@ -6937,6 +7017,9 @@ async function initializeLiveData() {
                     exitTime     : row.exit_time || null,
                     pnl          : row.pnl ? parseFloat(row.pnl) : null,
                     status       : row.status || 'OPEN',
+                    suggestedEntry: row.suggested_entry != null ? parseFloat(row.suggested_entry) : null,
+                    slippage      : row.slippage != null ? parseFloat(row.slippage) : null,
+                    slippagePct   : row.slippage_pct != null ? parseFloat(row.slippage_pct) : null,
                 });
                 if (row.id >= tradeCounter) tradeCounter = row.id + 1;
             }

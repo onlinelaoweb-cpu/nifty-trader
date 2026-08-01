@@ -1073,8 +1073,13 @@ function parsePCR(data, spotPrice) {
         }
         normalizedRecords.push({
             strikePrice: row.strikePrice,
-            CE: { openInterest: ce?.openInterest || 0, lastPrice: ce?.lastPrice || 0 },
-            PE: { openInterest: pe?.openInterest || 0, lastPrice: pe?.lastPrice || 0 },
+            // NEW: totalTradedVolume captured alongside OI — needed for the
+            // Liquidity/OI filter in pickStrikeAndPremium() so a suggested
+            // strike can be checked for "is this actually fillable today",
+            // not just "does it have open interest" (OI can be large but
+            // stale/inactive; volume tells you if it's trading right now).
+            CE: { openInterest: ce?.openInterest || 0, lastPrice: ce?.lastPrice || 0, volume: ce?.totalTradedVolume || 0 },
+            PE: { openInterest: pe?.openInterest || 0, lastPrice: pe?.lastPrice || 0, volume: pe?.totalTradedVolume || 0 },
         });
     }
 
@@ -1315,14 +1320,17 @@ async function fetchPCRFromAngel(spotPrice) {
             const ltp = parseFloat(item.lastPrice ?? item.ltp ?? item.closePrice ?? 0);
             // OI change field variants: netChange / changeinOpenInterest / oiChange
             const oiChg = parseInt(item.netChange ?? item.changeinOpenInterest ?? item.oiChange ?? 0);
+            // Volume field variants: tradeVolume / volume / tradedVolume — captured
+            // for the Liquidity/OI filter (same purpose as NSE/Fyers sources above).
+            const vol = parseInt(item.tradeVolume ?? item.volume ?? item.tradedVolume ?? 0);
             const { strike, optionType } = info;
             if (!strikeRows[strike]) strikeRows[strike] = { strikePrice: strike };
             if (optionType === 'CE') {
-                strikeRows[strike].CE = { openInterest: oi, lastPrice: ltp, changeinOpenInterest: oiChg };
+                strikeRows[strike].CE = { openInterest: oi, lastPrice: ltp, changeinOpenInterest: oiChg, volume: vol };
                 totalCeOI += oi;
                 if (oi > ceWall) { ceWall = oi; ceWallStrike = strike; }
             } else {
-                strikeRows[strike].PE = { openInterest: oi, lastPrice: ltp, changeinOpenInterest: oiChg };
+                strikeRows[strike].PE = { openInterest: oi, lastPrice: ltp, changeinOpenInterest: oiChg, volume: vol };
                 totalPeOI += oi;
                 if (oi > peWall) { peWall = oi; peWallStrike = strike; }
             }
@@ -1557,6 +1565,10 @@ async function fetchPCRFromFyers(spotPrice, opts = {}) {
             const peOIch = Number(sides.PE?.oich || 0);
             const ceLtp  = Number(sides.CE?.ltp  || 0);
             const peLtp  = Number(sides.PE?.ltp  || 0);
+            // NEW: Fyers options-chain-v3 rows include a `volume` field
+            // (contracts traded today) — captured for the Liquidity/OI filter.
+            const ceVol  = Number(sides.CE?.volume || 0);
+            const peVol  = Number(sides.PE?.volume || 0);
 
             totalCeOI += ceOI;
             totalPeOI += peOI;
@@ -1570,8 +1582,8 @@ async function fetchPCRFromFyers(spotPrice, opts = {}) {
 
             records.push({
                 strikePrice : strike,
-                CE          : { openInterest: ceOI, changeinOpenInterest: ceOIch, lastPrice: ceLtp },
-                PE          : { openInterest: peOI, changeinOpenInterest: peOIch, lastPrice: peLtp },
+                CE          : { openInterest: ceOI, changeinOpenInterest: ceOIch, lastPrice: ceLtp, volume: ceVol },
+                PE          : { openInterest: peOI, changeinOpenInterest: peOIch, lastPrice: peLtp, volume: peVol },
             });
         }
 
