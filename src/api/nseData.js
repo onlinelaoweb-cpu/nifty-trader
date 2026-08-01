@@ -81,12 +81,13 @@ const OC_URL = OC_URLS[0];  // kept for backward compat
 const FIIDII_URL = `${BASE_URL}/api/fiidiiTradeReact`;
 const TIMEOUT_MS = 12_000;   // 12s — enough for slow NSE responses from Railway; retry handles timeouts
 
-const PCR_INTERVAL_MS    =  60 * 1000;       // re-fetch PCR every 60s (was 3 min — 3-min gap let
-                                              // fast NIFTY option premium spikes touch target/SL and
-                                              // revert without ever being seen by updateSignalPerformance(),
-                                              // undercounting accuracy on expiry-day-style moves. Fyers
-                                              // rate limits are ~10/sec, ~200/min, ~100k/day — at 60s this
-                                              // is ~375 calls/day, well within all tiers.)
+const PCR_INTERVAL_MS    =  30 * 1000;       // re-fetch PCR every 30s (was 60s, was 3 min before that —
+                                              // 3-min gap let fast NIFTY option premium spikes touch
+                                              // target/SL and revert without ever being seen by
+                                              // updateSignalPerformance(), undercounting accuracy on
+                                              // expiry-day-style moves. Tightened further 1 Aug 2026:
+                                              // Fyers rate limits are ~10/sec, ~200/min, ~100k/day — at
+                                              // 30s this is ~750 calls/day, still well within all tiers.)
 const FIIDII_INTERVAL_MS = 15 * 60 * 1000;   // re-fetch FII/DII every 15 min
 const COOKIE_TTL_MS      = 15 * 60 * 1000;   // proactive cookie re-warm
 

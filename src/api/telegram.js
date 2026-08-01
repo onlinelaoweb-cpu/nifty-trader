@@ -178,84 +178,118 @@ async function sendSignalAlert(state, prevSignal, strikeData = null) {
             : '⏳ Strike data loading (VIX pending) — use ATM, SL -20%';
     }
 
-    const msg = `
-${emoji} <b>SIGNAL CHANGED!</b>
-━━━━━━━━━━━━━━━━━━
-📊 <b>NIFTY:</b> ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}
-${state.change >= 0 ? '▲' : '▼'} ${Math.abs(state.change).toFixed(2)} (${state.changePct.toFixed(2)}%)
+    // ── REDESIGN (1 Aug 2026, per user request) — style guide for this and
+    // every other message builder in this file:
+    //   1. First line = what to do, in plain words. No jargon before it.
+    //   2. Trade card (Entry/Target/SL) comes right after, still prominent.
+    //   3. Engine Checklist — nobody reads 20 pass/fail lines on a phone.
+    //      Condensed to a one-line pass count + ONLY the failing items,
+    //      same pattern sendMTFAlert's "blocked by" line already used —
+    //      applying it here too for consistency across message types.
+    //   4. Everything technical (POC, Delta, Greeks, PCR, News, regime...)
+    //      moves into one labeled "🔍 Details" block below the actionable
+    //      part, each line given a plain-language tag alongside the number
+    //      — nothing removed, just explained and reordered.
+    // Signal-change context — only shown when we actually know the previous
+    // signal and it's different, so the reader knows this is a flip, not a
+    // routine refresh (prevSignal was already passed in, just wasn't used
+    // in the message before).
+    const changedFromLine = (prevSignal && prevSignal !== state.signal)
+        ? `<i>(changed from ${prevSignal})</i>\n` : '';
 
-⚡ <b>SIGNAL: ${state.signal}</b>
-📈 Confidence: ${state.confidence}%${state.tradeQuality ? ` | Grade: ${state.tradeQuality.grade}${state.tradeQuality.stars ? ` ${state.tradeQuality.stars}` : ''} (${state.tradeQuality.sizeHint})` : ''}
-${(() => {
-    // ── Engine Checklist — highest-priority feature from both audits ────────
-    // "Immediately users know why." Directly reflects qualityGate, so it can
-    // never say something different from what actually gated this signal.
-    const cl = state.engineChecklist;
-    if (!cl || !cl.items?.length) return '';
-    const lines = cl.items.map(i => `${i.passed ? '✅' : '❌'} ${i.label}`).join('\n');
-    return `\n📋 <b>ENGINE CHECKLIST</b>\n${lines}\n<b>${cl.summary}</b>\n`;
-})()}${(() => {
-    // ── Probability Meter — requested 22 Jul and 25 Jul audits: "Historical
-    // win rate of similar setups." Real signal_performance data, grouped by
-    // same direction + same dyn_zone as THIS signal — not an invented number.
-    // Stays honest when there isn't enough history yet rather than showing a
-    // misleading "100%" off 1-2 samples.
-    const st = state.similarSetupStats;
-    if (!st) return '';
-    if (!st.enough) return `\n📊 <b>Probability Meter:</b> not enough history yet for this exact setup (${st.total} sample${st.total === 1 ? '' : 's'})\n`;
-    return `\n📊 <b>Probability Meter:</b> ${st.winRate}% — similar setups historically (${st.wins} of ${st.total})\n`;
-})()}
+    const gradeLabel = state.tradeQuality
+        ? ` — Grade ${state.tradeQuality.grade}${state.tradeQuality.stars ? ` ${state.tradeQuality.stars}` : ''} (${state.tradeQuality.sizeHint})`
+        : '';
+
+    const checklistLine = (() => {
+        const cl = state.engineChecklist;
+        if (!cl || !cl.items?.length) return '';
+        const failing = cl.items.filter(i => !i.passed);
+        return failing.length
+            ? `🔒 <b>Blocked by:</b> ${failing.map(i => i.label).join(', ')} (${cl.summary})`
+            : `✅ <b>All engine checks passed</b> (${cl.summary})`;
+    })();
+
+    const probLine = (() => {
+        const st = state.similarSetupStats;
+        if (!st) return '';
+        if (!st.enough) return `📊 Probability: not enough history yet for this setup (${st.total} sample${st.total === 1 ? '' : 's'})`;
+        return `📊 Probability: <b>${st.winRate}%</b> win rate historically (${st.wins}/${st.total} similar setups)`;
+    })();
+
+    // ── Details block — same underlying fields as before, plain-language
+    // tag added next to each so a number alone never has to speak for itself.
+    const detailLines = [];
+    if (state.poc?.poc) {
+        const pocPlain = { AT_POC: 'price at fair value', ABOVE_POC: 'price above fair value', BELOW_POC: 'price below fair value' }[state.poc.signal] || '';
+        detailLines.push(`${pocEmoji} POC ${state.poc.poc} (VAH ${state.poc.vah} / VAL ${state.poc.val})${pocPlain ? ` — ${pocPlain}` : ''}`);
+    } else {
+        detailLines.push('⏳ POC — warming up');
+    }
+    if (state.delta?.deltaPct !== undefined) {
+        const deltaPlain = state.delta.signal === 'BULLISH' ? 'buyers in control' : state.delta.signal === 'BEARISH' ? 'sellers in control' : 'balanced';
+        detailLines.push(`${deltaEmoji} Delta ${state.delta.deltaPct > 0 ? '+' : ''}${state.delta.deltaPct}% — ${deltaPlain}${state.delta.divergence ? ' ⚠️ reversal warning' : ''}${state.delta.source === 'websocket' ? ' [live]' : ' [proxy]'}`);
+    } else {
+        detailLines.push('⏳ Delta — warming up');
+    }
+    if (state.orb?.label) detailLines.push(state.orb.label);
+    if (state.dynamicLevels?.available) detailLines.push(`📐 ${state.dynamicLevels.label}`);
+    if (state.premarketGap?.available) detailLines.push(state.premarketGap.label);
+    if (state.eventCountdown?.available && state.eventCountdown.withinCautionWindow) detailLines.push(state.eventCountdown.label);
+    if (state.newsSentiment?.available) detailLines.push(state.newsSentiment.label);
+    if (state.smartMoney && state.smartMoney.bias !== 'NEUTRAL') detailLines.push(state.smartMoney.label);
+    if (state.physicsOfTrading?.bosChoch?.event && state.physicsOfTrading.bosChoch.event !== 'NONE') detailLines.push(state.physicsOfTrading.bosChoch.label);
+    if (state.optionGreeks?.available) detailLines.push(state.optionGreeks.label);
+    if (state.marketRegime && !state.marketRegime.tags?.includes('NORMAL')) detailLines.push(state.marketRegime.label);
+    if (state.dataHealth && !state.dataHealth.healthy) detailLines.push(state.dataHealth.label);
+    detailLines.push(mtfInfo.replace(/^🔥 /, '🔥 ').replace(/^⚠️ /, '⚠️ '));
+    if (state.marketHealth) detailLines.push(`📋 Market Health: ${state.marketHealth.total}/100 — ${state.marketHealth.label}`);
+    if (state.momentumDecayWarning) detailLines.push(state.momentumDecayWarning);
+    {
+        // ── Trend Conviction diagnostic — audit trail for contradiction cases ──
+        // Added after a Friday session where a BUY PUT fired while VWAP/Delta/ORB/
+        // 15m all looked bullish — impossible to verify after the fact from the
+        // Telegram message alone whether Trend Conviction actually evaluated this
+        // as opposing (and was overridden) or genuinely didn't reach the 4/6
+        // threshold at that tick. This line makes it directly checkable next time
+        // instead of requiring after-the-fact inference from other message fields.
+        const tc = state.trendConviction;
+        if (tc && tc.active) {
+            const oppose = (tc.active === 'BEARISH' && state.signal === 'BUY CALL') ||
+                           (tc.active === 'BULLISH' && state.signal === 'BUY PUT');
+            if (oppose) {
+                const conds = tc.active === 'BEARISH' ? tc.bearConditions : tc.bullConditions;
+                // BUG FIX (1 Aug, per Bug-1 audit): was interpolating the raw internal
+                // `convictionOk` variable directly into the user-facing message. This
+                // printed literal "undefined" whenever marketState.qualityGate was one
+                // of the reduced fallback shapes (e.g. the Liquidity Sweep Reversal /
+                // theta-zone exception path, which doesn't set a convictionOk key at
+                // all) — confirmed from production Telegram messages at 2:36pm and
+                // 3:17pm on 31 Jul. Now shows a clean, always-defined label instead.
+                const convictionGateLabel = state.qualityGate?.convictionOk === undefined
+                    ? 'N/A (reduced gate set active)'
+                    : (state.qualityGate.convictionOk ? 'PASSED (overridden)' : 'BLOCKED');
+                detailLines.push(`🔍 Trend Conviction: ${tc.active} (${conds.length}/6: ${conds.join(', ')}) — Gate: ${convictionGateLabel}`);
+            }
+        }
+    }
+    const detailsBlock = detailLines.length ? `🔍 <b>Details</b>\n${detailLines.join('\n')}\n━━━━━━━━━━━━━━━━━━\n` : '';
+
+    const contextLine = [rsiInfo, vixInfo, pcrInfo].join(' · ');
+
+    const msg = `
+${emoji} <b>${state.signal}${gradeLabel}</b>
+${changedFromLine}📈 Confidence: ${state.confidence}%
+━━━━━━━━━━━━━━━━━━
+📊 NIFTY: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})} ${state.change >= 0 ? '▲' : '▼'} ${Math.abs(state.change).toFixed(2)} (${state.changePct.toFixed(2)}%)
+${contextLine}${volInfo ? '\n' + volInfo : ''}
 🎯 Strike Zone: ${strikeInfo}
-━━━━━━━━━━━━━━━━━━
-${rsiInfo}
-${vwapInfo}
-${vixInfo}
-${pcrInfo}${volInfo ? '\n' + volInfo : ''}
-━━━━━━━━━━━━━━━━━━
-${pocInfo}
-${deltaInfo}
-${state.orb?.label ? '\n' + state.orb.label : ''}
-${state.dynamicLevels?.available ? `\n📐 ${state.dynamicLevels.label}` : ''}
-${state.premarketGap?.available ? `\n${state.premarketGap.label}` : ''}
-${(state.eventCountdown?.available && state.eventCountdown.withinCautionWindow) ? `\n${state.eventCountdown.label}` : ''}
-${state.newsSentiment?.available ? `\n${state.newsSentiment.label}` : ''}
-${state.smartMoney && state.smartMoney.bias !== 'NEUTRAL' ? `\n${state.smartMoney.label}` : ''}
-${state.physicsOfTrading?.bosChoch?.event && state.physicsOfTrading.bosChoch.event !== 'NONE' ? `\n${state.physicsOfTrading.bosChoch.label}` : ''}
-${state.optionGreeks?.available ? `\n${state.optionGreeks.label}` : ''}
-${state.marketRegime && !state.marketRegime.tags?.includes('NORMAL') ? `\n${state.marketRegime.label}` : ''}
-${state.dataHealth && !state.dataHealth.healthy ? `\n${state.dataHealth.label}` : ''}
 ━━━━━━━━━━━━━━━━━━
 ${strikeBlock}
 ━━━━━━━━━━━━━━━━━━
-${mtfInfo}${state.marketHealth ? `\n📋 Market Health: ${state.marketHealth.total}/100 — ${state.marketHealth.label}` : ''}${state.momentumDecayWarning ? `\n${state.momentumDecayWarning}` : ''}
-${(() => {
-    // ── Trend Conviction diagnostic — audit trail for contradiction cases ──
-    // Added after a Friday session where a BUY PUT fired while VWAP/Delta/ORB/
-    // 15m all looked bullish — impossible to verify after the fact from the
-    // Telegram message alone whether Trend Conviction actually evaluated this
-    // as opposing (and was overridden) or genuinely didn't reach the 4/6
-    // threshold at that tick. This line makes it directly checkable next time
-    // instead of requiring after-the-fact inference from other message fields.
-    const tc = state.trendConviction;
-    if (!tc || !tc.active) return '';
-    const oppose = (tc.active === 'BEARISH' && state.signal === 'BUY CALL') ||
-                   (tc.active === 'BULLISH' && state.signal === 'BUY PUT');
-    if (!oppose) return '';
-    const conds = tc.active === 'BEARISH' ? tc.bearConditions : tc.bullConditions;
-    // BUG FIX (1 Aug, per Bug-1 audit): was interpolating the raw internal
-    // `convictionOk` variable directly into the user-facing message. This
-    // printed literal "undefined" whenever marketState.qualityGate was one
-    // of the reduced fallback shapes (e.g. the Liquidity Sweep Reversal /
-    // theta-zone exception path, which doesn't set a convictionOk key at
-    // all) — confirmed from production Telegram messages at 2:36pm and
-    // 3:17pm on 31 Jul. Now shows a clean, always-defined label instead.
-    const convictionGateLabel = state.qualityGate?.convictionOk === undefined
-        ? 'N/A (reduced gate set active)'
-        : (state.qualityGate.convictionOk ? 'PASSED (overridden)' : 'BLOCKED');
-    return `\n🔍 Trend Conviction: ${tc.active} (${conds.length}/6: ${conds.join(', ')}) — Gate: ${convictionGateLabel}`;
-})()}
+${checklistLine}${probLine ? '\n' + probLine : ''}
 ━━━━━━━━━━━━━━━━━━
-⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
+${detailsBlock}⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
 <i>VardaanNifty AI</i>
 `.trim();
 
@@ -356,12 +390,14 @@ async function sendMTFAlert(state, strikeData = null) {
             : '';
 
         const pocData  = state.poc;
+        const pocPlainMap = { AT_POC: 'price at fair value', ABOVE_POC: 'price above fair value', BELOW_POC: 'price below fair value' };
         const pocLine  = pocData?.poc
-            ? `POC:${pocData.poc} | VAH:${pocData.vah} | VAL:${pocData.val} (${pocData.signal.replace('_',' ')})`
+            ? `POC ${pocData.poc} (VAH ${pocData.vah} / VAL ${pocData.val}) — ${pocPlainMap[pocData.signal] || pocData.signal.replace('_',' ')}`
             : '';
         const deltaData = state.delta;
+        const deltaPlain = deltaData?.signal === 'BULLISH' ? 'buyers in control' : deltaData?.signal === 'BEARISH' ? 'sellers in control' : 'balanced';
         const deltaLine = deltaData?.deltaPct !== undefined
-            ? `Delta:${deltaData.deltaPct > 0 ? '+' : ''}${deltaData.deltaPct}% (${deltaData.signal})${deltaData.divergence ? ' — REVERSAL WARNING' : ''}`
+            ? `Delta ${deltaData.deltaPct > 0 ? '+' : ''}${deltaData.deltaPct}% — ${deltaPlain}${deltaData.divergence ? ' ⚠️ reversal warning' : ''}`
             : '';
         const rvolLine = state.volumeRVOL?.reliable
             ? `📊 Volume: ${state.volumeRVOL.rvol}x average${state.volumeRVOL.rvol >= 2.0 ? ' — spike ⚡' : ''}`
@@ -737,6 +773,8 @@ RSI: ${rec.entryRSI} → ${currentRSI}
 ${confLine}
 Price hasn't hit SL or target — this isn't an auto-exit. Just a heads-up to reassess: book partial, tighten SL, or hold with awareness.
 ━━━━━━━━━━━━━━━━━━
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
+<i>VardaanNifty AI</i>
 `.trim();
     await sendMessage(msg);
 }
@@ -762,6 +800,8 @@ Delta and RSI have both moved back toward neutral since entry.
 ${confLine}
 This isn't a target hit or an auto-exit. But with this much R:R already banked and conviction cooling, booking part of the position now is usually smarter than waiting for a fixed price target that may not come.
 ━━━━━━━━━━━━━━━━━━
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
+<i>VardaanNifty AI</i>
 `.trim();
     await sendMessage(msg);
 }
