@@ -2335,6 +2335,23 @@ function combineSignals(indicators) {
                       && qualityGate.convictionOk;              // stacked structural trend opposes signal = block
                       // contradictionOk / sequenceAligned intentionally NOT included — informational only, see notes above
 
+    // ── BOS/CHOCH — MOVED HERE (staleness fix, 1 Aug, same class as Delta/POC) ─
+    // Must run BEFORE the ALL_FACTORS_HARD_GATE block below, not ~300 lines
+    // after it. qualityGate.bosChochAligned (in that block) reads
+    // marketState.physicsOfTrading.bosChoch — but the fresh value used to be
+    // written later in this same combineSignals() call (see the confidence-
+    // nudge block further down, kept in place — it just reads the already-
+    // computed value now instead of recomputing it). Gate was therefore
+    // evaluating the PREVIOUS tick's structure-break state.
+    let bosChoch = { event: 'NONE', label: 'BOS/CHOCH — awaiting data' };
+    try {
+        bosChoch = detectBOSCHOCH(getSessionCandles(), 30);
+        marketState.physicsOfTrading = marketState.physicsOfTrading || {};
+        marketState.physicsOfTrading.bosChoch = bosChoch;
+    } catch (e) {
+        console.warn('[BOS/CHOCH] error:', e.message);
+    }
+
     // ── EXPERIMENT (July 23): ALL_FACTORS_HARD_GATE ──────────────────────────
     // User request: wire every currently-informational factor into the hard
     // gate as an additional AND-condition, accept far fewer signals/day (1-2)
@@ -2380,8 +2397,15 @@ function combineSignals(indicators) {
             : !(bullish  && gapZone === 'GAP_DOWN')
                 && !(!bullish && gapZone === 'GAP_UP');
 
-        const regimeTags = marketState.marketRegime?.tags || [];
-        qualityGate.regimeClear = !regimeTags.includes('RANGE');
+        // regimeClear only ever checks the RANGE tag, which depends solely on
+        // dayType.rangeProbability — NOT on vixCapped/eventCaution/gapDay (the
+        // other inputs computeMarketRegime() needs). Compute dayType fresh
+        // right here instead of reading marketState.marketRegime (stale —
+        // see note above computeDayType() call for why the full regime object
+        // can't be moved this early). dayType's own inputs (adx/orb/momentum/
+        // mtf) are already fresh at this point in combineSignals().
+        const gateDayType = computeDayType();
+        qualityGate.regimeClear = !(gateDayType.rangeProbability >= 60);
 
         const bosEvent = marketState.physicsOfTrading?.bosChoch?.event;
         qualityGate.bosChochAligned = !bosEvent || bosEvent === 'NONE'
@@ -2628,7 +2652,7 @@ function combineSignals(indicators) {
         }
     }
 
-    // ── BOS / CHOCH — Smart Money Concepts structure break ────────────────────
+    // ── BOS / CHOCH confidence nudge — Smart Money Concepts structure break ───
     // ChatGPT audit ("Smart Money Tracker"): track Break of Structure / Change
     // of Character. CHOCH catches the exact price level where a counter-trend
     // move first violates the established swing structure — a sharper,
@@ -2655,12 +2679,12 @@ function combineSignals(indicators) {
     // Display now updates EVERY cycle unconditionally; only the confidence
     // nudge below stays gated to signal !== 'WAIT' (correctly, since that's
     // only meaningful when there's an actual signal to adjust).
+    //
+    // BUG FIX #3 (staleness, 1 Aug): computation itself moved earlier (before
+    // the ALL_FACTORS_HARD_GATE block) so the gate isn't reading last tick's
+    // value — see that block for details. This spot now just reuses `bosChoch`
+    // instead of recomputing it.
     try {
-        const bosChochCandles = getSessionCandles();
-        const bosChoch = detectBOSCHOCH(bosChochCandles, 30);
-        marketState.physicsOfTrading = marketState.physicsOfTrading || {};
-        marketState.physicsOfTrading.bosChoch = bosChoch;
-
         if (signal !== 'WAIT') {
             if (signal === 'BUY CALL' && bosChoch.event === 'BOS_BULLISH') {
                 confidence = Math.min(confidence + 5, 98);
@@ -4002,6 +4026,12 @@ async function updatePrice(price, change, changePct, source) {
     marketState.smartMoney = computeSmartMoneyBias();
     // (POC and Delta now computed earlier, before combineSignals() — see fixes above.)
     // ── Trend Day vs Range Day + Trap Zone — informational strategy guidance ──
+    // NOTE: regimeClear (the hard-gate check) no longer reads this — it uses
+    // its own earlier dayType computation inside combineSignals() so it can't
+    // go stale (see "gateDayType" fix above). This call is what the frontend/
+    // Telegram display actually show, computed here (after tradeQuality) since
+    // the full marketRegime object also needs vixCapped, which only exists
+    // once tradeQuality (derived from `signal`) is known.
     try { marketState.dayType  = computeDayType();  } catch(e) { console.warn('[DayType] error:', e.message); }
     try { marketState.trapZone = computeTrapZone(); } catch(e) { console.warn('[TrapZone] error:', e.message); }
     try { marketState.dataHealth = computeDataHealth(); } catch(e) { console.warn('[DataHealth] error:', e.message); }

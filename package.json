@@ -14,7 +14,6 @@
     "otpauth": "^9.3.6",
     "pg": "^8.12.0",
     "smartapi-javascript": "^1.0.23",
-    "socket.io": "^4.7.5",
     "technicalindicators": "^3.1.0",
     "ws": "^8.17.0"
   }
