@@ -376,13 +376,24 @@ ${rvolLine}
 ${lqLine}${state.momentumDecayWarning ? `\n${state.momentumDecayWarning}` : ''}`;
     }
 
+    // NOTE (fixed 1 Aug, found via video/audit review): levelsBlock below
+    // shows Entry/Target/SL/AI-Coach identically whether mainConfirms is
+    // true or false. Someone skimming past verdictLine could see a full
+    // actionable-looking trade card on a WATCH-ONLY/WEAK/LOW-CONVICTION
+    // alert and mistake it for a real signal. Keeping the numbers (useful
+    // reference for main-engine confirmation later) but making it visually
+    // unmissable that this isn't a trade to act on yet.
+    const referenceOnlyNote = !mainConfirms
+        ? `⚠️ <b>REFERENCE ONLY — main engine has NOT confirmed this. Do not enter on these numbers alone.</b>\n`
+        : '';
+
     const msg = `
 ${verdictLine}${blockedByLine}
 ━━━━━━━━━━━━━━━━━━
 ${alignTitle}
 ${emoji} <b>${state.mtf.signal}</b> — ${state.mtf.strength} | NIFTY: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}${rangeWarning}
 ━━━━━━━━━━━━━━━━━━
-${levelsBlock}
+${referenceOnlyNote}${levelsBlock}
 ━━━━━━━━━━━━━━━━━━${detailsBlock}
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
 <i>VardaanNifty AI</i>
