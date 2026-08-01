@@ -3520,31 +3520,34 @@ async function checkTelegramAlerts(newSignal) {
         }, 6*60*60*1000); // 6 hours after close = ~21:30 IST
         return;
     }
-    // ── BTST/STBT Telegram alert — fires once in 3:00–3:20 window if signal passed ──
-    if (!btstSentToday && marketState.btst?.passed) {
-        btstSentToday = true;
-        const b = marketState.btst;
-        const emoji = b.type === 'BTST' ? '🟢' : '🔴';
-        const msg = [
-            `${emoji} *${b.type} SIGNAL DETECTED*`,
-            ``,
-            `📌 *${b.signal}* | Strike: *${b.strike}*`,
-            `💪 Confidence: ${b.confidence}%`,
-            `📊 PCR: ${b.pcr ?? '--'} | VIX: ${b.vix ?? '--'}`,
-            `📈 15m: ${b.mtf15m} | 1h: ${b.mtf1h}`,
-            `🌍 Global: ${b.globalBias}`,
-            ``,
-            `⏰ Window: ${b.window}`,
-            `🎯 Exit: ${b.exitTarget}`,
-            `⚠️ Risk: ${b.risk}`,
-            ``,
-            `_Informational only — verify manually before taking position_`
-        ].join('\n');
-        try {
-            await sendRawMessage(msg);
-            console.log(`🌙 [BTST] Telegram alert sent — ${b.type} ${b.signal} ${b.strike}`);
-        } catch(e) { console.error('[BTST] Telegram error:', e.message); }
-    }
+    // ── BTST/STBT Telegram alert — DISABLED (1 Aug 2026, see evaluateBTST() call
+    // site above for reasoning). marketState.btst stays null now that evaluateBTST()
+    // doesn't run, so this block is already a no-op — left in place, commented,
+    // so it's easy to re-enable alongside evaluateBTST() if this is revisited.
+    // if (!btstSentToday && marketState.btst?.passed) {
+    //     btstSentToday = true;
+    //     const b = marketState.btst;
+    //     const emoji = b.type === 'BTST' ? '🟢' : '🔴';
+    //     const msg = [
+    //         `${emoji} *${b.type} SIGNAL DETECTED*`,
+    //         ``,
+    //         `📌 *${b.signal}* | Strike: *${b.strike}*`,
+    //         `💪 Confidence: ${b.confidence}%`,
+    //         `📊 PCR: ${b.pcr ?? '--'} | VIX: ${b.vix ?? '--'}`,
+    //         `📈 15m: ${b.mtf15m} | 1h: ${b.mtf1h}`,
+    //         `🌍 Global: ${b.globalBias}`,
+    //         ``,
+    //         `⏰ Window: ${b.window}`,
+    //         `🎯 Exit: ${b.exitTarget}`,
+    //         `⚠️ Risk: ${b.risk}`,
+    //         ``,
+    //         `_Informational only — verify manually before taking position_`
+    //     ].join('\n');
+    //     try {
+    //         await sendRawMessage(msg);
+    //         console.log(`🌙 [BTST] Telegram alert sent — ${b.type} ${b.signal} ${b.strike}`);
+    //     } catch(e) { console.error('[BTST] Telegram error:', e.message); }
+    // }
     // Gate signal-changed alerts to market hours (9:15–15:30) only.
     // On container restart Yahoo data can make TFs look aligned instantly,
     // causing spurious SIGNAL CHANGED alerts at 3–8 AM before market opens.
@@ -4039,7 +4042,13 @@ async function updatePrice(price, change, changePct, source) {
     try { marketState.marketRegime = computeMarketRegime(); } catch(e) { console.warn('[MarketRegime] error:', e.message); }
     try { marketState.confidenceBreakdown = computeConfidenceBreakdown(); } catch(e) { console.warn('[ConfBreakdown] error:', e.message); }
     if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%) | POC:${marketState.poc?.poc??'--'} Delta:${marketState.delta?.deltaPct??'--'}%`);
-    evaluateBTST();
+    // BTST/STBT evaluation DISABLED (1 Aug 2026, explicit user decision) — user
+    // confirmed they never act on these alerts, and unlike Main Engine/MTF Tracker
+    // signals, BTST/STBT outcomes were never wired into signal_performance, so
+    // there was no way to verify it actually works before this decision. Kept
+    // (not deleted) in case outcome tracking is added later and it's revisited —
+    // same treatment as the Spread Strategy disable above.
+    // evaluateBTST();
     await checkTelegramAlerts(signal);
     // ── Auto-log every fresh BUY CALL / BUY PUT transition to signal_log ─────
     // Runs silently — does NOT block the signal pipeline. Captures full snapshot

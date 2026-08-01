@@ -2276,7 +2276,11 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
       </div>
     </div>
 
-    <!-- BTST / STBT Card — visible only in 3:00–3:20 PM window -->
+    <!-- BTST / STBT Card — DISABLED (1 Aug 2026, see evaluateBTST() in server.js).
+    Backend no longer sets marketState.btst (always null), so renderBTST() below
+    always takes the "no data" branch and this card stays hidden (.btst-wrap has
+    no .visible class added). Markup kept, not deleted, in case this is
+    revisited after outcome tracking is added — same pattern as spread-section. -->
     <div class="btst-wrap" id="btst-wrap">
       <div class="btst-card none" id="btst-card">
         <div class="btst-label">🌙 BTST / STBT WATCH</div>
