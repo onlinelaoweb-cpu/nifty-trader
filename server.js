@@ -31,7 +31,7 @@ const { fetchAdvanceDecline,
 const { calculateSRLevels }         = require('./src/api/levels');
 const { computeDynamicLevels, classifyDynamicLevels } = require('./src/api/dynamicLevels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo, detectBOSCHOCH } = require('./src/api/physicsOfTrading');
-const { computeOptionGreeksDashboard } = require('./src/api/optionGreeks');
+const { computeOptionGreeksDashboard, calcGreeks } = require('./src/api/optionGreeks');
 const { getRenkoAnalysis } = require('./src/api/renko');
 // DISABLED (per decision to stay pure option-buyer, no selling/spread strategies):
 // const { suggestSpreadStrategy } = require('./src/api/spreadStrategy');
@@ -60,6 +60,7 @@ const {
     sendCloseSummary, sendExitAlert, sendMomentumExitWarning,
     sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured,
     sendScalpAlert, sendSignalTimeline, sendPartialProfitAlert,
+    sendWeeklyGateReview, answerCallbackQuery, clearMessageButtons, setTelegramWebhook,
 }                                   = require('./src/api/telegram');
 
 const app    = express();
@@ -332,6 +333,49 @@ let sessionOpenVix = null;
 // ── Daily signal counters — for the EOD Telegram digest ─────────────────────
 let dailySignalCounts = { main: 0, mtfStrong: 0, mtfModerate: 0, mtfWeak: 0 };
 let dailySignalCountsDirty = false;  // set true on every increment, cleared by the periodic DB flush
+// ── Gate-block counters — for Weekly Self-Review (1 Aug audit) ──────────────
+// Counts how often each individual Engine Checklist item was the one that
+// evaluated false, so we can eventually answer "which gate blocks the most
+// trades" from evidence instead of a gut feeling. Only counted when there was
+// an actual directional read (rawSignal !== 'WAIT') to potentially block —
+// counting during WAIT cycles would just measure "how often the market is
+// flat," not "how often a gate stopped a real signal." Must stay in sync with
+// the core/extra key lists inside buildEngineChecklist() below.
+const GATE_CHECK_KEYS = [
+    'mtfAligned','deltaAligned','adxTrend','vixSafe','rsiClean','safeWindow',
+    'srClear','physicsLaw1','physicsLaw3','pocClear','convictionOk',
+    'contradictionOk','sequenceAligned','breadthAligned','dynLevelsClear',
+    'renkoAligned','gapClear','regimeClear','bosChochAligned','newsClear',
+];
+// Must stay in sync with the label text inside buildEngineChecklist() below —
+// duplicated here (rather than imported from there) because buildEngineChecklist's
+// core/extra arrays are local to that function.
+const GATE_CHECK_LABELS = {
+    mtfAligned: 'MTF Aligned (5m/15m/1H)', deltaAligned: 'Delta Confirms',
+    adxTrend: 'ADX Trending', vixSafe: 'VIX Safe Zone', rsiClean: 'RSI Clean',
+    safeWindow: 'Safe Entry Window', srClear: 'Clear of S/R Wall',
+    physicsLaw1: 'Trend Structure (Physics Law-1)', physicsLaw3: 'Not Chasing (Physics Law-3)',
+    pocClear: 'Clear of POC', convictionOk: 'Trend Conviction',
+    contradictionOk: 'Contradiction Score Clear', sequenceAligned: 'Sequence Check Aligned',
+    breadthAligned: 'Market Breadth Aligned', dynLevelsClear: 'Clear of Range Pocket',
+    renkoAligned: 'Renko Trend Aligned', gapClear: 'Opening Gap Aligned',
+    regimeClear: 'Not Range Regime', bosChochAligned: 'Structure (BOS/CHOCH) Aligned',
+    newsClear: 'News Sentiment Clear',
+};
+let gateBlockCounts = {};       // { checkKey: count }
+let gateBlockTotalEvals = 0;    // denominator — # of directional evaluations today
+let gateBlockCountsDirty = false;
+
+function trackGateBlocks(qualityGate, rawSignal) {
+    if (rawSignal === 'WAIT' || !qualityGate) return;
+    gateBlockTotalEvals++;
+    for (const key of GATE_CHECK_KEYS) {
+        if (qualityGate[key] === false) {
+            gateBlockCounts[key] = (gateBlockCounts[key] || 0) + 1;
+        }
+    }
+    gateBlockCountsDirty = true;
+}
 let nishanebaazAlertSent=false;  // one-shot: fired once at 14:00 per day
 let pcrClearedToday=false;   // guards the one-shot stale-manual-PCR wipe at 09:15
 let _pcrHistoryDate = null;  // IST date-string of the session pcrHistory currently belongs to
@@ -2467,6 +2511,7 @@ function combineSignals(indicators) {
     }
     marketState.qualityGate = qualityGate;
     marketState.engineChecklist = buildEngineChecklist(qualityGate, ALL_FACTORS_HARD_GATE && rawSignal !== 'WAIT');
+    trackGateBlocks(qualityGate, rawSignal);
 
     if (rawSignal !== 'WAIT' && !qualityGate.deltaAligned) {
         signal = 'WAIT'; confidence = 0;
@@ -3517,12 +3562,24 @@ async function checkTelegramAlerts(newSignal) {
             marketState.todaySignalPerf = perfSummary?.today ?? null;
         } catch (e) { console.warn('[EOD Digest] perf summary error:', e.message); }
         await sendCloseSummary(marketState);
+        // ── Weekly Self-Review (1 Aug audit) — fires once, on Friday's close ──
+        // Flushes today's gate-block counts immediately (rather than waiting for
+        // the next 30s interval) so Friday's data is definitely in the DB before
+        // the weekly rollup query runs against it.
+        if (ist.getDay() === 5) {
+            try {
+                await flushGateBlockCountsIfDirty();
+                const review = await computeWeeklyGateReview();
+                if (review) await sendWeeklyGateReview(review);
+            } catch (e) { console.warn('[WeeklyReview] error:', e.message); }
+        }
         setTimeout(() => {
             morningSummarySent=false; closeSummarySent=false; vixAlertSent=false;
             nishanebaazAlertSent=false; pcrClearedToday=false; btstSentToday=false;
             telegramAlertInFlight=false; ema920AlertSentToday=false;
             sessionOpenVix = null;
             dailySignalCounts = { main: 0, mtfStrong: 0, mtfModerate: 0, mtfWeak: 0 };
+            gateBlockCounts = {}; gateBlockTotalEvals = 0;
             // Reset intraday trades so yesterday's trades don't show on next morning's fresh session
             trades = [];
             console.log('[Daily Reset] Intraday trades cleared for next session');
@@ -3575,8 +3632,9 @@ async function checkTelegramAlerts(newSignal) {
             if (strikeDataForAlert) strikeDataForAlert.coach = buildTradeCoach(strikeDataForAlert);
         } catch(e) { console.warn('[Strike] compute error:', e.message); }
 
+        let mainPerfRec = null;
         if (strikeDataForAlert) {
-            startSignalPerformance(newSignal, strikeDataForAlert).catch(e => console.warn('[SignalPerf] start error:', e.message));
+            mainPerfRec = await startSignalPerformance(newSignal, strikeDataForAlert).catch(e => { console.warn('[SignalPerf] start error:', e.message); return null; });
         }
 
         marketState.momentumDecayWarning = (newSignal === 'BUY CALL' || newSignal === 'BUY PUT')
@@ -3601,7 +3659,7 @@ async function checkTelegramAlerts(newSignal) {
         // reflects the exact tick that actually fired it, not a later one.
         const alertSnapshot = { ...marketState };
         alertSnapshot.similarSetupStats = await getSimilarSetupStats(newSignal, marketState.dynamicLevels?.zone).catch(e => { console.warn('[SimilarSetup] error:', e.message); return null; });
-        await sendSignalAlert(alertSnapshot, prevSignal, strikeDataForAlert);
+        await sendSignalAlert(alertSnapshot, prevSignal, strikeDataForAlert, mainPerfRec?.id ?? null);
         lastSignalFiredPrice = marketState.nifty || 0;
 
         // ── Scalp Plan alert — same confirmed signal, alternate fast-exit plan ──
@@ -3720,8 +3778,9 @@ async function checkTelegramAlerts(newSignal) {
         // purposes — tracking every Weak/Isolated ping as an "open position"
         // would be noisy and meaningless (most of those were never actionable
         // to begin with, per the Lead Quality distinction worked out earlier).
+        let mtfPerfRec = null;
         if (mtfStrikeData && leadQuality.score >= 3) {
-            startSignalPerformance(marketState.mtf.signal, mtfStrikeData, 'mtf').catch(e => console.warn('[SignalPerf] MTF start error:', e.message));
+            mtfPerfRec = await startSignalPerformance(marketState.mtf.signal, mtfStrikeData, 'mtf').catch(e => { console.warn('[SignalPerf] MTF start error:', e.message); return null; });
         }
         if (leadQuality.label === 'Strong Confluence') dailySignalCounts.mtfStrong++;
         else if (leadQuality.label === 'Moderate') dailySignalCounts.mtfModerate++;
@@ -3764,7 +3823,7 @@ async function checkTelegramAlerts(newSignal) {
         if (leadQuality.score >= 3 && _inSettlingWindow) {
             console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
         } else if (leadQuality.score >= 3) {
-            await sendMTFAlert(marketState, mtfStrikeData);
+            await sendMTFAlert(marketState, mtfStrikeData, mtfPerfRec?.id ?? null);
             lastMTFAlertAt     = Date.now();
             lastMTFAlertSignal = mtfSignalNow;
         }
@@ -5294,6 +5353,29 @@ async function initDB() {
             }
         } catch (e) { console.warn('[DailyCounts] restore error:', e.message); }
 
+        // ── gate_block_daily — Weekly Self-Review data (1 Aug audit) ────────────
+        // Same dirty-flag-then-flush-at-EOD pattern as daily_signal_counts above,
+        // just storing a JSONB blob of per-check block counts instead of fixed
+        // columns since the check list can grow (ALL_FACTORS_HARD_GATE extras).
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS gate_block_daily (
+                trade_date   DATE PRIMARY KEY DEFAULT (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE,
+                total_evals  INT DEFAULT 0,
+                counts       JSONB DEFAULT '{}',
+                updated_at   TIMESTAMPTZ DEFAULT NOW()
+            )
+        `);
+        console.log('✅ PostgreSQL gate_block_daily table ready');
+        try {
+            const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+            const r = await dbPool.query('SELECT total_evals, counts FROM gate_block_daily WHERE trade_date = $1', [todayIST]);
+            if (r.rows.length > 0) {
+                gateBlockTotalEvals = r.rows[0].total_evals || 0;
+                gateBlockCounts = r.rows[0].counts || {};
+                console.log(`✅ Restored today's gate-block counts from DB (${gateBlockTotalEvals} evals)`);
+            }
+        } catch (e) { console.warn('[GateBlockCounts] restore error:', e.message); }
+
         // ── Inject DB pool into historical data module ────────────────────────
         injectHistDBPool(dbPool);
         console.log('✅ Historical data module connected to DB');
@@ -5432,6 +5514,26 @@ async function flushDailySignalCountsIfDirty() {
     }
 }
 
+// ── Flush gateBlockCounts to DB, only when dirty — same pattern as above ────
+async function flushGateBlockCountsIfDirty() {
+    if (!gateBlockCountsDirty || !dbPool) return;
+    const wasDirty = gateBlockCountsDirty;
+    gateBlockCountsDirty = false;
+    try {
+        const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        await dbPool.query(
+            `INSERT INTO gate_block_daily (trade_date, total_evals, counts, updated_at)
+             VALUES ($1, $2, $3, NOW())
+             ON CONFLICT (trade_date) DO UPDATE SET
+                total_evals = $2, counts = $3, updated_at = NOW()`,
+            [todayIST, gateBlockTotalEvals, JSON.stringify(gateBlockCounts)]
+        );
+    } catch (e) {
+        console.warn('[GateBlockCounts] flush error:', e.message);
+        gateBlockCountsDirty = wasDirty;
+    }
+}
+
 // ── Signal Performance Tracking ──────────────────────────────────────────────
 // Automatic, no manual entry required. Per feedback: "Every signal should
 // later display: Entry, High, Target Hit, Time Taken" so accuracy can be
@@ -5457,6 +5559,14 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
         breadthSig: marketState.breadth?.breadthSignal ?? null,
         strikeOI: strikeData.strikeOI ?? null,
         strikeVolume: strikeData.strikeVolume ?? null,
+        // ── For Theta/time-decay estimate (see updateSignalPerformance) ──
+        // Snapshotted at entry so we can re-run Black-Scholes theta with
+        // the SAME inputs the trade started with — this isolates "how much
+        // of the premium move is just time passing" from the directional
+        // move the trader is actually trying to capture.
+        entryNiftyForTheta: marketState.nifty ?? null,
+        entryVixForTheta: marketState.vix ?? null,
+        entryDTE: (typeof daysToNextExpiry === 'function' ? daysToNextExpiry() : null),
     };
     openPerfRecords.push(rec);
     if (dbPool) {
@@ -5469,6 +5579,7 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
             rec.id = r.rows[0]?.id ?? null;
         } catch (e) { console.warn('[SignalPerf] insert error:', e.message); }
     }
+    return rec;
 }
 
 // Called every ~30s (piggybacks on updateOpenTradesMTM's cadence) — updates
@@ -5508,11 +5619,26 @@ async function updateSignalPerformance() {
                     const risk = rec.entry - rec.sl;
                     const rrAchieved = (live && risk > 0) ? (live - rec.entry) / risk : 0;
                     const decayedConf = computeDecayedConfidence(rec.entryConfidence, rec.entryDelta, rec.entryRSI, curDelta, curRSI, rec.signal);
+                    // ── Theta/time-decay so far (25 Jul-batch audit item) ──
+                    // Re-runs Black-Scholes theta with the trade's OWN entry
+                    // snapshot (nifty/vix/DTE at entry), then scales the
+                    // ₹/day theta figure by elapsed time. This is an ESTIMATE
+                    // (theta itself isn't constant as spot/vix/DTE move), not
+                    // a live-repriced theta — good enough to answer "roughly how
+                    // much of my open loss so far is just time, not direction."
+                    let thetaDecaySoFar = null;
+                    if (rec.entryNiftyForTheta && rec.entryVixForTheta && rec.entryDTE != null && calcGreeks) {
+                        const T0 = Math.max(rec.entryDTE, 0.04) / 365;
+                        const g = calcGreeks(rec.entryNiftyForTheta, rec.strike, T0, rec.entryVixForTheta / 100, rec.type);
+                        if (g && g.theta != null) {
+                            thetaDecaySoFar = parseFloat((g.theta * (elapsedMin / (60 * 24))).toFixed(2)); // negative = decay cost per share
+                        }
+                    }
                     if (live && rrAchieved >= 1.5) {
                         const gainPct = Math.round(((live - rec.entry) / rec.entry) * 1000) / 10;
-                        sendPartialProfitAlert(rec, live, gainPct, Math.round(rrAchieved * 10) / 10, decayedConf).catch(e => console.warn('[PartialProfit] send error:', e.message));
+                        sendPartialProfitAlert(rec, live, gainPct, Math.round(rrAchieved * 10) / 10, decayedConf, thetaDecaySoFar).catch(e => console.warn('[PartialProfit] send error:', e.message));
                     } else {
-                        sendMomentumExitWarning(rec, curDelta, curRSI, decayedConf).catch(e => console.warn('[ExitWarning] send error:', e.message));
+                        sendMomentumExitWarning(rec, curDelta, curRSI, decayedConf, thetaDecaySoFar).catch(e => console.warn('[ExitWarning] send error:', e.message));
                     }
                 }
             }
@@ -5877,6 +6003,17 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
     // only if that strike isn't present in the fetched chain (rare — chain covers
     // ATM±20 strikes, our OTM pick is only ±50 = 1 strike away).
     const dte = daysToNextExpiry();   // real days to next Tuesday expiry
+
+    // ── Days-to-expiry position-size suggestion (1 Aug audit) ───────────────
+    // Gamma/theta both accelerate sharply in the last 1-2 days before expiry —
+    // same directional move can produce a much bigger premium swing (both ways)
+    // on 0-1 DTE than on 4-5 DTE. This doesn't change Entry/SL/Target math,
+    // just surfaces a sizing heads-up, same "informational, not a hard rule"
+    // treatment as the AI Trade Coach block.
+    let positionSizeNote = null;
+    if (dte <= 1)      positionSizeNote = '0-1 DTE — gamma/theta both high, consider smaller size than usual';
+    else if (dte <= 2) positionSizeNote = '2 DTE — decay accelerating, size normal-to-slightly-reduced';
+    // 3+ DTE: no note — standard risk, nothing extra to flag
     let entryPremium = null;
     let premiumSource = 'bs';   // 'live' | 'bs' — surfaced to the trader below
     let premiumAgeSec = null;
@@ -6017,7 +6154,7 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
         ? parseFloat((strike + entryPremium).toFixed(2))
         : parseFloat((strike - entryPremium).toFixed(2));
 
-    return { type, strike, entry: entryPremium, sl, target, slSource, bep, premiumAgeSec, strikeOI, strikeVolume, lowLiquidity };
+    return { type, strike, entry: entryPremium, sl, target, slSource, bep, premiumAgeSec, strikeOI, strikeVolume, lowLiquidity, positionSizeNote };
 }
 
 // ── AI Trade Coach ───────────────────────────────────────────────────────────
@@ -6148,6 +6285,56 @@ function buildEngineChecklist(qualityGate, allFactorsActive) {
         totalCount: items.length,
         summary: `${passedCount} / ${items.length} Passed`,
     };
+}
+
+// ── Weekly Self-Review (1 Aug audit) ────────────────────────────────────────
+// "Analytics tab mein data hai, but koi automated 'yeh hafta kaisa raha, kaunsa
+// gate sabse zyada block/allow kar raha hai' summary nahi dikha." Aggregates
+// the last 7 calendar days of gate_block_daily rows and ranks checks by how
+// often each one was the reason a directional read got blocked. Evidence-first,
+// same discipline as the dyn_zone/strike_oi tracking added earlier — this
+// doesn't change any gate's behaviour, it just makes the pattern visible.
+async function computeWeeklyGateReview() {
+    if (!dbPool) return null;
+    try {
+        const r = await dbPool.query(
+            `SELECT trade_date, total_evals, counts FROM gate_block_daily
+             WHERE trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '7 days'
+             ORDER BY trade_date ASC`
+        );
+        if (r.rows.length === 0) return null;
+
+        let totalEvals = 0;
+        const summed = {};
+        for (const row of r.rows) {
+            totalEvals += row.total_evals || 0;
+            const counts = row.counts || {};
+            for (const key of GATE_CHECK_KEYS) {
+                summed[key] = (summed[key] || 0) + (counts[key] || 0);
+            }
+        }
+        if (totalEvals === 0) return { totalEvals: 0, dayCount: r.rows.length, stats: [] };
+
+        const stats = GATE_CHECK_KEYS
+            .map(key => ({
+                key, label: GATE_CHECK_LABELS[key] || key,
+                blockedCount: summed[key] || 0,
+                blockRatePct: Math.round(((summed[key] || 0) / totalEvals) * 100),
+            }))
+            .filter(s => s.blockedCount > 0)
+            .sort((a, b) => b.blockRatePct - a.blockRatePct);
+
+        return {
+            totalEvals,
+            dayCount: r.rows.length,
+            weekStart: r.rows[0].trade_date,
+            weekEnd: r.rows[r.rows.length - 1].trade_date,
+            stats,
+        };
+    } catch (e) {
+        console.warn('[WeeklyGateReview] query error:', e.message);
+        return null;
+    }
 }
 
 // ── Confidence Decay ──────────────────────────────────────────────────────
@@ -6605,6 +6792,83 @@ app.post('/api/optionflow', requireToken, (req,res) => {
 });
 
 // ── TRADE JOURNAL ─────────────────────────────────────
+// ── Telegram webhook — "log to Journal" one-tap button (1 Aug audit) ────────
+// The audit item this solves: "telegram message aaye to trade loonga, usi
+// time journal add karna possible nahi hai" — opening the app and typing
+// strike/premium/lots at the exact moment you're placing a real order isn't
+// realistic. This lets the trader tap ONE button on the alert itself; the
+// Journal entry gets created automatically using the same suggested entry
+// the alert already showed (editable afterward in-app if the real fill
+// differed — that edit is exactly what feeds Slippage tracking).
+async function createJournalEntryFromSignalPerf(perfId) {
+    // Prefer the in-memory record (openPerfRecords) — no DB round-trip, and
+    // works even before the DB insert in startSignalPerformance has landed.
+    let type = null, strike = null, entry = null, sl = null;
+    const memRec = openPerfRecords.find(r => r.id === perfId);
+    if (memRec) {
+        type = memRec.type; strike = memRec.strike; entry = memRec.entry; sl = memRec.sl;
+    } else if (dbPool) {
+        try {
+            const r = await dbPool.query('SELECT option_type, strike, entry, sl FROM signal_performance WHERE id = $1', [perfId]);
+            if (r.rows.length) { const row = r.rows[0]; type = row.option_type; strike = row.strike; entry = parseFloat(row.entry); sl = parseFloat(row.sl); }
+        } catch (e) { console.warn('[TelegramWebhook] signal_performance lookup error:', e.message); }
+    }
+    if (!type || !strike || !entry) return null;
+
+    const ist = getIST();
+    const time = `${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
+    let dbId = null;
+    if (dbPool) {
+        try {
+            const r = await dbPool.query(
+                `INSERT INTO journal_trades (time,type,strike,premium,lots,sl,notes,nifty_entry,status,suggested_entry,slippage,slippage_pct)
+                 VALUES ($1,$2,$3,$4,1,$5,'Auto-logged from Telegram',$6,'OPEN',$4,0,0) RETURNING id`,
+                [time, type, strike, entry, sl || 0, marketState.nifty || 0]
+            );
+            dbId = r.rows[0].id;
+        } catch (e) { console.warn('[TelegramWebhook] journal insert error:', e.message); }
+    }
+    const trade = {
+        id: dbId ?? tradeCounter++, time, type, strike, premium: entry, lots: 1,
+        sl: sl || 0, exitPremium: null, pnl: null, status: 'OPEN',
+        notes: 'Auto-logged from Telegram', niftyAtEntry: marketState.nifty,
+        niftyCurrent: marketState.nifty, niftyMove: 0,
+        suggestedEntry: entry, slippage: 0, slippagePct: 0,
+    };
+    trades.push(trade);
+    console.log(`📔 [TelegramWebhook] Auto-logged trade: ${type} ${strike} @₹${entry} (perfId ${perfId})`);
+    return trade;
+}
+
+app.post('/api/telegram-webhook', async (req, res) => {
+    // Verify the request genuinely came from Telegram (secret set via
+    // setTelegramWebhook at startup). If TELEGRAM_WEBHOOK_SECRET isn't
+    // configured, this check is skipped — fine for initial setup, but the
+    // secret should be set before relying on this in a public deployment.
+    const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    if (expectedSecret && req.headers['x-telegram-bot-api-secret-token'] !== expectedSecret) {
+        return res.sendStatus(401);
+    }
+    res.sendStatus(200); // ack immediately — Telegram expects a fast response
+
+    try {
+        const cq = req.body?.callback_query;
+        if (!cq || !cq.data) return;
+        if (cq.data.startsWith('logtrade:')) {
+            const perfId = parseInt(cq.data.split(':')[1], 10);
+            const trade = await createJournalEntryFromSignalPerf(perfId);
+            if (trade) {
+                await answerCallbackQuery(cq.id, `✅ Logged: ${trade.type} ${trade.strike} @₹${trade.premium}`);
+                if (cq.message?.chat?.id && cq.message?.message_id) {
+                    await clearMessageButtons(cq.message.chat.id, cq.message.message_id);
+                }
+            } else {
+                await answerCallbackQuery(cq.id, '⚠️ Could not find this signal — log manually in Journal.');
+            }
+        }
+    } catch (e) { console.warn('[TelegramWebhook] handler error:', e.message); }
+});
+
 app.post('/api/trade/add', requireToken, async (req,res) => {
     const {type,strike,premium,lots,sl,notes,suggestedEntry}=req.body;
     const ist=getIST();
@@ -6696,6 +6960,17 @@ app.delete('/api/trade/:id', requireToken, async (req,res) => {
 
 app.get('/api/trades', (req,res) => {
     res.json({ trades:[...trades].reverse(), summary:getTradeSummary() });
+});
+
+// On-demand Weekly Self-Review (Analytics tab "View Weekly Review" button) —
+// same data as the automatic Friday Telegram digest, just fetchable anytime.
+app.get('/api/weekly-review', async (req, res) => {
+    try {
+        const review = await computeWeeklyGateReview();
+        res.json({ success: true, review });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
 });
 
 // ── EVENTS CALENDAR ───────────────────────────────────
@@ -6819,6 +7094,7 @@ function startPollingIntervals() {
     // DB writes regardless of tick frequency (mtfWeak alone can increment
     // thousands of times/day) while keeping restart data-loss to under 30s.
     setTimeout(() => setInterval(flushDailySignalCountsIfDirty, 30*1000), 25*1000);
+    setTimeout(() => setInterval(flushGateBlockCountsIfDirty, 30*1000), 25*1000);
     setTimeout(() => setInterval(async () => {
         try { marketState.signalHistory = await getRecentSignalHistory(); }
         catch (e) { console.warn('[SignalHistory] refresh error:', e.message); }
@@ -7057,6 +7333,19 @@ server.listen(PORT, () => {
     console.log(`VardaanNifty AI running on port ${PORT}`);
     server.keepAliveTimeout = 120000;
     server.headersTimeout   = 125000;
+    // ── Register Telegram webhook for the "log to Journal" button (1 Aug) ──
+    // Needs RAILWAY_PUBLIC_DOMAIN (set automatically by Railway) and
+    // TELEGRAM_WEBHOOK_SECRET (set this yourself in Railway env vars — any
+    // random string works, it's just used to verify incoming webhook calls
+    // are really from Telegram). Without a secret configured, the webhook
+    // route still works but skips that verification — fine to test with,
+    // set the secret before relying on this day-to-day.
+    if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+        setTelegramWebhook(`https://${process.env.RAILWAY_PUBLIC_DOMAIN}`, process.env.TELEGRAM_WEBHOOK_SECRET)
+            .catch(e => console.warn('[Telegram] webhook registration error:', e.message));
+    } else {
+        console.log('[Telegram] RAILWAY_PUBLIC_DOMAIN not set — skipping webhook registration (local dev, or non-Railway host)');
+    }
     // Print outgoing IP for reference
     axios.get('https://api.ipify.org?format=json', { timeout: 5000 })
         .then(r => console.log(`[Railway] Outgoing IP: ${r.data.ip}`))
@@ -7090,6 +7379,7 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('SIGTERM', async () => {
     console.log('[Shutdown] SIGTERM received — flushing daily signal counts before exit');
     try { await flushDailySignalCountsIfDirty(); } catch (e) { /* best-effort only */ }
+    try { await flushGateBlockCountsIfDirty(); } catch (e) { /* best-effort only */ }
     process.exit(0);
 });
 process.on('uncaughtException', (err) => {

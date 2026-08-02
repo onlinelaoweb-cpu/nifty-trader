@@ -3641,7 +3641,17 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
         <span id="an-refresh-badge" style="font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:1px;"></span>
         <span id="an-status" style="font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:1px;"></span>
         <button onclick="loadAnalytics(true)" style="font-family:var(--mono);font-size:11px;padding:3px 10px;border:1px solid rgba(0,200,255,0.3);background:rgba(0,200,255,0.07);color:var(--blue);border-radius:4px;cursor:pointer;letter-spacing:1px;">⟳ REFRESH</button>
+        <button onclick="loadWeeklyReview()" style="font-family:var(--mono);font-size:11px;padding:3px 10px;border:1px solid rgba(255,187,0,0.3);background:rgba(255,187,0,0.07);color:var(--amber);border-radius:4px;cursor:pointer;letter-spacing:1px;">📅 WEEKLY REVIEW</button>
       </div>
+    </div>
+
+    <!-- Weekly Self-Review panel — hidden until requested -->
+    <div id="weekly-review-panel" style="display:none;margin:8px 10px;padding:12px 14px;background:var(--bg3);border:1px solid rgba(255,187,0,0.25);border-radius:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-family:var(--mono);font-size:12px;letter-spacing:1.5px;color:var(--amber);">📅 WEEKLY SELF-REVIEW</span>
+        <span onclick="document.getElementById('weekly-review-panel').style.display='none';" style="cursor:pointer;color:var(--dim);font-size:16px;">✕</span>
+      </div>
+      <div id="weekly-review-body" style="font-size:13px;color:var(--text);line-height:1.6;">Loading...</div>
     </div>
 
     <!-- Stats row — always visible -->
@@ -5527,6 +5537,7 @@ async function fetchTradeSuggestion() {
       ${sl ? `<div class="suggest-detail">SL: ₹${sl} | Target: ₹${target || '--'}</div>` : ''}
       ${bep ? `<div class="suggest-detail" style="color:var(--dim);">⚖️ Break-Even: Nifty ${bep} by expiry</div>` : ''}
       ${d.strikeData?.lowLiquidity ? `<div class="suggest-detail" style="color:var(--amber);">⚠️ Low liquidity: OI ${Math.round((d.strikeData.strikeOI||0)/1000)}K, Vol ${Math.round((d.strikeData.strikeVolume||0)/1000)}K — check spread before entry</div>` : ''}
+      ${d.strikeData?.positionSizeNote ? `<div class="suggest-detail" style="color:var(--amber);">📏 ${d.strikeData.positionSizeNote}</div>` : ''}
       ${reasoning ? `<div class="suggest-rationale">${reasoning}</div>` : ''}
       ${confidence ? `<div class="suggest-conf">Confidence: ${confidence}</div>` : ''}
       ${coachHtml}
@@ -8312,6 +8323,38 @@ function anApplyDateFilter(rows) {
 }
 
 // ── Main load ─────────────────────────────────────────────────────────────────
+async function loadWeeklyReview() {
+  const panel = document.getElementById('weekly-review-panel');
+  const body  = document.getElementById('weekly-review-body');
+  if (!panel || !body) return;
+  panel.style.display = 'block';
+  body.innerHTML = 'Loading...';
+  try {
+    const r = await fetch('/api/weekly-review');
+    const d = await r.json();
+    if (!d.success || !d.review || d.review.totalEvals === 0) {
+      body.innerHTML = 'No directional signal evaluations logged this week yet.';
+      return;
+    }
+    const rev = d.review;
+    const top = rev.stats.slice(0, 5);
+    let html = `<div style="color:var(--dim);margin-bottom:8px;">${rev.totalEvals} directional evaluations across ${rev.dayCount} trading day(s), ${rev.weekStart} → ${rev.weekEnd}</div>`;
+    if (!top.length) {
+      html += `<div style="color:var(--green);">No gate blocked any evaluation this week — clean week.</div>`;
+    } else {
+      html += '<div style="display:flex;flex-direction:column;gap:6px;">';
+      top.forEach((s, i) => {
+        html += `<div style="display:flex;justify-content:space-between;"><span>${i+1}. ${s.label}</span><span style="color:var(--amber);font-weight:700;">${s.blockRatePct}% (${s.blockedCount}/${rev.totalEvals})</span></div>`;
+      });
+      html += '</div>';
+      html += `<div style="margin-top:8px;font-size:11.5px;color:var(--dim);">Descriptive, not a recommendation — worth a look if the same gate tops this list week after week.</div>`;
+    }
+    body.innerHTML = html;
+  } catch (e) {
+    body.innerHTML = 'Failed to load weekly review: ' + e.message;
+  }
+}
+
 async function loadAnalytics(manual) {
   const limit   = (document.getElementById('an-limit')||{}).value || 100;
   const gate    = _anFilter === 'gate'  ? '&gate=true' : '';

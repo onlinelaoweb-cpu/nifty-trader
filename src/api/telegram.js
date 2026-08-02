@@ -31,22 +31,28 @@ function sanitizeForTelegramHTML(text) {
 }
 
 // ── Send message ──────────────────────────────────────
-async function sendMessage(text) {
+// replyMarkup: optional Telegram inline_keyboard object, e.g.
+//   { inline_keyboard: [[{ text: '✅ I took this trade', callback_data: 'logtrade:123' }]] }
+// Used by the "log to Journal from Telegram" one-tap feature (1 Aug) — see
+// server.js /api/telegram-webhook for what happens when the button is tapped.
+async function sendMessage(text, replyMarkup) {
     if (!isConfigured()) {
         console.warn('⚠️  Telegram not configured — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing. Message NOT sent:', text.substring(0, 50));
-        return;
+        return null;
     }
 
     const safeText = sanitizeForTelegramHTML(text);
 
     try {
+        const payload = {
+            chat_id   : CHAT_ID,
+            text      : safeText,
+            parse_mode: 'HTML'
+        };
+        if (replyMarkup) payload.reply_markup = replyMarkup;
         const res = await axios.post(
             `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
-            {
-                chat_id   : CHAT_ID,
-                text      : safeText,
-                parse_mode: 'HTML'
-            },
+            payload,
             { timeout: 8000 }
         );
 
@@ -55,8 +61,10 @@ async function sendMessage(text) {
         if (res.data && res.data.ok === true) {
             const chatTitle = res.data.result?.chat?.title || res.data.result?.chat?.username || res.data.result?.chat?.id;
             console.log(`📱 Telegram sent → chat:${chatTitle} msgId:${res.data.result?.message_id} | ${text.substring(0, 50)}...`);
+            return res.data.result?.message_id ?? null;
         } else {
             console.error('❌ Telegram rejected message (ok:false):', JSON.stringify(res.data), '| chat_id used:', CHAT_ID, '| text:', text.substring(0, 80));
+            return null;
         }
     } catch (err) {
         // err.response.data carries Telegram's actual error description (e.g. "chat not found",
@@ -67,7 +75,7 @@ async function sendMessage(text) {
 }
 
 // ── Signal Change Alert ───────────────────────────────
-async function sendSignalAlert(state, prevSignal, strikeData = null) {
+async function sendSignalAlert(state, prevSignal, strikeData = null, perfId = null) {
     const emoji = state.signal === 'BUY CALL' ? '🟢'
                 : state.signal === 'BUY PUT'  ? '🔴'
                 : '🟡';
@@ -156,11 +164,14 @@ async function sendSignalAlert(state, prevSignal, strikeData = null) {
         const liquidityNote = strikeData.lowLiquidity
             ? `\n⚠️ Low liquidity: OI ${Math.round(strikeData.strikeOI/1000)}K, Vol ${Math.round(strikeData.strikeVolume/1000)}K — check bid-ask spread before entry, slippage risk`
             : '';
+        const sizeNote = strikeData.positionSizeNote
+            ? `\n📏 Size note: ${strikeData.positionSizeNote}`
+            : '';
         strikeBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
 📥 Entry : ₹${strikeData.entry}${stalenessNote}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
-📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep} (Nifty needs ${strikeData.type === 'CE' ? 'to reach' : 'to fall to'} this by expiry to break even)` : ''}${liquidityNote}`;
+📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep} (Nifty needs ${strikeData.type === 'CE' ? 'to reach' : 'to fall to'} this by expiry to break even)` : ''}${liquidityNote}${sizeNote}`;
 
         // ── AI Trade Coach block — entry-zone + staged profit plan ───────────
         const coach = strikeData.coach;
@@ -296,11 +307,20 @@ ${detailsBlock}⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, time
 <i>VardaanNifty AI</i>
 `.trim();
 
-    await sendMessage(msg);
+    // ── One-tap "log to Journal" button (1 Aug audit) ────────────────────────
+    // The whole point: at the moment this alert lands, opening the app and
+    // manually typing strike/premium/lots isn't realistic if you're actually
+    // about to place the order. One tap here calls /api/telegram-webhook in
+    // server.js, which auto-creates the Journal entry using strikeData's own
+    // suggested entry (editable in-app afterward if the real fill differed).
+    const replyMarkup = (perfId != null && strikeData)
+        ? { inline_keyboard: [[{ text: '✅ I took this trade — log it', callback_data: `logtrade:${perfId}` }]] }
+        : undefined;
+    await sendMessage(msg, replyMarkup);
 }
 
 // ── MTF All Aligned Alert ─────────────────────────────
-async function sendMTFAlert(state, strikeData = null) {
+async function sendMTFAlert(state, strikeData = null, perfId = null) {
     const emoji      = state.mtf.signal === 'BUY CALL' ? '🟢' : '🔴';
     const validCount     = state.mtf.validTFCount ?? 3;
     const oneHourLagging = state.mtf.oneHourLagging ?? false;
@@ -371,11 +391,14 @@ async function sendMTFAlert(state, strikeData = null) {
         const liquidityNote2 = strikeData.lowLiquidity
             ? `\n⚠️ Low liquidity: OI ${Math.round(strikeData.strikeOI/1000)}K, Vol ${Math.round(strikeData.strikeVolume/1000)}K — check bid-ask spread before entry, slippage risk`
             : '';
+        const sizeNote2 = strikeData.positionSizeNote
+            ? `\n📏 Size note: ${strikeData.positionSizeNote}`
+            : '';
 
         levelsBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
 📥 Entry : ₹${strikeData.entry}${stalenessNote2}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
-🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)${liquidityNote2}`;
+🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)${liquidityNote2}${sizeNote2}`;
 
         const coachBlock = coach
             ? `\n\n🧑‍🏫 <b>AI Trade Coach</b>\n✅ Ideal Entry: ${coach.idealEntryLabel} | ${coach.chaseWarning}\n📈 +20% SL→cost | +30% book 50% | +40% exit`
@@ -441,7 +464,12 @@ ${referenceOnlyNote}${levelsBlock}
 <i>VardaanNifty AI</i>
 `.trim();
 
-    await sendMessage(msg);
+    // Only offer the one-tap log button when this is genuinely actionable
+    // (main engine confirms) — a REFERENCE ONLY alert isn't a trade to log.
+    const replyMarkup = (perfId != null && strikeData && mainConfirms)
+        ? { inline_keyboard: [[{ text: '✅ I took this trade — log it', callback_data: `logtrade:${perfId}` }]] }
+        : undefined;
+    await sendMessage(msg, replyMarkup);
 }
 
 // ── Morning Market Summary ────────────────────────────
@@ -760,7 +788,7 @@ ${beLine ? beLine + '\n' : ''}🎯 Profit Zone: ${spread.profitZone}
 // even though price hasn't hit SL or target yet. Purely a "conviction is
 // fading, use your own judgement" signal — never auto-closes or resizes
 // anything.
-async function sendMomentumExitWarning(rec, currentDelta, currentRSI, decayedConfidence) {
+async function sendMomentumExitWarning(rec, currentDelta, currentRSI, decayedConfidence, thetaDecaySoFar) {
     const dirLabel = rec.signal === 'BUY CALL' ? 'CALL' : 'PUT';
     // Confidence Decay (25 Jul audit): shows how much conviction has actually
     // worn off, not just direction — only included when we have a real entry
@@ -769,6 +797,11 @@ async function sendMomentumExitWarning(rec, currentDelta, currentRSI, decayedCon
     const confLine = (decayedConfidence != null && rec.entryConfidence != null)
         ? `\nConfidence: ${rec.entryConfidence}% → ${decayedConfidence}%\n`
         : '';
+    // Theta/time-decay so far (1 Aug audit) — estimate only, see server.js
+    // updateSignalPerformance for the calc and its caveats.
+    const thetaLine = (thetaDecaySoFar != null)
+        ? `\n⏳ Time decay so far: ~₹${Math.abs(thetaDecaySoFar)}/share (theta estimate, not live-repriced)\n`
+        : '';
     const msg = `
 ⚠️ <b>EXIT WARNING — Setup Weakening</b>
 ━━━━━━━━━━━━━━━━━━
@@ -776,7 +809,7 @@ Your ${dirLabel} lead (${rec.strike}${rec.type}, entry ₹${rec.entry}) is still
 
 Delta: ${rec.entryDelta}% → ${currentDelta}%
 RSI: ${rec.entryRSI} → ${currentRSI}
-${confLine}
+${confLine}${thetaLine}
 Price hasn't hit SL or target — this isn't an auto-exit. Just a heads-up to reassess: book partial, tighten SL, or hold with awareness.
 ━━━━━━━━━━━━━━━━━━
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
@@ -792,10 +825,13 @@ Price hasn't hit SL or target — this isn't an auto-exit. Just a heads-up to re
 // Warning above (see updateSignalPerformance in server.js) — this is the
 // version shown when the trade already has real R:R banked, so the framing
 // is positive ("lock some in") rather than defensive ("reassess").
-async function sendPartialProfitAlert(rec, currentPremium, gainPct, rrAchieved, decayedConfidence) {
+async function sendPartialProfitAlert(rec, currentPremium, gainPct, rrAchieved, decayedConfidence, thetaDecaySoFar) {
     const dirLabel = rec.signal === 'BUY CALL' ? 'CALL' : 'PUT';
     const confLine = (decayedConfidence != null && rec.entryConfidence != null)
         ? `\nConfidence: ${rec.entryConfidence}% → ${decayedConfidence}%\n`
+        : '';
+    const thetaLine = (thetaDecaySoFar != null)
+        ? `\n⏳ Time decay so far: ~₹${Math.abs(thetaDecaySoFar)}/share (theta estimate, not live-repriced)\n`
         : '';
     const msg = `
 🟡 <b>PARTIAL PROFIT BOOK — Consider Locking Some In</b>
@@ -803,13 +839,87 @@ async function sendPartialProfitAlert(rec, currentPremium, gainPct, rrAchieved, 
 Your ${dirLabel} lead (${rec.strike}${rec.type}, entry ₹${rec.entry}) is up <b>+${gainPct}%</b> (₹${currentPremium}), already ${rrAchieved}:1 on risk — but momentum is starting to fade:
 
 Delta and RSI have both moved back toward neutral since entry.
-${confLine}
+${confLine}${thetaLine}
 This isn't a target hit or an auto-exit. But with this much R:R already banked and conviction cooling, booking part of the position now is usually smarter than waiting for a fixed price target that may not come.
 ━━━━━━━━━━━━━━━━━━
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
 <i>VardaanNifty AI</i>
 `.trim();
     await sendMessage(msg);
+}
+
+// ── Weekly Self-Review Telegram digest (1 Aug audit) ─────────────────────────
+// review = { totalEvals, dayCount, weekStart, weekEnd, stats: [{label, blockedCount, blockRatePct}] }
+// from computeWeeklyGateReview() in server.js. Sent once, Friday close.
+async function sendWeeklyGateReview(review) {
+    if (!review || review.totalEvals === 0) {
+        await sendMessage(`📅 <b>WEEKLY SELF-REVIEW</b>\n━━━━━━━━━━━━━━━━━━\nNo directional signal evaluations logged this week — nothing to review yet.\n<i>VardaanNifty AI</i>`);
+        return;
+    }
+    const top = review.stats.slice(0, 5);
+    const lines = top.map((s, i) =>
+        `${i + 1}. ${s.label} — blocked ${s.blockRatePct}% of evaluations (${s.blockedCount}/${review.totalEvals})`
+    ).join('\n');
+    const msg = `
+📅 <b>WEEKLY SELF-REVIEW</b> (${review.weekStart} → ${review.weekEnd})
+━━━━━━━━━━━━━━━━━━
+${review.totalEvals} directional evaluations across ${review.dayCount} trading day(s) this week.
+
+<b>Top gates blocking signals:</b>
+${lines || 'No gate blocked any evaluation this week — clean week.'}
+
+This is descriptive, not a recommendation — a gate blocking often isn't wrong by itself. Worth a look if the SAME gate tops this list week after week.
+━━━━━━━━━━━━━━━━━━
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
+<i>VardaanNifty AI</i>
+`.trim();
+    await sendMessage(msg);
+}
+
+// ── Telegram webhook helpers (1 Aug — "log to Journal" one-tap button) ─────
+// Used by server.js's /api/telegram-webhook route when the button is tapped.
+async function answerCallbackQuery(callbackQueryId, text) {
+    if (!BOT_TOKEN) return;
+    try {
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`,
+            { callback_query_id: callbackQueryId, text, show_alert: false },
+            { timeout: 8000 }
+        );
+    } catch (e) { console.warn('[Telegram] answerCallbackQuery error:', e.message); }
+}
+
+// Removes the inline keyboard from the original message after it's been
+// tapped once, so the same signal can't be double-logged to the Journal.
+async function clearMessageButtons(chatId, messageId) {
+    if (!BOT_TOKEN) return;
+    try {
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageReplyMarkup`,
+            { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } },
+            { timeout: 8000 }
+        );
+    } catch (e) { console.warn('[Telegram] clearMessageButtons error:', e.message); }
+}
+
+// Registers (or re-registers) the webhook URL with Telegram — called once at
+// server startup. secretToken is echoed back by Telegram in every webhook
+// POST's X-Telegram-Bot-Api-Secret-Token header so /api/telegram-webhook can
+// verify the request genuinely came from Telegram, not a stranger who guessed
+// the URL.
+async function setTelegramWebhook(publicUrl, secretToken) {
+    if (!BOT_TOKEN || !publicUrl) return false;
+    try {
+        const res = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`, {
+            url: `${publicUrl.replace(/\/$/, '')}/api/telegram-webhook`,
+            secret_token: secretToken,
+            allowed_updates: ['callback_query'],
+        }, { timeout: 8000 });
+        if (res.data?.ok) {
+            console.log('✅ Telegram webhook registered:', `${publicUrl}/api/telegram-webhook`);
+            return true;
+        }
+        console.warn('⚠️ Telegram setWebhook rejected:', JSON.stringify(res.data));
+        return false;
+    } catch (e) { console.warn('[Telegram] setWebhook error:', e.message); return false; }
 }
 
 module.exports = {
@@ -826,5 +936,9 @@ module.exports = {
     sendNishanebaazAlert,
     sendSpreadAlert,
     sendRawMessage,
+    sendWeeklyGateReview,
+    answerCallbackQuery,
+    clearMessageButtons,
+    setTelegramWebhook,
     isConfigured
 };
