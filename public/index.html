@@ -3448,14 +3448,16 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
   <div class="chart-wrap">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <div style="font-family:'Orbitron',monospace;font-size:13px;color:var(--blue);letter-spacing:2px;">📊 NIFTY CHART</div>
-      <div style="display:flex;align-items:center;gap:10px;">
+      <div style="display:flex;align-items:center;gap:8px;">
         <div style="font-family:'Share Tech Mono',monospace;font-size:13px;color:var(--text);" id="chart-nifty-label">--</div>
+        <button onclick="toggleChartMode()" title="Switch to full TradingView chart" id="chart-tv-toggle-btn"
+          style="background:none;border:1px solid var(--border);color:var(--dim);border-radius:4px;padding:3px 6px;cursor:pointer;font-size:11px;line-height:1;white-space:nowrap;">📈 TradingView</button>
         <button onclick="toggleChartFullscreen()" title="Maximize" id="chart-maximize-btn"
           style="background:none;border:1px solid var(--border);color:var(--dim);border-radius:4px;padding:3px 6px;cursor:pointer;font-size:13px;line-height:1;">⛶</button>
       </div>
     </div>
-    <!-- TF buttons + overlay toggles on same row -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:6px;flex-wrap:wrap;">
+    <!-- TF buttons + overlay toggles on same row — hidden while TradingView mode is active -->
+    <div id="chart-own-controls" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:6px;flex-wrap:wrap;">
       <div class="chart-controls" style="margin-bottom:0;">
         <button class="chart-btn" onclick="setChartTF('1m',this)">1m</button>
         <button class="chart-btn active" onclick="setChartTF('5m',this)">5m</button>
@@ -3472,11 +3474,12 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     </div>
     <div class="chart-box" style="position:relative;">
       <canvas id="chart-canvas"></canvas>
+      <div id="tv-chart-container" style="display:none;width:100%;height:420px;"></div>
       <div id="chart-loading" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:var(--bg2);font-size:13px;color:var(--blue);letter-spacing:1px;">⏳ LOADING…</div>
       <div id="chart-empty"   style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:var(--bg2);font-size:13px;color:var(--dim);letter-spacing:1px;">📭 NO DATA FOR THIS TIMEFRAME</div>
     </div>
     <div style="text-align:right;font-size:11px;color:var(--dim);margin-top:3px;" id="chart-updated"></div>
-    <div class="chart-legend" style="margin-top:5px;">
+    <div class="chart-legend" style="margin-top:5px;" id="chart-own-legend">
       <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div><span>Bull</span></div>
       <div class="legend-item"><div class="legend-dot" style="background:var(--red)"></div><span>Bear</span></div>
       <div class="legend-item"><div class="legend-dot" style="background:#3399ff"></div><span>VWAP</span></div>
@@ -3748,7 +3751,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
 <!-- BOTTOM TABS — 6 tabs -->
 <div class="bottom-tabs">
   <button class="btab active" id="btab-dashboard" onclick="switchTab('dashboard',this)"><span class="bi">📊</span>LIVE</button>
-  <button class="btab" id="btab-physics" onclick="switchTab('physics',this)"><span class="bi">⚛️</span>PHYSICS</button>
+  <button class="btab" id="btab-chart" onclick="switchTab('chart',this)"><span class="bi">🕯️</span>CHART</button>
   <button class="btab" id="btab-breadth" onclick="switchTab('breadth',this)"><span class="bi">📈</span>BREADTH</button>
   <button class="btab" id="btab-insights" onclick="switchTab('insights',this)"><span class="bi">🧠</span>INSIGHTS</button>
   <button class="btab" id="btab-more" onclick="toggleMoreMenu(this)"><span class="bi">☰</span>MORE</button>
@@ -3758,7 +3761,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
 <div id="more-menu" style="display:none;position:fixed;bottom:62px;right:0;left:0;z-index:300;background:rgba(6,13,20,0.97);border-top:1px solid rgba(0,255,136,0.15);backdrop-filter:blur(16px);padding:8px 0 4px;">
   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;padding:0 8px;">
     <button class="more-item" onclick="switchTabFromMore('journal')"><span>📔</span>JOURNAL</button>
-    <button class="more-item" onclick="switchTabFromMore('chart')"><span>🕯️</span>CHART</button>
+    <button class="more-item" onclick="switchTabFromMore('physics')"><span>⚛️</span>PHYSICS</button>
     <button class="more-item" onclick="switchTabFromMore('guard')"><span>🛡️</span>GUARD</button>
     <button class="more-item" onclick="switchTabFromMore('tools')"><span>🔧</span>TOOLS</button>
     <button class="more-item" onclick="switchTabFromMore('analytics')"><span>📊</span>ANALYTICS</button>
@@ -7621,6 +7624,55 @@ function _drawSignalFlag(ctx, cx, boxY, tailY, text, color, pointUp) {
 }
 
 // ── Chart maximize/fullscreen toggle ────────────────────────────────────
+// ── Hybrid TradingView view ─────────────────────────────────────────────
+// Free TradingView "Advanced Chart" widget — no API key, no cost, and it
+// does NOT touch our Fyers/Angel/NSE quota (own independent data feed).
+// Trade-off: it's a sealed iframe, so our own CALL/PUT signal markers
+// can't be drawn on it — that's why this is a toggle, not a replacement.
+// Our own chart (with SIG markers) stays the default view.
+function loadTradingViewWidget() {
+  const container = document.getElementById('tv-chart-container');
+  if (!container || container.dataset.loaded === '1') return;
+  container.innerHTML = '<div class="tradingview-widget-container" style="height:100%;width:100%;">'
+    + '<div class="tradingview-widget-container__widget"></div></div>';
+  const script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  script.async = true;
+  script.textContent = JSON.stringify({
+    autosize: true,
+    symbol: 'NSE:NIFTY',
+    interval: '5',
+    timezone: 'Asia/Kolkata',
+    theme: 'dark',
+    style: '1',
+    locale: 'en',
+    allow_symbol_change: true,
+    hide_top_toolbar: false,
+    save_image: false,
+    support_host: 'https://www.tradingview.com'
+  });
+  container.querySelector('.tradingview-widget-container').appendChild(script);
+  container.dataset.loaded = '1';
+}
+
+function toggleChartMode() {
+  const canvas   = document.getElementById('chart-canvas');
+  const tv       = document.getElementById('tv-chart-container');
+  const btn      = document.getElementById('chart-tv-toggle-btn');
+  const ownCtrls = document.getElementById('chart-own-controls');
+  const ownLeg   = document.getElementById('chart-own-legend');
+  if (!canvas || !tv) return;
+  const switchingToTV = tv.style.display === 'none';
+  tv.style.display = switchingToTV ? 'block' : 'none';
+  canvas.style.display = switchingToTV ? 'none' : 'block';
+  if (ownCtrls) ownCtrls.style.display = switchingToTV ? 'none' : '';
+  if (ownLeg)   ownLeg.style.display   = switchingToTV ? 'none' : '';
+  if (btn) btn.textContent = switchingToTV ? '🕯️ Our Chart' : '📈 TradingView';
+  if (switchingToTV) loadTradingViewWidget();
+  else { const c = document.getElementById('chart-canvas'); if (c) _drawChart(c); }
+}
+
 function toggleChartFullscreen() {
   const box = document.querySelector('#panel-chart .chart-box');
   const btn = document.getElementById('chart-maximize-btn');
