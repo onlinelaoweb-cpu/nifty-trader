@@ -6684,10 +6684,13 @@ async function _apiPost(url, body) {
 
 // Normalize a server trade object to the local schema used by the renderer.
 function _normServerTrade(t) {
-  // Server stores time as "HH:MM"; reconstruct a full ISO string for today so
-  // date comparisons in getTradeSummaryLocal() continue to work.
-  let isoTime = t.time;
-  if (t.time && /^\d{2}:\d{2}$/.test(t.time)) {
+  // FIX (2 Aug audit): previously this ALWAYS stamped today's date onto the
+  // "HH:MM" time string — so a trade logged yesterday would show as if it
+  // happened today, or vanish once the old daily reset cleared trades[].
+  // `t.ts` is now the real DB timestamp (added 2 Aug); only fall back to the
+  // old today-reconstruction for legacy cached trades that predate this fix.
+  let isoTime = t.ts || t.time;
+  if (!t.ts && t.time && /^\d{2}:\d{2}$/.test(t.time)) {
     const d = new Date();
     const [h, m] = t.time.split(':').map(Number);
     d.setHours(h, m, 0, 0);

@@ -31,10 +31,10 @@ function sanitizeForTelegramHTML(text) {
 }
 
 // ── Send message ──────────────────────────────────────
-// replyMarkup: optional Telegram inline_keyboard object, e.g.
-//   { inline_keyboard: [[{ text: '✅ I took this trade', callback_data: 'logtrade:123' }]] }
-// Used by the "log to Journal from Telegram" one-tap feature (1 Aug) — see
-// server.js /api/telegram-webhook for what happens when the button is tapped.
+// replyMarkup: optional Telegram inline_keyboard object — kept as a generic
+// capability (unused as of 1 Aug; an earlier "log to Journal" button was
+// replaced by fully-automatic Journal punching, see server.js
+// createJournalEntryFromSignalPerf) in case a future alert needs a button.
 async function sendMessage(text, replyMarkup) {
     if (!isConfigured()) {
         console.warn('⚠️  Telegram not configured — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing. Message NOT sent:', text.substring(0, 50));
@@ -75,7 +75,7 @@ async function sendMessage(text, replyMarkup) {
 }
 
 // ── Signal Change Alert ───────────────────────────────
-async function sendSignalAlert(state, prevSignal, strikeData = null, perfId = null) {
+async function sendSignalAlert(state, prevSignal, strikeData = null, autoLogged = false) {
     const emoji = state.signal === 'BUY CALL' ? '🟢'
                 : state.signal === 'BUY PUT'  ? '🔴'
                 : '🟡';
@@ -307,20 +307,17 @@ ${detailsBlock}⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, time
 <i>VardaanNifty AI</i>
 `.trim();
 
-    // ── One-tap "log to Journal" button (1 Aug audit) ────────────────────────
-    // The whole point: at the moment this alert lands, opening the app and
-    // manually typing strike/premium/lots isn't realistic if you're actually
-    // about to place the order. One tap here calls /api/telegram-webhook in
-    // server.js, which auto-creates the Journal entry using strikeData's own
-    // suggested entry (editable in-app afterward if the real fill differed).
-    const replyMarkup = (perfId != null && strikeData)
-        ? { inline_keyboard: [[{ text: '✅ I took this trade — log it', callback_data: `logtrade:${perfId}` }]] }
-        : undefined;
-    await sendMessage(msg, replyMarkup);
+    // ── Auto-punch to Journal (1 Aug audit, replaces the earlier one-tap
+    // button — "office mein rehta hun, Telegram pe hamesha available nahi").
+    // The Journal entry is created BEFORE this alert is even sent (see
+    // server.js) — this line is just confirming to the trader that it
+    // happened, not asking them to do anything.
+    const finalMsg = autoLogged ? `${msg}\n\n📔 Auto-logged to Journal (edit premium there if your actual fill differed)` : msg;
+    await sendMessage(finalMsg);
 }
 
 // ── MTF All Aligned Alert ─────────────────────────────
-async function sendMTFAlert(state, strikeData = null, perfId = null) {
+async function sendMTFAlert(state, strikeData = null, autoLogged = false) {
     const emoji      = state.mtf.signal === 'BUY CALL' ? '🟢' : '🔴';
     const validCount     = state.mtf.validTFCount ?? 3;
     const oneHourLagging = state.mtf.oneHourLagging ?? false;
@@ -464,12 +461,11 @@ ${referenceOnlyNote}${levelsBlock}
 <i>VardaanNifty AI</i>
 `.trim();
 
-    // Only offer the one-tap log button when this is genuinely actionable
-    // (main engine confirms) — a REFERENCE ONLY alert isn't a trade to log.
-    const replyMarkup = (perfId != null && strikeData && mainConfirms)
-        ? { inline_keyboard: [[{ text: '✅ I took this trade — log it', callback_data: `logtrade:${perfId}` }]] }
-        : undefined;
-    await sendMessage(msg, replyMarkup);
+    // Journal was already auto-punched in server.js BEFORE this alert was
+    // sent (only when main engine confirms — a REFERENCE ONLY lead isn't a
+    // taken trade). This just confirms it to the trader.
+    const finalMsg = autoLogged ? `${msg}\n\n📔 Auto-logged to Journal (edit premium there if your actual fill differed)` : msg;
+    await sendMessage(finalMsg);
 }
 
 // ── Morning Market Summary ────────────────────────────
@@ -876,52 +872,6 @@ This is descriptive, not a recommendation — a gate blocking often isn't wrong 
     await sendMessage(msg);
 }
 
-// ── Telegram webhook helpers (1 Aug — "log to Journal" one-tap button) ─────
-// Used by server.js's /api/telegram-webhook route when the button is tapped.
-async function answerCallbackQuery(callbackQueryId, text) {
-    if (!BOT_TOKEN) return;
-    try {
-        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`,
-            { callback_query_id: callbackQueryId, text, show_alert: false },
-            { timeout: 8000 }
-        );
-    } catch (e) { console.warn('[Telegram] answerCallbackQuery error:', e.message); }
-}
-
-// Removes the inline keyboard from the original message after it's been
-// tapped once, so the same signal can't be double-logged to the Journal.
-async function clearMessageButtons(chatId, messageId) {
-    if (!BOT_TOKEN) return;
-    try {
-        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageReplyMarkup`,
-            { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } },
-            { timeout: 8000 }
-        );
-    } catch (e) { console.warn('[Telegram] clearMessageButtons error:', e.message); }
-}
-
-// Registers (or re-registers) the webhook URL with Telegram — called once at
-// server startup. secretToken is echoed back by Telegram in every webhook
-// POST's X-Telegram-Bot-Api-Secret-Token header so /api/telegram-webhook can
-// verify the request genuinely came from Telegram, not a stranger who guessed
-// the URL.
-async function setTelegramWebhook(publicUrl, secretToken) {
-    if (!BOT_TOKEN || !publicUrl) return false;
-    try {
-        const res = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`, {
-            url: `${publicUrl.replace(/\/$/, '')}/api/telegram-webhook`,
-            secret_token: secretToken,
-            allowed_updates: ['callback_query'],
-        }, { timeout: 8000 });
-        if (res.data?.ok) {
-            console.log('✅ Telegram webhook registered:', `${publicUrl}/api/telegram-webhook`);
-            return true;
-        }
-        console.warn('⚠️ Telegram setWebhook rejected:', JSON.stringify(res.data));
-        return false;
-    } catch (e) { console.warn('[Telegram] setWebhook error:', e.message); return false; }
-}
-
 module.exports = {
     sendSignalAlert,
     sendMTFAlert,
@@ -937,8 +887,5 @@ module.exports = {
     sendSpreadAlert,
     sendRawMessage,
     sendWeeklyGateReview,
-    answerCallbackQuery,
-    clearMessageButtons,
-    setTelegramWebhook,
     isConfigured
 };

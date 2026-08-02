@@ -60,7 +60,7 @@ const {
     sendCloseSummary, sendExitAlert, sendMomentumExitWarning,
     sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured,
     sendScalpAlert, sendSignalTimeline, sendPartialProfitAlert,
-    sendWeeklyGateReview, answerCallbackQuery, clearMessageButtons, setTelegramWebhook,
+    sendWeeklyGateReview,
 }                                   = require('./src/api/telegram');
 
 const app    = express();
@@ -3580,9 +3580,16 @@ async function checkTelegramAlerts(newSignal) {
             sessionOpenVix = null;
             dailySignalCounts = { main: 0, mtfStrong: 0, mtfModerate: 0, mtfWeak: 0 };
             gateBlockCounts = {}; gateBlockTotalEvals = 0;
-            // Reset intraday trades so yesterday's trades don't show on next morning's fresh session
-            trades = [];
-            console.log('[Daily Reset] Intraday trades cleared for next session');
+            // CHANGED (2 Aug audit): trades[] used to be wiped here so
+            // "yesterday's trades don't show on next morning's fresh session."
+            // That was the root cause of the Journal date bug — a trade logged
+            // one day either vanished after this reset, or (once ts/date
+            // tracking was fixed) would have looked stale with no way to tell
+            // it apart from today's. Trades now persist in memory (mirroring
+            // the DB, which already kept full history) and the Journal UI
+            // buckets them into Today / Yesterday / older by their real `ts`
+            // timestamp instead of relying on this reset to hide old ones.
+            console.log('[Daily Reset] Signal/gate counters cleared for next session (trades preserved)');
         }, 6*60*60*1000); // 6 hours after close = ~21:30 IST
         return;
     }
@@ -3633,8 +3640,20 @@ async function checkTelegramAlerts(newSignal) {
         } catch(e) { console.warn('[Strike] compute error:', e.message); }
 
         let mainPerfRec = null;
+        let mainAutoLogged = false;
         if (strikeDataForAlert) {
             mainPerfRec = await startSignalPerformance(newSignal, strikeDataForAlert).catch(e => { console.warn('[SignalPerf] start error:', e.message); return null; });
+            // ── Auto-punch to Journal (1 Aug) — replaces the one-tap button.
+            // "Office mein rehta hun, Telegram pe hamesha available nahi" — so
+            // tapping a button isn't reliable either. Every confirmed signal now
+            // logs itself to the Journal the moment it fires, no action needed.
+            // If a particular signal wasn't actually traded, delete it from the
+            // Journal afterward; if the real fill differed, edit the premium
+            // (that edit is what feeds Slippage tracking).
+            if (mainPerfRec?.id != null) {
+                const autoTrade = await createJournalEntryFromSignalPerf(mainPerfRec.id).catch(e => { console.warn('[AutoJournal] error:', e.message); return null; });
+                mainAutoLogged = !!autoTrade;
+            }
         }
 
         marketState.momentumDecayWarning = (newSignal === 'BUY CALL' || newSignal === 'BUY PUT')
@@ -3659,7 +3678,7 @@ async function checkTelegramAlerts(newSignal) {
         // reflects the exact tick that actually fired it, not a later one.
         const alertSnapshot = { ...marketState };
         alertSnapshot.similarSetupStats = await getSimilarSetupStats(newSignal, marketState.dynamicLevels?.zone).catch(e => { console.warn('[SimilarSetup] error:', e.message); return null; });
-        await sendSignalAlert(alertSnapshot, prevSignal, strikeDataForAlert, mainPerfRec?.id ?? null);
+        await sendSignalAlert(alertSnapshot, prevSignal, strikeDataForAlert, mainAutoLogged);
         lastSignalFiredPrice = marketState.nifty || 0;
 
         // ── Scalp Plan alert — same confirmed signal, alternate fast-exit plan ──
@@ -3779,8 +3798,17 @@ async function checkTelegramAlerts(newSignal) {
         // would be noisy and meaningless (most of those were never actionable
         // to begin with, per the Lead Quality distinction worked out earlier).
         let mtfPerfRec = null;
+        let mtfAutoLogged = false;
         if (mtfStrikeData && leadQuality.score >= 3) {
             mtfPerfRec = await startSignalPerformance(marketState.mtf.signal, mtfStrikeData, 'mtf').catch(e => { console.warn('[SignalPerf] MTF start error:', e.message); return null; });
+            // Only auto-log when main engine agrees — a REFERENCE ONLY MTF lead
+            // (main engine disagreeing or still WAIT) isn't something to log as
+            // if it were a taken trade.
+            const mainConfirmsMtf = marketState.signal === marketState.mtf.signal;
+            if (mtfPerfRec?.id != null && mainConfirmsMtf) {
+                const autoTrade = await createJournalEntryFromSignalPerf(mtfPerfRec.id).catch(e => { console.warn('[AutoJournal] MTF error:', e.message); return null; });
+                mtfAutoLogged = !!autoTrade;
+            }
         }
         if (leadQuality.label === 'Strong Confluence') dailySignalCounts.mtfStrong++;
         else if (leadQuality.label === 'Moderate') dailySignalCounts.mtfModerate++;
@@ -3823,7 +3851,7 @@ async function checkTelegramAlerts(newSignal) {
         if (leadQuality.score >= 3 && _inSettlingWindow) {
             console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
         } else if (leadQuality.score >= 3) {
-            await sendMTFAlert(marketState, mtfStrikeData, mtfPerfRec?.id ?? null);
+            await sendMTFAlert(marketState, mtfStrikeData, mtfAutoLogged);
             lastMTFAlertAt     = Date.now();
             lastMTFAlertSignal = mtfSignalNow;
         }
@@ -4952,20 +4980,30 @@ app.get('/api/calendar', (req, res) => res.json(marketState.calendarEvents || []
 
 // ── Trade journal helpers ─────────────────────────────
 function getTradeSummary() {
-    const closed = trades.filter(t=>t.status==='CLOSED');
+    // CHANGED (2 Aug audit): trades[] no longer gets wiped daily (see EOD
+    // reset comment above), so this must explicitly filter to today's IST
+    // date now — otherwise "REALIZED P&L TODAY" on the dashboard would
+    // silently become all-time P&L the first time this runs after the fix.
+    const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const todayTrades = trades.filter(t => {
+        const d = t.ts || t.time;
+        if (!d) return true; // legacy rows with no ts at all — don't silently drop them
+        return new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) === todayIST;
+    });
+    const closed = todayTrades.filter(t=>t.status==='CLOSED');
     const totalPnl = closed.reduce((s,t)=>s+(t.pnl||0), 0);
     const winners  = closed.filter(t=>t.pnl>0).length;
     const losers   = closed.filter(t=>t.pnl<0).length;
     const winRate  = (winners+losers)>0 ? Math.round((winners/(winners+losers))*100) : 0;
-    const openPnl  = trades.filter(t=>t.status==='OPEN'&&t.currentPnl!=null).reduce((s,t)=>s+(t.currentPnl||0),0);
-    // Slippage summary — only over trades logged against an actual AI suggestion
-    // (suggestedEntry != null); trades entered with no matching suggestion are
-    // excluded rather than counted as zero slippage.
+    const openPnl  = todayTrades.filter(t=>t.status==='OPEN'&&t.currentPnl!=null).reduce((s,t)=>s+(t.currentPnl||0),0);
+    // Slippage summary — running across ALL trades ever logged (not just
+    // today), same as before this fix; small daily sample sizes make a
+    // same-day-only average too noisy to be useful.
     const withSlippage = trades.filter(t => t.slippagePct != null);
     const avgSlippagePct = withSlippage.length
         ? parseFloat((withSlippage.reduce((s,t)=>s+t.slippagePct, 0) / withSlippage.length).toFixed(1))
         : null;
-    return { totalPnl, openPnl, winners, losers, winRate, totalTrades:trades.length, openTrades:trades.filter(t=>t.status==='OPEN').length, avgSlippagePct, slippageSampleSize: withSlippage.length };
+    return { totalPnl, openPnl, winners, losers, winRate, totalTrades:todayTrades.length, openTrades:todayTrades.filter(t=>t.status==='OPEN').length, avgSlippagePct, slippageSampleSize: withSlippage.length };
 }
 
 // ── Exit monitor — runs every time live premiums arrive ──
@@ -6792,14 +6830,15 @@ app.post('/api/optionflow', requireToken, (req,res) => {
 });
 
 // ── TRADE JOURNAL ─────────────────────────────────────
-// ── Telegram webhook — "log to Journal" one-tap button (1 Aug audit) ────────
+// ── Auto-punch to Journal (1 Aug audit) ──────────────────────────────────────
 // The audit item this solves: "telegram message aaye to trade loonga, usi
-// time journal add karna possible nahi hai" — opening the app and typing
-// strike/premium/lots at the exact moment you're placing a real order isn't
-// realistic. This lets the trader tap ONE button on the alert itself; the
-// Journal entry gets created automatically using the same suggested entry
-// the alert already showed (editable afterward in-app if the real fill
-// differed — that edit is exactly what feeds Slippage tracking).
+// time journal add karna possible nahi hai" — and since the trader is often
+// at office and not reliably watching Telegram either, even a one-tap button
+// isn't dependable. Every confirmed signal now logs itself to the Journal the
+// moment it fires — no button, no app-open needed. If a particular signal
+// wasn't actually traded, delete it from the Journal afterward; if the real
+// fill differed from the suggested entry, edit the premium there (that edit
+// is what feeds Slippage tracking).
 async function createJournalEntryFromSignalPerf(perfId) {
     // Prefer the in-memory record (openPerfRecords) — no DB round-trip, and
     // works even before the DB insert in startSignalPerformance has landed.
@@ -6818,18 +6857,22 @@ async function createJournalEntryFromSignalPerf(perfId) {
     const ist = getIST();
     const time = `${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
     let dbId = null;
+    let dbTs = null;
     if (dbPool) {
         try {
             const r = await dbPool.query(
                 `INSERT INTO journal_trades (time,type,strike,premium,lots,sl,notes,nifty_entry,status,suggested_entry,slippage,slippage_pct)
-                 VALUES ($1,$2,$3,$4,1,$5,'Auto-logged from Telegram',$6,'OPEN',$4,0,0) RETURNING id`,
+                 VALUES ($1,$2,$3,$4,1,$5,'Auto-logged from Telegram',$6,'OPEN',$4,0,0) RETURNING id, ts`,
                 [time, type, strike, entry, sl || 0, marketState.nifty || 0]
             );
             dbId = r.rows[0].id;
+            dbTs = r.rows[0].ts;
         } catch (e) { console.warn('[TelegramWebhook] journal insert error:', e.message); }
     }
     const trade = {
-        id: dbId ?? tradeCounter++, time, type, strike, premium: entry, lots: 1,
+        id: dbId ?? tradeCounter++,
+        ts: dbTs ? new Date(dbTs).toISOString() : new Date().toISOString(),
+        time, type, strike, premium: entry, lots: 1,
         sl: sl || 0, exitPremium: null, pnl: null, status: 'OPEN',
         notes: 'Auto-logged from Telegram', niftyAtEntry: marketState.nifty,
         niftyCurrent: marketState.nifty, niftyMove: 0,
@@ -6839,35 +6882,6 @@ async function createJournalEntryFromSignalPerf(perfId) {
     console.log(`📔 [TelegramWebhook] Auto-logged trade: ${type} ${strike} @₹${entry} (perfId ${perfId})`);
     return trade;
 }
-
-app.post('/api/telegram-webhook', async (req, res) => {
-    // Verify the request genuinely came from Telegram (secret set via
-    // setTelegramWebhook at startup). If TELEGRAM_WEBHOOK_SECRET isn't
-    // configured, this check is skipped — fine for initial setup, but the
-    // secret should be set before relying on this in a public deployment.
-    const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-    if (expectedSecret && req.headers['x-telegram-bot-api-secret-token'] !== expectedSecret) {
-        return res.sendStatus(401);
-    }
-    res.sendStatus(200); // ack immediately — Telegram expects a fast response
-
-    try {
-        const cq = req.body?.callback_query;
-        if (!cq || !cq.data) return;
-        if (cq.data.startsWith('logtrade:')) {
-            const perfId = parseInt(cq.data.split(':')[1], 10);
-            const trade = await createJournalEntryFromSignalPerf(perfId);
-            if (trade) {
-                await answerCallbackQuery(cq.id, `✅ Logged: ${trade.type} ${trade.strike} @₹${trade.premium}`);
-                if (cq.message?.chat?.id && cq.message?.message_id) {
-                    await clearMessageButtons(cq.message.chat.id, cq.message.message_id);
-                }
-            } else {
-                await answerCallbackQuery(cq.id, '⚠️ Could not find this signal — log manually in Journal.');
-            }
-        }
-    } catch (e) { console.warn('[TelegramWebhook] handler error:', e.message); }
-});
 
 app.post('/api/trade/add', requireToken, async (req,res) => {
     const {type,strike,premium,lots,sl,notes,suggestedEntry}=req.body;
@@ -6889,23 +6903,33 @@ app.post('/api/trade/add', requireToken, async (req,res) => {
 
     // ── Persist to DB first (if available) so trade survives a Railway restart ──
     let dbId = null;
+    let dbTs = null;
     if (dbPool) {
         try {
             const r = await dbPool.query(
                 `INSERT INTO journal_trades (time,type,strike,premium,lots,sl,notes,nifty_entry,status,suggested_entry,slippage,slippage_pct)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,$10,$11) RETURNING id`,
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,$10,$11) RETURNING id, ts`,
                 [time, type, parseInt(strike), actualPremium,
                  parseInt(lots)||1, parseFloat(sl)||0, notes||'',
                  marketState.nifty||0, suggEntry, slippage, slippagePct]
             );
             dbId = r.rows[0].id;
+            dbTs = r.rows[0].ts;
         } catch(e) {
             console.error('Journal DB save error:', e.message);
         }
     }
 
+    // ── Date+time bug fix (2 Aug) ────────────────────────────────────────────
+    // Previously only "HH:MM" was sent to the frontend, which reconstructed a
+    // full timestamp using TODAY's date regardless of when the trade actually
+    // happened — so a trade from yesterday would silently show as if logged
+    // today (or vanish once the day rolled over). `ts` is the real DB
+    // timestamp (falls back to server clock if DB write failed) and is now
+    // what the frontend uses to bucket trades into Today/Yesterday/older.
     const trade = {
         id: dbId ?? tradeCounter++,   // use DB id when available
+        ts: dbTs ? new Date(dbTs).toISOString() : new Date().toISOString(),
         time, type, strike:parseInt(strike),
         premium:actualPremium, lots:parseInt(lots)||1,
         sl:parseFloat(sl)||0, exitPremium:null, pnl:null,
@@ -7279,6 +7303,7 @@ async function initializeLiveData() {
             for (const row of jRows.rows) {
                 trades.push({
                     id           : row.id,
+                    ts           : row.ts ? new Date(row.ts).toISOString() : null,
                     time         : row.time,
                     type         : row.type,
                     strike       : row.strike,
@@ -7333,19 +7358,6 @@ server.listen(PORT, () => {
     console.log(`VardaanNifty AI running on port ${PORT}`);
     server.keepAliveTimeout = 120000;
     server.headersTimeout   = 125000;
-    // ── Register Telegram webhook for the "log to Journal" button (1 Aug) ──
-    // Needs RAILWAY_PUBLIC_DOMAIN (set automatically by Railway) and
-    // TELEGRAM_WEBHOOK_SECRET (set this yourself in Railway env vars — any
-    // random string works, it's just used to verify incoming webhook calls
-    // are really from Telegram). Without a secret configured, the webhook
-    // route still works but skips that verification — fine to test with,
-    // set the secret before relying on this day-to-day.
-    if (process.env.RAILWAY_PUBLIC_DOMAIN) {
-        setTelegramWebhook(`https://${process.env.RAILWAY_PUBLIC_DOMAIN}`, process.env.TELEGRAM_WEBHOOK_SECRET)
-            .catch(e => console.warn('[Telegram] webhook registration error:', e.message));
-    } else {
-        console.log('[Telegram] RAILWAY_PUBLIC_DOMAIN not set — skipping webhook registration (local dev, or non-Railway host)');
-    }
     // Print outgoing IP for reference
     axios.get('https://api.ipify.org?format=json', { timeout: 5000 })
         .then(r => console.log(`[Railway] Outgoing IP: ${r.data.ip}`))
