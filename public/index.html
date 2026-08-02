@@ -3564,6 +3564,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
         <div class="res-card"><div class="res-label">BREAK EVEN</div><div class="res-val" id="th-breakeven" style="color:var(--amber);">--</div><div class="res-sub">min movement</div></div>
         <div class="res-card"><div class="res-label">EXIT BY</div><div class="res-val" id="th-exitby" style="color:var(--amber);">--</div><div class="res-sub">recommended</div></div>
       </div>
+      <div class="tool-note">Quick estimate from premium + DTE only — won't exactly match the Θ THETA figure above, which factors in Nifty price, strike and VIX via Black-Scholes.</div>
       <div class="theta-alert" id="theta-alert" style="display:none;"></div>
     </div>
 
@@ -3970,6 +3971,8 @@ function switchTab(name,btn){
     const niftyEl=document.getElementById('calc-nifty'); if(niftyEl && !niftyEl.value && _lastState.nifty>0) niftyEl.value=_lastState.nifty.toFixed(0);
     const vixEl=document.getElementById('calc-vix'); if(vixEl && !vixEl.value && _lastState.vix) vixEl.value=_lastState.vix.toFixed(2);
     const slVixEl=document.getElementById('sl-vix'); if(slVixEl && !slVixEl.value && _lastState.vix) slVixEl.value=_lastState.vix.toFixed(2);
+    const dteEl=document.getElementById('calc-dte'); if(dteEl && !dteEl.value && _lastState.daysToExpiry!=null) dteEl.value=Math.round(_lastState.daysToExpiry);
+    const thDteEl=document.getElementById('th-dte'); if(thDteEl && !thDteEl.value && _lastState.daysToExpiry!=null) thDteEl.value=Math.round(_lastState.daysToExpiry);
     autoATM();
   }
   if(name==='journal'){loadJournal();}
@@ -4379,6 +4382,18 @@ function startSSE() {
             ? 'rgba(0,255,136,0.25)' : 'rgba(255,68,102,0.25)';
           setTimeout(() => { anTab.style.background = ''; }, 2500);
         }
+      }
+      // Chart tab sync — push straight into the signal log used by the SIG
+      // overlay so a fresh CALL/PUT flag appears the instant it fires, same
+      // moment the Live tab sees it. No extra fetch — this SSE push already
+      // carries everything the flag needs.
+      if (!window._signalLog) window._signalLog = [];
+      const alreadyHave = window._signalLog.some(s => s.time === sig.ts && s.type === sig.signal);
+      if (!alreadyHave) window._signalLog.push({ time: sig.ts, type: sig.signal });
+      const chartPanel = document.getElementById('panel-chart');
+      const chartCanvas = document.getElementById('chart-canvas');
+      if (chartPanel && chartPanel.classList.contains('active') && chartCanvas) {
+        _drawChart(chartCanvas);
       }
     } catch(_) {}
   });
@@ -6839,6 +6854,10 @@ function _renderJournal() {
         : '<span style="display:flex;align-items:center;gap:3px;" id="exit-wrap-' + t.id + '">'
           + '<button data-exit-id="' + t.id + '" data-premium="' + t.premium + '" '
           + 'style="font-size:11px;padding:2px 5px;background:rgba(255,187,0,0.1);border:1px solid var(--amber);color:var(--amber);border-radius:3px;cursor:pointer">EXIT</button></span>';
+      // Per-trade delete — removes just this one entry (server + local), unlike
+      // the top "Clear All" button which wipes the entire journal.
+      const delBtn = '<button onclick="deleteTrade(' + t.id + ')" title="Delete this entry" '
+        + 'style="font-size:11px;padding:2px 5px;background:rgba(255,50,50,0.08);border:1px solid var(--red);color:var(--red);border-radius:3px;cursor:pointer;line-height:1;">🗑</button>';
       html += '<div class="trade-row">'
         + '<span style="color:' + (t.type === 'CE' ? 'var(--green)' : 'var(--red)') + ';">' + t.type + '</span>'
         + '<span>' + t.strike + ' @₹' + t.premium + '</span>'
@@ -6846,6 +6865,7 @@ function _renderJournal() {
         + '<span style="color:' + pnlRowColor + ';">' + pnlRowStr + '</span>'
         + '<span style="font-size:11px;color:var(--dim);">' + timeStr + '</span>'
         + exitBtn
+        + delBtn
         + '</div>';
       if (t.slippagePct != null) {
         const slipColor = Math.abs(t.slippagePct) >= 5 ? 'var(--red)' : 'var(--dim)';
@@ -6946,6 +6966,77 @@ async function confirmExit(id) {
   } catch(e) {
     console.warn('📔 Exit server sync failed — exit kept in localStorage only:', e.message);
   }
+}
+
+// Delete a single trade entry — optimistic remove with a 6s "Undo" toast
+// before the server delete actually fires. Tapping Undo restores it locally
+// and cancels the pending server call, so nothing is lost unless the toast
+// times out. Unlike clearAllTrades(), leaves every other entry untouched.
+let _pendingDelete = null; // { trade, timerId } — only one undo slot at a time
+
+function deleteTrade(id) {
+  const idx = _trades.findIndex(t => t.id === id);
+  if (idx === -1) return;
+  const trade = _trades[idx];
+
+  // A second delete before the first's undo window closed? Commit the first
+  // one now so we don't lose track of it, then start the new undo window.
+  if (_pendingDelete) _finalizeDelete(_pendingDelete.trade.id);
+
+  _trades.splice(idx, 1);
+  localStorage.setItem('vn_trades', JSON.stringify(_trades));
+  _renderJournal();
+
+  _pendingDelete = { trade, timerId: setTimeout(() => _finalizeDelete(trade.id), 6000) };
+  _showUndoToast();
+}
+
+// Actually deletes from the server (Postgres journal_trades) once the undo
+// window has closed without being cancelled.
+function _finalizeDelete(id) {
+  if (_pendingDelete && _pendingDelete.trade.id === id) {
+    clearTimeout(_pendingDelete.timerId);
+    _pendingDelete = null;
+    _hideUndoToast();
+  }
+  const _delTok = localStorage.getItem('vn_token') || '';
+  const _delHeaders = _delTok ? { 'X-App-Token': _delTok } : {};
+  fetch('/api/trade/' + id, { method: 'DELETE', headers: _delHeaders })
+    .then(() => console.log('📔 Trade', id, 'deleted from server'))
+    .catch(e => console.warn('📔 Delete server sync failed:', e.message));
+}
+
+function undoDelete() {
+  if (!_pendingDelete) return;
+  clearTimeout(_pendingDelete.timerId);
+  const trade = _pendingDelete.trade;
+  _pendingDelete = null;
+  _trades.push(trade);
+  localStorage.setItem('vn_trades', JSON.stringify(_trades));
+  _renderJournal();
+  _hideUndoToast();
+}
+
+function _showUndoToast() {
+  let toast = document.getElementById('undo-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'undo-toast';
+    toast.style.cssText = 'position:fixed;bottom:62px;left:50%;transform:translateX(-50%);'
+      + 'background:rgba(10,20,32,0.97);border:1px solid var(--amber);border-radius:6px;'
+      + 'padding:9px 10px 9px 14px;display:flex;align-items:center;gap:12px;'
+      + 'font-family:\'Share Tech Mono\',monospace;font-size:12px;color:#fff;z-index:9999;'
+      + 'box-shadow:0 4px 14px rgba(0,0,0,0.5);white-space:nowrap;';
+    document.body.appendChild(toast);
+  }
+  toast.innerHTML = 'Trade deleted'
+    + '<button onclick="undoDelete()" style="background:none;border:1px solid var(--amber);'
+    + 'color:var(--amber);border-radius:3px;padding:3px 9px;cursor:pointer;font-weight:700;">UNDO</button>';
+  toast.style.display = 'flex';
+}
+function _hideUndoToast() {
+  const toast = document.getElementById('undo-toast');
+  if (toast) toast.style.display = 'none';
 }
 
 function showClearConfirm() {
@@ -7285,6 +7376,19 @@ function _stopChartAutoRefresh() {
   if (_chartLiveTimer) { clearInterval(_chartLiveTimer); _chartLiveTimer = null; }
 }
 
+// ── Signal markers for chart SIG overlay ───────────────────────────────────
+// /api/signal-log rows have ts + signal ('BUY CALL'/'BUY PUT') — matches the
+// { time, type } shape _drawChart's SIG overlay already expects.
+async function fetchSignalMarkers(canvas) {
+  try {
+    const r = await fetch('/api/signal-log?limit=100');
+    if (!r.ok) return;
+    const data = await r.json();
+    window._signalLog = (data.rows || []).map(row => ({ time: row.ts, type: row.signal }));
+    if (canvas && _chartOverlay.sig) _drawChart(canvas);
+  } catch(_) {}
+}
+
 async function refreshChart() {
   const canvas = document.getElementById('chart-canvas');
   if (!canvas) return;
@@ -7339,6 +7443,11 @@ async function refreshChart() {
 
     renderCandlestickChart(canvas, candles);
     if (updEl) updEl.textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+
+    // ── Signal markers (▲/▼) — fetch fired-signal history so the SIG overlay
+    // toggle (on by default) actually has data to draw. Previously this was
+    // never fetched, so the toggle silently did nothing.
+    fetchSignalMarkers(canvas);
   } catch (e) {
     if (loadEl) loadEl.style.display = 'none';
     canvas.style.opacity = '1';
@@ -7389,6 +7498,37 @@ let _chartLiveTimer   = null;
 const _CHART_LIVE_MS  = { '1m': 30000, '5m': 60000, '15m': 90000, '1h': 120000, '1D': 300000 };
 
 // ── Called by refreshChart after data arrives ──────────────────────────────
+// ── Rounded flag bubble with a pointer tail toward the candle — mirrors the
+// BUY/SELL tag style traders recognize from TradingView indicators.
+function _drawSignalFlag(ctx, cx, boxY, tailY, text, color, pointUp) {
+  ctx.save();
+  ctx.font = 'bold 9px monospace';
+  const padX = 5;
+  const textW = ctx.measureText(text).width;
+  const w = textW + padX * 2, h = 13, r = 3;
+  const x0 = cx - w / 2, y0 = boxY - h / 2;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x0 + r, y0);
+  ctx.arcTo(x0 + w, y0, x0 + w, y0 + h, r);
+  ctx.arcTo(x0 + w, y0 + h, x0, y0 + h, r);
+  ctx.arcTo(x0, y0 + h, x0, y0, r);
+  ctx.arcTo(x0, y0, x0 + w, y0, r);
+  ctx.closePath();
+  ctx.fill();
+  // Pointer tail — apex touches the candle (tailY), base sits on the box edge.
+  ctx.beginPath();
+  if (pointUp) { ctx.moveTo(cx - 4, y0); ctx.lineTo(cx + 4, y0); ctx.lineTo(cx, tailY); }
+  else         { ctx.moveTo(cx - 4, y0 + h); ctx.lineTo(cx + 4, y0 + h); ctx.lineTo(cx, tailY); }
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, cx, boxY + 0.5);
+  ctx.restore();
+}
+
 function renderCandlestickChart(canvas, candles) {
   // Store full dataset; reset view only when TF changes (handled by setChartTF)
   _chartAllCandles = candles;
@@ -7413,6 +7553,7 @@ function renderCandlestickChart(canvas, candles) {
       }
       if (fresh && fresh.length) {
         _chartAllCandles = fresh;
+        fetchSignalMarkers(canvas);  // pick up any signal that fired since last tick
         _drawChart(canvas);
         const updEl = document.getElementById('chart-updated');
         if (updEl) updEl.textContent = 'Live · ' + new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -7616,7 +7757,7 @@ function _drawChart(canvas) {
     ctx.strokeRect(x, bodyTop, bw, bodyH);
   });
 
-  // ── Signal markers (▲/▼ arrows on candles from _signalLog) ───────────────
+  // ── Signal markers (CALL/PUT flag labels, TradingView-style bubbles) ─────
   if (_chartOverlay.sig && window._signalLog && window._signalLog.length) {
     window._signalLog.forEach(sig => {
       const sigTime = new Date(sig.time).getTime();
@@ -7625,15 +7766,15 @@ function _drawChart(canvas) {
         return Math.abs(ct - sigTime) < 5 * 60 * 1000; // within 5 min
       });
       if (idx < 0) return;
-      const x = toX(idx) + bw/2;
       const isBull = sig.dir === 'bull' || sig.type === 'BUY CALL';
-      const y = isBull ? toY(slice[idx].low) + 8 : toY(slice[idx].high) - 8;
-      ctx.save();
-      ctx.fillStyle = isBull ? '#00ff88' : '#ff2244';
-      ctx.font = 'bold 10px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(isBull ? '▲' : '▼', x, y);
-      ctx.restore();
+      const label  = isBull ? 'CALL' : 'PUT';
+      const color  = isBull ? '#2962ff' : '#ff1f5e';
+      const cx     = toX(idx) + bw/2;
+      // CALL flag sits below the candle low, pointing up into it (like a BUY tag).
+      // PUT flag sits above the candle high, pointing down into it (like a SELL tag).
+      const tailY = isBull ? toY(slice[idx].low) + 4 : toY(slice[idx].high) - 4;
+      const boxY  = isBull ? tailY + 15 : tailY - 15;
+      _drawSignalFlag(ctx, cx, boxY, tailY, label, color, isBull);
     });
   }
 
@@ -8005,7 +8146,7 @@ function calcSL() {
   document.getElementById('sl-maxloss').textContent = '₹' + (prem * 0.20 * qty * LOT_SIZE).toFixed(0);
   document.getElementById('sl-pnl').textContent = '₹' + (prem * 0.20 * qty * LOT_SIZE).toFixed(0);
   document.getElementById('sl-invested').textContent = '₹' + (prem * qty * LOT_SIZE).toFixed(0);
-  document.getElementById('sl-qty-lbl').textContent = qty + 'lot=' + (qty*65);
+  document.getElementById('sl-qty-lbl').textContent = qty + 'lot=' + (qty*LOT_SIZE);
   // VIX-dynamic SL (Murarka strategy: <12→20%, 12-16→25%, 16-20→30%, >20→35%)
   const vix = parseFloat(document.getElementById('sl-vix').value);
   const vixValEl = document.getElementById('sl-vix-val');
