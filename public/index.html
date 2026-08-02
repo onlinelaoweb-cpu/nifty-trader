@@ -1643,6 +1643,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .chart-btn{background:var(--bg3);border:1px solid var(--border);color:var(--dim);border-radius:5px;padding:4px 11px;font-size:13px;font-family:'Rajdhani',sans-serif;font-weight:700;cursor:pointer;}
 .chart-btn.active{border-color:var(--green);color:var(--green);background:rgba(0,255,136,0.08);}
 .chart-box{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;}
+.chart-box.chart-fullscreen{position:fixed;inset:0;z-index:5000;border-radius:0;padding:10px 6px;display:flex;flex-direction:column;justify-content:center;}
 #chart-canvas{width:100%;height:200px;display:block;}
 .chart-legend{display:flex;gap:10px;margin-top:5px;font-size:12px;color:var(--dim);flex-wrap:wrap;}
 /* Overlay toggle buttons (VOL / RSI / SIG / S/R) */
@@ -3447,7 +3448,11 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
   <div class="chart-wrap">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <div style="font-family:'Orbitron',monospace;font-size:13px;color:var(--blue);letter-spacing:2px;">📊 NIFTY CHART</div>
-      <div style="font-family:'Share Tech Mono',monospace;font-size:13px;color:var(--text);" id="chart-nifty-label">--</div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="font-family:'Share Tech Mono',monospace;font-size:13px;color:var(--text);" id="chart-nifty-label">--</div>
+        <button onclick="toggleChartFullscreen()" title="Maximize" id="chart-maximize-btn"
+          style="background:none;border:1px solid var(--border);color:var(--dim);border-radius:4px;padding:3px 6px;cursor:pointer;font-size:13px;line-height:1;">⛶</button>
+      </div>
     </div>
     <!-- TF buttons + overlay toggles on same row -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:6px;flex-wrap:wrap;">
@@ -4362,6 +4367,22 @@ function startSSE() {
         // Also update ATM strike in hero (recalc on each tick)
         const atmEl = document.getElementById('atm-strike-display-hero');
         if (atmEl) atmEl.textContent = (Math.round(t.nifty / 50) * 50);
+
+        // Chart tab sync — nudge the currently-forming (last) candle's close/
+        // high/low on every tick, so price moves live instead of waiting for
+        // the next periodic /api/chart poll. The poll still runs and remains
+        // the source of truth for opening a fresh candle at each TF boundary.
+        if (_chartAllCandles && _chartAllCandles.length) {
+          const last = _chartAllCandles[_chartAllCandles.length - 1];
+          last.close = t.nifty;
+          if (t.nifty > last.high) last.high = t.nifty;
+          if (t.nifty < last.low)  last.low  = t.nifty;
+          const chartPanel = document.getElementById('panel-chart');
+          const chartCanvas = document.getElementById('chart-canvas');
+          if (chartPanel && chartPanel.classList.contains('active') && chartCanvas) {
+            _drawChart(chartCanvas);
+          }
+        }
       }
     } catch(_) {}
   });
@@ -6858,13 +6879,18 @@ function _renderJournal() {
       // the top "Clear All" button which wipes the entire journal.
       const delBtn = '<button onclick="deleteTrade(' + t.id + ')" title="Delete this entry" '
         + 'style="font-size:11px;padding:2px 5px;background:rgba(255,50,50,0.08);border:1px solid var(--red);color:var(--red);border-radius:3px;cursor:pointer;line-height:1;">🗑</button>';
-      html += '<div class="trade-row">'
+      // Per-trade edit — corrects premium/lots/SL after logging (e.g. actual
+      // fill differed from what was typed). Opens an inline form in-place.
+      const editBtn = '<button onclick="editTradeInline(' + t.id + ')" title="Edit this entry" '
+        + 'style="font-size:11px;padding:2px 5px;background:rgba(0,180,255,0.08);border:1px solid var(--blue);color:var(--blue);border-radius:3px;cursor:pointer;line-height:1;">✏️</button>';
+      html += '<div class="trade-row" data-trade-id="' + t.id + '">'
         + '<span style="color:' + (t.type === 'CE' ? 'var(--green)' : 'var(--red)') + ';">' + t.type + '</span>'
         + '<span>' + t.strike + ' @₹' + t.premium + '</span>'
         + '<span>' + t.lots + 'L ' + slStr + '</span>'
         + '<span style="color:' + pnlRowColor + ';">' + pnlRowStr + '</span>'
         + '<span style="font-size:11px;color:var(--dim);">' + timeStr + '</span>'
         + exitBtn
+        + editBtn
         + delBtn
         + '</div>';
       if (t.slippagePct != null) {
@@ -7037,6 +7063,71 @@ function _showUndoToast() {
 function _hideUndoToast() {
   const toast = document.getElementById('undo-toast');
   if (toast) toast.style.display = 'none';
+}
+
+async function _apiPut(url, body) {
+  const tok = localStorage.getItem('vn_token') || '';
+  const headers = { 'Content-Type': 'application/json' };
+  if (tok) headers['X-App-Token'] = tok;
+  const r = await fetch(url, { method: 'PUT', headers, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+// Edit a trade's premium/lots/SL in-place, without leaving the Journal list.
+// Swaps that one row's HTML for a small inline form (same pattern as EXIT).
+function editTradeInline(id) {
+  const row = document.querySelector('.trade-row[data-trade-id="' + id + '"]');
+  const t = _trades.find(x => x.id === id);
+  if (!row || !t) return;
+  if (row.dataset.editing === '1') return; // already open
+  row.dataset.editing = '1';
+  row.innerHTML =
+    '<span style="font-size:11px;color:' + (t.type === 'CE' ? 'var(--green)' : 'var(--red)') + ';">' + t.type + ' ' + t.strike + '</span>'
+    + '<span style="display:flex;align-items:center;gap:4px;">'
+    + '<input id="edit-prem-' + id + '" type="number" step="0.05" value="' + t.premium + '" placeholder="premium" '
+    + 'style="width:52px;font-size:11px;padding:2px 4px;background:#0a1a2a;border:1px solid var(--blue);color:var(--blue);border-radius:3px;" />'
+    + '<input id="edit-lots-' + id + '" type="number" step="1" min="1" value="' + t.lots + '" placeholder="lots" '
+    + 'style="width:38px;font-size:11px;padding:2px 4px;background:#0a1a2a;border:1px solid var(--blue);color:var(--blue);border-radius:3px;" />'
+    + '<input id="edit-sl-' + id + '" type="number" step="0.05" value="' + (t.sl || '') + '" placeholder="SL" '
+    + 'style="width:48px;font-size:11px;padding:2px 4px;background:#0a1a2a;border:1px solid var(--blue);color:var(--blue);border-radius:3px;" />'
+    + '</span>'
+    + '<button onclick="confirmEditTrade(' + id + ')" style="font-size:11px;padding:2px 5px;background:rgba(0,180,255,0.15);border:1px solid var(--blue);color:var(--blue);border-radius:3px;cursor:pointer;">✓</button>'
+    + '<button onclick="_renderJournal()" style="font-size:11px;padding:2px 4px;background:rgba(255,255,255,0.04);border:1px solid var(--dim);color:var(--dim);border-radius:3px;cursor:pointer;">✕</button>';
+  const inp = document.getElementById('edit-prem-' + id);
+  if (inp) { inp.focus(); inp.select(); }
+}
+
+async function confirmEditTrade(id) {
+  const premEl = document.getElementById('edit-prem-' + id);
+  const lotsEl = document.getElementById('edit-lots-' + id);
+  const slEl   = document.getElementById('edit-sl-' + id);
+  if (!premEl || !lotsEl) return;
+  const premium = parseFloat(premEl.value);
+  const lots    = parseInt(lotsEl.value);
+  const sl      = slEl.value !== '' ? parseFloat(slEl.value) : null;
+  if (isNaN(premium) || premium <= 0 || isNaN(lots) || lots <= 0) {
+    premEl.style.borderColor = 'var(--red)';
+    return;
+  }
+  const t = _trades.find(x => x.id === id);
+  if (!t) return;
+
+  // Optimistic local update — mirrors backend's own recompute of P&L when closed
+  t.premium = premium;
+  t.lots    = lots;
+  t.sl      = sl;
+  if (t.status === 'CLOSED' && t.exit != null) {
+    t.pnl = parseFloat(((t.exit - t.premium) * t.lots * LOT_SIZE).toFixed(0));
+  }
+  localStorage.setItem('vn_trades', JSON.stringify(_trades));
+  _renderJournal();
+
+  try {
+    await _apiPut('/api/trade/' + id, { premium, lots, sl });
+  } catch(e) {
+    console.warn('📔 Edit server sync failed:', e.message);
+  }
 }
 
 function showClearConfirm() {
@@ -7529,6 +7620,19 @@ function _drawSignalFlag(ctx, cx, boxY, tailY, text, color, pointUp) {
   ctx.restore();
 }
 
+// ── Chart maximize/fullscreen toggle ────────────────────────────────────
+function toggleChartFullscreen() {
+  const box = document.querySelector('#panel-chart .chart-box');
+  const btn = document.getElementById('chart-maximize-btn');
+  const canvas = document.getElementById('chart-canvas');
+  if (!box) return;
+  const goingFullscreen = !box.classList.contains('chart-fullscreen');
+  box.classList.toggle('chart-fullscreen', goingFullscreen);
+  document.body.style.overflow = goingFullscreen ? 'hidden' : '';
+  if (btn) { btn.textContent = goingFullscreen ? '✕' : '⛶'; btn.title = goingFullscreen ? 'Exit fullscreen' : 'Maximize'; }
+  if (canvas) _drawChart(canvas);
+}
+
 function renderCandlestickChart(canvas, candles) {
   // Store full dataset; reset view only when TF changes (handled by setChartTF)
   _chartAllCandles = candles;
@@ -7645,12 +7749,23 @@ function _drawChart(canvas) {
   const showRsi = _chartOverlay.rsi;
   const showVol = _chartOverlay.vol;
   const rsiH = showRsi ? 60 : 0;
-  const totalH = 280 + rsiH;
+  const isFullscreen = canvas.closest('.chart-box')?.classList.contains('chart-fullscreen');
+  const totalH = isFullscreen ? (window.innerHeight - 170) : (280 + rsiH);
 
   const W = canvas.parentElement.clientWidth || 360, H = totalH;
-  canvas.width = W; canvas.height = H;
+  // Render at device pixel ratio so the chart is crisp on high-DPI phone
+  // screens (previously canvas.width/height were set 1:1 with CSS pixels,
+  // then the browser upscaled the buffer to fit — that's what caused the blur).
+  // All drawing below still uses W/H (CSS-pixel/logical space) unchanged —
+  // ctx.scale() maps it onto the higher-res backing store.
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30, '1D': 120 };
   const defaultN = tfLimits[_chartTF] || 65;
@@ -7978,7 +8093,7 @@ function _setupChartInteractions(canvas) {
     if (_chartDragging) {
       const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30, '1D': 120 };
       const visN = _chartZoomBars > 0 ? _chartZoomBars : (tfLimits[_chartTF] || 65);
-      const barW = (canvas.width - 52) / visN;
+      const barW = (canvas.clientWidth - 52) / visN;
       const dx = e.clientX - _chartDragStartX;
       const barsShifted = Math.round(-dx / barW);
       _chartViewOffset = Math.max(0, Math.min(_chartAllCandles.length - visN, _chartDragStartOffset + barsShifted));
@@ -8012,7 +8127,7 @@ function _setupChartInteractions(canvas) {
     if (e.touches.length === 1 && _chartDragging) {
       const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30, '1D': 120 };
       const visN = _chartZoomBars > 0 ? _chartZoomBars : (tfLimits[_chartTF] || 65);
-      const barW = (canvas.width - 52) / visN;
+      const barW = (canvas.clientWidth - 52) / visN;
       const dx = e.touches[0].clientX - _chartDragStartX;
       const barsShifted = Math.round(-dx / barW);
       _chartViewOffset = Math.max(0, Math.min(_chartAllCandles.length - visN, _chartDragStartOffset + barsShifted));

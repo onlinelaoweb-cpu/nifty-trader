@@ -6971,6 +6971,38 @@ app.post('/api/trade/exit', requireToken, async (req,res) => {
     res.json({success:true, trade});
 });
 
+// Edit an existing trade's premium/lots/SL/notes after logging (e.g. actual
+// fill differed from what was typed, or a correction is needed). If the
+// trade is already CLOSED, P&L is recomputed against the new premium/lots
+// so it doesn't go stale.
+app.put('/api/trade/:id', requireToken, async (req,res) => {
+    const tid = parseInt(req.params.id);
+    const trade = trades.find(t => t.id === tid);
+    if (!trade) return res.json({success:false, msg:'Not found'});
+
+    const { premium, lots, sl, notes } = req.body;
+    if (premium != null && premium !== '') trade.premium = parseFloat(premium);
+    if (lots != null && lots !== '') trade.lots = parseInt(lots) || trade.lots;
+    if (sl != null && sl !== '') trade.sl = parseFloat(sl);
+    if (notes != null) trade.notes = notes;
+
+    if (trade.status === 'CLOSED' && trade.exitPremium != null) {
+        trade.pnl = parseFloat(((trade.exitPremium - trade.premium) * trade.lots * LOT_SIZE).toFixed(0));
+    }
+
+    if (dbPool) {
+        try {
+            await dbPool.query(
+                `UPDATE journal_trades SET premium=$1, lots=$2, sl=$3, notes=$4, pnl=$5 WHERE id=$6`,
+                [trade.premium, trade.lots, trade.sl, trade.notes, trade.pnl, tid]
+            );
+        } catch(e) { console.error('Journal edit DB error:', e.message); }
+    }
+
+    console.log(`📔 Trade ${tid} edited: premium=₹${trade.premium} lots=${trade.lots} sl=${trade.sl}`);
+    res.json({success:true, trade});
+});
+
 app.delete('/api/trade/:id', requireToken, async (req,res) => {
     const tid = parseInt(req.params.id);
     trades = trades.filter(t => t.id !== tid);
