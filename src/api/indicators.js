@@ -188,20 +188,37 @@ function calcVWAP() {
 // "volume should be a numeric decision input, not just spike/no-spike").
 // Returns the actual ratio so a 2.0x spike and a 5.0x breakout can be told
 // apart, instead of both just tripping the same true/false flag.
+//
+// ROOT CAUSE FIX (3 Aug audit — ChatGPT flagged 0.02x/0.04x/0.07x readings
+// coexisting with "Lead Quality: Strong Confluence"): the old version compared
+// currentCandle.volume (the STILL-FORMING candle — tick count starts at 1 and
+// climbs to ~60 as the minute progresses) against avgVol from the last 10
+// FULLY CLOSED candles (~60 ticks each). Called anywhere but the very last
+// second of a minute, this is a partial-candle-vs-full-candle mismatch, not a
+// real low-volume reading — 4 ticks into a new minute vs a ~57-tick average
+// is mathematically going to read ~0.07x almost every time regardless of
+// actual market activity. That's why it kept firing low no matter how strong
+// the move was, and why it contradicted the Strong Confluence label.
+// Fix: compare the last CLOSED candle's full volume against the average of
+// the closed candles before it — both sides are now "whole minutes", so the
+// ratio is finally apples-to-apples. Trade-off: RVOL now updates once per
+// minute (at candle close) instead of continuously — a good trade since a
+// mid-formation number was never meaningful to begin with.
 function calcRVOL() {
-    if (!currentCandle) return { rvol: null, avgVol: null, reliable: false };
+    if (candleHistory.length < 6) return { rvol: null, avgVol: null, reliable: false };
 
-    const recent = candleHistory.slice(-10);
-    if (recent.length < 5) return { rvol: null, avgVol: null, reliable: false };  // not enough history yet
+    const lastClosed    = candleHistory[candleHistory.length - 1];
+    const priorCandles  = candleHistory.slice(-11, -1); // up to 10 candles before lastClosed
+    if (priorCandles.length < 5) return { rvol: null, avgVol: null, reliable: false };  // not enough history yet
 
-    const avgVol = recent.reduce((s, c) => s + c.volume, 0) / recent.length;
+    const avgVol = priorCandles.reduce((s, c) => s + c.volume, 0) / priorCandles.length;
 
     // Guard: if average volume ≤ 2 ticks, we're on Yahoo fallback (1 tick/poll).
     // RVOL is meaningless on polling data — mark unreliable so callers skip it
     // entirely rather than voting on phantom "spikes".
     if (avgVol <= 2) return { rvol: null, avgVol, reliable: false };
 
-    const rvol = parseFloat((currentCandle.volume / avgVol).toFixed(2));
+    const rvol = parseFloat((lastClosed.volume / avgVol).toFixed(2));
     return { rvol, avgVol: Math.round(avgVol), reliable: true };
 }
 

@@ -96,6 +96,21 @@ async function sendSignalAlert(state, prevSignal, strikeData = null, autoLogged 
         ? `VWAP: ${state.vwap.toLocaleString('en-IN')}`
         : 'VWAP: --';
 
+    // ── ADX (3 Aug audit — Prabhash asked for this in the Telegram text
+    // itself so the dashboard doesn't need a separate check). Shows the 1m
+    // ADX that actually gates THIS (Main Engine) signal, plus 5m/15m/1h for
+    // comparison against a chart on a different timeframe — see the ADX(1m)
+    // vs 15m-chart confusion from the 3 Aug audit for why both are shown.
+    const adx1mVal = state.adx?.adx ?? null;
+    const adxInfo = adx1mVal != null
+        ? `ADX(1m): ${adx1mVal.toFixed(1)}${adx1mVal >= 20 ? ' ✅' : ' ⛔'}`
+        : 'ADX(1m): --';
+    const adx5m  = state.mtf?.tf5m?.adx  ?? null;
+    const adx15m = state.mtf?.tf15m?.adx ?? null;
+    const adx1h  = state.mtf?.tf1h?.adx  ?? null;
+    const adxMtfLine = `📈 ADX — 1m:${adx1mVal != null ? adx1mVal.toFixed(1) : '--'} · 5m:${adx5m != null ? adx5m.toFixed(1) : '--'} · 15m:${adx15m != null ? adx15m.toFixed(1) : '--'} · 1h:${adx1h != null ? adx1h.toFixed(1) : '--'}`;
+
+
     const strikeInfo = state.strikeRange || 'ATM ±200';
 
     // Volume info — prefer RVOL (decision-relevant: "is this move on real volume?")
@@ -257,6 +272,7 @@ async function sendSignalAlert(state, prevSignal, strikeData = null, autoLogged 
     if (state.marketRegime && !state.marketRegime.tags?.includes('NORMAL')) detailLines.push(state.marketRegime.label);
     if (state.dataHealth && !state.dataHealth.healthy) detailLines.push(state.dataHealth.label);
     detailLines.push(mtfInfo.replace(/^🔥 /, '🔥 ').replace(/^⚠️ /, '⚠️ '));
+    detailLines.push(adxMtfLine);
     if (state.marketHealth) detailLines.push(`📋 Market Health: ${state.marketHealth.total}/100 — ${state.marketHealth.label}`);
     if (state.momentumDecayWarning) detailLines.push(state.momentumDecayWarning);
     {
@@ -289,7 +305,7 @@ async function sendSignalAlert(state, prevSignal, strikeData = null, autoLogged 
     }
     const detailsBlock = detailLines.length ? `🔍 <b>Details</b>\n${detailLines.join('\n')}\n━━━━━━━━━━━━━━━━━━\n` : '';
 
-    const contextLine = [rsiInfo, vixInfo, pcrInfo].join(' · ');
+    const contextLine = [rsiInfo, vixInfo, pcrInfo, adxInfo].join(' · ');
 
     const msg = `
 ${emoji} <b>${state.signal}${gradeLabel}</b>
@@ -430,7 +446,7 @@ async function sendMTFAlert(state, strikeData = null, autoLogged = false) {
             : '';
 
         detailsBlock = `\n🔍 <b>Why this fired</b>
-5m: ${state.mtf.tf5m?.signal || '--'} · 15m: ${state.mtf.tf15m?.signal || '--'} · 1H: ${state.mtf.tf1h?.signal || '--'}
+5m: ${state.mtf.tf5m?.signal || '--'} (ADX ${state.mtf.tf5m?.adx != null ? state.mtf.tf5m.adx.toFixed(1) : '--'}) · 15m: ${state.mtf.tf15m?.signal || '--'} (ADX ${state.mtf.tf15m?.adx != null ? state.mtf.tf15m.adx.toFixed(1) : '--'}) · 1H: ${state.mtf.tf1h?.signal || '--'} (ADX ${state.mtf.tf1h?.adx != null ? state.mtf.tf1h.adx.toFixed(1) : '--'})
 ${pocLine}
 ${deltaLine}
 ${rvolLine}

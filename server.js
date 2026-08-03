@@ -4537,6 +4537,30 @@ async function refreshBreadth(force = false) {
 }
 async function refreshSR() { if (!isNSEMarketDay()) return; try { if(marketState.nifty>0) { const sr=await calculateSRLevels(marketState.nifty, marketState.maxPain?.strike ? marketState.maxPain : null); if(sr) marketState.srLevels=sr; } } catch(e) { console.error('SR:',e.message); } }
 
+// ── Fast option-flow sync (30s) — 3 Aug audit fix ─────────────────────────
+// Separate from the heavier refreshPCR() below, which stays on its 3-min
+// cycle for max pain / option greeks / OI buildup / FII-DII (those are fine
+// at that cadence, and fetching them faster risks the Fyers daily API quota).
+// But ATM CE/PE premium is different: nseData.js's own internal scheduler
+// (PCR_INTERVAL_MS, see nseData.js) already fetches fresh option-chain data
+// every 30s regardless of what server.js does with it. getPCRState() just
+// reads that already-cached state from memory — no network call — so it's
+// free to poll here every 30s instead of leaving marketState.optionFlow
+// (the "live" price used for target/SL checks in updateSignalPerformance())
+// frozen for up to 3 minutes at a time between refreshPCR() ticks.
+async function syncOptionFlowFast() {
+    if (!isMarketOpen()) return;
+    try {
+        const pcrState = getPCRState();
+        if (pcrState && (pcrState.atmCEpremium || pcrState.atmPEpremium)) {
+            updateOptionFlow(pcrState.atmCEpremium, pcrState.atmPEpremium);
+            await updateOpenTradesMTM();
+        }
+    } catch (e) {
+        console.warn('[OptionFlow] fast sync error:', e.message);
+    }
+}
+
 async function refreshPCR() {
     if (!isNSEMarketDay()) return;
     if (!isMarketOpen() || marketState.nifty <= 0) return;
@@ -4577,12 +4601,13 @@ async function refreshPCR() {
             marketState.atmPcrSignal = pcrLabel(pcrState.atmPcr);
         }
 
-        // Feed live ATM premiums into option flow tracker
-        if (pcrState.atmCEpremium || pcrState.atmPEpremium) {
-            updateOptionFlow(pcrState.atmCEpremium, pcrState.atmPEpremium);
-            // Check open trades for SL/target hits using fresh premiums
-            await updateOpenTradesMTM();
-        }
+        // NOTE: ATM premium → optionFlow sync moved OUT of this 3-min cycle —
+        // see syncOptionFlowFast() below, which now does this every 30s.
+        // (3 Aug audit: entry premium was captured fresh via a direct
+        // getPCRState() call at signal time, but this 3-min-cadence copy was
+        // the ONLY thing updating marketState.optionFlow — the "live" price
+        // used to check target/SL — so it sat frozen for up to 3 minutes
+        // then jumped in one step, looking like an instant target hit.)
 
         marketState.pcrSource  = 'auto';
         marketState.pcrFromIndex = pcrState.fromIndex || 'NIFTY';
@@ -7144,6 +7169,7 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshBreadth,        2*60*1000), 90*1000);   // 2 min — breadth is fast-changing
     setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
+    setTimeout(() => setInterval(syncOptionFlowFast,       30*1000), 5*1000);   // 3 Aug fix — no network call, just stops throwing away fresh nseData cache
     setTimeout(() => setInterval(refreshFyersVolume,      15*1000), 20*1000);   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
     setTimeout(() => setInterval(computePremarketGap,     60*1000), 20*1000);   // opening gap vs prev close, via Fyers (see combineSignals note)
     // Flush dailySignalCounts to DB only when dirty, at most every 30s — bounds

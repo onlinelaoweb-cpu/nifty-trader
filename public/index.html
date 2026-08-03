@@ -2238,7 +2238,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
         <div id="hdr-pcr" style="font-size:14.5px;font-family:'Share Tech Mono',monospace;color:var(--text);">--</div>
       </div>
       <div style="padding:5px 8px;background:var(--bg2);">
-        <div style="font-size:9px;color:var(--dim);letter-spacing:1px;font-family:'Orbitron',monospace;">ADX</div>
+        <div style="font-size:9px;color:var(--dim);letter-spacing:1px;font-family:'Orbitron',monospace;" title="1-minute session ADX — will read lower/choppier than a 5m/15m chart ADX. See the ADX card below for 5m/15m/1h comparison.">ADX(1m)</div>
         <div id="hdr-adx" style="font-size:14.5px;font-family:'Share Tech Mono',monospace;color:var(--text);">--</div>
       </div>
     </div>
@@ -2722,12 +2722,12 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
   <div style="padding:0 12px;margin-bottom:7px;">
     <div class="ind-card" id="adx-card" style="border-left:2px solid var(--amber);">
       <div class="ind-label">
-        <span>ADX (14) — TREND STRENGTH</span>
+        <span>ADX (14) — 1 MIN — TREND STRENGTH</span>
         <span id="adx-zone" style="font-size:10px;font-weight:700;">--</span>
       </div>
       <div style="display:flex;align-items:baseline;gap:14px;margin-top:3px;">
         <div>
-          <div style="font-size:10px;color:var(--dim);">ADX</div>
+          <div style="font-size:10px;color:var(--dim);">ADX (1m)</div>
           <div class="ind-val" id="adx-val" style="font-size:22px;">--</div>
         </div>
         <div>
@@ -2737,6 +2737,10 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
         <div>
           <div style="font-size:10px;color:var(--red);">DI−</div>
           <div class="ind-val" id="adx-dim" style="font-size:14px;color:var(--red);">--</div>
+        </div>
+        <div style="border-left:1px solid var(--border);padding-left:12px;">
+          <div style="font-size:10px;color:var(--dim);" title="Compare against a TradingView-style chart on the matching timeframe — not against ADX(1m) above.">MTF ADX</div>
+          <div id="adx-mtf-compare" style="font-size:12px;font-family:'Share Tech Mono',monospace;color:var(--text);white-space:nowrap;">5m -- · 15m -- · 1h --</div>
         </div>
         <div style="flex:1;text-align:right;">
           <div style="font-size:10px;color:var(--dim);">GATE</div>
@@ -4817,6 +4821,19 @@ function renderDashboard(s) {
   // indefinitely (this is exactly what caused ADX/momentum/checklist panels
   // to freeze for hours while VIX/RSI/PCR above kept updating fine).
   try {
+  // 5m/15m/1h ADX comparison chip — populated regardless of whether the 1m
+  // ADX below is ready yet, so the chart-comparable numbers show up as soon
+  // as the MTF engine has them, independent of the 1m warmup gate.
+  {
+    const _a5  = s.mtf?.tf5m?.adx,  _a15 = s.mtf?.tf15m?.adx,  _a1h = s.mtf?.tf1h?.adx;
+    const cmp = document.getElementById('adx-mtf-compare');
+    if (cmp) {
+      cmp.textContent =
+        '5m ' + (_a5  != null ? _a5.toFixed(1)  : '--') + ' · ' +
+        '15m ' + (_a15 != null ? _a15.toFixed(1) : '--') + ' · ' +
+        '1h ' + (_a1h != null ? _a1h.toFixed(1) : '--');
+    }
+  }
   if (s.adx && s.adx.adx != null) {
     const adx = s.adx.adx; const dip = s.adx.diPlus; const dim = s.adx.diMinus;
     document.getElementById('adx-val').textContent = adx.toFixed(1);
