@@ -872,7 +872,8 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .btab.active::before{content:'';position:absolute;top:-4px;left:20%;right:20%;height:2px;background:var(--green);border-radius:0 0 3px 3px;box-shadow:0 0 8px var(--green);}
 
 /* More menu items */
-.more-item{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;background:transparent;border:1px solid rgba(0,255,136,0.1);border-radius:8px;color:var(--dim);font-family:'Rajdhani',sans-serif;font-weight:700;font-size:11px;letter-spacing:0.8px;cursor:pointer;transition:all 0.2s;}
+.more-item{display:flex;flex-direction:row;align-items:center;gap:10px;padding:11px 14px;background:transparent;border:1px solid rgba(0,255,136,0.1);border-radius:8px;color:var(--dim);font-family:'Rajdhani',sans-serif;font-weight:700;font-size:13px;letter-spacing:0.8px;cursor:pointer;transition:all 0.2s;width:100%;text-align:left;}
+.more-item span:first-child{font-size:16px;}
 .more-item:active,.more-item.active-more{color:var(--green);background:rgba(0,255,136,0.08);border-color:rgba(0,255,136,0.3);}
 .more-item span{font-size:20px;}
 .panel{display:none;}.panel.active{display:block;}
@@ -3450,13 +3451,11 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
       <div style="font-family:'Orbitron',monospace;font-size:13px;color:var(--blue);letter-spacing:2px;">📊 NIFTY CHART</div>
       <div style="display:flex;align-items:center;gap:8px;">
         <div style="font-family:'Share Tech Mono',monospace;font-size:13px;color:var(--text);" id="chart-nifty-label">--</div>
-        <button onclick="toggleChartMode()" title="Switch to full TradingView chart" id="chart-tv-toggle-btn"
-          style="background:none;border:1px solid var(--border);color:var(--dim);border-radius:4px;padding:3px 6px;cursor:pointer;font-size:11px;line-height:1;white-space:nowrap;">📈 TradingView</button>
         <button onclick="toggleChartFullscreen()" title="Maximize" id="chart-maximize-btn"
           style="background:none;border:1px solid var(--border);color:var(--dim);border-radius:4px;padding:3px 6px;cursor:pointer;font-size:13px;line-height:1;">⛶</button>
       </div>
     </div>
-    <!-- TF buttons + overlay toggles on same row — hidden while TradingView mode is active -->
+    <!-- TF buttons + overlay toggles on same row -->
     <div id="chart-own-controls" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:6px;flex-wrap:wrap;">
       <div class="chart-controls" style="margin-bottom:0;">
         <button class="chart-btn" onclick="setChartTF('1m',this)">1m</button>
@@ -3474,7 +3473,6 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     </div>
     <div class="chart-box" style="position:relative;">
       <canvas id="chart-canvas"></canvas>
-      <div id="tv-chart-container" style="display:none;width:100%;height:420px;"></div>
       <div id="chart-loading" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:var(--bg2);font-size:13px;color:var(--blue);letter-spacing:1px;">⏳ LOADING…</div>
       <div id="chart-empty"   style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:var(--bg2);font-size:13px;color:var(--dim);letter-spacing:1px;">📭 NO DATA FOR THIS TIMEFRAME</div>
     </div>
@@ -3749,17 +3747,23 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
 
 
 <!-- BOTTOM TABS — 6 tabs -->
-<div class="bottom-tabs">
-  <button class="btab active" id="btab-dashboard" onclick="switchTab('dashboard',this)"><span class="bi">📊</span>LIVE</button>
-  <button class="btab" id="btab-chart" onclick="switchTab('chart',this)"><span class="bi">🕯️</span>CHART</button>
-  <button class="btab" id="btab-breadth" onclick="switchTab('breadth',this)"><span class="bi">📈</span>BREADTH</button>
-  <button class="btab" id="btab-insights" onclick="switchTab('insights',this)"><span class="bi">🧠</span>INSIGHTS</button>
-  <button class="btab" id="btab-more" onclick="toggleMoreMenu(this)"><span class="bi">☰</span>MORE</button>
+<div class="bottom-tabs" id="bottom-tabs-bar">
+  <button class="btab active" id="btab-more" onclick="toggleMoreMenu(this)" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:8px 16px;">
+    <span style="display:flex;align-items:center;gap:8px;">
+      <span class="bi" id="collapsed-tab-icon">📊</span>
+      <span id="collapsed-tab-label">LIVE</span>
+    </span>
+    <span id="collapsed-chevron" style="font-size:11px;color:var(--dim);">▲ MENU</span>
+  </button>
 </div>
 
-<!-- More dropdown menu -->
-<div id="more-menu" style="display:none;position:fixed;bottom:62px;right:0;left:0;z-index:300;background:rgba(6,13,20,0.97);border-top:1px solid rgba(0,255,136,0.15);backdrop-filter:blur(16px);padding:8px 0 4px;">
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;padding:0 8px;">
+<!-- Full navigation list — collapsible, all tabs in one place, in order -->
+<div id="more-menu" style="display:none;position:fixed;bottom:62px;right:0;left:0;z-index:300;background:rgba(6,13,20,0.97);border-top:1px solid rgba(0,255,136,0.15);backdrop-filter:blur(16px);padding:8px;">
+  <div style="display:flex;flex-direction:column;gap:3px;max-height:60vh;overflow-y:auto;">
+    <button class="more-item" onclick="switchTabFromMore('dashboard')"><span>📊</span>LIVE</button>
+    <button class="more-item" onclick="switchTabFromMore('chart')"><span>🕯️</span>CHART</button>
+    <button class="more-item" onclick="switchTabFromMore('breadth')"><span>📈</span>BREADTH</button>
+    <button class="more-item" onclick="switchTabFromMore('insights')"><span>🧠</span>INSIGHTS</button>
     <button class="more-item" onclick="switchTabFromMore('journal')"><span>📔</span>JOURNAL</button>
     <button class="more-item" onclick="switchTabFromMore('physics')"><span>⚛️</span>PHYSICS</button>
     <button class="more-item" onclick="switchTabFromMore('guard')"><span>🛡️</span>GUARD</button>
@@ -3804,12 +3808,9 @@ function _initDesktopLayout() {
     btn.dataset.tab = t.id;
     btn.innerHTML = `<span class="bi">${t.icon}</span>${t.label}`;
     btn.onclick = () => {
-      const primaryTabs = ['dashboard','physics','breadth','insights'];
-      if (primaryTabs.includes(t.id)) {
-        switchTab(t.id, document.getElementById('btab-' + t.id) || btn);
-      } else {
-        switchTabFromMore(t.id);
-      }
+      // Mobile nav is now a single collapsible list (no individual btab-<id>
+      // buttons left), so every tab routes through switchTabFromMore uniformly.
+      switchTabFromMore(t.id);
     };
     sidebar.appendChild(btn);
   });
@@ -3930,6 +3931,8 @@ function toggleMoreMenu(btn) {
   const isOpen = menu.style.display !== 'none';
   menu.style.display = isOpen ? 'none' : 'block';
   btn.classList.toggle('active', !isOpen);
+  const chevron = document.getElementById('collapsed-chevron');
+  if (chevron) chevron.textContent = isOpen ? '▲ MENU' : '▼ CLOSE';
   // Close menu when tapping outside
   if (!isOpen) {
     setTimeout(() => {
@@ -3943,6 +3946,8 @@ function _closeMoreMenu(e) {
   if (menu && !menu.contains(e.target) && e.target !== btn) {
     menu.style.display = 'none';
     if (btn) btn.classList.remove('active');
+    const chevron = document.getElementById('collapsed-chevron');
+    if (chevron) chevron.textContent = '▲ MENU';
   }
 }
 function switchTabFromMore(name) {
@@ -3950,6 +3955,8 @@ function switchTabFromMore(name) {
   const menu = document.getElementById('more-menu');
   const moreBtn = document.getElementById('btab-more');
   if (menu) menu.style.display = 'none';
+  const chevron = document.getElementById('collapsed-chevron');
+  if (chevron) chevron.textContent = '▲ MENU';
 
   // Deactivate all primary tabs, mark MORE as active-proxy
   document.querySelectorAll('.btab').forEach(b => b.classList.remove('active'));
@@ -3964,11 +3971,32 @@ function switchTabFromMore(name) {
   switchTab(name, moreBtn);
 }
 
+const TAB_LABELS = {
+  dashboard: { icon: '📊', label: 'LIVE' },
+  chart:     { icon: '🕯️', label: 'CHART' },
+  breadth:   { icon: '📈', label: 'BREADTH' },
+  insights:  { icon: '🧠', label: 'INSIGHTS' },
+  journal:   { icon: '📔', label: 'JOURNAL' },
+  physics:   { icon: '⚛️', label: 'PHYSICS' },
+  guard:     { icon: '🛡️', label: 'GUARD' },
+  tools:     { icon: '🔧', label: 'TOOLS' },
+  analytics: { icon: '📊', label: 'ANALYTICS' },
+  global:    { icon: '🌍', label: 'GLOBAL' },
+};
+
 function switchTab(name,btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.btab').forEach(b=>b.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
   btn.classList.add('active');
+  // Keep the collapsed nav button's icon/label in sync with whichever tab is active
+  const meta = TAB_LABELS[name];
+  if (meta) {
+    const iconEl = document.getElementById('collapsed-tab-icon');
+    const labelEl = document.getElementById('collapsed-tab-label');
+    if (iconEl) iconEl.textContent = meta.icon;
+    if (labelEl) labelEl.textContent = meta.label;
+  }
   if(name==='chart'){
     refreshChart(); // live timer starts inside renderCandlestickChart
   } else {
@@ -4398,8 +4426,8 @@ function startSSE() {
       // Refresh analytics instantly (DB write is complete by the time SSE fires)
       if (typeof _anLoaded !== 'undefined' && _anLoaded) {
         loadAnalytics();
-        // Flash ANALYTICS tab
-        const anTab = document.querySelector('.btab[onclick*="analytics"]');
+        // Flash the nav button so a background analytics update is noticeable
+        const anTab = document.getElementById('btab-more');
         if (anTab) {
           anTab.style.transition = 'background 0.3s';
           anTab.style.background = sig.signal === 'BUY CALL'
@@ -7588,6 +7616,9 @@ let _chartPinchStartDist  = 0;
 let _chartPinchStartZoom  = 0;
 let _chartCrosshairX  = -1;
 let _chartCrosshairY  = -1;
+let _chartCrosshairTimer = null;
+let _chartTouchStartX = 0;
+let _chartTouchStartY = 0;
 let _chartLiveTimer   = null;
 const _CHART_LIVE_MS  = { '1m': 30000, '5m': 60000, '15m': 90000, '1h': 120000, '1D': 300000 };
 
@@ -7624,55 +7655,6 @@ function _drawSignalFlag(ctx, cx, boxY, tailY, text, color, pointUp) {
 }
 
 // ── Chart maximize/fullscreen toggle ────────────────────────────────────
-// ── Hybrid TradingView view ─────────────────────────────────────────────
-// Free TradingView "Advanced Chart" widget — no API key, no cost, and it
-// does NOT touch our Fyers/Angel/NSE quota (own independent data feed).
-// Trade-off: it's a sealed iframe, so our own CALL/PUT signal markers
-// can't be drawn on it — that's why this is a toggle, not a replacement.
-// Our own chart (with SIG markers) stays the default view.
-function loadTradingViewWidget() {
-  const container = document.getElementById('tv-chart-container');
-  if (!container || container.dataset.loaded === '1') return;
-  container.innerHTML = '<div class="tradingview-widget-container" style="height:100%;width:100%;">'
-    + '<div class="tradingview-widget-container__widget"></div></div>';
-  const script = document.createElement('script');
-  script.type = 'text/javascript';
-  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-  script.async = true;
-  script.textContent = JSON.stringify({
-    autosize: true,
-    symbol: 'NSE:NIFTY',
-    interval: '5',
-    timezone: 'Asia/Kolkata',
-    theme: 'dark',
-    style: '1',
-    locale: 'en',
-    allow_symbol_change: true,
-    hide_top_toolbar: false,
-    save_image: false,
-    support_host: 'https://www.tradingview.com'
-  });
-  container.querySelector('.tradingview-widget-container').appendChild(script);
-  container.dataset.loaded = '1';
-}
-
-function toggleChartMode() {
-  const canvas   = document.getElementById('chart-canvas');
-  const tv       = document.getElementById('tv-chart-container');
-  const btn      = document.getElementById('chart-tv-toggle-btn');
-  const ownCtrls = document.getElementById('chart-own-controls');
-  const ownLeg   = document.getElementById('chart-own-legend');
-  if (!canvas || !tv) return;
-  const switchingToTV = tv.style.display === 'none';
-  tv.style.display = switchingToTV ? 'block' : 'none';
-  canvas.style.display = switchingToTV ? 'none' : 'block';
-  if (ownCtrls) ownCtrls.style.display = switchingToTV ? 'none' : '';
-  if (ownLeg)   ownLeg.style.display   = switchingToTV ? 'none' : '';
-  if (btn) btn.textContent = switchingToTV ? '🕯️ Our Chart' : '📈 TradingView';
-  if (switchingToTV) loadTradingViewWidget();
-  else { const c = document.getElementById('chart-canvas'); if (c) _drawChart(c); }
-}
-
 function toggleChartFullscreen() {
   const box = document.querySelector('#panel-chart .chart-box');
   const btn = document.getElementById('chart-maximize-btn');
@@ -8159,14 +8141,27 @@ function _setupChartInteractions(canvas) {
   });
   canvas.style.cursor = 'crosshair';
 
-  // ── Touch pan + pinch zoom ────────────────────────────────────────────
+  // ── Touch: tap-and-hold shows crosshair/tooltip, horizontal drag pans,
+  // two fingers pinch-zoom. Previously crosshair was wired to mousemove only,
+  // which never fires on a touchscreen — that's why it never appeared on
+  // mobile. Gesture is decided on the fly: small movement stays a crosshair
+  // scrub, movement past a threshold commits to panning instead. ──────────
+  const PAN_THRESHOLD = 8; // px before a touch commits to panning over crosshair
   canvas.addEventListener('touchstart', e => {
+    if (_chartCrosshairTimer) { clearTimeout(_chartCrosshairTimer); _chartCrosshairTimer = null; }
     if (e.touches.length === 1) {
-      _chartDragging = true;
+      _chartDragging = false; // gesture not yet decided
+      _chartTouchStartX = e.touches[0].clientX;
+      _chartTouchStartY = e.touches[0].clientY;
       _chartDragStartX = e.touches[0].clientX;
       _chartDragStartOffset = _chartViewOffset;
+      const rect = canvas.getBoundingClientRect();
+      _chartCrosshairX = e.touches[0].clientX - rect.left;
+      _chartCrosshairY = e.touches[0].clientY - rect.top;
+      _drawChart(canvas);
     } else if (e.touches.length === 2) {
       _chartDragging = false;
+      _chartCrosshairX = -1; _chartCrosshairY = -1;
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       _chartPinchStartDist = Math.sqrt(dx*dx + dy*dy);
@@ -8176,13 +8171,26 @@ function _setupChartInteractions(canvas) {
     e.preventDefault();
   }, { passive: false });
   canvas.addEventListener('touchmove', e => {
-    if (e.touches.length === 1 && _chartDragging) {
-      const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30, '1D': 120 };
-      const visN = _chartZoomBars > 0 ? _chartZoomBars : (tfLimits[_chartTF] || 65);
-      const barW = (canvas.clientWidth - 52) / visN;
-      const dx = e.touches[0].clientX - _chartDragStartX;
-      const barsShifted = Math.round(-dx / barW);
-      _chartViewOffset = Math.max(0, Math.min(_chartAllCandles.length - visN, _chartDragStartOffset + barsShifted));
+    if (e.touches.length === 1) {
+      const dx0 = e.touches[0].clientX - _chartTouchStartX;
+      const dy0 = e.touches[0].clientY - _chartTouchStartY;
+      if (!_chartDragging && Math.abs(dx0) > PAN_THRESHOLD && Math.abs(dx0) > Math.abs(dy0)) {
+        _chartDragging = true; // committed to panning — crosshair hides
+        _chartCrosshairX = -1; _chartCrosshairY = -1;
+      }
+      if (_chartDragging) {
+        const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30, '1D': 120 };
+        const visN = _chartZoomBars > 0 ? _chartZoomBars : (tfLimits[_chartTF] || 65);
+        const barW = (canvas.clientWidth - 52) / visN;
+        const dx = e.touches[0].clientX - _chartDragStartX;
+        const barsShifted = Math.round(-dx / barW);
+        _chartViewOffset = Math.max(0, Math.min(_chartAllCandles.length - visN, _chartDragStartOffset + barsShifted));
+      } else {
+        // Still within threshold — scrub the crosshair with the finger
+        const rect = canvas.getBoundingClientRect();
+        _chartCrosshairX = e.touches[0].clientX - rect.left;
+        _chartCrosshairY = e.touches[0].clientY - rect.top;
+      }
       _drawChart(canvas);
     } else if (e.touches.length === 2) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -8194,7 +8202,19 @@ function _setupChartInteractions(canvas) {
     }
     e.preventDefault();
   }, { passive: false });
-  canvas.addEventListener('touchend', () => { _chartDragging = false; });
+  canvas.addEventListener('touchend', () => {
+    _chartDragging = false;
+    // If it ended as a tap-hold (crosshair still showing, not a pan), leave
+    // the crosshair/tooltip visible briefly so the tap actually feels useful.
+    if (_chartCrosshairX >= 0) {
+      _chartCrosshairTimer = setTimeout(() => {
+        _chartCrosshairX = -1; _chartCrosshairY = -1;
+        _drawChart(canvas);
+      }, 2000);
+    }
+  });
+
+
 
   // ── Double-tap / double-click reset ──────────────────────────────────
   canvas.addEventListener('dblclick', () => {
