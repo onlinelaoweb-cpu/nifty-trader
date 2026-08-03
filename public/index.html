@@ -7761,7 +7761,7 @@ function _drawChart(canvas) {
     bg:        isDay ? '#f5f8fb'             : '#060d14',
     grid:      isDay ? 'rgba(0,0,0,0.07)'   : '#0d2035',
     gridV:     isDay ? 'rgba(0,0,0,0.05)'   : '#0a1a28',
-    axisText:  isDay ? '#607080'             : '#4a6a8a',
+    axisText:  isDay ? '#607080'             : '#7a9ac0',
     timeText:  isDay ? '#7a9090'             : '#3a5a7a',
     crosshair: isDay ? 'rgba(0,60,120,0.35)': 'rgba(180,220,255,0.4)',
     tooltip:   isDay ? 'rgba(240,244,248,0.97)' : 'rgba(6,20,34,0.93)',
@@ -7800,6 +7800,11 @@ function _drawChart(canvas) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Snap a coordinate so a 1px stroke lands exactly on a pixel boundary
+  // instead of straddling two — this is what actually removes the soft/
+  // blurry look on grid lines and candle wicks (separate from DPR scaling,
+  // which only fixes overall resolution, not sub-pixel line placement).
+  const snap = v => Math.round(v) + 0.5;
 
   const tfLimits = { '1m': 75, '5m': 65, '15m': 45, '1h': 30, '1D': 120 };
   const defaultN = tfLimits[_chartTF] || 65;
@@ -7844,7 +7849,7 @@ function _drawChart(canvas) {
       ctx.strokeStyle = C.srLine; ctx.lineWidth = 1; ctx.setLineDash([4,3]);
       ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W-padR, y); ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = C.srLine; ctx.font = '6px monospace'; ctx.textAlign = 'left';
+      ctx.fillStyle = C.srLine; ctx.font = '7px monospace'; ctx.textAlign = 'left';
       ctx.fillText('S/R '+sr.val.toFixed(0), W-padR+2, y-1);
       ctx.restore();
     });
@@ -7853,17 +7858,17 @@ function _drawChart(canvas) {
   // ── Grid ─────────────────────────────────────────────────────────────────
   const gridLines = 6;
   for (let i = 0; i <= gridLines; i++) {
-    const y = padT + (i / gridLines) * chartH;
+    const y = snap(padT + (i / gridLines) * chartH);
     ctx.strokeStyle = C.grid; ctx.setLineDash([2, 4]); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
     ctx.setLineDash([]);
     const price = maxP - (i / gridLines) * range;
-    ctx.fillStyle = C.axisText; ctx.font = '7px monospace'; ctx.textAlign = 'left';
+    ctx.fillStyle = C.axisText; ctx.font = '8px monospace'; ctx.textAlign = 'left';
     ctx.fillText(price.toFixed(0), W - padR + 4, y + 3);
   }
   const vStep = Math.max(1, Math.floor(n / 5));
   for (let i = 0; i < n; i += vStep) {
-    const x = toX(i) + bw / 2;
+    const x = snap(toX(i) + bw / 2);
     ctx.strokeStyle = C.gridV; ctx.setLineDash([1,4]); ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + chartH); ctx.stroke();
     ctx.setLineDash([]);
@@ -7871,7 +7876,7 @@ function _drawChart(canvas) {
     if (c) {
       const label = c.date ? String(c.date).slice(5,10) :
                     (c.ts ? new Date(c.ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}) : '');
-      ctx.fillStyle = C.timeText; ctx.font = '6px monospace'; ctx.textAlign = 'center';
+      ctx.fillStyle = C.timeText; ctx.font = '7px monospace'; ctx.textAlign = 'center';
       ctx.fillText(label, x, padT + chartH + 12);
     }
   }
@@ -7887,23 +7892,32 @@ function _drawChart(canvas) {
       ctx.fillStyle = isUp ? C.volUp : C.volDn;
       ctx.fillRect(x, volTop + (volH - 4 - vh), bw, vh);
     });
-    ctx.fillStyle = C.axisText; ctx.font='6px monospace'; ctx.textAlign='left';
+    ctx.fillStyle = C.axisText; ctx.font='7px monospace'; ctx.textAlign='left';
     ctx.fillText('VOL', W-padR+4, volTop + 8);
   }
 
   // ── Candles ───────────────────────────────────────────────────────────────
   slice.forEach((c, i) => {
-    const x    = toX(i);
+    const xRaw = toX(i);
     const isUp = c.close >= c.open;
     const col  = isUp ? '#00ff88' : '#ff2244';
-    const bodyTop = toY(Math.max(c.open, c.close));
-    const bodyBot = toY(Math.min(c.open, c.close));
-    const bodyH = Math.max(1, bodyBot - bodyTop);
+    const bodyTopRaw = toY(Math.max(c.open, c.close));
+    const bodyBotRaw = toY(Math.min(c.open, c.close));
+    // Snap the body rect to whole pixels on every edge — a fractional-bound
+    // rect blurs its fill edges AND its 1px border on all four sides, which
+    // is far more visually prominent than the wick alone (every candle has
+    // a colored body outline, so this was likely the biggest source of the
+    // "soft" look).
+    const x = Math.round(xRaw);
+    const bwPx = Math.max(1, Math.round(bw));
+    const bodyTop = Math.round(bodyTopRaw);
+    const bodyH = Math.max(1, Math.round(bodyBotRaw) - bodyTop);
     ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.setLineDash([]);
-    ctx.beginPath(); ctx.moveTo(x + bw/2, toY(c.high)); ctx.lineTo(x + bw/2, toY(c.low)); ctx.stroke();
+    const wickX = snap(xRaw + bw/2);
+    ctx.beginPath(); ctx.moveTo(wickX, toY(c.high)); ctx.lineTo(wickX, toY(c.low)); ctx.stroke();
     ctx.fillStyle = isUp ? 'rgba(0,255,136,0.8)' : 'rgba(255,34,68,0.8)';
-    ctx.fillRect(x, bodyTop, bw, bodyH);
-    ctx.strokeRect(x, bodyTop, bw, bodyH);
+    ctx.fillRect(x, bodyTop, bwPx, bodyH);
+    ctx.strokeRect(x + 0.5, bodyTop + 0.5, bwPx - 1, bodyH - 1);
   });
 
   // ── Signal markers (CALL/PUT flag labels, TradingView-style bubbles) ─────
@@ -7933,7 +7947,7 @@ function _drawChart(canvas) {
   ema9.forEach((v,i)=>{ if(!v)return; if(!started){ctx.moveTo(toX(i)+bw/2,toY(v));started=true;}else ctx.lineTo(toX(i)+bw/2,toY(v)); });
   ctx.stroke();
   const lastE9=ema9.filter(Boolean).pop();
-  if(lastE9){ctx.fillStyle='#ffcc00';ctx.font='7px monospace';ctx.textAlign='left';ctx.fillText('E9 '+lastE9.toFixed(0),W-padR+4,toY(lastE9)+3);}
+  if(lastE9){ctx.fillStyle='#ffcc00';ctx.font='8px monospace';ctx.textAlign='left';ctx.fillText('E9 '+lastE9.toFixed(0),W-padR+4,toY(lastE9)+3);}
   ctx.restore();
 
   // ── EMA 21 ───────────────────────────────────────────────────────────────
@@ -7942,7 +7956,7 @@ function _drawChart(canvas) {
   ema21.forEach((v,i)=>{ if(!v)return; if(!started){ctx.moveTo(toX(i)+bw/2,toY(v));started=true;}else ctx.lineTo(toX(i)+bw/2,toY(v)); });
   ctx.stroke();
   const lastE21=ema21.filter(Boolean).pop();
-  if(lastE21){ctx.fillStyle='#ff8c00';ctx.font='7px monospace';ctx.textAlign='left';ctx.fillText('E21 '+lastE21.toFixed(0),W-padR+4,toY(lastE21)+3);}
+  if(lastE21){ctx.fillStyle='#ff8c00';ctx.font='8px monospace';ctx.textAlign='left';ctx.fillText('E21 '+lastE21.toFixed(0),W-padR+4,toY(lastE21)+3);}
   ctx.restore();
 
   // ── VWAP ─────────────────────────────────────────────────────────────────
@@ -7952,7 +7966,7 @@ function _drawChart(canvas) {
     vwap.forEach((v,i)=>{ if(i===0)ctx.moveTo(toX(i)+bw/2,toY(v));else ctx.lineTo(toX(i)+bw/2,toY(v)); });
     ctx.stroke(); ctx.setLineDash([]);
     const lastVp=vwap[vwap.length-1];
-    if(lastVp){ctx.fillStyle='#3399ff';ctx.font='7px monospace';ctx.textAlign='left';ctx.fillText('VP '+lastVp.toFixed(0),W-padR+4,toY(lastVp)+3);}
+    if(lastVp){ctx.fillStyle='#3399ff';ctx.font='8px monospace';ctx.textAlign='left';ctx.fillText('VP '+lastVp.toFixed(0),W-padR+4,toY(lastVp)+3);}
     ctx.restore();
   }
 
@@ -7967,7 +7981,7 @@ function _drawChart(canvas) {
     ctx.setLineDash([]);
     ctx.fillStyle = curPrice>=slice[0]?.open?'#00bb66':'#dd2244';
     ctx.fillRect(W-padR+1,cy-7,padR-2,13);
-    ctx.fillStyle='#fff'; ctx.font='bold 8px monospace'; ctx.textAlign='center';
+    ctx.fillStyle='#fff'; ctx.font='bold 9px monospace'; ctx.textAlign='center';
     ctx.fillText(curPrice.toFixed(0),W-padR/2+1,cy+3);
     ctx.restore();
   }
@@ -7992,7 +8006,7 @@ function _drawChart(canvas) {
       ctx.lineWidth=0.5; ctx.setLineDash([2,3]);
       ctx.beginPath(); ctx.moveTo(0,toRY(lvl)); ctx.lineTo(W-padR,toRY(lvl)); ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle=C.rsiText; ctx.font='6px monospace'; ctx.textAlign='left';
+      ctx.fillStyle=C.rsiText; ctx.font='7px monospace'; ctx.textAlign='left';
       ctx.fillText(lvl, W-padR+3, toRY(lvl)+2);
     });
     // RSI line
@@ -8003,7 +8017,7 @@ function _drawChart(canvas) {
     // RSI label
     const lastRsi = rsi9.filter(v=>v!=null).pop();
     if (lastRsi) {
-      ctx.fillStyle=C.rsiLine; ctx.font='bold 7px monospace'; ctx.textAlign='left';
+      ctx.fillStyle=C.rsiLine; ctx.font='bold 8px monospace'; ctx.textAlign='left';
       ctx.fillText('RSI '+lastRsi.toFixed(1), W-padR+3, toRY(lastRsi));
     }
     ctx.restore();
@@ -8011,7 +8025,7 @@ function _drawChart(canvas) {
     ctx.strokeStyle = isDay ? '#b8c8d8' : '#1a3050';
     ctx.lineWidth=1; ctx.setLineDash([]);
     ctx.beginPath(); ctx.moveTo(0,rsiTop); ctx.lineTo(W-padR,rsiTop); ctx.stroke();
-    ctx.fillStyle=C.axisText; ctx.font='6px monospace'; ctx.textAlign='left';
+    ctx.fillStyle=C.axisText; ctx.font='7px monospace'; ctx.textAlign='left';
     ctx.fillText('RSI(9)', 4, rsiTop+8);
   }
 
@@ -8026,7 +8040,7 @@ function _drawChart(canvas) {
     const hoverPrice = maxP - ((my - padT) / chartH) * range;
     if (hoverPrice > minP && hoverPrice < maxP) {
       ctx.fillStyle=C.priceLabelBg; ctx.fillRect(W-padR+1,my-7,padR-2,13);
-      ctx.fillStyle=C.priceLabelText; ctx.font='bold 7px monospace'; ctx.textAlign='center';
+      ctx.fillStyle=C.priceLabelText; ctx.font='bold 8px monospace'; ctx.textAlign='center';
       ctx.fillText(hoverPrice.toFixed(0),W-padR/2+1,my+3);
     }
     // Candle tooltip
@@ -8051,7 +8065,7 @@ function _drawChart(canvas) {
       ctx.fillStyle='rgba(6,20,34,0.93)';
       ctx.strokeStyle=isUp?'#00ff88':'#ff2244'; ctx.lineWidth=1;
       ctx.beginPath(); ctx.roundRect?ctx.roundRect(tx,ty,tw,th,4):ctx.rect(tx,ty,tw,th); ctx.fill(); ctx.stroke();
-      ctx.font='7.5px monospace'; ctx.textAlign='left';
+      ctx.font='8.5px monospace'; ctx.textAlign='left';
       lines.forEach((l,i)=>{
         ctx.fillStyle = i===3?(isUp?'#00ff88':'#ff2244'):C.tooltipText;
         ctx.fillText(l, tx+6, ty+13+i*11);
@@ -8062,7 +8076,7 @@ function _drawChart(canvas) {
 
   // ── Zoom indicator ────────────────────────────────────────────────────────
   if (offset > 0) {
-    ctx.fillStyle='rgba(0,180,255,0.5)'; ctx.font='8px monospace'; ctx.textAlign='left';
+    ctx.fillStyle='rgba(0,180,255,0.5)'; ctx.font='9px monospace'; ctx.textAlign='left';
     ctx.fillText('◀ scroll', padL+4, padT+chartH+12);
   }
 
