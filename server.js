@@ -5101,16 +5101,32 @@ async function updateOpenTradesMTM() {
     // independent of the trades[] journal below.
     updateSignalPerformance().catch(e => console.warn('[SignalPerf] update error:', e.message));
 
-    const atmCE = marketState.optionFlow.atmCEpremium;
-    const atmPE = marketState.optionFlow.atmPEpremium;
+    // FIX (2026-08-04): same bug class as updateSignalPerformance() had —
+    // this loop was pricing every open trade off the ATM premium regardless
+    // of t.strike. Confirmed from the 2:30pm 24400PE journal trade: spot was
+    // 24467.85 (ATM=24450, not 24400), so the "+103.3% Target 1:1 HIT" fired
+    // 8 seconds after entry was really just the ATM 24450PE's premium, not
+    // 24400PE's. Now looks up each trade's own strike from the option chain,
+    // same ATM-only fast path retained for the common case.
+    const atmCE     = marketState.optionFlow.atmCEpremium;
+    const atmPE     = marketState.optionFlow.atmPEpremium;
+    const pcrState  = getPCRState();
+    const atmStrike = Math.round(price / 50) * 50;
 
     for (const t of trades.filter(t => t.status === 'OPEN')) {
         // Nifty move (kept for UI display)
         t.niftyCurrent = price;
         t.niftyMove    = parseFloat((price - (t.niftyAtEntry || price)).toFixed(0));
 
-        // Pick the live premium that matches this trade's type
-        const livePremium = t.type === 'CE' ? atmCE : atmPE;
+        // Pick the live premium that matches this trade's actual strike
+        let livePremium;
+        if (t.strike === atmStrike) {
+            livePremium = t.type === 'CE' ? atmCE : atmPE;
+        } else if (pcrState?.records?.length) {
+            const chainRow = pcrState.records.find(r => r.strikePrice === t.strike);
+            const ltp      = t.type === 'CE' ? chainRow?.CE?.lastPrice : chainRow?.PE?.lastPrice;
+            livePremium    = (ltp > 0) ? ltp : null;
+        }
         if (!livePremium || !t.premium) continue;
 
         t.currentPremium = livePremium;
@@ -5667,6 +5683,19 @@ async function flushGateBlockCountsIfDirty() {
 // after a signal fires and records what actually happened.
 async function startSignalPerformance(signal, strikeData, source = 'main') {
     if (!strikeData || !strikeData.entry) return;
+    // DEDUP (2026-08-04): a strike could get a fresh "STRONG SIGNAL" fire
+    // while an earlier signal on that exact same strike+type was still open
+    // and being tracked — confirmed today: 24450PE fired at 12:00pm (still
+    // open), then fired again at 1:00pm with a different entry price, both
+    // then closing within the same minute. Two parallel, independently-
+    // tracked records on one instrument is confusing (which entry is real?)
+    // and double-counts in the performance stats. Skip starting a new record
+    // if this strike+type is already being tracked, regardless of source.
+    const dup = openPerfRecords.find(r => r.strike === strikeData.strike && r.type === strikeData.type);
+    if (dup) {
+        console.log(`[SignalPerf] Skipping duplicate ${strikeData.type} ${strikeData.strike} — already tracking since ${new Date(dup.startTs).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} (source: ${dup.source})`);
+        return null;
+    }
     const rec = {
         id: null,
         signal, type: strikeData.type, strike: strikeData.strike,

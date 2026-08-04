@@ -99,6 +99,21 @@ const NSE_INDEX_MAP = {
     '^CNXMETAL'  : 'NIFTY METAL',
     '^INDIAVIX'  : 'INDIA VIX',
     '%5EINDIAVIX': 'INDIA VIX',
+    // FIX (2026-08-04): these 7 extended-heatmap sectors were fetched via
+    // fetchQuote('^CNXPHARMA') etc in globalCues.js but were never routed
+    // anywhere — not global (isGlobal() doesn't list them), not in this map
+    // either, and they don't end in '.NS' for toNSESymbol — so nseSym/indexName
+    // both came back undefined and fetchYahooMeta always returned null.
+    // Sector heatmap showed "--" for all 7 all day, every day, regardless of
+    // market conditions. Real NSE index names confirmed against NSE's own
+    // allIndices field values (not guessed).
+    '^CNXPHARMA' : 'NIFTY PHARMA',
+    '^CNXFMCG'   : 'NIFTY FMCG',
+    '^CNXREALTY' : 'NIFTY REALTY',
+    '^CNXMEDIA'  : 'NIFTY MEDIA',
+    '^CNXENERGY' : 'NIFTY ENERGY',
+    '^CNXINFRA'  : 'NIFTY INFRA',
+    '^CNXPSUBANK': 'NIFTY PSU BANK',
 };
 
 const GLOBAL_SYMBOLS = new Set([
@@ -276,6 +291,15 @@ const YAHOO_FALLBACK_MAP = {
     'NIFTY AUTO' : '%5ECNXAUTO',
     'NIFTY METAL': '%5ECNXMETAL',
     'NIFTY 50'   : '%5ENSEI',
+    // Matches the 7 additions in NSE_INDEX_MAP above — same fallback pattern
+    // as the existing sectors (NSE row missing/stale → straight to Yahoo).
+    'NIFTY PHARMA'  : '%5ECNXPHARMA',
+    'NIFTY FMCG'    : '%5ECNXFMCG',
+    'NIFTY REALTY'  : '%5ECNXREALTY',
+    'NIFTY MEDIA'   : '%5ECNXMEDIA',
+    'NIFTY ENERGY'  : '%5ECNXENERGY',
+    'NIFTY INFRA'   : '%5ECNXINFRA',
+    'NIFTY PSU BANK': '%5ECNXPSUBANK',
 };
 
 // ── Yahoo Finance direct HTTP (used only as NSE fallback) ────────────────────
