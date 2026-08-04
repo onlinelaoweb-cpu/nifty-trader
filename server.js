@@ -3543,11 +3543,24 @@ ${vixFmt}
 }
 
 async function checkTelegramAlerts(newSignal) {
-    if (!isConfigured()||!isMarketOpen()) return;
+    if (!isConfigured()||!isMarketOpen()) return false;
     // ── Race-condition guard: onTick fires synchronously on every websocket tick,
     //    so multiple concurrent calls can pass a flag check before any one of them
     //    sets the flag. This in-flight lock ensures only one alert send runs at a time.
-    if (telegramAlertInFlight) return;
+    // FIX (3 Aug): previously returned bare/undefined here with no signal to the
+    // caller — updatePrice() would still advance prevSignal=signal right after,
+    // even though THIS transition never actually got evaluated/alerted. If a
+    // genuine signal change landed exactly while a previous alert was still
+    // mid-flight (DB writes + Telegram API calls easily take >1s, and ticks
+    // are throttled to 1/sec, so this is a real possibility during fast/volatile
+    // moves), that transition was silently and permanently skipped — no alert,
+    // no journal entry, no signal_performance row, and no retry, since prevSignal
+    // had already caught up. Returning false now lets updatePrice() hold
+    // prevSignal back so the same transition gets retried on the very next tick.
+    if (telegramAlertInFlight) {
+        console.warn(`[Telegram] Skipped — alert already in flight | newSignal: ${newSignal} (will retry next tick)`);
+        return false;
+    }
     telegramAlertInFlight = true;
     try {
     const ist=getIST(), h=ist.getHours(), m=ist.getMinutes();
@@ -3639,6 +3652,22 @@ async function checkTelegramAlerts(newSignal) {
             if (strikeDataForAlert) strikeDataForAlert.coach = buildTradeCoach(strikeDataForAlert);
         } catch(e) { console.warn('[Strike] compute error:', e.message); }
 
+        // FIX (3 Aug — Prabhash flagged Telegram showing "WAIT — Grade — (No
+        // trade)" headline text on messages that WERE auto-logged/tracked as
+        // real trades with real target hits): the 29 Jul fix snapshotted
+        // marketState right before getSimilarSetupStats()'s await, correctly
+        // closing THAT race. But TWO EARLIER awaits — startSignalPerformance()
+        // and createJournalEntryFromSignalPerf() just below — ran BEFORE that
+        // snapshot. During either of those awaits, a newer WebSocket tick can
+        // interleave, re-run combineSignals(), and overwrite marketState.signal
+        // (e.g. back to WAIT) before the snapshot ever captured it — while the
+        // trade itself (started synchronously below, from the correct
+        // newSignal/strikeDataForAlert already computed above) was opened and
+        // tracked correctly the whole time. Net effect: the trade was real,
+        // but the Telegram text describing it was stale/wrong. Snapshotting
+        // HERE — before either await — closes this too.
+        const alertSnapshot = { ...marketState };
+
         let mainPerfRec = null;
         let mainAutoLogged = false;
         if (strikeDataForAlert) {
@@ -3663,20 +3692,11 @@ async function checkTelegramAlerts(newSignal) {
                 marketState.mtf?.tf5m?.signal
               )
             : null;
+        // Carry the (possibly later-computed) momentum decay warning into the
+        // frozen snapshot too, since it's read by sendSignalAlert below.
+        alertSnapshot.momentumDecayWarning = marketState.momentumDecayWarning;
 
         dailySignalCounts.main++; dailySignalCountsDirty = true;
-        // FIX (29 Jul): freeze a snapshot of marketState BEFORE the async DB
-        // lookup below. getSimilarSetupStats() awaits a real Postgres query,
-        // and Node's event loop can interleave a NEWER WebSocket tick's
-        // combineSignals() run during that await — which would overwrite
-        // marketState.engineChecklist/qualityGate with that later tick's data
-        // (e.g. RSI having since moved enough to flip rsiClean) before
-        // sendSignalAlert ever reads it. Confirmed in production 29 Jul: a
-        // checklist showed "❌ RSI Clean" on a signal that could only have
-        // fired with rsiClean=true (that gate forces WAIT otherwise — see the
-        // early cascade above). Snapshotting here guarantees the alert always
-        // reflects the exact tick that actually fired it, not a later one.
-        const alertSnapshot = { ...marketState };
         alertSnapshot.similarSetupStats = await getSimilarSetupStats(newSignal, marketState.dynamicLevels?.zone).catch(e => { console.warn('[SimilarSetup] error:', e.message); return null; });
         await sendSignalAlert(alertSnapshot, prevSignal, strikeDataForAlert, mainAutoLogged);
         lastSignalFiredPrice = marketState.nifty || 0;
@@ -3749,6 +3769,17 @@ async function checkTelegramAlerts(newSignal) {
     }
 
     if (marketState.mtf.aligned && mtfInWindow && mtfCooldownOk && mtfReversalConfirmed) {
+        // FIX (3 Aug — same race-condition class as the Main Engine fix above,
+        // but this path had NO snapshot at all): sendMTFAlert() used to read
+        // straight from the live, mutable `marketState` object. Two awaits run
+        // below (startSignalPerformance, createJournalEntryFromSignalPerf)
+        // before sendMTFAlert() is ever called — during either of those, a
+        // newer market tick can interleave and mutate marketState.mtf/.delta/
+        // .signal before the message is actually composed, so the Telegram
+        // text could describe a different tick than the one that triggered
+        // leadQuality/mtfStrikeData. Snapshotting here, before any await,
+        // guarantees the alert always reflects the exact tick that fired it.
+        const mtfAlertSnapshot = { ...marketState };
         let mtfStrikeData = null;
         try {
             const pcrStateMtf = getPCRState();
@@ -3792,6 +3823,14 @@ async function checkTelegramAlerts(newSignal) {
             (marketState.nifty > marketState.vwap) ? 'ABOVE' : 'BELOW',
             marketState.mtf?.tf5m?.signal
         );
+        // momentumDecayWarning is a top-level field (copied by value at
+        // snapshot time, so the snapshot's copy is stale) — carry the fresh
+        // one over explicitly. marketState.mtf.leadQuality just above doesn't
+        // need this treatment: marketState.mtf is reassigned wholesale (not
+        // mutated) each refresh cycle, so mtfAlertSnapshot.mtf is still the
+        // same shared object reference as marketState.mtf right now, and
+        // setting .leadQuality on it a few lines up already updated both.
+        mtfAlertSnapshot.momentumDecayWarning = marketState.momentumDecayWarning;
 
         // Only track Strong Confluence (3-4/4) MTF-tracker leads for exit-warning
         // purposes — tracking every Weak/Isolated ping as an "open position"
@@ -3851,7 +3890,7 @@ async function checkTelegramAlerts(newSignal) {
         if (leadQuality.score >= 3 && _inSettlingWindow) {
             console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
         } else if (leadQuality.score >= 3) {
-            await sendMTFAlert(marketState, mtfStrikeData, mtfAutoLogged);
+            await sendMTFAlert(mtfAlertSnapshot, mtfStrikeData, mtfAutoLogged);
             lastMTFAlertAt     = Date.now();
             lastMTFAlertSignal = mtfSignalNow;
         }
@@ -3887,9 +3926,11 @@ async function checkTelegramAlerts(newSignal) {
         // silently all the way up through updatePrice() with ZERO console output —
         // looked exactly like "nothing happened" even though a signal change occurred.
         console.error('❌ checkTelegramAlerts crashed:', e.message, '| newSignal:', newSignal, '\n', e.stack);
+        return true; // don't retry-loop on a persistent bug — already logged above
     } finally {
         telegramAlertInFlight = false;
     }
+    return true;
 }
 
 async function updatePrice(price, change, changePct, source) {
@@ -4145,7 +4186,7 @@ async function updatePrice(price, change, changePct, source) {
     // (not deleted) in case outcome tracking is added later and it's revisited —
     // same treatment as the Spread Strategy disable above.
     // evaluateBTST();
-    await checkTelegramAlerts(signal);
+    const _alertHandled = await checkTelegramAlerts(signal);
     // ── Auto-log every fresh BUY CALL / BUY PUT transition to signal_log ─────
     // Runs silently — does NOT block the signal pipeline. Captures full snapshot
     // (RSI, VIX, PCR, ADX, MTF, quality gate) for later review / pattern mining.
@@ -4154,7 +4195,12 @@ async function updatePrice(price, change, changePct, source) {
     }
     if (signal === 'BUY CALL') lastMainCallAt = Date.now();
     if (signal === 'BUY PUT')  lastMainPutAt  = Date.now();
-    prevSignal=signal;
+    // FIX (3 Aug): only advance prevSignal if the alert check actually ran.
+    // If it was skipped (another alert still in flight), keep prevSignal at
+    // its old value so this same transition is re-evaluated — and actually
+    // gets its Telegram alert / journal entry — on the next tick, instead of
+    // being permanently treated as "already seen" without ever having fired.
+    if (_alertHandled) prevSignal=signal;
 }
 
 // ── 1-min Yahoo price poller — fixes price freeze on Yahoo fallback ──────────
@@ -5366,6 +5412,21 @@ async function initDB() {
                 ADD COLUMN IF NOT EXISTS suggested_entry NUMERIC,
                 ADD COLUMN IF NOT EXISTS slippage        NUMERIC,
                 ADD COLUMN IF NOT EXISTS slippage_pct    NUMERIC
+        `);
+        // FIX (3 Aug): defensive backfill for the `ts` column itself, for DBs
+        // created before `ts` was added to the CREATE TABLE above. Without
+        // this, pre-existing rows have NULL ts — and the frontend's
+        // _normServerTrade() (2 Aug fix) falls back to stamping those rows
+        // with TODAY's date on every page load whenever ts is missing, which
+        // is exactly the "yesterday's trade shows as today" bug that 2 Aug
+        // fix was meant to close. Postgres populates all existing NULL rows
+        // with a single NOW() computed at ALTER-time — not each row's true
+        // original timestamp (that info doesn't exist for old rows, only
+        // "HH:MM" does), but a stable real value instead of NULL means they
+        // stop being silently re-dated to "today" forever on every reload.
+        await dbPool.query(`
+            ALTER TABLE journal_trades
+                ADD COLUMN IF NOT EXISTS ts TIMESTAMPTZ DEFAULT NOW()
         `);
 
         // ── pcr_intraday_history table — every PCR tick of the day, persisted ──
