@@ -310,23 +310,35 @@ async function yahooDirectQuote(yahooSymbol) {
 }
 
 // ── NSE index quote — NSE first, Yahoo Finance fallback ───────────────────────
+// FIX (2026-08-04): fetchAllIndices() can silently replay a stale cached row for
+// up to 15 min during a Railway NSE rate-limit backoff (same issue bankNiftyVWAPLead
+// hit in Jun 2026 — see that function's comment). This fed stale sector prices
+// (e.g. BankNifty frozen at one value+% for an hour) straight into the Global
+// bias score, which weights BankNifty 3x — so the Global badge got stuck too.
+// Fix: skip the NSE row if the cache is older than its normal refresh window and
+// go straight to Yahoo instead, exactly like bankNiftyVWAPLead already does.
 async function nseIndexQuote(indexName) {
     try {
-        const indices = await fetchAllIndices();
-        const row     = indices.find(r => r.index === indexName);
-        if (row) {
-            const price     = parseFloat(row.last);
-            const prevClose = parseFloat(row.previousClose);
-            return {
-                price,
-                prevClose,
-                open  : parseFloat(row.open   || price),
-                high  : parseFloat(row.high   || price),
-                low   : parseFloat(row.low    || price),
-                volume: 0,
-            };
+        const cacheAge = getAllIndicesCacheAge();
+        if (cacheAge <= ALL_INDICES_OK_TTL) {
+            const indices = await fetchAllIndices();
+            const row     = indices.find(r => r.index === indexName);
+            if (row) {
+                const price     = parseFloat(row.last);
+                const prevClose = parseFloat(row.previousClose);
+                return {
+                    price,
+                    prevClose,
+                    open  : parseFloat(row.open   || price),
+                    high  : parseFloat(row.high   || price),
+                    low   : parseFloat(row.low    || price),
+                    volume: 0,
+                };
+            }
+        } else {
+            console.warn(`[NSE] index quote ${indexName}: allIndices cache stale (${Math.round(cacheAge / 1000)}s) — skipping straight to Yahoo`);
         }
-        // NSE blocked / not found — try Yahoo Finance directly
+        // NSE blocked / not found / stale — try Yahoo Finance directly
         const yahooSym = YAHOO_FALLBACK_MAP[indexName];
         if (yahooSym) {
             console.warn(`[NSE] index not found: ${indexName} — trying Yahoo fallback`);
