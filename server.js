@@ -5709,14 +5709,37 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
 // Called every ~30s (piggybacks on updateOpenTradesMTM's cadence) — updates
 // running high, checks target/SL hit, and auto-closes stale records so a
 // signal that never resolved doesn't hang open forever.
+//
+// FIX (2026-08-04): this was always comparing rec.target/rec.sl against the
+// ATM strike's premium (marketState.optionFlow.atmCEpremium/atmPEpremium),
+// even when the tracked signal's own strike was OTM (pickStrikeAndPremium
+// picks ATM±50 whenever VIX<13 — i.e. most of today's signals). ATM premium
+// is a different number entirely from an OTM strike's premium, so a signal
+// entered at ₹15.75 (24700CE) was being marked against the ATM CE's ₹29+
+// premium — an instant, false "TARGET HIT" at 0 min / +98%+ that never
+// actually happened on the traded strike. Now: look up rec.strike's own
+// live LTP from the full option chain (same source pickStrikeAndPremium
+// already uses for entry), same ATM-only shortcut retained as a fast path
+// since that's still the common case and avoids an extra array scan.
 async function updateSignalPerformance() {
     if (openPerfRecords.length === 0) return;
     const atmCE = marketState.optionFlow?.atmCEpremium;
     const atmPE = marketState.optionFlow?.atmPEpremium;
+    const pcrState = getPCRState();
+    const atmStrike = marketState.nifty ? Math.round(marketState.nifty / 50) * 50 : null;
     const stillOpen = [];
 
     for (const rec of openPerfRecords) {
-        const live = rec.type === 'CE' ? atmCE : atmPE;
+        let live;
+        if (rec.strike === atmStrike) {
+            live = rec.type === 'CE' ? atmCE : atmPE;
+        } else if (pcrState?.records?.length) {
+            const chainRow = pcrState.records.find(r => r.strikePrice === rec.strike);
+            const liveLtp  = rec.type === 'CE' ? chainRow?.CE?.lastPrice : chainRow?.PE?.lastPrice;
+            live = (liveLtp > 0) ? liveLtp : null;
+        }
+        // Chain lookup failed (strike missing from fetched range) — hold last
+        // known high/low rather than falsely comparing against ATM's number.
         const elapsedMin = Math.round((Date.now() - rec.startTs) / 60000);
 
         if (live) { rec.high = Math.max(rec.high, live); rec.low = Math.min(rec.low, live); }
