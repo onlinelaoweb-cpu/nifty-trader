@@ -5093,6 +5093,35 @@ function getTradeSummary() {
 //                 risk-unit from the peak locks in whatever was made.
 // SL never moves down, only up (for CE) — same mirrored logic works for PE
 // since we're comparing premium levels, not direction.
+// FIX (2026-08-05): SL / Trailing-SL alerts below used to only set an
+// alertSent flag — the trade itself stayed status:'OPEN' forever. Confirmed
+// today: yesterday's 2:30pm 24400PE trade (Trade #51) sent "EXIT NOW" at
+// 2:33pm but never actually closed, so it survived past expiry, got
+// reloaded from journal_trades on today's boot ("Reloaded 1 journal trades
+// from DB"), and re-fired its SL/target alerts all over again this morning
+// against a dead/mismatched contract (₹101.75 "peak" out of nowhere).
+// alertSent flags also aren't persisted to DB, compounding the replay.
+// This mirrors the exact close logic already used by the manual
+// POST /api/trade/exit endpoint — same fields, same DB update.
+async function closeTradeAuto(t, exitPremium) {
+    t.exitPremium = exitPremium;
+    t.pnl = parseFloat(((exitPremium - t.premium) * t.lots * LOT_SIZE).toFixed(0));
+    t.status = 'CLOSED';
+    const ist = getIST();
+    t.exitTime = `${String(ist.getHours()).padStart(2, '0')}:${String(ist.getMinutes()).padStart(2, '0')}`;
+    if (dbPool) {
+        try {
+            await dbPool.query(
+                `UPDATE journal_trades
+                 SET exit_premium=$1, exit_time=$2, pnl=$3, status='CLOSED'
+                 WHERE id=$4`,
+                [t.exitPremium, t.exitTime, t.pnl, t.id]
+            );
+        } catch (e) { console.error('[closeTradeAuto] DB error:', e.message); }
+    }
+    console.log(`📔 Auto-closed Trade #${t.id}: P&L ${t.pnl >= 0 ? '+' : ''}₹${t.pnl}`);
+}
+
 async function updateOpenTradesMTM() {
     const price = marketState.nifty;
     if (!price) return;
@@ -5169,6 +5198,7 @@ async function updateOpenTradesMTM() {
             t.alertSent.sl = true;
             console.log(`🛑 SL hit: Trade #${t.id} ${t.type} ${t.strike} — premium ₹${livePremium} ≤ SL ₹${sl}`);
             if (isConfigured()) await sendExitAlert(t, 'STOP_LOSS', livePremium);
+            await closeTradeAuto(t, livePremium);
         }
 
         // ── Trailing SL hit (after 1R — locks in whatever profit was made) ─
@@ -5176,6 +5206,7 @@ async function updateOpenTradesMTM() {
             t.alertSent.trailSL = true;
             console.log(`🎯 Trailing SL hit: Trade #${t.id} ${t.type} ${t.strike} — premium ₹${livePremium} ≤ trail ₹${effectiveSL} (peak was ₹${t.peakPremium})`);
             if (isConfigured()) await sendExitAlert(t, 'TRAILING_SL', livePremium, { peak: t.peakPremium, trailSL: effectiveSL });
+            await closeTradeAuto(t, livePremium);
         }
 
         // ── Target 1:1 — now just an informational checkpoint (trailing takes over) ──
