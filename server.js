@@ -2371,7 +2371,21 @@ function combineSignals(indicators) {
     const convictionOpposesSignal =
         (trendConviction.active === 'BEARISH' && rawSignal === 'BUY CALL') ||
         (trendConviction.active === 'BULLISH' && rawSignal === 'BUY PUT');
-    const mtfGenuinelyConfirms = marketState.mtf?.aligned && marketState.mtf?.signal === rawSignal;
+    // FIX (5 Aug): mtfGenuinelyConfirms used to check direction alignment only
+    // (marketState.mtf.aligned + signal match) — it could fire off a genuinely
+    // weak/no-trend reading (e.g. 15m ADX 16.8, below the ~20 trend-strength
+    // floor used everywhere else in this file) and still override a 5/6
+    // stacked bearish Trend Conviction. A direction flip with no real trend
+    // strength behind it isn't a "genuine reversal" — require both the 15m
+    // and 1H legs of the alignment to actually show trend strength before
+    // this override is allowed to bypass Trend Conviction.
+    const MTF_REVERSAL_MIN_ADX = 20;
+    const adx15mForReversal = marketState.mtf?.tf15m?.adx;
+    const adx1hForReversal  = marketState.mtf?.tf1h?.adx;
+    const mtfReversalStrongEnough =
+        adx15mForReversal != null && adx15mForReversal >= MTF_REVERSAL_MIN_ADX &&
+        adx1hForReversal  != null && adx1hForReversal  >= MTF_REVERSAL_MIN_ADX;
+    const mtfGenuinelyConfirms = marketState.mtf?.aligned && marketState.mtf?.signal === rawSignal && mtfReversalStrongEnough;
     qualityGate.convictionOk = !(convictionOpposesSignal && !mtfGenuinelyConfirms);
 
     // Recompute passed HERE — srClear may have been flipped to false inside the gate block above.
@@ -2534,7 +2548,11 @@ function combineSignals(indicators) {
     if (rawSignal !== 'WAIT' && !qualityGate.convictionOk) {
         signal = 'WAIT'; confidence = 0;
         const conds = trendConviction.active === 'BEARISH' ? trendConviction.bearConditions : trendConviction.bullConditions;
-        reasons.push(`⛔ Trend Conviction (${trendConviction.active}, ${conds.length}/6: ${conds.join(', ')}) contradicts ${rawSignal} without genuine MTF reversal — wait`);
+        const mtfAlignedButWeak = marketState.mtf?.aligned && marketState.mtf?.signal === rawSignal && !mtfReversalStrongEnough;
+        const reversalNote = mtfAlignedButWeak
+            ? `MTF aligned but 15m/1h ADX too weak for a genuine reversal (15m ${adx15mForReversal?.toFixed(1) ?? '--'}, 1h ${adx1hForReversal?.toFixed(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX}+ on both)`
+            : 'without genuine MTF reversal';
+        reasons.push(`⛔ Trend Conviction (${trendConviction.active}, ${conds.length}/6: ${conds.join(', ')}) contradicts ${rawSignal} — ${reversalNote} — wait`);
     } else if (rawSignal !== 'WAIT' && !convictionOpposesSignal &&
                ((trendConviction.active === 'BEARISH' && rawSignal === 'BUY PUT') ||
                 (trendConviction.active === 'BULLISH' && rawSignal === 'BUY CALL'))) {

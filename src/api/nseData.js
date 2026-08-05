@@ -2085,7 +2085,7 @@ function startNSEScheduler(getSpotPrice, getBankNiftySpot) {
     }
     _nseSchedulerStarted = true;
     if (typeof getBankNiftySpot === 'function') _getBankNiftySpot = getBankNiftySpot;
-    console.log('[NSE] 🚀 Starting NSE scheduler (PCR: 60s | FII/DII: 15 min)');
+    console.log('[NSE] 🚀 Starting NSE scheduler (PCR: 30s | FII/DII: 15 min)');
 
     // Fire first fetches async — intentionally NOT awaited so the app never
     // hangs at startup if NSE is slow or unreachable.  State objects stay at
