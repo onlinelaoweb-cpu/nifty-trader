@@ -339,10 +339,10 @@ async function sendMTFAlert(state, strikeData = null, autoLogged = false) {
     const oneHourLagging = state.mtf.oneHourLagging ?? false;
     // Honest title: show exact situation
     const alignTitle = oneHourLagging
-        ? '⚡ SIGNAL — 2/3 TFs ALIGNED (1H lagging — reversed)'
+        ? '⚡ MTF Reference — 2/3 TFs aligned (1H lagging — reversed)'
         : validCount === 3
-            ? '🔥 STRONG SIGNAL — ALL 3 ALIGNED!'
-            : `⚡ SIGNAL — ${validCount}/3 TFs ALIGNED (15m warming up)`;
+            ? '🧭 MTF Reference — all 3 TFs aligned (not main-engine confirmed)'
+            : `⚡ MTF Reference — ${validCount}/3 TFs aligned (15m warming up)`;
 
     const LOT = 65;  // Nifty lot size, revised Jan 2026: 75 → 65
     const lq = strikeData?.leadQuality;

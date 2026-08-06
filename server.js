@@ -3905,8 +3905,28 @@ async function checkTelegramAlerts(newSignal) {
         const _minsSinceOpen = (_ist.getHours() * 60 + _ist.getMinutes()) - 555;  // 555 = 9:15 AM
         const _inSettlingWindow = _minsSinceOpen >= 0 && _minsSinceOpen < 5;
 
+        // ── Exhaustion guard (5 Aug) — added after a live case: an 11:04am
+        // "STRONG SIGNAL — ALL 3 ALIGNED" BUY CALL fired with RSI 81.76
+        // (extreme overbought) AND price inside the Dynamic H1–L1 range
+        // pocket (false-breakout risk) at the SAME time. Chart afterward
+        // confirmed price peaked within minutes and reversed hard — exactly
+        // the two things Main Engine's own "RSI Clean" / "Clear of Range
+        // Pocket" gates exist to catch. Those gates already block Main
+        // Engine's own signal but were never applied to this MTF reference-
+        // only alert, which fires purely on TF-alignment + delta/confluence.
+        // A directionally-"aligned" reading at a structurally exhausted spot
+        // isn't a genuine setup — suppress rather than send as reference.
+        const RSI_EXHAUSTED_HIGH = 75, RSI_EXHAUSTED_LOW = 25;
+        const rsiExhausted = mtfSignalNow === 'BUY CALL' ? (marketState.rsi ?? 50) >= RSI_EXHAUSTED_HIGH
+                           : mtfSignalNow === 'BUY PUT'  ? (marketState.rsi ?? 50) <= RSI_EXHAUSTED_LOW
+                           : false;
+        const insideRangePocket = marketState.dynamicLevels?.noTradeZone === true;
+        const exhaustionRisk = rsiExhausted || insideRangePocket;
+
         if (leadQuality.score >= 3 && _inSettlingWindow) {
             console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
+        } else if (leadQuality.score >= 3 && exhaustionRisk) {
+            console.log(`[MTF] Suppressed Strong Confluence alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'})`);
         } else if (leadQuality.score >= 3) {
             await sendMTFAlert(mtfAlertSnapshot, mtfStrikeData, mtfAutoLogged);
             lastMTFAlertAt     = Date.now();
