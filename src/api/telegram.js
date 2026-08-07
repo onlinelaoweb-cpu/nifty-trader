@@ -663,7 +663,7 @@ ${rec.exitWarned ? `⚠️ Weakened    conviction faded before this closed — y
 async function sendExitAlert(trade, reason, currentPremium, extra = {}) {
     const pnlPerLot = parseFloat(((currentPremium - trade.premium) * 65).toFixed(0));
     const totalPnl  = pnlPerLot * trade.lots;
-    const pnlSign   = totalPnl >= 0 ? '+' : '';
+    const pnlSign   = totalPnl >= 0 ? '+' : '-';
     const changePct = parseFloat(((currentPremium - trade.premium) / trade.premium * 100).toFixed(1));
 
     let emoji, heading, action;
