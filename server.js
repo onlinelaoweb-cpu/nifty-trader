@@ -4179,8 +4179,21 @@ async function updatePrice(price, change, changePct, source) {
 
         const healthTotal = Math.round(trendScore + momentumScore + volumeScore + optionsScore + breadthScore);
         // Bias direction for the label — bull/bear vote tally isn't accessible here
-        // (it's local to combineSignals()), so use MTF bull/bear counts as the proxy.
-        const biasIsBull = (marketState.mtf?.bullCount ?? 0) >= (marketState.mtf?.bearCount ?? 0);
+        // (it's local to combineSignals()). FIX (6 Aug): previously used MTF's raw
+        // 3-vote bullCount/bearCount as the proxy — a small, noisy sample (5m/15m/1h
+        // direction only, no extremity threshold) that could disagree with the
+        // Probability Engine's WAIT-state split, which is driven by Trend
+        // Conviction's broader 7-factor structural tally (VWAP, 15m, 1H, Delta
+        // extremity, VAL/VAH, POC, ORB). That mismatch was confusing on the
+        // Insights screen — same "market bias" claimed twice from two unrelated
+        // vote counts. Trend Conviction is computed earlier in combineSignals()
+        // (see line ~2370) and is already marketState.trendConviction by the time
+        // this runs, so use its bullCount/bearCount here too — same source as
+        // Probability Engine, MTF kept only as a fallback if it's unavailable.
+        const tcForHealth = marketState.trendConviction;
+        const biasIsBull = tcForHealth
+            ? (tcForHealth.bullCount ?? 0) >= (tcForHealth.bearCount ?? 0)
+            : (marketState.mtf?.bullCount ?? 0) >= (marketState.mtf?.bearCount ?? 0);
         const healthLabel = healthTotal >= 80 ? (biasIsBull ? 'Strong Bullish Trend' : 'Strong Bearish Trend')
                            : healthTotal >= 60 ? (biasIsBull ? 'Moderate Bullish Bias' : 'Moderate Bearish Bias')
                            : healthTotal >= 40 ? 'Choppy / Mixed'
@@ -5839,6 +5852,41 @@ async function updateSignalPerformance() {
         // Chain lookup failed (strike missing from fetched range) — hold last
         // known high/low rather than falsely comparing against ATM's number.
         const elapsedMin = Math.round((Date.now() - rec.startTs) / 60000);
+
+        // ── EOD carry-over guard (6 Aug) ────────────────────────────────────
+        // This function only runs when /api/signal is polled (30s throttle),
+        // which stops entirely once the frontend detects "market closed" and
+        // switches to showing cached data — so a record still open at 3:30pm
+        // close just sits frozen (elapsedMin stops advancing) until the NEXT
+        // poll, which could be hours later or the next trading day. If that
+        // next poll lands after a new day's ticks have started flowing,
+        // `live` here reflects the NEW session's (possibly gap-moved) premium
+        // — comparing that against yesterday's entry/target/SL would produce
+        // a target/SL "hit" driven by an overnight gap, not the intraday
+        // move the signal was actually about. Detect the day rollover FIRST
+        // and close with whatever premium we last legitimately observed
+        // (rec.lastLive, tracked below), before any target/SL/timeout check
+        // runs against a cross-day price.
+        if (live) rec.lastLive = live;
+        const recDay   = new Date(rec.startTs).toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
+        const todayDay = getIST().toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
+        if (recDay !== todayDay) {
+            const eodPremium = rec.lastLive ?? rec.high ?? rec.entry;
+            const closedAt = new Date().toISOString();
+            const maxGainPctEod = rec.entry > 0 ? Math.round(((rec.high - rec.entry) / rec.entry) * 1000) / 10 : 0;
+            const maxAdverseExcursionPctEod = rec.entry > 0 ? Math.round(((rec.low - rec.entry) / rec.entry) * 1000) / 10 : 0;
+            console.log(`📊 [SignalPerf] ${rec.signal} ${rec.strike}${rec.type} closed — EOD ⏰ (still open past session close, carried from ${recDay}) | Entry:${rec.entry} Last:${eodPremium} | ${elapsedMin} min`);
+            sendSignalTimeline(rec, 'EOD ⏰ (session ended)', maxGainPctEod, elapsedMin, closedAt, maxAdverseExcursionPctEod).catch(e => console.warn('[SignalTimeline] send error:', e.message));
+            if (dbPool && rec.id) {
+                try {
+                    await dbPool.query(
+                        `UPDATE signal_performance SET high=$1, low=$2, target_hit=false, sl_hit=false, closed=true, time_taken_min=$3, closed_at=$4, max_gain_pct=$5, max_adverse_pct=$6, partial_win=false, exit_warned=$7 WHERE id=$8`,
+                        [rec.high, rec.low, elapsedMin, closedAt, maxGainPctEod, maxAdverseExcursionPctEod, rec.exitWarned, rec.id]
+                    );
+                } catch (e) { console.warn('[SignalPerf] EOD close DB error:', e.message); }
+            }
+            continue;
+        }
 
         if (live) { rec.high = Math.max(rec.high, live); rec.low = Math.min(rec.low, live); }
 
