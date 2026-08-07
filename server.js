@@ -3921,12 +3921,32 @@ async function checkTelegramAlerts(newSignal) {
                            : mtfSignalNow === 'BUY PUT'  ? (marketState.rsi ?? 50) <= RSI_EXHAUSTED_LOW
                            : false;
         const insideRangePocket = marketState.dynamicLevels?.noTradeZone === true;
-        const exhaustionRisk = rsiExhausted || insideRangePocket;
+
+        // ── Weak-ADX-backed alignment guard (7 Aug) — live case: a 9:52am
+        // "3/3 TFs aligned, Strong Confluence" BUY CALL fired with 15m ADX
+        // shown as "--" (unavailable/insufficient) — isFull3 above only checks
+        // marketState.mtf.bullCount===3, a pure DIRECTION vote that never looks
+        // at ADX. So one of the three "aligned" legs had zero trend-strength
+        // confirmation behind it. Alert decayed within 5 min (Delta 80%→56%,
+        // confidence 83%→37%) and the tracker flipped to BUY PUT 30 min later.
+        // Same root cause the 6 Aug Trend-Conviction-override fix addressed on
+        // the Main Engine side (MTF_REVERSAL_MIN_ADX) — mirrored here for this
+        // alert's own firing gate, since that fix only guards the override
+        // path, not this alert's "Strong Confluence" label/send decision.
+        const adx15mForAlert = marketState.mtf?.tf15m?.adx;
+        const adx1hForAlert  = marketState.mtf?.tf1h?.adx;
+        const MTF_REVERSAL_MIN_ADX = 20;   // same threshold as combineSignals()'s Trend Conviction override guard
+        const alignmentADXWeak = isFull3 && (
+            adx15mForAlert == null || adx15mForAlert < MTF_REVERSAL_MIN_ADX ||
+            adx1hForAlert  == null || adx1hForAlert  < MTF_REVERSAL_MIN_ADX
+        );
+
+        const exhaustionRisk = rsiExhausted || insideRangePocket || alignmentADXWeak;
 
         if (leadQuality.score >= 3 && _inSettlingWindow) {
             console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
         } else if (leadQuality.score >= 3 && exhaustionRisk) {
-            console.log(`[MTF] Suppressed Strong Confluence alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'})`);
+            console.log(`[MTF] Suppressed Strong Confluence alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'}, ${alignmentADXWeak ? `weak ADX backing (15m ${adx15mForAlert?.toFixed?.(1) ?? '--'}, 1h ${adx1hForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX}+ on both)` : 'ADX ok'})`);
         } else if (leadQuality.score >= 3) {
             await sendMTFAlert(mtfAlertSnapshot, mtfStrikeData, mtfAutoLogged);
             lastMTFAlertAt     = Date.now();
