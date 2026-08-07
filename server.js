@@ -220,6 +220,23 @@ let events       = [];
 // ── Signal Performance Tracking (automatic, independent of Journal) ─────────
 let openPerfRecords = [];   // records currently being tracked toward target/SL
 const PERF_AUTOCLOSE_MIN = 90;  // auto-close untouched signals after 90 min (theta eats the edge past this)
+// ── Shadow-tracking for TIMED OUT signals (7 Aug audit request) ─────────────
+// Live cases surfaced by Prabhash (screenshots) showed a repeating pattern:
+// a signal gets marked "TIMED OUT" at 90 min, then the underlying premium
+// keeps moving favourably shortly AFTER that close — meaning 90 min might be
+// cutting some genuinely-still-developing setups off too early. But the
+// existing signal_performance schema stops observing a record the moment
+// it's marked closed, so there was no data to actually answer "how often
+// does this happen, and by how much" — only anecdotes from screenshots.
+// This shadow-tracks ONLY TIMED OUT records (never SL/target hits — those are
+// genuinely resolved) for an EXTRA window purely for observation. It never
+// reopens the trade, never changes win-rate/accuracy stats, and never sends
+// a Telegram alert — it's a silent, separate log so that after a couple
+// weeks of real data, a decision on PERF_AUTOCLOSE_MIN can be evidence-based
+// instead of adjusted off 2-3 screenshots (the same discipline this file
+// already applies everywhere else — e.g. MIN_STRIKE_OI/MIN_STRIKE_VOLUME).
+let shadowPerfRecords = [];
+const SHADOW_TRACK_MIN = 60;   // extra minutes observed AFTER a TIMED OUT close
 // ── Liquidity/OI filter thresholds (pickStrikeAndPremium) ───────────────────
 // NIFTY weekly options: ATM/near-ATM strikes normally carry OI in the several-
 // lakh range and volume in the tens-of-thousands intraday. These thresholds
@@ -5200,6 +5217,7 @@ async function updateOpenTradesMTM() {
     // Piggyback signal-performance tracking on this same 30s cadence —
     // independent of the trades[] journal below.
     updateSignalPerformance().catch(e => console.warn('[SignalPerf] update error:', e.message));
+    updateShadowTracking().catch(e => console.warn('[Shadow] update error:', e.message));
 
     // FIX (2026-08-04): same bug class as updateSignalPerformance() had —
     // this loop was pricing every open trade off the ATM premium regardless
@@ -5497,6 +5515,14 @@ async function initDB() {
         // same discipline as the dyn_zone/gap_zone columns above.
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS strike_oi NUMERIC`).catch(()=>{});
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS strike_volume NUMERIC`).catch(()=>{});
+        // Shadow-tracking columns (7 Aug audit) — see shadowPerfRecords comment
+        // above for why these exist. post_close_* is ONLY populated for
+        // TIMED OUT records, tracked for SHADOW_TRACK_MIN after the official
+        // close — purely observational, never affects target_hit/sl_hit/closed.
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS post_close_high NUMERIC`).catch(()=>{});
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS post_close_low NUMERIC`).catch(()=>{});
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS post_close_max_gain_pct NUMERIC`).catch(()=>{});
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS shadow_tracked BOOLEAN DEFAULT FALSE`).catch(()=>{});
         console.log('✅ PostgreSQL signal_performance table ready');
 
         // ── journal_trades table — manually entered trades from the Journal tab ──
@@ -6004,6 +6030,16 @@ async function updateSignalPerformance() {
                     );
                 } catch (e) { console.warn('[SignalPerf] update error:', e.message); }
             }
+            // ── Shadow-track TIMED OUT records only (not target/SL hits — those
+            // are genuinely resolved outcomes, nothing left to observe) ────────
+            if (timedOut && !targetHit && !slHit && rec.id) {
+                shadowPerfRecords.push({
+                    id: rec.id, signal: rec.signal, type: rec.type, strike: rec.strike,
+                    entry: rec.entry, closeHigh: rec.high, closeLow: rec.low,
+                    shadowHigh: live ?? rec.high, shadowLow: live ?? rec.low,
+                    shadowStartTs: Date.now(),
+                });
+            }
         } else {
             stillOpen.push(rec);
         }
@@ -6023,6 +6059,53 @@ async function updateSignalPerformance() {
         currentConfidence: computeDecayedConfidence(r.entryConfidence, r.entryDelta, r.entryRSI, marketState.delta?.deltaPct, marketState.rsi, r.signal),
         elapsedMin: Math.round((Date.now() - r.startTs) / 60000),
     }));
+}
+
+// ── Shadow-tracking updater (7 Aug audit) — see shadowPerfRecords comment
+// near its declaration. Piggybacks on the same 30s cadence as
+// updateSignalPerformance() (called alongside it in updateOpenTradesMTM()).
+// Purely observational: updates running high/low for TIMED OUT records for
+// an extra SHADOW_TRACK_MIN, then writes post_close_max_gain_pct to DB and
+// stops — never reopens the trade, never touches target_hit/sl_hit/closed.
+async function updateShadowTracking() {
+    if (shadowPerfRecords.length === 0) return;
+    const atmCE = marketState.optionFlow?.atmCEpremium;
+    const atmPE = marketState.optionFlow?.atmPEpremium;
+    const pcrState = getPCRState();
+    const atmStrike = marketState.nifty ? Math.round(marketState.nifty / 50) * 50 : null;
+    const stillTracking = [];
+
+    for (const rec of shadowPerfRecords) {
+        let live;
+        if (rec.strike === atmStrike) {
+            live = rec.type === 'CE' ? atmCE : atmPE;
+        } else if (pcrState?.records?.length) {
+            const chainRow = pcrState.records.find(r => r.strikePrice === rec.strike);
+            const liveLtp  = rec.type === 'CE' ? chainRow?.CE?.lastPrice : chainRow?.PE?.lastPrice;
+            live = (liveLtp > 0) ? liveLtp : null;
+        }
+        if (live) {
+            rec.shadowHigh = Math.max(rec.shadowHigh, live);
+            rec.shadowLow  = Math.min(rec.shadowLow,  live);
+        }
+
+        const shadowElapsedMin = Math.round((Date.now() - rec.shadowStartTs) / 60000);
+        if (shadowElapsedMin >= SHADOW_TRACK_MIN) {
+            const postCloseMaxGainPct = rec.entry > 0 ? Math.round(((rec.shadowHigh - rec.entry) / rec.entry) * 1000) / 10 : 0;
+            console.log(`👻 [Shadow] ${rec.signal} ${rec.strike}${rec.type} — post-TIMED-OUT ${SHADOW_TRACK_MIN}min check: High ${rec.shadowHigh} (+${postCloseMaxGainPct}% from entry ₹${rec.entry}, vs +${rec.entry > 0 ? Math.round(((rec.closeHigh - rec.entry) / rec.entry) * 1000) / 10 : 0}% at close)`);
+            if (dbPool) {
+                try {
+                    await dbPool.query(
+                        `UPDATE signal_performance SET post_close_high=$1, post_close_low=$2, post_close_max_gain_pct=$3, shadow_tracked=true WHERE id=$4`,
+                        [rec.shadowHigh, rec.shadowLow, postCloseMaxGainPct, rec.id]
+                    );
+                } catch (e) { console.warn('[Shadow] DB update error:', e.message); }
+            }
+        } else {
+            stillTracking.push(rec);
+        }
+    }
+    shadowPerfRecords = stillTracking;
 }
 
 // Daily/weekly/monthly accuracy rollup — per feedback: "Over time you can
@@ -7299,6 +7382,46 @@ app.get('/api/weekly-review', async (req, res) => {
     try {
         const review = await computeWeeklyGateReview();
         res.json({ success: true, review });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── Shadow-tracking audit summary (7 Aug) — evidence for whether
+// PERF_AUTOCLOSE_MIN (90 min) is cutting genuinely-still-developing signals
+// off too early. Compares each TIMED OUT record's max_gain_pct AT close vs
+// post_close_max_gain_pct (observed over the next SHADOW_TRACK_MIN=60min).
+// "improved" = post-close high ran further than the close-time high did.
+// Needs at least a couple weeks of TIMED OUT samples before this is a
+// reliable enough signal to actually change PERF_AUTOCLOSE_MIN on — same
+// evidence-first discipline as every other threshold in this file.
+app.get('/api/timeout-audit', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, msg: 'No DB configured' });
+    try {
+        const r = await dbPool.query(
+            `SELECT signal, option_type, strike, entry, max_gain_pct, post_close_max_gain_pct, trade_date
+             FROM signal_performance
+             WHERE closed = true AND shadow_tracked = true
+               AND NOT target_hit AND NOT sl_hit
+             ORDER BY trade_date DESC, id DESC LIMIT 200`
+        );
+        const rows = r.rows;
+        const total = rows.length;
+        if (total === 0) return res.json({ success: true, total: 0, msg: 'No shadow-tracked TIMED OUT records yet — check back after a few trading days.' });
+
+        const improved = rows.filter(row => parseFloat(row.post_close_max_gain_pct) > parseFloat(row.max_gain_pct));
+        const upliftPctAvg = improved.length
+            ? Math.round((improved.reduce((s, row) => s + (parseFloat(row.post_close_max_gain_pct) - parseFloat(row.max_gain_pct)), 0) / improved.length) * 10) / 10
+            : 0;
+
+        res.json({
+            success: true, total,
+            improvedCount: improved.length,
+            improvedPct: Math.round((improved.length / total) * 100),
+            avgUpliftOnImproved: upliftPctAvg,
+            note: `${improved.length}/${total} TIMED OUT signals kept moving favourably in the ${SHADOW_TRACK_MIN} min after close (avg +${upliftPctAvg}% further on those). Low count = not enough evidence yet either way.`,
+            rows: rows.slice(0, 50),
+        });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
