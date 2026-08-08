@@ -5306,13 +5306,28 @@ async function updateOpenTradesMTM() {
         const sl      = t.sl > 0 ? t.sl : parseFloat((entry * (1 - slFallbackPct)).toFixed(2));
         const target1R  = parseFloat((entry + risk).toFixed(2));         // 1:1 — trailing activation point
         const target15R = parseFloat((entry + risk * 1.5).toFixed(2));   // 1:1.5 — informational checkpoint only
+        const target2R  = parseFloat((entry + risk * 2).toFixed(2));     // 1:2 — the OFFICIAL target shown in the AI Trade Coach/Telegram alert
 
         // Initialise alert-sent guards + trailing state on first pass
-        if (!t.alertSent) t.alertSent = { sl: false, target1R: false, target15R: false, trailSL: false };
+        if (!t.alertSent) t.alertSent = { sl: false, target1R: false, target15R: false, target2R: false, trailSL: false };
         if (t.peakPremium == null) t.peakPremium = entry;
 
         // Track the best premium seen since entry (needed to trail from)
         if (livePremium > t.peakPremium) t.peakPremium = livePremium;
+
+        // ── Full Target (1:2) hit — hard close (7 Aug, per explicit request) ─
+        // Previously hitting the official target only fired an informational
+        // TARGET_1R alert and handed off to the trailing-SL system, letting
+        // the position keep running past its own stated target indefinitely.
+        // Now: reaching the official 1:2 target closes the trade outright —
+        // no trailing hand-off, same as an SL hit closes it on the downside.
+        if (!t.alertSent.target2R && livePremium >= target2R) {
+            t.alertSent.target2R = true;
+            console.log(`🏆 Full Target (1:2) hit: Trade #${t.id} ${t.type} ${t.strike} — premium ₹${livePremium} ≥ ₹${target2R} — closing`);
+            if (isConfigured()) await sendExitAlert(t, 'TARGET_FULL', livePremium);
+            await closeTradeAuto(t, livePremium);
+            continue;
+        }
 
         // ── Trailing SL: only active once 1R profit has been reached ────
         const trailingActive = t.peakPremium >= target1R;

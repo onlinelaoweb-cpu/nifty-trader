@@ -679,6 +679,10 @@ async function sendExitAlert(trade, reason, currentPremium, extra = {}) {
         emoji   = '⚠️';
         heading = 'TREND STRUCTURE BROKE (Physics Law-1)';
         action  = 'Consider tightening exit — trend that got you here may be over';
+    } else if (reason === 'TARGET_FULL') {
+        emoji   = '🏆';
+        heading = 'FULL TARGET HIT (1:2)';
+        action  = 'Trade closed — full target booked';
     } else if (reason === 'TARGET_1_5R') {
         emoji   = '🎯';
         heading = 'TARGET 1:1.5 HIT';
