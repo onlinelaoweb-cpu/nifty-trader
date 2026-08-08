@@ -2549,6 +2549,24 @@ function combineSignals(indicators) {
         reasons.push(`⛔ Delta ${deltaPct > 0 ? '+' : ''}${deltaPct}% strongly contradicts ${rawSignal} — order flow disagrees, wait for alignment`);
     }
 
+    // ── POC gate enforcement (7 Aug fix) ─────────────────────────────────────
+    // qualityGate.pocClear has existed since the POC gate was introduced and
+    // is already counted in qualityGate.passed's AND-formula above (line
+    // ~2417) — but pocClear is computed AFTER the main gate if/else chain
+    // (adxTrend/mtfAligned/rsiClean/vixSafe/S-R), which runs too early to
+    // include it, and unlike deltaAligned/convictionOk (which ARE computed
+    // late and DO have their own explicit enforcement block, see above/below)
+    // pocClear was never given one. Net effect: a signal firing exactly AT
+    // the POC magnet (chop zone) or on the wrong side of POC could — and did,
+    // per a live 7 Aug case, 2:42pm BUY PUT whose own "Blocked by" checklist
+    // line named "Clear of POC" — fire for real, auto-log to Journal, and
+    // trade. Wiring this in now so it actually blocks, matching what the
+    // checklist display already implied it was doing.
+    if (rawSignal !== 'WAIT' && !qualityGate.pocClear) {
+        signal = 'WAIT'; confidence = 0;
+        reasons.push(`⛔ ${pocSig === 'AT_POC' ? `Price AT POC (${marketState.poc?.poc}) — chop-zone magnet` : `Price on wrong side of POC for ${rawSignal}`} — wait for clear break`);
+    }
+
     if (rawSignal !== 'WAIT' && !qualityGate.contradictionOk) {
         // Informational only — does NOT force WAIT. See note above.
         reasons.push(`ℹ️ Contradiction Score — Bullish ${contradictionScore.bullFactors.join('+')||'-'} (${contradictionScore.bullWeight}%) vs Bearish ${contradictionScore.bearFactors.join('+')||'-'} (${contradictionScore.bearWeight}%) — both sides substantial (not blocking)`);
