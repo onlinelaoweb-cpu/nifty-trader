@@ -5263,6 +5263,29 @@ async function updateOpenTradesMTM() {
             const ltp      = t.type === 'CE' ? chainRow?.CE?.lastPrice : chainRow?.PE?.lastPrice;
             livePremium    = (ltp > 0) ? ltp : null;
         }
+
+        // ── EOD carry-over guard (7 Aug) — same class of bug the 6 Aug fix
+        // closed for signal_performance, applied here to journal trades[].
+        // Until now, ONLY a hard-SL or trailing-SL hit could ever auto-close
+        // a journal trade (see the two closeTradeAuto() calls below) — a
+        // trade that simply never got stopped out stayed status:'OPEN'
+        // forever, across days, silently comparing its SL against whatever
+        // day's premium this loop next happened to run against (which could
+        // be a fresh, gapped next-session price with no relation to the
+        // original day's move). Detect the day rollover FIRST, using the
+        // last legitimate premium seen before close (t.lastLivePremium,
+        // captured below every tick), and close it out labelled EOD rather
+        // than let SL/trailing logic run against a cross-day price.
+        const tradeDay = t.ts ? new Date(t.ts).toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' }) : null;
+        const todayDay = getIST().toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
+        if (tradeDay && tradeDay !== todayDay) {
+            const eodPremium = t.lastLivePremium ?? t.currentPremium ?? t.premium;
+            console.log(`📔 [EOD] Auto-closing carried-over Trade #${t.id} (${t.type} ${t.strike}, opened ${tradeDay}) — last known premium ₹${eodPremium}`);
+            await closeTradeAuto(t, eodPremium);
+            continue;
+        }
+        if (livePremium) t.lastLivePremium = livePremium;
+
         if (!livePremium || !t.premium) continue;
 
         t.currentPremium = livePremium;
