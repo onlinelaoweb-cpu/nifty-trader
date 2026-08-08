@@ -681,7 +681,7 @@ async function sendExitAlert(trade, reason, currentPremium, extra = {}) {
         action  = 'Consider tightening exit — trend that got you here may be over';
     } else if (reason === 'TARGET_FULL') {
         emoji   = '🏆';
-        heading = 'FULL TARGET HIT (1:2)';
+        heading = 'FULL TARGET HIT';
         action  = 'Trade closed — full target booked';
     } else if (reason === 'TARGET_1_5R') {
         emoji   = '🎯';

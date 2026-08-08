@@ -2994,6 +2994,27 @@ function combineSignals(indicators) {
             if (reactionGate.zone === 'ON_ACTION') {
                 reasons.push(`⚛️ Law3 ❌ Chasing the action — ${Math.abs(reactionGate.vwapDistPct ?? 0).toFixed(2)}% from VWAP, not a reaction entry`);
             }
+
+            // ── Law1/Law3 enforcement (7 Aug fix) — same bug class as pocClear:
+            // both gates were computed above, counted in qualityGate.passed's
+            // AND-formula, and shown in the "Blocked by" checklist as hard
+            // gates ("Law 3 hard gate" per the comment above) — but neither
+            // ever actually forced signal to WAIT anywhere in this file. This
+            // is exactly the VWAP-reaction-zone / trend-structure check
+            // Prabhash asked for on 7 Aug ("each trade should be at or near
+            // VWAP") — it already existed, it just wasn't wired to block.
+            // Enforced here, right where both are computed, since this block
+            // only runs when signal !== 'WAIT' already (see the wrapping
+            // `if (signal !== 'WAIT')` a few lines above).
+            if (qualityGate.physicsLaw3 === false) {
+                const preLawSignal = signal;
+                signal = 'WAIT'; confidence = 0;
+                reasons.push(`⛔ Not a reaction entry (Physics Law-3) for ${preLawSignal} — price too far from VWAP/fib zone, chasing the move — wait for pullback`);
+            } else if (qualityGate.physicsLaw1 === false) {
+                const preLawSignal = signal;
+                signal = 'WAIT'; confidence = 0;
+                reasons.push(`⛔ Swing structure (Physics Law-1) contradicts ${preLawSignal} — counter-trend or sideways, wait for structure to align`);
+            }
         } catch (e) {
             console.warn('[Physics] reaction-zone gate failed:', e.message);
         }
@@ -3893,11 +3914,16 @@ async function checkTelegramAlerts(newSignal) {
         let mtfAutoLogged = false;
         if (mtfStrikeData && leadQuality.score >= 3) {
             mtfPerfRec = await startSignalPerformance(marketState.mtf.signal, mtfStrikeData, 'mtf').catch(e => { console.warn('[SignalPerf] MTF start error:', e.message); return null; });
-            // Only auto-log when main engine agrees — a REFERENCE ONLY MTF lead
-            // (main engine disagreeing or still WAIT) isn't something to log as
-            // if it were a taken trade.
-            const mainConfirmsMtf = marketState.signal === marketState.mtf.signal;
-            if (mtfPerfRec?.id != null && mainConfirmsMtf) {
+            // Auto-log every Strong Confluence MTF lead — this is exactly the
+            // tier that actually gets sent to Telegram (see the exhaustion/
+            // settling-window suppression above), so if it's worth alerting
+            // on, it's worth having in the Journal too. createJournalEntry-
+            // FromSignalPerf() tags the notes field with "MTF Reference —
+            // not Main Engine confirmed" whenever the Main Engine hasn't
+            // independently agreed, so these stay clearly distinguishable
+            // from a fully-gated Main Engine trade rather than looking
+            // identical in the Journal.
+            if (mtfPerfRec?.id != null) {
                 const autoTrade = await createJournalEntryFromSignalPerf(mtfPerfRec.id).catch(e => { console.warn('[AutoJournal] MTF error:', e.message); return null; });
                 mtfAutoLogged = !!autoTrade;
             }
@@ -5306,7 +5332,12 @@ async function updateOpenTradesMTM() {
         const sl      = t.sl > 0 ? t.sl : parseFloat((entry * (1 - slFallbackPct)).toFixed(2));
         const target1R  = parseFloat((entry + risk).toFixed(2));         // 1:1 — trailing activation point
         const target15R = parseFloat((entry + risk * 1.5).toFixed(2));   // 1:1.5 — informational checkpoint only
-        const target2R  = parseFloat((entry + risk * 2).toFixed(2));     // 1:2 — the OFFICIAL target shown in the AI Trade Coach/Telegram alert
+        // Official target — prefer the VIX-scaled value persisted at entry
+        // time (t.target, set by pickStrikeAndPremium's rrMultiplier — see
+        // that function for why this is no longer a flat 1:2 everywhere).
+        // Falls back to a fresh entry+risk*2 calc only for older/manually
+        // added trades that predate this field.
+        const target2R  = parseFloat((t.target > 0 ? t.target : entry + risk * 2).toFixed(2));
 
         // Initialise alert-sent guards + trailing state on first pass
         if (!t.alertSent) t.alertSent = { sl: false, target1R: false, target15R: false, target2R: false, trailSL: false };
@@ -5323,7 +5354,7 @@ async function updateOpenTradesMTM() {
         // no trailing hand-off, same as an SL hit closes it on the downside.
         if (!t.alertSent.target2R && livePremium >= target2R) {
             t.alertSent.target2R = true;
-            console.log(`🏆 Full Target (1:2) hit: Trade #${t.id} ${t.type} ${t.strike} — premium ₹${livePremium} ≥ ₹${target2R} — closing`);
+            console.log(`🏆 Full Target hit: Trade #${t.id} ${t.type} ${t.strike} — premium ₹${livePremium} ≥ ₹${target2R} — closing`);
             if (isConfigured()) await sendExitAlert(t, 'TARGET_FULL', livePremium);
             await closeTradeAuto(t, livePremium);
             continue;
@@ -5613,6 +5644,11 @@ async function initDB() {
                 ADD COLUMN IF NOT EXISTS slippage        NUMERIC,
                 ADD COLUMN IF NOT EXISTS slippage_pct    NUMERIC
         `);
+        // Official target (7 Aug) — persisted at entry time so the full-target
+        // hard-close in updateOpenTradesMTM() uses the SAME VIX-scaled R:R
+        // target the trader was actually shown, instead of recomputing off
+        // whatever VIX happens to be live when the MTM loop runs later.
+        await dbPool.query(`ALTER TABLE journal_trades ADD COLUMN IF NOT EXISTS target NUMERIC`).catch(()=>{});
         // FIX (3 Aug): defensive backfill for the `ts` column itself, for DBs
         // created before `ts` was added to the CREATE TABLE above. Without
         // this, pre-existing rows have NULL ts — and the frontend's
@@ -6536,17 +6572,24 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
     //   VIX 12-16 → 25% SL (baseline)
     //   VIX 16-20 → 30% SL (wider, more premium noise)
     //   VIX > 20  → 35% SL (very wide, but signal is blocked by gate anyway)
-    // Target always = SL risk × 2 (1:2 R:R) from entry.
-    let slPct = 0.25;  // default
+    // ── R:R now ALSO scales with VIX (7 Aug, per Prabhash request) ───────────
+    // For an option BUYER specifically: low-VIX days tend to grind/trend more
+    // persistently (less violent mean-reversion) and premium is cheap, so a
+    // wider target captures more of a sustained move for little extra risk.
+    // High-VIX days carry much higher IV-crush and violent-reversal risk —
+    // theta/vega can erase gains fast if the trade isn't booked promptly, so
+    // the target tightens instead of widening. Same VIX brackets as the SL
+    // scale above, for consistency.
+    let slPct = 0.25, rrMultiplier = 2.0;  // defaults
     {
-        if      (effectiveVix < 12) slPct = 0.20;
-        else if (effectiveVix < 16) slPct = 0.25;
-        else if (effectiveVix < 20) slPct = 0.30;
-        else                        slPct = 0.35;
+        if      (effectiveVix < 12) { slPct = 0.20; rrMultiplier = 2.5; }   // calm, trending — let it run
+        else if (effectiveVix < 16) { slPct = 0.25; rrMultiplier = 2.0; }   // baseline (unchanged)
+        else if (effectiveVix < 20) { slPct = 0.30; rrMultiplier = 1.75; }  // elevated noise — book a bit sooner
+        else                        { slPct = 0.35; rrMultiplier = 1.5; }  // high vol — quick book (also gated out mostly)
     }
     let slWidth  = parseFloat((entryPremium * slPct).toFixed(2));
     let sl       = parseFloat((entryPremium - slWidth).toFixed(2));
-    let target   = parseFloat((entryPremium + slWidth * 2).toFixed(2));  // 1:2 R:R
+    let target   = parseFloat((entryPremium + slWidth * rrMultiplier).toFixed(2));
     let slSource = 'vix-pct';
 
     // ── Structural SL from Physics Law-3 Fibonacci swing (preferred) ─────────
@@ -6586,7 +6629,7 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
                     if (risk > 0 && riskPct >= 0.05 && riskPct <= 0.45) {
                         sl       = structSL;
                         slWidth  = parseFloat(risk.toFixed(2));
-                        target   = parseFloat((entryPremium + slWidth * 2).toFixed(2));  // keep 1:2 R:R
+                        target   = parseFloat((entryPremium + slWidth * rrMultiplier).toFixed(2));  // keep VIX-scaled R:R
                         slSource = `fibo-swing (61.8% retrace @ ${slSpot.toFixed(0)} spot)`;
                     }
                 }
@@ -6606,7 +6649,7 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
         ? parseFloat((strike + entryPremium).toFixed(2))
         : parseFloat((strike - entryPremium).toFixed(2));
 
-    return { type, strike, entry: entryPremium, sl, target, slSource, bep, premiumAgeSec, strikeOI, strikeVolume, lowLiquidity, positionSizeNote };
+    return { type, strike, entry: entryPremium, sl, target, slSource, rrMultiplier, bep, premiumAgeSec, strikeOI, strikeVolume, lowLiquidity, positionSizeNote };
 }
 
 // ── AI Trade Coach ───────────────────────────────────────────────────────────
@@ -7256,17 +7299,34 @@ app.post('/api/optionflow', requireToken, (req,res) => {
 async function createJournalEntryFromSignalPerf(perfId) {
     // Prefer the in-memory record (openPerfRecords) — no DB round-trip, and
     // works even before the DB insert in startSignalPerformance has landed.
-    let type = null, strike = null, entry = null, sl = null;
+    let type = null, strike = null, entry = null, sl = null, target = null, source = 'main', leadQualityLabel = null;
     const memRec = openPerfRecords.find(r => r.id === perfId);
     if (memRec) {
         type = memRec.type; strike = memRec.strike; entry = memRec.entry; sl = memRec.sl;
+        target = memRec.target; source = memRec.source || 'main'; leadQualityLabel = memRec.leadQuality || null;
     } else if (dbPool) {
         try {
-            const r = await dbPool.query('SELECT option_type, strike, entry, sl FROM signal_performance WHERE id = $1', [perfId]);
-            if (r.rows.length) { const row = r.rows[0]; type = row.option_type; strike = row.strike; entry = parseFloat(row.entry); sl = parseFloat(row.sl); }
+            const r = await dbPool.query('SELECT option_type, strike, entry, sl, target, source, lead_quality FROM signal_performance WHERE id = $1', [perfId]);
+            if (r.rows.length) {
+                const row = r.rows[0];
+                type = row.option_type; strike = row.strike; entry = parseFloat(row.entry); sl = parseFloat(row.sl);
+                target = row.target != null ? parseFloat(row.target) : null;
+                source = row.source || 'main'; leadQualityLabel = row.lead_quality || null;
+            }
         } catch (e) { console.warn('[TelegramWebhook] signal_performance lookup error:', e.message); }
     }
     if (!type || !strike || !entry) return null;
+
+    // Notes text distinguishes WHY this got auto-logged — a Main Engine
+    // confirmed trade vs an MTF Strong Confluence reference-only lead (7 Aug:
+    // now auto-logged too, per Prabhash request — previously only logged when
+    // Main Engine also agreed). Keeping this distinction visible in the
+    // Journal itself matters since MTF-reference entries were never confirmed
+    // by the Main Engine's own gates — worth a glance before treating one the
+    // same as a fully-confirmed trade.
+    const notesText = source === 'mtf'
+        ? `Auto-logged from Telegram — MTF Reference${leadQualityLabel ? ` (${leadQualityLabel})` : ''}, not Main Engine confirmed`
+        : 'Auto-logged from Telegram — Main Engine confirmed';
 
     const ist = getIST();
     const time = `${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
@@ -7275,9 +7335,9 @@ async function createJournalEntryFromSignalPerf(perfId) {
     if (dbPool) {
         try {
             const r = await dbPool.query(
-                `INSERT INTO journal_trades (time,type,strike,premium,lots,sl,notes,nifty_entry,status,suggested_entry,slippage,slippage_pct)
-                 VALUES ($1,$2,$3,$4,1,$5,'Auto-logged from Telegram',$6,'OPEN',$4,0,0) RETURNING id, ts`,
-                [time, type, strike, entry, sl || 0, marketState.nifty || 0]
+                `INSERT INTO journal_trades (time,type,strike,premium,lots,sl,target,notes,nifty_entry,status,suggested_entry,slippage,slippage_pct)
+                 VALUES ($1,$2,$3,$4,1,$5,$6,$7,$8,'OPEN',$4,0,0) RETURNING id, ts`,
+                [time, type, strike, entry, sl || 0, target, notesText, marketState.nifty || 0]
             );
             dbId = r.rows[0].id;
             dbTs = r.rows[0].ts;
@@ -7287,18 +7347,18 @@ async function createJournalEntryFromSignalPerf(perfId) {
         id: dbId ?? tradeCounter++,
         ts: dbTs ? new Date(dbTs).toISOString() : new Date().toISOString(),
         time, type, strike, premium: entry, lots: 1,
-        sl: sl || 0, exitPremium: null, pnl: null, status: 'OPEN',
-        notes: 'Auto-logged from Telegram', niftyAtEntry: marketState.nifty,
+        sl: sl || 0, target: target || null, exitPremium: null, pnl: null, status: 'OPEN',
+        notes: notesText, niftyAtEntry: marketState.nifty,
         niftyCurrent: marketState.nifty, niftyMove: 0,
         suggestedEntry: entry, slippage: 0, slippagePct: 0,
     };
     trades.push(trade);
-    console.log(`📔 [TelegramWebhook] Auto-logged trade: ${type} ${strike} @₹${entry} (perfId ${perfId})`);
+    console.log(`📔 [TelegramWebhook] Auto-logged trade: ${type} ${strike} @₹${entry} (perfId ${perfId}, source: ${source})`);
     return trade;
 }
 
 app.post('/api/trade/add', requireToken, async (req,res) => {
-    const {type,strike,premium,lots,sl,notes,suggestedEntry}=req.body;
+    const {type,strike,premium,lots,sl,notes,suggestedEntry,target}=req.body;
     const ist=getIST();
     const time=`${String(ist.getHours()).padStart(2,'0')}:${String(ist.getMinutes()).padStart(2,'0')}`;
 
@@ -7311,6 +7371,7 @@ app.post('/api/trade/add', requireToken, async (req,res) => {
     // theoretical premium, but the ACTUAL fill can differ, especially on thin
     // strikes — this is what the audit flagged as unmeasured.
     const suggEntry = (suggestedEntry != null && suggestedEntry > 0) ? parseFloat(suggestedEntry) : null;
+    const tradeTarget = (target != null && target > 0) ? parseFloat(target) : null;
     const actualPremium = parseFloat(premium);
     const slippage = suggEntry != null ? parseFloat((actualPremium - suggEntry).toFixed(2)) : null;
     const slippagePct = (suggEntry != null && suggEntry > 0) ? parseFloat(((slippage / suggEntry) * 100).toFixed(1)) : null;
@@ -7321,10 +7382,10 @@ app.post('/api/trade/add', requireToken, async (req,res) => {
     if (dbPool) {
         try {
             const r = await dbPool.query(
-                `INSERT INTO journal_trades (time,type,strike,premium,lots,sl,notes,nifty_entry,status,suggested_entry,slippage,slippage_pct)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,$10,$11) RETURNING id, ts`,
+                `INSERT INTO journal_trades (time,type,strike,premium,lots,sl,target,notes,nifty_entry,status,suggested_entry,slippage,slippage_pct)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'OPEN',$10,$11,$12) RETURNING id, ts`,
                 [time, type, parseInt(strike), actualPremium,
-                 parseInt(lots)||1, parseFloat(sl)||0, notes||'',
+                 parseInt(lots)||1, parseFloat(sl)||0, tradeTarget, notes||'',
                  marketState.nifty||0, suggEntry, slippage, slippagePct]
             );
             dbId = r.rows[0].id;
@@ -7346,7 +7407,7 @@ app.post('/api/trade/add', requireToken, async (req,res) => {
         ts: dbTs ? new Date(dbTs).toISOString() : new Date().toISOString(),
         time, type, strike:parseInt(strike),
         premium:actualPremium, lots:parseInt(lots)||1,
-        sl:parseFloat(sl)||0, exitPremium:null, pnl:null,
+        sl:parseFloat(sl)||0, target: tradeTarget, exitPremium:null, pnl:null,
         status:'OPEN', notes:notes||'',
         niftyAtEntry:marketState.nifty,
         niftyCurrent:marketState.nifty, niftyMove:0,
@@ -7797,6 +7858,7 @@ async function initializeLiveData() {
                     premium      : parseFloat(row.premium),
                     lots         : row.lots,
                     sl           : parseFloat(row.sl || 0),
+                    target       : row.target != null ? parseFloat(row.target) : null,
                     notes        : row.notes || '',
                     niftyAtEntry : parseFloat(row.nifty_entry || 0),
                     niftyCurrent : 0,
