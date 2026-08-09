@@ -886,6 +886,9 @@ async function sendWeeklyGateReview(review, analytics) {
         const regimeLines = Object.entries(analytics.regimeBreakdown || {})
             .map(([regime, d]) => `  ${regime}: ${d.winRate}% win (${d.total} signals, avg ${d.avgR >= 0 ? '+' : ''}${d.avgR}R)`)
             .join('\n');
+        const dnaLines = (analytics.setupDnaLeaderboard || [])
+            .map(d => `  ${d.dna}: ${d.winRate}% win (${d.total} signals, avg ${d.avgR >= 0 ? '+' : ''}${d.avgR}R)`)
+            .join('\n');
         analyticsBlock = `
 ━━━━━━━━━━━━━━━━━━
 📈 <b>PERFORMANCE ANALYTICS</b> (last ${analytics.windowDays}d, ${analytics.total} closed signals)
@@ -893,6 +896,7 @@ Win Rate: ${analytics.winRate}% · Profit Factor: ${pf} · Expectancy: ${analyti
 Max Drawdown: ${analytics.maxDrawdownR}R · Max Consecutive Losses: ${analytics.maxConsecLosses}
 Sharpe-style: ${analytics.sharpeStyle ?? '--'} · Calmar-style: ${analytics.calmarStyle ?? '--'}
 ${regimeLines ? `\nBy regime:\n${regimeLines}` : ''}
+${dnaLines ? `\n🧬 Top setups (min 3 samples):\n${dnaLines}` : ''}
 ${analytics.approximated > 0 ? `\n<i>${analytics.note}</i>` : ''}`;
     } else if (analytics && !analytics.enough) {
         analyticsBlock = `\n━━━━━━━━━━━━━━━━━━\n📈 <b>PERFORMANCE ANALYTICS</b> — ${analytics.msg}`;

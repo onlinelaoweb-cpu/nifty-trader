@@ -5621,6 +5621,12 @@ async function initDB() {
         // max_gain_pct approximation for those, and use this exact value for
         // every close going forward.
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS exit_premium NUMERIC`).catch(()=>{});
+        // Entry VIX + Setup DNA (8 Aug) — entry_vix lets Performance Analytics
+        // bucket by volatility regime (Low/Normal/High), same idea as the
+        // existing dyn_zone Trending/Range split. setup_dna is the readable
+        // tag from buildSetupDNA() — see that function for what it means.
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS entry_vix NUMERIC`).catch(()=>{});
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS setup_dna TEXT`).catch(()=>{});
         console.log('✅ PostgreSQL signal_performance table ready');
 
         // ── journal_trades table — manually entered trades from the Journal tab ──
@@ -5951,14 +5957,17 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
         entryNiftyForTheta: marketState.nifty ?? null,
         entryVixForTheta: marketState.vix ?? null,
         entryDTE: (typeof daysToNextExpiry === 'function' ? daysToNextExpiry() : null),
+        // ── Setup DNA + entry VIX (8 Aug) — see buildSetupDNA() header ──────
+        setupDNA: buildSetupDNA(signal),
+        entryVix: marketState.vix ?? null,
     };
     openPerfRecords.push(rec);
     if (dbPool) {
         try {
             const r = await dbPool.query(
-                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high, low, source, lead_quality, dyn_zone, gap_zone, breadth_sig, strike_oi, strike_volume)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
-                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry, strikeData.entry, rec.source, rec.leadQuality, rec.dynZone, rec.gapZone, rec.breadthSig, rec.strikeOI, rec.strikeVolume]
+                `INSERT INTO signal_performance (signal, option_type, strike, entry, sl, target, high, low, source, lead_quality, dyn_zone, gap_zone, breadth_sig, strike_oi, strike_volume, entry_vix, setup_dna)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
+                [signal, strikeData.type, strikeData.strike, strikeData.entry, strikeData.sl, strikeData.target, strikeData.entry, strikeData.entry, rec.source, rec.leadQuality, rec.dynZone, rec.gapZone, rec.breadthSig, rec.strikeOI, rec.strikeVolume, rec.entryVix, rec.setupDNA]
             );
             rec.id = r.rows[0]?.id ?? null;
         } catch (e) { console.warn('[SignalPerf] insert error:', e.message); }
@@ -6476,6 +6485,53 @@ function daysToNextExpiry() {
 
 // ── Strike + Premium Picker ────────────────────────────────────────────────
 // Picks the right strike and reads live LTP from option chain already in memory
+// ── Setup DNA (8 Aug) ─────────────────────────────────────────────────────
+// Per Prabhash's request after reviewing trading-education video summaries:
+// tag each signal with a short, readable combination of the notable
+// structural factors that were actually present when it fired — not a new
+// calculation, just naming the same signals combineSignals() already voted
+// on (liquidity sweep, BOS/CHOCH, ORB, Delta strength, MTF alignment, Trend
+// Conviction, Dynamic Levels). Stored per signal_performance row so a later
+// query can answer "does Liquidity Sweep + Delta Confirm actually outperform
+// plain ORB Breakout?" instead of only a flat win-rate. Purely descriptive —
+// never read by combineSignals() or any gate.
+function buildSetupDNA(signal) {
+    if (signal !== 'BUY CALL' && signal !== 'BUY PUT') return null;
+    const isBull = signal === 'BUY CALL';
+    const tags = [];
+
+    const sweep = marketState.sweepReversal;
+    if (sweep?.detected && ((isBull && sweep.direction === 'BULLISH') || (!isBull && sweep.direction === 'BEARISH'))) {
+        tags.push('Liquidity Sweep');
+    }
+    const bc = marketState.physicsOfTrading?.bosChoch?.event;
+    if (bc === 'BOS_BULLISH'   && isBull)  tags.push('BOS Bullish');
+    if (bc === 'BOS_BEARISH'   && !isBull) tags.push('BOS Bearish');
+    if (bc === 'CHOCH_BULLISH' && isBull)  tags.push('CHOCH Bullish');
+    if (bc === 'CHOCH_BEARISH' && !isBull) tags.push('CHOCH Bearish');
+
+    const orbStatus = marketState.orb?.status;
+    if (orbStatus === 'BROKEN_UP'   && isBull)  tags.push('ORB Breakout');
+    if (orbStatus === 'BROKEN_DOWN' && !isBull) tags.push('ORB Breakdown');
+
+    const deltaPct = marketState.delta?.deltaPct;
+    if (deltaPct != null && ((isBull && deltaPct >= 40) || (!isBull && deltaPct <= -40))) tags.push('Delta Confirm');
+
+    if (marketState.mtf?.aligned) tags.push('3/3 MTF');
+
+    const tc = marketState.trendConviction;
+    if (tc?.active === (isBull ? 'BULLISH' : 'BEARISH')) tags.push('Trend Conviction');
+
+    const dl = marketState.dynamicLevels;
+    if (dl?.available) {
+        if (isBull  && dl.aboveH3) tags.push('Above Dyn H3');
+        if (!isBull && dl.belowL3) tags.push('Below Dyn L3');
+    }
+
+    if (tags.length === 0) return 'Baseline Vote-Tally';   // fired on the general vote tally, no single named factor stood out
+    return tags.slice(0, 4).join(' + ');
+}
+
 function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
     if (!nifty || nifty <= 0) return null;
     // FIX: If VIX not yet fetched, use safe default (15 = moderate volatility)
@@ -6875,7 +6931,7 @@ async function computePerformanceAnalytics(windowDays = 30) {
     if (!dbPool) return null;
     try {
         const r = await dbPool.query(
-            `SELECT entry, sl, exit_premium, max_gain_pct, target_hit, sl_hit, dyn_zone, trade_date
+            `SELECT entry, sl, exit_premium, max_gain_pct, target_hit, sl_hit, dyn_zone, entry_vix, setup_dna, trade_date
              FROM signal_performance
              WHERE closed = true AND entry > 0 AND sl > 0 AND entry > sl
                AND trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '${windowDays} days'
@@ -6887,6 +6943,17 @@ async function computePerformanceAnalytics(windowDays = 30) {
         let approximated = 0;
         const rMultiples = [];
         const regimeR = {};   // Trending / Range, reusing dyn_zone same as getRecentSignalHistory()
+        // ── VIX regime + Breakout/Reversal buckets (8 Aug) ──────────────────
+        // VIX brackets match the ones already used elsewhere in this file
+        // (e.g. the MTF ADX-floor and BTST checks) — Low <14, Normal 14-18,
+        // High ≥18 — for consistency rather than inventing new boundaries.
+        // Breakout/Reversal is derived from the setup_dna tag (buildSetupDNA())
+        // rather than a new column — 'ORB Breakout/Breakdown' tags = Breakout,
+        // 'Liquidity Sweep' tag = Reversal. A signal can be neither (plain MTF/
+        // vote-tally fire) and simply won't appear in this specific breakdown.
+        const vixR = {};        // Low VIX / Normal VIX / High VIX
+        const setupR = {};      // Breakout / Reversal
+        const dnaR = {};        // exact setup_dna tag combinations — leaderboard
         for (const row of rows) {
             const entry = parseFloat(row.entry), sl = parseFloat(row.sl);
             const risk = entry - sl;
@@ -6902,6 +6969,16 @@ async function computePerformanceAnalytics(windowDays = 30) {
             const regime = (row.dyn_zone === 'ABOVE_H3' || row.dyn_zone === 'BELOW_L3') ? 'Trending'
                           : (row.dyn_zone === 'INSIDE') ? 'Range' : null;
             if (regime) { (regimeR[regime] ??= []).push(rMult); }
+
+            const vix = row.entry_vix != null ? parseFloat(row.entry_vix) : null;
+            if (vix != null) {
+                const vixBucket = vix < 14 ? 'Low VIX' : vix < 18 ? 'Normal VIX' : 'High VIX';
+                (vixR[vixBucket] ??= []).push(rMult);
+            }
+            const dna = row.setup_dna || '';
+            if (dna.includes('ORB Breakout') || dna.includes('ORB Breakdown')) (setupR['Breakout'] ??= []).push(rMult);
+            if (dna.includes('Liquidity Sweep')) (setupR['Reversal'] ??= []).push(rMult);
+            if (dna && dna !== 'Baseline Vote-Tally') (dnaR[dna] ??= []).push(rMult);
         }
 
         const n = rMultiples.length;
@@ -6950,13 +7027,40 @@ async function computePerformanceAnalytics(windowDays = 30) {
                 avgR: parseFloat((arr.reduce((s, x) => s + x, 0) / arr.length).toFixed(3)),
             };
         }
+        // Fold VIX-regime and Breakout/Reversal buckets into the same
+        // regimeBreakdown object — same shape, just more buckets, so the
+        // Telegram digest can loop over one object rather than three.
+        for (const bucketSet of [vixR, setupR]) {
+            for (const [key, arr] of Object.entries(bucketSet)) {
+                if (arr.length < 3) continue;   // too few to be worth showing yet
+                const rw = arr.filter(x => x > 0).length;
+                regimeBreakdown[key] = {
+                    total: arr.length,
+                    winRate: Math.round((rw / arr.length) * 100),
+                    avgR: parseFloat((arr.reduce((s, x) => s + x, 0) / arr.length).toFixed(3)),
+                };
+            }
+        }
+
+        // ── Setup DNA leaderboard — top exact tag combinations by win-rate ──
+        // Min 3 samples per tag before it's shown, same "don't show noise as
+        // if it were a stat" discipline as everywhere else in this file.
+        const setupDnaLeaderboard = Object.entries(dnaR)
+            .filter(([, arr]) => arr.length >= 3)
+            .map(([dna, arr]) => ({
+                dna, total: arr.length,
+                winRate: Math.round((arr.filter(x => x > 0).length / arr.length) * 100),
+                avgR: parseFloat((arr.reduce((s, x) => s + x, 0) / arr.length).toFixed(3)),
+            }))
+            .sort((a, b) => b.winRate - a.winRate)
+            .slice(0, 5);
 
         return {
             total: n, approximated, windowDays,
             winRate, profitFactor, expectancy, maxDrawdownR: maxDD,
             sharpeStyle, calmarStyle, maxConsecLosses,
             cumulativeR: parseFloat(cum.toFixed(2)),
-            regimeBreakdown, enough: true,
+            regimeBreakdown, setupDnaLeaderboard, enough: true,
             note: approximated > 0
                 ? `${approximated}/${n} trades use an approximate R (older rows closed before exit-price tracking was added, 7 Aug) — treat ratios as directional, not exact, until those age out of the window.`
                 : 'All trades in this window have exact exit prices.',
