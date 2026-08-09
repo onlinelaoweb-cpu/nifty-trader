@@ -339,10 +339,10 @@ async function sendMTFAlert(state, strikeData = null, autoLogged = false) {
     const oneHourLagging = state.mtf.oneHourLagging ?? false;
     // Honest title: show exact situation
     const alignTitle = oneHourLagging
-        ? '⚡ MTF Reference — 2/3 TFs aligned (1H lagging — reversed)'
+        ? '⚡ <b>MTF Reference</b> — 2/3 TFs aligned (1H lagging — reversed)'
         : validCount === 3
-            ? '🧭 MTF Reference — all 3 TFs aligned (not main-engine confirmed)'
-            : `⚡ MTF Reference — ${validCount}/3 TFs aligned (15m warming up)`;
+            ? '🧭 <b>MTF Reference</b> — all 3 TFs aligned (not main-engine confirmed)'
+            : `⚡ <b>MTF Reference</b> — ${validCount}/3 TFs aligned (15m warming up)`;
 
     const LOT = 65;  // Nifty lot size, revised Jan 2026: 75 → 65
     const lq = strikeData?.leadQuality;
@@ -600,7 +600,7 @@ async function sendScalpAlert(state, strikeData, scalpPlan) {
     const emoji = state.signal === 'BUY CALL' ? '🟢' : '🔴';
 
     const msg = `
-⚡⚡⚡ SCALP EXIT PLAN ⚡⚡⚡
+⚡⚡⚡ <b>SCALP EXIT PLAN</b> ⚡⚡⚡
 (same trade as above — optional quick-exit alternative)
 ⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡
 ${emoji} <b>${strikeData.strike} ${strikeData.type}</b> @ ₹${scalpPlan.entry}
