@@ -3657,7 +3657,8 @@ async function checkTelegramAlerts(newSignal) {
             try {
                 await flushGateBlockCountsIfDirty();
                 const review = await computeWeeklyGateReview();
-                if (review) await sendWeeklyGateReview(review);
+                const analytics = await computePerformanceAnalytics(30).catch(e => { console.warn('[PerformanceAnalytics] weekly fetch error:', e.message); return null; });
+                if (review) await sendWeeklyGateReview(review, analytics);
             } catch (e) { console.warn('[WeeklyReview] error:', e.message); }
         }
         setTimeout(() => {
@@ -5610,6 +5611,16 @@ async function initDB() {
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS post_close_low NUMERIC`).catch(()=>{});
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS post_close_max_gain_pct NUMERIC`).catch(()=>{});
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS shadow_tracked BOOLEAN DEFAULT FALSE`).catch(()=>{});
+        // Exit premium (7 Aug) — needed for the Performance Analytics layer
+        // (Calmar/Sharpe/Profit Factor/Expectancy below). Until now, closing
+        // a record only stored high/low/max_gain_pct/max_adverse_pct — never
+        // the actual premium at the moment it closed, so an R-multiple could
+        // only be approximated (target_hit/sl_hit are exact by definition,
+        // but a TIMED OUT close's real exit price was never captured). Old
+        // rows will have this NULL — analytics below fall back to the
+        // max_gain_pct approximation for those, and use this exact value for
+        // every close going forward.
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS exit_premium NUMERIC`).catch(()=>{});
         console.log('✅ PostgreSQL signal_performance table ready');
 
         // ── journal_trades table — manually entered trades from the Journal tab ──
@@ -6018,8 +6029,8 @@ async function updateSignalPerformance() {
             if (dbPool && rec.id) {
                 try {
                     await dbPool.query(
-                        `UPDATE signal_performance SET high=$1, low=$2, target_hit=false, sl_hit=false, closed=true, time_taken_min=$3, closed_at=$4, max_gain_pct=$5, max_adverse_pct=$6, partial_win=false, exit_warned=$7 WHERE id=$8`,
-                        [rec.high, rec.low, elapsedMin, closedAt, maxGainPctEod, maxAdverseExcursionPctEod, rec.exitWarned, rec.id]
+                        `UPDATE signal_performance SET high=$1, low=$2, target_hit=false, sl_hit=false, closed=true, time_taken_min=$3, closed_at=$4, max_gain_pct=$5, max_adverse_pct=$6, partial_win=false, exit_warned=$7, exit_premium=$8 WHERE id=$9`,
+                        [rec.high, rec.low, elapsedMin, closedAt, maxGainPctEod, maxAdverseExcursionPctEod, rec.exitWarned, eodPremium, rec.id]
                     );
                 } catch (e) { console.warn('[SignalPerf] EOD close DB error:', e.message); }
             }
@@ -6107,6 +6118,9 @@ async function updateSignalPerformance() {
         if (targetHit || slHit || timedOut) {
             const closedAt = new Date().toISOString();
             const outcomeLabel = targetHit ? 'TARGET HIT ✅' : slHit ? 'SL HIT ⛔' : partialWin ? `PARTIAL WIN 🟡 (+${maxGainPct}%)` : 'TIMED OUT ⏳';
+            // Exit premium — exact for target/SL (closed AT that level by
+            // definition), best-available live tick for a timeout close.
+            const exitPremium = targetHit ? rec.target : slHit ? rec.sl : (live ?? rec.entry);
             console.log(`📊 [SignalPerf] ${rec.signal} ${rec.strike}${rec.type} closed — ${outcomeLabel} | Entry:${rec.entry} High:${rec.high} (+${maxGainPct}%) Low:${rec.low} (${maxAdverseExcursionPct}%) | ${elapsedMin} min${rec.exitWarned ? ' | ⚠️ had exit warning' : ''}`);
             // Live Signal Timeline — requested in the very first audit (22 Jul):
             // "Signal generated → Confirmation → Entry → Exit → Final verdict."
@@ -6117,8 +6131,8 @@ async function updateSignalPerformance() {
             if (dbPool && rec.id) {
                 try {
                     await dbPool.query(
-                        `UPDATE signal_performance SET high=$1, low=$2, target_hit=$3, sl_hit=$4, closed=true, time_taken_min=$5, closed_at=$6, max_gain_pct=$7, max_adverse_pct=$8, partial_win=$9, exit_warned=$10 WHERE id=$11`,
-                        [rec.high, rec.low, targetHit, slHit, elapsedMin, closedAt, maxGainPct, maxAdverseExcursionPct, partialWin, rec.exitWarned, rec.id]
+                        `UPDATE signal_performance SET high=$1, low=$2, target_hit=$3, sl_hit=$4, closed=true, time_taken_min=$5, closed_at=$6, max_gain_pct=$7, max_adverse_pct=$8, partial_win=$9, exit_warned=$10, exit_premium=$11 WHERE id=$12`,
+                        [rec.high, rec.low, targetHit, slHit, elapsedMin, closedAt, maxGainPct, maxAdverseExcursionPct, partialWin, rec.exitWarned, exitPremium, rec.id]
                     );
                 } catch (e) { console.warn('[SignalPerf] update error:', e.message); }
             }
@@ -6832,6 +6846,127 @@ async function computeWeeklyGateReview() {
     }
 }
 
+// ── Performance Analytics (7 Aug) ────────────────────────────────────────────
+// Per Prabhash: extract useful ideas from trading-education videos he'd sent
+// to another assistant. Most of what came back (Market Regime, Market
+// Structure/BOS-CHOCH, Liquidity Sweep, VWAP/POC location, layered-not-
+// hard-gated architecture) already exists in this file in some form — see
+// computeMarketRegime(), getSwingTrend()/detectBOSCHOCH(), detectLiquidity-
+// SweepReversal(), Physics Law-3, and the Contradiction-Score/Sequence-Check
+// "informational not hard gate" precedent this file already established.
+// The one genuinely missing piece: portfolio-style risk-quality metrics
+// (Calmar, Sharpe, Profit Factor, Expectancy, Max Drawdown) instead of just
+// a bare win-rate. Deliberately kept as PURE POST-HOC ANALYTICS — this
+// function is never called from combineSignals() or any gate, only from the
+// Weekly Review and its own read-only endpoint. Same reasoning the source
+// material itself gave: "Calmar needs a sufficiently long and consistent
+// trade history before it becomes meaningful... don't hard-code it as a
+// trading gate."
+//
+// R-multiple per closed signal = (exit_premium - entry) / (entry - sl).
+// exit_premium is exact for target_hit/sl_hit (closed AT that level by
+// definition) and for every close from 7 Aug onward (now stored — see
+// updateSignalPerformance()). Older TIMED OUT/EOD rows predating that fix
+// have exit_premium=NULL; those fall back to max_gain_pct as an approximate
+// R (a slight optimistic bias — the true exit could have been below the
+// session high — flagged in the returned `approximated` count rather than
+// silently blended in as if equally precise).
+async function computePerformanceAnalytics(windowDays = 30) {
+    if (!dbPool) return null;
+    try {
+        const r = await dbPool.query(
+            `SELECT entry, sl, exit_premium, max_gain_pct, target_hit, sl_hit, dyn_zone, trade_date
+             FROM signal_performance
+             WHERE closed = true AND entry > 0 AND sl > 0 AND entry > sl
+               AND trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '${windowDays} days'
+             ORDER BY trade_date ASC, id ASC`
+        );
+        const rows = r.rows;
+        if (rows.length < 5) return { total: rows.length, enough: false, msg: 'Fewer than 5 closed signals in this window — not enough for meaningful ratios yet.' };
+
+        let approximated = 0;
+        const rMultiples = [];
+        const regimeR = {};   // Trending / Range, reusing dyn_zone same as getRecentSignalHistory()
+        for (const row of rows) {
+            const entry = parseFloat(row.entry), sl = parseFloat(row.sl);
+            const risk = entry - sl;
+            if (risk <= 0) continue;
+            let rMult;
+            if (row.exit_premium != null) {
+                rMult = (parseFloat(row.exit_premium) - entry) / risk;
+            } else {
+                approximated++;
+                rMult = (parseFloat(row.max_gain_pct || 0) / 100 * entry) / risk;   // optimistic approximation, see note above
+            }
+            rMultiples.push(rMult);
+            const regime = (row.dyn_zone === 'ABOVE_H3' || row.dyn_zone === 'BELOW_L3') ? 'Trending'
+                          : (row.dyn_zone === 'INSIDE') ? 'Range' : null;
+            if (regime) { (regimeR[regime] ??= []).push(rMult); }
+        }
+
+        const n = rMultiples.length;
+        const wins   = rMultiples.filter(x => x > 0);
+        const losses = rMultiples.filter(x => x <= 0);
+        const winRate = Math.round((wins.length / n) * 100);
+        const grossProfit = wins.reduce((s, x) => s + x, 0);
+        const grossLoss   = Math.abs(losses.reduce((s, x) => s + x, 0));
+        const profitFactor = grossLoss > 0 ? parseFloat((grossProfit / grossLoss).toFixed(2)) : (grossProfit > 0 ? Infinity : 0);
+        const expectancy = parseFloat((rMultiples.reduce((s, x) => s + x, 0) / n).toFixed(3));   // avg R per trade
+
+        // Max drawdown — running cumulative R curve, largest peak-to-trough dip
+        let cum = 0, peak = 0, maxDD = 0;
+        for (const x of rMultiples) {
+            cum += x;
+            peak = Math.max(peak, cum);
+            maxDD = Math.max(maxDD, peak - cum);
+        }
+        maxDD = parseFloat(maxDD.toFixed(2));
+
+        // Sharpe-style: mean R / stdev(R) — no risk-free-rate adjustment (not
+        // meaningful at trade-level R units), so this is a Sharpe-STYLE ratio,
+        // not the textbook annualized version.
+        const mean = rMultiples.reduce((s, x) => s + x, 0) / n;
+        const variance = rMultiples.reduce((s, x) => s + (x - mean) ** 2, 0) / n;
+        const stdev = Math.sqrt(variance);
+        const sharpeStyle = stdev > 0 ? parseFloat((mean / stdev).toFixed(2)) : null;
+
+        // Calmar-style: total cumulative R / max drawdown in R. Textbook Calmar
+        // is annualized-return/max-DD — this is the same shape (return vs pain)
+        // but in R-units over the sample window, not annualized. Labelled
+        // "-style" everywhere it's displayed for the same reason.
+        const calmarStyle = maxDD > 0 ? parseFloat((cum / maxDD).toFixed(2)) : null;
+
+        // Max consecutive losses — a risk-of-ruin style signal often missed by
+        // win-rate/expectancy alone.
+        let maxConsecLosses = 0, curConsec = 0;
+        for (const x of rMultiples) { if (x <= 0) { curConsec++; maxConsecLosses = Math.max(maxConsecLosses, curConsec); } else curConsec = 0; }
+
+        const regimeBreakdown = {};
+        for (const [regime, arr] of Object.entries(regimeR)) {
+            const rw = arr.filter(x => x > 0).length;
+            regimeBreakdown[regime] = {
+                total: arr.length,
+                winRate: Math.round((rw / arr.length) * 100),
+                avgR: parseFloat((arr.reduce((s, x) => s + x, 0) / arr.length).toFixed(3)),
+            };
+        }
+
+        return {
+            total: n, approximated, windowDays,
+            winRate, profitFactor, expectancy, maxDrawdownR: maxDD,
+            sharpeStyle, calmarStyle, maxConsecLosses,
+            cumulativeR: parseFloat(cum.toFixed(2)),
+            regimeBreakdown, enough: true,
+            note: approximated > 0
+                ? `${approximated}/${n} trades use an approximate R (older rows closed before exit-price tracking was added, 7 Aug) — treat ratios as directional, not exact, until those age out of the window.`
+                : 'All trades in this window have exact exit prices.',
+        };
+    } catch (e) {
+        console.warn('[PerformanceAnalytics] error:', e.message);
+        return null;
+    }
+}
+
 // ── Confidence Decay ──────────────────────────────────────────────────────
 // Requested 25 Jul audit: "Confidence could decay automatically as trend
 // weakens instead of remaining static." The alert shows a fixed confidence %
@@ -7539,6 +7674,18 @@ app.get('/api/timeout-audit', async (req, res) => {
             note: `${improved.length}/${total} TIMED OUT signals kept moving favourably in the ${SHADOW_TRACK_MIN} min after close (avg +${upliftPctAvg}% further on those). Low count = not enough evidence yet either way.`,
             rows: rows.slice(0, 50),
         });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── Performance Analytics endpoint (7 Aug) ───────────────────────────────────
+// ?days=30 (default) — window in trading days. Pure read, no gate impact.
+app.get('/api/performance-analytics', async (req, res) => {
+    try {
+        const windowDays = Math.min(parseInt(req.query.days) || 30, 180);
+        const analytics = await computePerformanceAnalytics(windowDays);
+        res.json({ success: true, analytics });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }

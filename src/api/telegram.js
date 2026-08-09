@@ -867,7 +867,7 @@ This isn't a target hit or an auto-exit. But with this much R:R already banked a
 // ── Weekly Self-Review Telegram digest (1 Aug audit) ─────────────────────────
 // review = { totalEvals, dayCount, weekStart, weekEnd, stats: [{label, blockedCount, blockRatePct}] }
 // from computeWeeklyGateReview() in server.js. Sent once, Friday close.
-async function sendWeeklyGateReview(review) {
+async function sendWeeklyGateReview(review, analytics) {
     if (!review || review.totalEvals === 0) {
         await sendMessage(`📅 <b>WEEKLY SELF-REVIEW</b>\n━━━━━━━━━━━━━━━━━━\nNo directional signal evaluations logged this week — nothing to review yet.\n<i>VardaanNifty AI</i>`);
         return;
@@ -876,6 +876,28 @@ async function sendWeeklyGateReview(review) {
     const lines = top.map((s, i) =>
         `${i + 1}. ${s.label} — blocked ${s.blockRatePct}% of evaluations (${s.blockedCount}/${review.totalEvals})`
     ).join('\n');
+
+    // ── Performance Analytics block (7 Aug) — pure informational, see
+    // computePerformanceAnalytics() in server.js for what each number means
+    // and why they're labelled "-style" (not textbook-annualized versions).
+    let analyticsBlock = '';
+    if (analytics?.enough) {
+        const pf = analytics.profitFactor === Infinity ? '∞' : analytics.profitFactor;
+        const regimeLines = Object.entries(analytics.regimeBreakdown || {})
+            .map(([regime, d]) => `  ${regime}: ${d.winRate}% win (${d.total} signals, avg ${d.avgR >= 0 ? '+' : ''}${d.avgR}R)`)
+            .join('\n');
+        analyticsBlock = `
+━━━━━━━━━━━━━━━━━━
+📈 <b>PERFORMANCE ANALYTICS</b> (last ${analytics.windowDays}d, ${analytics.total} closed signals)
+Win Rate: ${analytics.winRate}% · Profit Factor: ${pf} · Expectancy: ${analytics.expectancy >= 0 ? '+' : ''}${analytics.expectancy}R/trade
+Max Drawdown: ${analytics.maxDrawdownR}R · Max Consecutive Losses: ${analytics.maxConsecLosses}
+Sharpe-style: ${analytics.sharpeStyle ?? '--'} · Calmar-style: ${analytics.calmarStyle ?? '--'}
+${regimeLines ? `\nBy regime:\n${regimeLines}` : ''}
+${analytics.approximated > 0 ? `\n<i>${analytics.note}</i>` : ''}`;
+    } else if (analytics && !analytics.enough) {
+        analyticsBlock = `\n━━━━━━━━━━━━━━━━━━\n📈 <b>PERFORMANCE ANALYTICS</b> — ${analytics.msg}`;
+    }
+
     const msg = `
 📅 <b>WEEKLY SELF-REVIEW</b> (${review.weekStart} → ${review.weekEnd})
 ━━━━━━━━━━━━━━━━━━
@@ -885,6 +907,7 @@ ${review.totalEvals} directional evaluations across ${review.dayCount} trading d
 ${lines || 'No gate blocked any evaluation this week — clean week.'}
 
 This is descriptive, not a recommendation — a gate blocking often isn't wrong by itself. Worth a look if the SAME gate tops this list week after week.
+${analyticsBlock}
 ━━━━━━━━━━━━━━━━━━
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
 <i>VardaanNifty AI</i>
