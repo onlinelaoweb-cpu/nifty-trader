@@ -215,6 +215,24 @@ let marketState = {
 
 // ── Trade Journal ─────────────────────────────────────
 let trades       = [];
+// ── In-memory trim window for trades[] (8 Aug) ──────────────────────────────
+// journal_trades in Postgres keeps FULL history forever — this constant only
+// bounds what stays loaded in the live in-memory array (used for real-time
+// MTM/SL/target tracking + the Journal UI's Today/Yesterday/older buckets).
+// Since the 2 Aug fix stopped daily-wiping trades[] (see comment in the daily
+// reset block below for why), this array would otherwise grow forever across
+// months of trading. 180 days is generous slack for the UI's own history
+// view while keeping the in-memory footprint bounded.
+const TRADES_MEMORY_DAYS = 180;
+function trimOldTradesFromMemory() {
+    const cutoffMs = Date.now() - TRADES_MEMORY_DAYS * 24 * 60 * 60 * 1000;
+    const before = trades.length;
+    // Keep legacy rows with no ts at all (can't judge their age — same
+    // conservative choice getTradeSummary() already makes for these).
+    trades = trades.filter(t => !t.ts || new Date(t.ts).getTime() >= cutoffMs);
+    const removed = before - trades.length;
+    if (removed > 0) console.log(`[Memory] Trimmed ${removed} trades older than ${TRADES_MEMORY_DAYS}d from memory (still in DB — journal_trades table unaffected)`);
+}
 let tradeCounter = 1;
 let events       = [];
 // ── Signal Performance Tracking (automatic, independent of Journal) ─────────
@@ -3668,6 +3686,7 @@ async function checkTelegramAlerts(newSignal) {
             sessionOpenVix = null;
             dailySignalCounts = { main: 0, mtfStrong: 0, mtfModerate: 0, mtfWeak: 0 };
             gateBlockCounts = {}; gateBlockTotalEvals = 0;
+            trimOldTradesFromMemory();
             // CHANGED (2 Aug audit): trades[] used to be wiped here so
             // "yesterday's trades don't show on next morning's fresh session."
             // That was the root cause of the Journal date bug — a trade logged
@@ -8097,7 +8116,7 @@ async function initializeLiveData() {
     if (dbPool) {
         try {
             const jRows = await dbPool.query(
-                `SELECT * FROM journal_trades ORDER BY id ASC`
+                `SELECT * FROM journal_trades WHERE ts IS NULL OR ts >= NOW() - INTERVAL '${TRADES_MEMORY_DAYS} days' ORDER BY id ASC`
             );
             for (const row of jRows.rows) {
                 trades.push({
