@@ -3581,6 +3581,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     <!-- Position Sizing -->
     <div class="tool-card">
       <div class="tool-title">📐 POSITION SIZING</div>
+      <button class="tool-btn" style="margin-bottom:10px;background:rgba(0,170,255,0.12);border:1px solid var(--blue);color:var(--blue);" onclick="useLiveSignalForSizing()">⚡ Use Live Signal</button>
       <div class="tool-grid">
         <div class="tool-field"><label>CAPITAL (₹)</label><input class="tool-input" id="ps-capital" type="number" placeholder="100000" step="1000" oninput="calcPositionSize()"/></div>
         <div class="tool-field"><label>RISK % PER TRADE</label><input class="tool-input" id="ps-risk" type="number" placeholder="2" step="0.5" min="0.5" max="10" oninput="calcPositionSize()"/></div>
@@ -3588,9 +3589,14 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
         <div class="tool-field"><label>STOP-LOSS (₹)</label><input class="tool-input" id="ps-sl" type="number" placeholder="60" step="1" oninput="calcPositionSize()"/></div>
       </div>
       <div class="ps-result" id="ps-result" style="display:none;">
-        <div style="font-size:11px;color:var(--dim);letter-spacing:2px;margin-bottom:4px;">MAX LOTS TO BUY</div>
+        <div style="font-size:11px;color:var(--dim);letter-spacing:2px;margin-bottom:4px;">MAX LOTS (FULL RISK)</div>
         <div class="ps-lots" id="ps-lots">0</div>
         <div class="ps-note" id="ps-note">--</div>
+        <div id="ps-graded-wrap" style="display:none;margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);">
+          <div style="font-size:11px;color:var(--dim);letter-spacing:2px;margin-bottom:4px;">SUGGESTED LOTS (GRADE-ADJUSTED)</div>
+          <div class="ps-lots" id="ps-graded-lots" style="color:var(--amber);">0</div>
+          <div class="ps-note" id="ps-graded-note">--</div>
+        </div>
       </div>
       <div class="result-grid-4" id="ps-details" style="display:none;margin-top:8px;">
         <div class="res-card"><div class="res-label">RISK AMT</div><div class="res-val" id="ps-riskamt" style="color:var(--red);">--</div></div>
@@ -5597,7 +5603,7 @@ async function fetchTradeSuggestion() {
     // if the trader logs a trade for a DIFFERENT strike/type than the last
     // suggestion, addTrade() below simply won't attach it (no false match).
     if (ai.action && ai.action !== 'WAIT' && strike && entry) {
-        window._lastAISuggestion = { type: (ai.action.includes('CALL') ? 'CE' : 'PE'), strike, entry };
+        window._lastAISuggestion = { type: (ai.action.includes('CALL') ? 'CE' : 'PE'), strike, entry, sl, target };
     }
     const confidence = ai.confidence || d.confidence || '';
     const reasoning  = ai.reasoning  || ai.rationale || '';  // server uses 'reasoning'
@@ -8332,6 +8338,26 @@ function calcTheta() {
   else { alertEl.style.display='none'; }
 }
 
+// ── Position Sizing enhancements (8 Aug) ─────────────────────────────────────
+// 1. Auto-fill Entry/SL from whatever the live AI Trade Suggestion last
+//    returned (window._lastAISuggestion, populated in fetchTradeSuggestion()
+//    above) — one click instead of retyping numbers already on screen.
+// 2. Grade-adjusted lots — the raw risk-% formula above doesn't know about
+//    this app's own confidence-tier sizing (tradeQuality.grade/pct, see
+//    server.js combineSignals()/updatePrice()). This applies that same
+//    multiplier so the "suggested" number matches what the app itself
+//    already recommends sizing down to on a weaker setup.
+function useLiveSignalForSizing() {
+  const sug = window._lastAISuggestion;
+  if (!sug || !sug.entry) {
+    alert('No live AI suggestion available right now — wait for a signal to fire, or fill in manually.');
+    return;
+  }
+  document.getElementById('ps-entry').value = sug.entry;
+  if (sug.sl) document.getElementById('ps-sl').value = sug.sl;
+  calcPositionSize();
+}
+
 function calcPositionSize() {
   const cap = parseFloat(document.getElementById('ps-capital').value);
   const riskPct = parseFloat(document.getElementById('ps-risk').value);
@@ -8350,6 +8376,21 @@ function calcPositionSize() {
   document.getElementById('ps-target').textContent = '₹' + (lots * (entry - sl) * LOT_SIZE).toFixed(0);
   document.getElementById('ps-result').style.display = 'block';
   document.getElementById('ps-details').style.display = 'grid';
+
+  // Grade-adjusted lots — uses the live signal's own confidence tier if
+  // available (_lastState, populated on every SSE/poll update elsewhere in
+  // this file). Hidden entirely when no live grade is known, rather than
+  // showing a misleading 100% default.
+  const tq = _lastState?.tradeQuality;
+  const gradedWrap = document.getElementById('ps-graded-wrap');
+  if (tq && tq.grade && tq.grade !== '—' && typeof tq.pct === 'number') {
+    const gradedLots = Math.floor(lots * tq.pct / 100);
+    document.getElementById('ps-graded-lots').textContent = gradedLots + ' Lots';
+    document.getElementById('ps-graded-note').textContent = `Grade ${tq.grade} (${tq.sizeHint}) applied to the ${lots}-lot full-risk figure`;
+    gradedWrap.style.display = 'block';
+  } else {
+    gradedWrap.style.display = 'none';
+  }
 }
 
 function calcSL() {
