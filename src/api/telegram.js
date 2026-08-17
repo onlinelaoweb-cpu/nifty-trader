@@ -562,7 +562,7 @@ async function sendCloseSummary(state) {
             // so you can see how much the gate is filtering without having to
             // watch the noisy leads yourself.
             const suppressed = dc.mtfModerate + dc.mtfWeak;
-            digestLines.push(`MTF-tracker: 🟢${dc.mtfStrong} Strong (sent) · 🟡${dc.mtfModerate} Moderate + 🔴${dc.mtfWeak} Weak (${suppressed} suppressed, not sent)`);
+            digestLines.push(`MTF-tracker: 🟢${dc.mtfStrongSent || 0} Strong sent (${dc.mtfStrong} classified) · 🟡${dc.mtfModerate} Moderate + 🔴${dc.mtfWeak} Weak (${suppressed} suppressed, not sent)`);
         }
     }
     const perf = state.todaySignalPerf;
@@ -631,6 +631,7 @@ instead of riding the full swing target.
 async function sendSignalTimeline(rec, outcomeLabel, maxGainPct, elapsedMin, closedAt, maxAdverseExcursionPct) {
     if (!rec) return;
     const fmt = ts => new Date(ts).toLocaleTimeString('en-IN', { hour12: true, hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+    const fmtDate = ts => new Date(ts).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' });
     const emoji = rec.signal === 'BUY CALL' ? '🟢' : '🔴';
     const sourceLabel = rec.source === 'main' ? 'Main Engine' : 'MTF Tracker';
     // MAE (25 Jul audit): the worst point BEFORE the final outcome — a trade
@@ -641,12 +642,24 @@ async function sendSignalTimeline(rec, outcomeLabel, maxGainPct, elapsedMin, clo
         ? ` · Worst point: ${maxAdverseExcursionPct}%`
         : '';
 
+    // ── Date-carry-over fix (10 Aug) — live case: an EOD-carried signal
+    // showed "Generated 10:44 am" then "Closed 10:37 am" right below it, no
+    // date on either — reads as closed before it was even generated. Only
+    // add the date when it's genuinely a different calendar day than
+    // generation (the vast majority of same-day closes stay exactly as
+    // before — no extra clutter).
+    const genDay   = new Date(rec.startTs).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const closeDay = new Date(closedAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const closedTimeLabel = genDay !== closeDay
+        ? `${fmtDate(closedAt)}, ${fmt(new Date(closedAt).getTime())}`
+        : fmt(new Date(closedAt).getTime());
+
     const msg = `
 📍 <b>SIGNAL TIMELINE</b> — ${rec.strike}${rec.type} (${sourceLabel})
 ━━━━━━━━━━━━━━━━━━
 🟢 Generated   ${fmt(rec.startTs)}
 📥 Entry       ₹${rec.entry} (same moment)
-${rec.exitWarned ? `⚠️ Weakened    conviction faded before this closed — you got a heads-up at the time\n` : ''}🏁 Closed      ${fmt(new Date(closedAt).getTime())} — <b>${outcomeLabel}</b>
+${rec.exitWarned ? `⚠️ Weakened    conviction faded before this closed — you got a heads-up at the time\n` : ''}🏁 Closed      ${closedTimeLabel} — <b>${outcomeLabel}</b>
 ━━━━━━━━━━━━━━━━━━
 ⏱ Duration: ${elapsedMin} min · Best price reached: +${maxGainPct}%${maeLine}
 <i>VardaanNifty AI</i>

@@ -366,7 +366,7 @@ let morningSummarySent=false, closeSummarySent=false, vixAlertSent=false;
 // just an absolute level, since "normal" VIX varies across market regimes.
 let sessionOpenVix = null;
 // ── Daily signal counters — for the EOD Telegram digest ─────────────────────
-let dailySignalCounts = { main: 0, mtfStrong: 0, mtfModerate: 0, mtfWeak: 0 };
+let dailySignalCounts = { main: 0, mtfStrong: 0, mtfModerate: 0, mtfWeak: 0, mtfStrongSent: 0 };
 let dailySignalCountsDirty = false;  // set true on every increment, cleared by the periodic DB flush
 // ── Gate-block counters — for Weekly Self-Review (1 Aug audit) ──────────────
 // Counts how often each individual Engine Checklist item was the one that
@@ -1730,6 +1730,7 @@ function combineSignals(indicators) {
 
         if (!sweep.detected || sweep.strength < 2) {
             marketState.qualityGate = { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, srClear:true, passed:false };
+            marketState.engineChecklist = null;   // standard checklist doesn't apply in the theta-zone sweep path — see fire branch below for why
             return {
                 signal     : 'WAIT',
                 confidence : 0,
@@ -1760,6 +1761,18 @@ function combineSignals(indicators) {
         }
 
         marketState.qualityGate = { mtfAligned:false, rsiClean:true, safeWindow:true, vixSafe:true, adxTrend:true, srClear:true, passed:true };
+        // ── Stale-checklist fix (10 Aug) — live case: 2:57pm and 3:03pm real
+        // fired signals both showed "🔒 Blocked by: MTF Aligned, RSI Clean,
+        // Clear of POC" in their Telegram message — but that checklist was
+        // leftover from the LAST normal-path combineSignals() evaluation
+        // (before market entered the 14:30-15:30 theta zone), since this
+        // sweep-exception branch returns early and never calls
+        // buildEngineChecklist(). The displayed "Blocked by" text had nothing
+        // to do with what actually qualified this signal — the sweep's own
+        // strength/volume/reclaim checks (shown in "Why this fired") are the
+        // real basis. Null it so the Telegram template shows nothing rather
+        // than stale, irrelevant, alarming-looking text.
+        marketState.engineChecklist = null;
         return {
             signal     : sweep.direction === 'BULLISH' ? 'BUY CALL' : 'BUY PUT',
             confidence : sweepConf,
@@ -3684,7 +3697,7 @@ async function checkTelegramAlerts(newSignal) {
             nishanebaazAlertSent=false; pcrClearedToday=false; btstSentToday=false;
             telegramAlertInFlight=false; ema920AlertSentToday=false;
             sessionOpenVix = null;
-            dailySignalCounts = { main: 0, mtfStrong: 0, mtfModerate: 0, mtfWeak: 0 };
+            dailySignalCounts = { main: 0, mtfStrong: 0, mtfModerate: 0, mtfWeak: 0, mtfStrongSent: 0 };
             gateBlockCounts = {}; gateBlockTotalEvals = 0;
             trimOldTradesFromMemory();
             // CHANGED (2 Aug audit): trades[] used to be wiped here so
@@ -4032,6 +4045,17 @@ async function checkTelegramAlerts(newSignal) {
             await sendMTFAlert(mtfAlertSnapshot, mtfStrikeData, mtfAutoLogged);
             lastMTFAlertAt     = Date.now();
             lastMTFAlertSignal = mtfSignalNow;
+            // ── Genuine 'sent' counter (10 Aug fix) ──────────────────────────
+            // dailySignalCounts.mtfStrong (above, line ~3951) increments on
+            // every tick classified as Strong Confluence, REGARDLESS of
+            // whether settling-window/exhaustion-guard/cooldown suppressed
+            // the actual send — the EOD digest was labelling that number
+            // "(sent)", which live data showed could reach 3900+/day, wildly
+            // more than the handful of Strong Confluence alerts actually
+            // delivered to Telegram that day. This counter only increments
+            // right here, at the one place sendMTFAlert() is genuinely
+            // called — the EOD digest now shows both numbers explicitly.
+            dailySignalCounts.mtfStrongSent = (dailySignalCounts.mtfStrongSent || 0) + 1;
         }
     }
     prevMTFAligned = marketState.mtf.aligned;
@@ -5255,7 +5279,38 @@ function getTradeSummary() {
 // alertSent flags also aren't persisted to DB, compounding the replay.
 // This mirrors the exact close logic already used by the manual
 // POST /api/trade/exit endpoint — same fields, same DB update.
-async function closeTradeAuto(t, exitPremium) {
+// ── Sync helper (8/10 Aug fix) — see the perf_id ALTER comment above for the
+// live case this fixes. Called from closeTradeAuto() whenever a journal
+// trade has a linked signal_performance record still open — removes it from
+// openPerfRecords immediately (stopping any further decay-warning/target/SL
+// evaluation) and marks the DB row closed with the same exit premium the
+// journal just closed at. Deliberately does NOT send its own Telegram alert
+// — the journal's own closeTradeAuto() call already told the user.
+async function closeLinkedPerfRecord(perfId, exitPremium) {
+    if (!perfId) return;
+    const idx = openPerfRecords.findIndex(r => r.id === perfId);
+    if (idx === -1) return;   // already closed independently (target/SL/timeout beat the journal to it), or never tracked in memory
+    const rec = openPerfRecords[idx];
+    openPerfRecords.splice(idx, 1);
+    const elapsedMin = Math.round((Date.now() - rec.startTs) / 60000);
+    const high = Math.max(rec.high, exitPremium);
+    const low  = Math.min(rec.low, exitPremium);
+    const maxGainPct    = rec.entry > 0 ? Math.round(((high - rec.entry) / rec.entry) * 1000) / 10 : 0;
+    const maxAdversePct = rec.entry > 0 ? Math.round(((low  - rec.entry) / rec.entry) * 1000) / 10 : 0;
+    const targetHit = rec.target > 0 && exitPremium >= rec.target;
+    const slHit     = rec.sl     > 0 && exitPremium <= rec.sl;
+    if (dbPool && rec.id) {
+        try {
+            await dbPool.query(
+                `UPDATE signal_performance SET high=$1, low=$2, target_hit=$3, sl_hit=$4, closed=true, time_taken_min=$5, closed_at=$6, max_gain_pct=$7, max_adverse_pct=$8, exit_premium=$9 WHERE id=$10`,
+                [high, low, targetHit, slHit, elapsedMin, new Date().toISOString(), maxGainPct, maxAdversePct, exitPremium, rec.id]
+            );
+        } catch (e) { console.warn('[closeLinkedPerfRecord] DB error:', e.message); }
+    }
+    console.log(`🔗 [Sync] Closed linked signal_performance #${perfId} alongside journal trade close (exit ₹${exitPremium})`);
+}
+
+async function closeTradeAuto(t, exitPremium, skipPerfSync = false) {
     t.exitPremium = exitPremium;
     t.pnl = parseFloat(((exitPremium - t.premium) * t.lots * LOT_SIZE).toFixed(0));
     t.status = 'CLOSED';
@@ -5271,6 +5326,12 @@ async function closeTradeAuto(t, exitPremium) {
             );
         } catch (e) { console.error('[closeTradeAuto] DB error:', e.message); }
     }
+    // skipPerfSync=true when called FROM the signal_performance side (see
+    // updateSignalPerformance()'s reverse-sync) — that caller is already
+    // closing the perf record itself; calling closeLinkedPerfRecord() again
+    // here would re-enter openPerfRecords mid-iteration and double-write the
+    // same DB row for no reason.
+    if (t.perfId && !skipPerfSync) await closeLinkedPerfRecord(t.perfId, exitPremium).catch(e => console.warn('[closeTradeAuto] linked-perf close error:', e.message));
     console.log(`📔 Auto-closed Trade #${t.id}: P&L ${t.pnl >= 0 ? '+' : ''}₹${t.pnl}`);
 }
 
@@ -5685,6 +5746,18 @@ async function initDB() {
         // target the trader was actually shown, instead of recomputing off
         // whatever VIX happens to be live when the MTM loop runs later.
         await dbPool.query(`ALTER TABLE journal_trades ADD COLUMN IF NOT EXISTS target NUMERIC`).catch(()=>{});
+        // Link to signal_performance (8/10 Aug fix) — without this, the
+        // journal trade (closed via SL/Trailing-SL/Full-Target in
+        // updateOpenTradesMTM) and its signal_performance twin (closed
+        // independently via target/SL/timeout in updateSignalPerformance)
+        // had NO way to know about each other. Confirmed live: a 24500PE
+        // trade closed via Trailing SL at 9:36am (P&L locked, "profit locked
+        // in" alert sent) — then at 9:39am, a SEPARATE "Partial Profit Book —
+        // consider locking some in" alert fired for the SAME already-closed
+        // trade, because its signal_performance record was still open and
+        // being tracked independently. perf_id lets closeTradeAuto() also
+        // close the linked record so this can't happen again.
+        await dbPool.query(`ALTER TABLE journal_trades ADD COLUMN IF NOT EXISTS perf_id INTEGER`).catch(()=>{});
         // FIX (3 Aug): defensive backfill for the `ts` column itself, for DBs
         // created before `ts` was added to the CREATE TABLE above. Without
         // this, pre-existing rows have NULL ts — and the frontend's
@@ -5737,15 +5810,18 @@ async function initDB() {
             )
         `);
         console.log('✅ PostgreSQL daily_signal_counts table ready');
+        // mtf_strong_sent (10 Aug) — see dailySignalCounts.mtfStrongSent
+        // comment at its increment site for what this fixes.
+        await dbPool.query(`ALTER TABLE daily_signal_counts ADD COLUMN IF NOT EXISTS mtf_strong_sent INT DEFAULT 0`).catch(()=>{});
 
         // Restore today's counts on startup/restart instead of starting from zero.
         try {
             const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-            const r = await dbPool.query('SELECT main, mtf_strong, mtf_moderate, mtf_weak FROM daily_signal_counts WHERE trade_date = $1', [todayIST]);
+            const r = await dbPool.query('SELECT main, mtf_strong, mtf_moderate, mtf_weak, mtf_strong_sent FROM daily_signal_counts WHERE trade_date = $1', [todayIST]);
             if (r.rows.length > 0) {
                 const row = r.rows[0];
-                dailySignalCounts = { main: row.main, mtfStrong: row.mtf_strong, mtfModerate: row.mtf_moderate, mtfWeak: row.mtf_weak };
-                console.log(`✅ Restored today's signal counts from DB: main=${row.main}, strong=${row.mtf_strong}, moderate=${row.mtf_moderate}, weak=${row.mtf_weak}`);
+                dailySignalCounts = { main: row.main, mtfStrong: row.mtf_strong, mtfModerate: row.mtf_moderate, mtfWeak: row.mtf_weak, mtfStrongSent: row.mtf_strong_sent || 0 };
+                console.log(`✅ Restored today's signal counts from DB: main=${row.main}, strong=${row.mtf_strong} (sent=${row.mtf_strong_sent||0}), moderate=${row.mtf_moderate}, weak=${row.mtf_weak}`);
             }
         } catch (e) { console.warn('[DailyCounts] restore error:', e.message); }
 
@@ -5898,11 +5974,11 @@ async function flushDailySignalCountsIfDirty() {
     try {
         const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
         await dbPool.query(
-            `INSERT INTO daily_signal_counts (trade_date, main, mtf_strong, mtf_moderate, mtf_weak, updated_at)
-             VALUES ($1, $2, $3, $4, $5, NOW())
+            `INSERT INTO daily_signal_counts (trade_date, main, mtf_strong, mtf_moderate, mtf_weak, mtf_strong_sent, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, NOW())
              ON CONFLICT (trade_date) DO UPDATE SET
-                main = $2, mtf_strong = $3, mtf_moderate = $4, mtf_weak = $5, updated_at = NOW()`,
-            [todayIST, dailySignalCounts.main, dailySignalCounts.mtfStrong, dailySignalCounts.mtfModerate, dailySignalCounts.mtfWeak]
+                main = $2, mtf_strong = $3, mtf_moderate = $4, mtf_weak = $5, mtf_strong_sent = $6, updated_at = NOW()`,
+            [todayIST, dailySignalCounts.main, dailySignalCounts.mtfStrong, dailySignalCounts.mtfModerate, dailySignalCounts.mtfWeak, dailySignalCounts.mtfStrongSent || 0]
         );
     } catch (e) {
         console.warn('[DailyCounts] flush error:', e.message);
@@ -6062,6 +6138,8 @@ async function updateSignalPerformance() {
                     );
                 } catch (e) { console.warn('[SignalPerf] EOD close DB error:', e.message); }
             }
+            const linkedTradeEod = trades.find(t => t.perfId === rec.id && t.status === 'OPEN');
+            if (linkedTradeEod) await closeTradeAuto(linkedTradeEod, eodPremium, true).catch(e => console.warn('[SignalPerf] EOD reverse-sync close error:', e.message));
             continue;
         }
 
@@ -6164,6 +6242,14 @@ async function updateSignalPerformance() {
                     );
                 } catch (e) { console.warn('[SignalPerf] update error:', e.message); }
             }
+            // ── Reverse-sync (10 Aug) — mirror of closeTradeAuto()'s own sync:
+            // if signal_performance closes FIRST (its own target/SL/90-min-
+            // timeout can trigger before the journal's trailing-SL system
+            // does), close the linked journal trade too rather than leaving
+            // it open to keep sending its own independent SL/target alerts
+            // for a signal this side already considers resolved.
+            const linkedTrade = trades.find(t => t.perfId === rec.id && t.status === 'OPEN');
+            if (linkedTrade) await closeTradeAuto(linkedTrade, exitPremium, true).catch(e => console.warn('[SignalPerf] reverse-sync close error:', e.message));
             // ── Shadow-track TIMED OUT records only (not target/SL hits — those
             // are genuinely resolved outcomes, nothing left to observe) ────────
             if (timedOut && !targetHit && !slHit && rec.id) {
@@ -6939,13 +7025,14 @@ async function computeWeeklyGateReview() {
 // trading gate."
 //
 // R-multiple per closed signal = (exit_premium - entry) / (entry - sl).
-// exit_premium is exact for target_hit/sl_hit (closed AT that level by
-// definition) and for every close from 7 Aug onward (now stored — see
-// updateSignalPerformance()). Older TIMED OUT/EOD rows predating that fix
-// have exit_premium=NULL; those fall back to max_gain_pct as an approximate
-// R (a slight optimistic bias — the true exit could have been below the
-// session high — flagged in the returned `approximated` count rather than
-// silently blended in as if equally precise).
+// exit_premium is exact for every close from 7 Aug onward (now stored — see
+// updateSignalPerformance()). Older rows predating that fix have
+// exit_premium=NULL; those fall back to: sl_hit=true → R=-1 exactly (a loss
+// is a loss regardless of any favourable excursion before reversing — see
+// the 14 Aug fix note at the fallback site for the bug this replaced), else
+// → max_gain_pct as an approximate R (optimistic bias, since the true exit
+// could have been below the session high — flagged in the returned
+// `approximated` count rather than silently blended in as if equally precise).
 async function computePerformanceAnalytics(windowDays = 30) {
     if (!dbPool) return null;
     try {
@@ -6982,7 +7069,21 @@ async function computePerformanceAnalytics(windowDays = 30) {
                 rMult = (parseFloat(row.exit_premium) - entry) / risk;
             } else {
                 approximated++;
-                rMult = (parseFloat(row.max_gain_pct || 0) / 100 * entry) / risk;   // optimistic approximation, see note above
+                if (row.sl_hit) {
+                    // Exact, not approximated — SL hit means the loss equals
+                    // the risk unit by definition, REGARDLESS of what
+                    // max_gain_pct shows (the trade may well have ticked up
+                    // before reversing and hitting SL — that peak isn't the
+                    // outcome). Using max_gain_pct here was the bug: it made
+                    // SL-hit losers show up as positive-R winners whenever
+                    // they'd had any favourable excursion before reversing.
+                    rMult = -1;
+                } else {
+                    // target_hit or ambiguous (TIMED OUT/EOD/PARTIAL) — no
+                    // exact exit known, max_gain_pct remains the best
+                    // available (still optimistic) approximation.
+                    rMult = (parseFloat(row.max_gain_pct || 0) / 100 * entry) / risk;
+                }
             }
             rMultiples.push(rMult);
             const regime = (row.dyn_zone === 'ABOVE_H3' || row.dyn_zone === 'BELOW_L3') ? 'Trending'
@@ -7593,9 +7694,9 @@ async function createJournalEntryFromSignalPerf(perfId) {
     if (dbPool) {
         try {
             const r = await dbPool.query(
-                `INSERT INTO journal_trades (time,type,strike,premium,lots,sl,target,notes,nifty_entry,status,suggested_entry,slippage,slippage_pct)
-                 VALUES ($1,$2,$3,$4,1,$5,$6,$7,$8,'OPEN',$4,0,0) RETURNING id, ts`,
-                [time, type, strike, entry, sl || 0, target, notesText, marketState.nifty || 0]
+                `INSERT INTO journal_trades (time,type,strike,premium,lots,sl,target,notes,nifty_entry,status,suggested_entry,slippage,slippage_pct,perf_id)
+                 VALUES ($1,$2,$3,$4,1,$5,$6,$7,$8,'OPEN',$4,0,0,$9) RETURNING id, ts`,
+                [time, type, strike, entry, sl || 0, target, notesText, marketState.nifty || 0, perfId]
             );
             dbId = r.rows[0].id;
             dbTs = r.rows[0].ts;
@@ -7608,6 +7709,7 @@ async function createJournalEntryFromSignalPerf(perfId) {
         sl: sl || 0, target: target || null, exitPremium: null, pnl: null, status: 'OPEN',
         notes: notesText, niftyAtEntry: marketState.nifty,
         niftyCurrent: marketState.nifty, niftyMove: 0,
+        perfId,
         suggestedEntry: entry, slippage: 0, slippagePct: 0,
     };
     trades.push(trade);
@@ -8129,6 +8231,7 @@ async function initializeLiveData() {
                     lots         : row.lots,
                     sl           : parseFloat(row.sl || 0),
                     target       : row.target != null ? parseFloat(row.target) : null,
+                    perfId       : row.perf_id ?? null,
                     notes        : row.notes || '',
                     niftyAtEntry : parseFloat(row.nifty_entry || 0),
                     niftyCurrent : 0,
