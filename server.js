@@ -8032,6 +8032,29 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
     setTimeout(() => setInterval(syncOptionFlowFast,       30*1000), 5*1000);   // 3 Aug fix — no network call, just stops throwing away fresh nseData cache
+    // ── EOD carry-over safety net (14 Aug) ────────────────────────────────────
+    // syncOptionFlowFast (above) already calls updateOpenTradesMTM() every 30s
+    // once isMarketOpen() is true, which SHOULD catch any overnight EOD
+    // carry-over within seconds of 9:15 open. Live case flagged by Prabhash:
+    // a SIGNAL TIMELINE "EOD" message for a record generated the previous day
+    // fired at 11:02 AM instead of ~9:16 AM — 1h47m late — during the same
+    // window Fyers' access token had gone stale (11-14 Aug), which could have
+    // delayed/destabilised other subsystems this depended on. Rather than
+    // relying on ONE path to catch this, this is a redundant, independent
+    // safety net: fires once daily in the 9:15-9:20 window, calls
+    // updateOpenTradesMTM() directly regardless of what else is healthy —
+    // worst case it's a harmless no-op if syncOptionFlowFast already handled it.
+    let _eodCatchupDoneToday = null;
+    setInterval(() => {
+        const ist = getIST();
+        const todayStr = ist.toISOString().slice(0, 10);
+        const mins = ist.getHours() * 60 + ist.getMinutes();
+        if (mins >= 555 && mins <= 560 && _eodCatchupDoneToday !== todayStr && marketState.nifty > 0) {
+            _eodCatchupDoneToday = todayStr;
+            console.log('[EOD Catchup] Running safety-net updateOpenTradesMTM() at market open');
+            updateOpenTradesMTM().catch(e => console.warn('[EOD Catchup] error:', e.message));
+        }
+    }, 60 * 1000);
     setTimeout(() => setInterval(refreshFyersVolume,      15*1000), 20*1000);   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
     setTimeout(() => setInterval(computePremarketGap,     60*1000), 20*1000);   // opening gap vs prev close, via Fyers (see combineSignals note)
     // Flush dailySignalCounts to DB only when dirty, at most every 30s — bounds
