@@ -3939,48 +3939,17 @@ async function checkTelegramAlerts(newSignal) {
         // setting .leadQuality on it a few lines up already updated both.
         mtfAlertSnapshot.momentumDecayWarning = marketState.momentumDecayWarning;
 
-        // Only track Strong Confluence (3-4/4) MTF-tracker leads for exit-warning
-        // purposes — tracking every Weak/Isolated ping as an "open position"
-        // would be noisy and meaningless (most of those were never actionable
-        // to begin with, per the Lead Quality distinction worked out earlier).
-        let mtfPerfRec = null;
-        let mtfAutoLogged = false;
-        if (mtfStrikeData && leadQuality.score >= 3) {
-            mtfPerfRec = await startSignalPerformance(marketState.mtf.signal, mtfStrikeData, 'mtf').catch(e => { console.warn('[SignalPerf] MTF start error:', e.message); return null; });
-            // Auto-log every Strong Confluence MTF lead — this is exactly the
-            // tier that actually gets sent to Telegram (see the exhaustion/
-            // settling-window suppression above), so if it's worth alerting
-            // on, it's worth having in the Journal too. createJournalEntry-
-            // FromSignalPerf() tags the notes field with "MTF Reference —
-            // not Main Engine confirmed" whenever the Main Engine hasn't
-            // independently agreed, so these stay clearly distinguishable
-            // from a fully-gated Main Engine trade rather than looking
-            // identical in the Journal.
-            if (mtfPerfRec?.id != null) {
-                const autoTrade = await createJournalEntryFromSignalPerf(mtfPerfRec.id).catch(e => { console.warn('[AutoJournal] MTF error:', e.message); return null; });
-                mtfAutoLogged = !!autoTrade;
-            }
-        }
-        if (leadQuality.label === 'Strong Confluence') dailySignalCounts.mtfStrong++;
-        else if (leadQuality.label === 'Moderate') dailySignalCounts.mtfModerate++;
-        else dailySignalCounts.mtfWeak++;
-        dailySignalCountsDirty = true;
-
-        // ── Alert-firing gate — CHANGED per user request (22 Jul): "I want the
-        // sure shot lead." Previously sendMTFAlert() fired for EVERY lead
-        // quality tier including Weak/Isolated (0-1/4 factors), purely
-        // informational, "does not change whether the alert fires" (see
-        // comment above). A live-video audit caught a concrete case of the
-        // exact documented failure mode this created: a 1:42pm BUY CALL with
-        // 1H Bearish + Delta -19.9% (both contradicting) still fired as an
-        // alert, just labelled "weak" — and per this file's own historical
-        // example, that 9:15am-style 0-1/4 pattern "never confirmed" while
-        // only 3-4/4 Strong Confluence leads reliably hit target. So Weak and
-        // Moderate leads are now suppressed entirely — only genuinely
-        // high-quality (Strong Confluence, score>=3) leads are sent. Counts
-        // above (mtfWeak/mtfModerate/mtfStrong) still track ALL tiers for
-        // analytics even though only Strong fires, so you can still audit how
-        // often each tier occurs.
+        // ── Suppression checks (settling-window / exhaustion-guard) — MOVED
+        // HERE, BEFORE signal-performance tracking + Journal auto-log (10 Aug
+        // fix). Confirmed live bug: these checks used to run AFTER
+        // startSignalPerformance()/createJournalEntryFromSignalPerf() below,
+        // so a lead could get tracked + auto-logged to Journal and THEN have
+        // its actual Telegram send suppressed — Prabhash saw leads punch into
+        // Journal with no matching Telegram message. Computing suppression
+        // first and gating tracking/journal on it too keeps all three (perf
+        // tracking, Journal, Telegram) in sync — either all three happen, or
+        // none do.
+        //
         // ── Market-open settling window (28 Jul) — a DIFFERENT failure mode from
         // the 22 Jul score-based fix above (that targeted low-confluence leads;
         // this is about data freshness regardless of score). Confirmed by a real
@@ -4036,12 +4005,57 @@ async function checkTelegramAlerts(newSignal) {
         );
 
         const exhaustionRisk = rsiExhausted || insideRangePocket || alignmentADXWeak;
+        const willActuallySend = leadQuality.score >= 3 && !_inSettlingWindow && !exhaustionRisk;
 
+        // Only track Strong Confluence (3-4/4) MTF-tracker leads for exit-warning
+        // purposes — tracking every Weak/Isolated ping as an "open position"
+        // would be noisy and meaningless (most of those were never actionable
+        // to begin with, per the Lead Quality distinction worked out earlier).
+        // Gated on willActuallySend (not just leadQuality.score>=3) — see the
+        // 10 Aug fix note above for why this must stay in sync with the send.
+        let mtfPerfRec = null;
+        let mtfAutoLogged = false;
+        if (mtfStrikeData && willActuallySend) {
+            mtfPerfRec = await startSignalPerformance(marketState.mtf.signal, mtfStrikeData, 'mtf').catch(e => { console.warn('[SignalPerf] MTF start error:', e.message); return null; });
+            // Auto-log every Strong Confluence MTF lead — this is exactly the
+            // tier that actually gets sent to Telegram (see the exhaustion/
+            // settling-window suppression above), so if it's worth alerting
+            // on, it's worth having in the Journal too. createJournalEntry-
+            // FromSignalPerf() tags the notes field with "MTF Reference —
+            // not Main Engine confirmed" whenever the Main Engine hasn't
+            // independently agreed, so these stay clearly distinguishable
+            // from a fully-gated Main Engine trade rather than looking
+            // identical in the Journal.
+            if (mtfPerfRec?.id != null) {
+                const autoTrade = await createJournalEntryFromSignalPerf(mtfPerfRec.id).catch(e => { console.warn('[AutoJournal] MTF error:', e.message); return null; });
+                mtfAutoLogged = !!autoTrade;
+            }
+        }
+        if (leadQuality.label === 'Strong Confluence') dailySignalCounts.mtfStrong++;
+        else if (leadQuality.label === 'Moderate') dailySignalCounts.mtfModerate++;
+        else dailySignalCounts.mtfWeak++;
+        dailySignalCountsDirty = true;
+
+        // ── Alert-firing gate — CHANGED per user request (22 Jul): "I want the
+        // sure shot lead." Previously sendMTFAlert() fired for EVERY lead
+        // quality tier including Weak/Isolated (0-1/4 factors), purely
+        // informational, "does not change whether the alert fires" (see
+        // comment above). A live-video audit caught a concrete case of the
+        // exact documented failure mode this created: a 1:42pm BUY CALL with
+        // 1H Bearish + Delta -19.9% (both contradicting) still fired as an
+        // alert, just labelled "weak" — and per this file's own historical
+        // example, that 9:15am-style 0-1/4 pattern "never confirmed" while
+        // only 3-4/4 Strong Confluence leads reliably hit target. So Weak and
+        // Moderate leads are now suppressed entirely — only genuinely
+        // high-quality (Strong Confluence, score>=3) leads are sent. Counts
+        // above (mtfWeak/mtfModerate/mtfStrong) still track ALL tiers for
+        // analytics even though only Strong fires, so you can still audit how
+        // often each tier occurs.
         if (leadQuality.score >= 3 && _inSettlingWindow) {
             console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
         } else if (leadQuality.score >= 3 && exhaustionRisk) {
             console.log(`[MTF] Suppressed Strong Confluence alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'}, ${alignmentADXWeak ? `weak ADX backing (15m ${adx15mForAlert?.toFixed?.(1) ?? '--'}, 1h ${adx1hForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX}+ on both)` : 'ADX ok'})`);
-        } else if (leadQuality.score >= 3) {
+        } else if (willActuallySend) {
             await sendMTFAlert(mtfAlertSnapshot, mtfStrikeData, mtfAutoLogged);
             lastMTFAlertAt     = Date.now();
             lastMTFAlertSignal = mtfSignalNow;
