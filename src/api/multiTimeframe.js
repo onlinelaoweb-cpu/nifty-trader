@@ -441,38 +441,61 @@ async function analyzeMultiTimeframe(vix = null) {
     // After resampling, check each TF against its minimum. If still short,
     // fetch historical Yahoo candles for that specific TF. This runs mostly
     // for 15m and 1h during the first 90 min of the session.
+    //
+    // BUG FOUND (28 Aug 2026 — Prabhash: "koi signal telegram mein kyon nahi
+    // aa raha"): this used to gate the Yahoo fallback purely on MIN_BARS
+    // (20 for 15m) — the threshold for RSI/EMA/signal validity. But
+    // calculateADX() has its OWN, higher hard floor (period*2+2 = 30 bars)
+    // that MIN_BARS never accounted for. Today's memory-resampled 15m series
+    // reached 26 bars (comfortably above MIN_BARS['15m']=20, so Yahoo was
+    // never called) but stayed under 30, so calculateADX() returned null on
+    // every single cycle — confirmed in Railway logs: 663/663 "Suppressed
+    // Strong Confluence" lines all showed "15m --". Since the Strong-
+    // Confluence alert path requires ADX 20+ on BOTH 15m and 1h
+    // (alignmentADXWeak treats a null ADX as automatically weak), 15m's ADX
+    // being structurally unobtainable meant NO Strong Confluence alert could
+    // ever fire, all session — exactly matching the "0 Strong sent (1785
+    // classified)" Telegram summary. 5m (76 memory bars) and 1h (always
+    // falls through to the Yahoo 5d fetch since memory rarely gives 20 bars)
+    // were not affected — this was specific to 15m's 20-29 bar gap.
+    // Fix: gate the Yahoo fallback on whichever is higher — MIN_BARS or
+    // ADX's own 30-bar floor — so a TF that clears MIN_BARS but not ADX's
+    // floor still gets backfilled with Yahoo's richer (up to 80-bar) history.
+    // Yahoo responses are cached 5 min (YAHOO_CACHE_TTL_MS), so this doesn't
+    // meaningfully increase request volume.
+    const ADX_MIN_BARS = 30;   // calculateADX()'s own hard floor: period*2+2, period=14
     const fetchPromises = [];
 
     // 5m Yahoo fallback — without this, 5m stays INSUFFICIENT for the entire
     // session if startup happens after ~9:50 AM with < 22 bars in memory.
     // Yahoo 5m gives today's bars directly so ADX and RSI compute from first cycle.
-    if (c5m.length < MIN_BARS['5m']) {
+    if (c5m.length < Math.max(MIN_BARS['5m'], ADX_MIN_BARS)) {
         fetchPromises.push(
             fetchCandlesFromYahoo('5m').then(yc => {
                 if (yc.length > c5m.length) {
-                    console.log(`📊 MTF 5m: resampled ${c5m.length} bars < ${MIN_BARS['5m']} min → Yahoo gave ${yc.length} bars ✅`);
+                    console.log(`📊 MTF 5m: resampled ${c5m.length} bars < ${Math.max(MIN_BARS['5m'], ADX_MIN_BARS)} min → Yahoo gave ${yc.length} bars ✅`);
                     c5m = yc;
                 }
             })
         );
     }
 
-    if (c15m.length < MIN_BARS['15m']) {
+    if (c15m.length < Math.max(MIN_BARS['15m'], ADX_MIN_BARS)) {
         fetchPromises.push(
             fetchCandlesFromYahoo('15m').then(yc => {
                 if (yc.length > c15m.length) {
-                    console.log(`📊 MTF 15m: resampled ${c15m.length} bars < ${MIN_BARS['15m']} min → Yahoo gave ${yc.length} bars ✅`);
+                    console.log(`📊 MTF 15m: resampled ${c15m.length} bars < ${Math.max(MIN_BARS['15m'], ADX_MIN_BARS)} min → Yahoo gave ${yc.length} bars ✅`);
                     c15m = yc;
                 }
             })
         );
     }
 
-    if (c1h.length < MIN_BARS['1h']) {
+    if (c1h.length < Math.max(MIN_BARS['1h'], ADX_MIN_BARS)) {
         fetchPromises.push(
             fetchCandlesFromYahoo('1h').then(yc => {
                 if (yc.length > c1h.length) {
-                    console.log(`📊 MTF 1h: resampled ${c1h.length} bars < ${MIN_BARS['1h']} min → Yahoo gave ${yc.length} bars ✅`);
+                    console.log(`📊 MTF 1h: resampled ${c1h.length} bars < ${Math.max(MIN_BARS['1h'], ADX_MIN_BARS)} min → Yahoo gave ${yc.length} bars ✅`);
                     c1h = yc;
                 }
             })
