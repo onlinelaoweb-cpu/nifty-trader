@@ -399,9 +399,27 @@ async function scraperAPIFetch(targetUrl) {
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// FIX (28 Aug 2026 — debug pass): plain "getDay()===2" ignores NSE's own
+// convention that when the normal weekly-expiry Tuesday is a trading holiday,
+// expiry moves to the previous trading day (Monday, or the nearest earlier
+// trading day if Monday is also a holiday). Several 2026 Tuesdays ARE NSE
+// holidays (Mar 3 Holi, Mar 31 Mahavir Jayanti, Apr 14 Ambedkar Jayanti,
+// Oct 20 Dussehra, Nov 10 Diwali-Balipratipada, Nov 24 Guru Nanak Jayanti) —
+// on each of those weeks the un-patched check would never return true on the
+// real (Monday) expiry day (the market isn't even open on the holiday Tuesday
+// itself), silently skipping every expiry-day risk control (size caps, Setup
+// DNA, max-pain buffer, trade-quality gate) on exactly the day theta/gamma
+// risk is highest.
 function isExpiryDay() {
     const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    return ist.getDay() === 2;   // Tuesday
+    const day = ist.getDay();
+    if (day === 2) return !isNSEHoliday(ist);   // normal case — Tuesday, not itself a holiday
+    if (day === 1) {                             // Monday — expiry shifts here only if TOMORROW (Tue) is a holiday
+        const tue = new Date(ist);
+        tue.setDate(tue.getDate() + 1);
+        return isNSEHoliday(tue);
+    }
+    return false;
 }
 
 function calcATMStrike(spotPrice) {
@@ -1092,11 +1110,34 @@ function parsePCR(data, spotPrice) {
 
 // ── Market hours guard ────────────────────────────────────────────────────────
 // Returns true if current IST time is within 9:10–15:35 (5-min buffer either side)
-// NSE 2026 holidays (keep in sync with server.js)
+// NSE 2026 trading holidays — single source of truth (see isNSEHoliday() below,
+// used by both nseData.js and server.js — do NOT duplicate this list elsewhere).
+//
+// FIX (28 Aug 2026 — Prabhash asked for a debug pass): this list was wrong in
+// two directions at once, verified against NSE's official 2026 trading-holiday
+// calendar (cross-checked via Zerodha's and Kotak's published NSE holiday
+// pages):
+//   1. WRONG DATES for two real holidays — Holi was listed as Mar 2 instead of
+//      Mar 3, and Diwali-Balipratipada as Nov 4 instead of Nov 10. On both
+//      actual dates the app would have wrongly treated NSE as OPEN.
+//   2. FOUR SPURIOUS entries that are not NSE trading holidays at all — Mar 20,
+//      Apr 2, Aug 27, and Oct 21. This is the exact same failure mode as the
+//      31 Jul 2026 incident (hardcoded 2026-07-27 silently blocking all PCR
+//      fetches and Telegram signals all day) — Aug 27, 2026 was YESTERDAY, so
+//      this likely blocked yesterday's trading session the same way.
+//   3. SEVEN real holidays were missing entirely — Jan 15 (Maharashtra
+//      Municipal Corporation Elections), Mar 26 (Ram Navami), Mar 31 (Mahavir
+//      Jayanti), May 28 (Bakri Eid), Jun 26 (Muharram), Sep 14 (Ganesh
+//      Chaturthi), Nov 24 (Guru Nanak Jayanti) — on each of these the app
+//      would have wrongly treated NSE as OPEN and tried to trade/signal on a
+//      day the exchange is actually closed.
+// Aug 15, 2026 (Independence Day) already falls on a Saturday — kept below for
+// documentation even though the weekend check alone would already exclude it.
 const NSE_HOLIDAYS = new Set([
-    '2026-01-26','2026-03-02','2026-03-20','2026-04-02','2026-04-03',
-    '2026-04-14','2026-05-01','2026-08-15','2026-08-27','2026-10-02',
-    '2026-10-20','2026-10-21','2026-11-04','2026-12-25',
+    '2026-01-15','2026-01-26','2026-03-03','2026-03-26','2026-03-31',
+    '2026-04-03','2026-04-14','2026-05-01','2026-05-28','2026-06-26',
+    '2026-08-15','2026-09-14','2026-10-02','2026-10-20','2026-11-10',
+    '2026-11-24','2026-12-25',
 ]);
 function isNSEHoliday(dateObj) {
     // dateObj: a Date object in IST (or any Date — we extract IST date parts)
@@ -1173,7 +1214,13 @@ async function fetchPCRFromAngel(spotPrice) {
         }
 
         // Get nearest expiry date
-        const today = new Date();
+        // FIX (28 Aug 2026): was `new Date()` — server clock (Railway = UTC),
+        // not IST. Harmless today only because the market-hours gate above
+        // already restricts this function to 9:15-15:30 IST, a window where
+        // the UTC and IST calendar dates always agree — but fragile if that
+        // gate is ever relaxed. Reusing the already-IST-adjusted `istNow`
+        // from above makes this correct on its own terms too.
+        const today = istNow;
         const expiries = [...new Set(niftyOptions.map(s => s.expiry))].sort();
         const nearestExpiry = expiries.find(e => {
             // ScripMaster expiry format: "07JUL2026" = DDMMMYYYY

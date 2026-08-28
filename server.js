@@ -5172,12 +5172,18 @@ async function fetchCalendarEvents() {
       }
     }
 
-    // Add NSE weekly expiry (every Tuesday, effective Sep 2025)
+    // Add NSE weekly expiry (every Tuesday, effective Sep 2025).
+    // FIX (28 Aug 2026): walk back off a holiday Tuesday to the real (shifted)
+    // expiry day, same fix as daysToNextExpiry()/isExpiryDay() above — otherwise
+    // this countdown card shows the wrong expiry date on holiday weeks.
     const d2 = new Date(ist);
     for (let i = 0; i <= 7; i++) {
       const dd = new Date(d2); dd.setDate(dd.getDate() + i);
       if (dd.getDay() === 2) {
-        const ds = `${dd.getFullYear()}-${String(dd.getMonth()+1).padStart(2,'0')}-${String(dd.getDate()).padStart(2,'0')}`;
+        let real = new Date(dd);
+        let back = 0;
+        while (isNSEHoliday(real) && back < 6) { real.setDate(real.getDate() - 1); back++; }
+        const ds = `${real.getFullYear()}-${String(real.getMonth()+1).padStart(2,'0')}-${String(real.getDate()).padStart(2,'0')}`;
         events2.push({ title: 'NSE Weekly F&O Expiry', date: ds, time: '15:30', impact: 'high', country: 'IN', category: 'expiry' });
         break;
       }
@@ -6585,6 +6591,18 @@ async function getWinRateFromHistory(signalType) {
 // Used in pickStrikeAndPremium() so BS estimates use real DTE instead of hardcoded 3 days.
 // On expiry day (Tuesday) after 15:30 → returns 7 (next week).
 // Minimum 0.04 (≈ 1 hr) so BS never divides by zero on intraday expiry morning.
+//
+// FIX (28 Aug 2026 — debug pass, same root cause as isExpiryDay() in
+// nseData.js): this used to count plain calendar-days to the next Tuesday
+// with no NSE-holiday awareness. When the upcoming Tuesday is itself an NSE
+// holiday (several this year — see isExpiryDay() comment), the exchange
+// actually expires that week's contracts on the previous trading day
+// (typically Monday), not Tuesday. Left unpatched, Black-Scholes premium
+// estimates in pickStrikeAndPremium() would use one extra day of time value
+// on the real (Monday) expiry morning — mispricing theta/gamma exactly when
+// it's most sensitive. Walks the target Tuesday back one day at a time while
+// it's a holiday (handles the edge case of a holiday landing on the
+// fallback day too, though none of 2026's fall on a Monday).
 function daysToNextExpiry() {
     const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const day = ist.getDay();   // 0=Sun 1=Mon 2=Tue 3=Wed 4=Thu 5=Fri 6=Sat
@@ -6594,6 +6612,16 @@ function daysToNextExpiry() {
         // Today IS Tuesday — check if market already closed (after 15:30)
         const minNow = ist.getHours() * 60 + ist.getMinutes();
         if (minNow >= 930) daysUntilTue = 7;  // next Tuesday
+    }
+    // Walk the target expiry date back a day at a time while it's an NSE
+    // holiday, so DTE reflects the real (shifted) expiry, not the nominal Tuesday.
+    let expiryDate = new Date(ist);
+    expiryDate.setDate(expiryDate.getDate() + daysUntilTue);
+    let daysBack = 0;
+    while (isNSEHoliday(expiryDate) && daysBack < 6) {
+        expiryDate.setDate(expiryDate.getDate() - 1);
+        daysUntilTue -= 1;
+        daysBack++;
     }
     // Remaining minutes today until 15:30
     const minsUntilClose = Math.max(0, 930 - (ist.getHours() * 60 + ist.getMinutes()));
