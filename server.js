@@ -1474,11 +1474,27 @@ function computeMarketRegime() {
     // ordinary days — a "regime," by contrast, should mean something the
     // trader should actually adjust their read of the day for.
     const gapDay = Math.abs(marketState.premarketGap?.gapPct ?? 0) >= 0.5;
+    // LOW_VIX — added 28 Aug 2026 after an intensive audit for accuracy: the
+    // weekly self-review's own "by regime" breakdown (30d, 148 closed signals)
+    // showed Low VIX (<14) as BOTH the single most common regime (112 of ~290
+    // signals) AND the weakest among regimes with a real sample size — 40%
+    // win, +0.307R average, versus Trending's 59%/+0.694R and Range's
+    // 54%/+0.808R. Since this app runs almost entirely on low-VIX days (VIX
+    // has read 10-13 "VERY LOW" across nearly every session reviewed), this
+    // one regime alone was quietly dragging down blended performance more
+    // than any single gate. Threshold (14) matches the bucket the weekly
+    // report itself already uses, so this doesn't introduce a new number to
+    // separately justify. Following this file's own stated policy above
+    // ("graduate specific regimes to actual new rules later, one regime at a
+    // time with live data") — additive only, capped, same shape as the
+    // existing HIGH_VIX/EXPIRY size caps below, not a rewrite.
+    const lowVix = marketState.vix > 0 && marketState.vix < 14;
 
     const tags = [];
     if (expiry) tags.push('EXPIRY');
     if (eventCaution) tags.push('EVENT_DAY');
     if (vixSpike) tags.push('HIGH_VIX');
+    if (lowVix) tags.push('LOW_VIX');
     if (gapDay) tags.push('GAP_DAY');
     if (dt?.trendProbability >= 60) tags.push('TRENDING');
     else if (dt?.rangeProbability >= 60) tags.push('RANGE');
@@ -1488,6 +1504,7 @@ function computeMarketRegime() {
     if (tags.includes('EXPIRY'))     activeRules.push('A+/A grade size capped 50% (Tuesday expiry)');
     if (tags.includes('EVENT_DAY'))  activeRules.push(`Confidence capped 60% (${marketState.eventCountdown?.title || 'high-impact event'} approaching)`);
     if (tags.includes('HIGH_VIX'))   activeRules.push('Size capped 50% (VIX spiked vs today\'s open)');
+    if (tags.includes('LOW_VIX'))    activeRules.push('Size capped 65% (Low VIX regime — historically weakest expectancy: +0.31R vs +0.69-0.81R in Trending/Range)');
     if (tags.includes('GAP_DAY'))    activeRules.push(`Large ${marketState.premarketGap?.zone === 'GAP_UP' ? 'gap-up' : 'gap-down'} open (${marketState.premarketGap?.gapPct}%) — first-hour moves less reliable, gap-fill risk both ways`);
     if (tags.includes('RANGE'))      activeRules.push('Dynamic Levels no-trade range-pocket cap active');
     if (tags.includes('TRENDING'))   activeRules.push('Momentum/breakout confluence factors weighted normally');
@@ -4251,6 +4268,23 @@ async function updatePrice(price, change, changePct, source) {
             marketState.tradeQuality.pct = 50;
             marketState.tradeQuality.vixCapped = true;
         }
+    }
+    // ── Low-VIX regime size cap ──────────────────────────────────────────────
+    // Added 28 Aug 2026 — see the LOW_VIX comment in computeMarketRegime()
+    // above for the full data justification (weakest-expectancy regime by a
+    // wide margin, and the app's most common one). Capped at 65% rather than
+    // the 50% used for expiry/VIX-spike since Low VIX isn't a danger signal
+    // the way those two are — it's a milder, average-case statistical edge
+    // reduction, not an acute risk event — so it shouldn't override a
+    // genuinely strong (A+/A) signal's size as hard as those do. Only touches
+    // sizing, same as the other two caps — a Low-VIX day's Grade/confidence
+    // itself is untouched, since the signal quality assessment is still valid,
+    // only the historical payoff in this regime is smaller on average.
+    if (signal !== 'WAIT' && marketState.vix > 0 && marketState.vix < 14 && marketState.tradeQuality.pct > 65) {
+        const beforePct = marketState.tradeQuality.pct;
+        marketState.tradeQuality.sizeHint = `${beforePct}%→65% (Low VIX regime — weakest historical expectancy)`;
+        marketState.tradeQuality.pct = 65;
+        marketState.tradeQuality.lowVixCapped = true;
     }
     marketState.rsi=indicators.rsi; marketState.ema9=indicators.ema9;
     marketState.ema21=indicators.ema21; marketState.vwap=indicators.vwap;

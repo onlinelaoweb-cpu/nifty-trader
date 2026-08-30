@@ -721,8 +721,19 @@ function computePOC(candles) {
     const val = parseFloat((lo + vaLo * BUCKET_SIZE).toFixed(2));
 
     // Signal vs current price
+    // TUNED (28 Aug 2026 — Prabhash: "pehle kaam ke signals aate the, ab kuch
+    // nahi", weekly self-review showed "Clear of POC" blocking 76% of ALL
+    // directional evaluations, by far the top bottleneck — best setup in the
+    // system, Delta Confirm + 3/3 MTF + Trend Conviction + Below Dyn L3, was
+    // starved to just 8 signals in 30 days despite an 88% win rate on those).
+    // Root cause: POC itself is computed on 50-point buckets, so a ±0.1%
+    // (~24pt on Nifty) chop-zone around it covers nearly the ENTIRE
+    // highest-volume bucket — the gate was blocking almost by construction,
+    // not just on genuine chop. Tightened to ±0.05% (~12pt) so it still
+    // catches price sitting right on top of the POC magnet without eating
+    // most of the bucket's width.
     const lastClose = session[session.length - 1]?.close ?? poc;
-    const atPOC     = Math.abs(lastClose - poc) / poc < 0.001; // within 0.1%
+    const atPOC     = Math.abs(lastClose - poc) / poc < 0.0005; // within 0.05%
     const signal    = atPOC
         ? 'AT_POC'
         : lastClose > poc ? 'ABOVE_POC' : 'BELOW_POC';
