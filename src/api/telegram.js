@@ -35,20 +35,45 @@ function sanitizeForTelegramHTML(text) {
 // capability (unused as of 1 Aug; an earlier "log to Journal" button was
 // replaced by fully-automatic Journal punching, see server.js
 // createJournalEntryFromSignalPerf) in case a future alert needs a button.
+// ── Telegram's hard message-length limit ──────────────────────────────────
+// Telegram rejects (ok:false) any sendMessage text over 4096 characters —
+// the WHOLE message, not just the overflow. As more optional detail lines
+// (POC, Delta, News Sentiment, Option Greeks, regime tags, AI Coach, etc.)
+// get added to alerts over time, a long-enough confluence of them firing
+// together could eventually cross this limit and silently drop an alert the
+// trader never sees (the existing catch-block below would log it, but
+// that's cold comfort mid-session on the office PC). Guard it once here,
+// in the shared send path every alert builder funnels through, rather than
+// in each builder individually.
+const TELEGRAM_MAX_LEN = 4096;
+
 async function sendMessage(text, replyMarkup) {
     if (!isConfigured()) {
         console.warn('⚠️  Telegram not configured — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing. Message NOT sent:', text.substring(0, 50));
         return null;
     }
 
-    const safeText = sanitizeForTelegramHTML(text);
+    let safeText  = sanitizeForTelegramHTML(text);
+    let parseMode = 'HTML';
+
+    if (safeText.length > TELEGRAM_MAX_LEN) {
+        // Don't hard-truncate the HTML-tagged text directly — a cut mid-tag
+        // (e.g. inside "<b>") produces unbalanced markup, which Telegram
+        // ALSO rejects outright. Strip the allowed tags first so truncation
+        // is always safe, then send as plain text.
+        const plain = text.replace(/<\/?(?:b|i|u|code|pre)>/gi, '');
+        const note  = '\n\n⚠️ [Trimmed — message exceeded Telegram\'s length limit]';
+        safeText  = plain.slice(0, TELEGRAM_MAX_LEN - note.length) + note;
+        parseMode = undefined; // no tags left to parse, and none intended
+        console.warn(`⚠️ Telegram message too long (${text.length} chars, limit ${TELEGRAM_MAX_LEN}) — sent a trimmed plain-text version instead of risking Telegram dropping the whole alert`);
+    }
 
     try {
         const payload = {
-            chat_id   : CHAT_ID,
-            text      : safeText,
-            parse_mode: 'HTML'
+            chat_id: CHAT_ID,
+            text   : safeText,
         };
+        if (parseMode) payload.parse_mode = parseMode;
         if (replyMarkup) payload.reply_markup = replyMarkup;
         const res = await axios.post(
             `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,

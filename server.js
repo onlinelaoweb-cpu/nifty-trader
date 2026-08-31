@@ -1672,7 +1672,7 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
 {"score": <number -100 to 100>, "label": "Bullish/Bearish/Neutral", "reason": "one sentence on the key driver", "volatilityFlag": true or false}`;
 
         const res = await axios.post('https://api.anthropic.com/v1/messages', {
-            model: 'claude-sonnet-4-6',
+            model: 'claude-sonnet-5',
             max_tokens: 200,
             messages: [{ role: 'user', content: prompt }]
         }, {
@@ -4013,12 +4013,24 @@ async function checkTelegramAlerts(newSignal) {
         // the Main Engine side (MTF_REVERSAL_MIN_ADX) — mirrored here for this
         // alert's own firing gate, since that fix only guards the override
         // path, not this alert's "Strong Confluence" label/send decision.
+        // TUNED (31 Aug) — live audit found this blanket-blocking nearly every
+        // Strong Confluence lead for a full hour at a time on a LOW_VIX day:
+        // 15m ADX 30-31 (genuine momentum) paired with 1h ADX pinned at 17.0
+        // (unchanged for 11+ min straight, since 1h only updates on candle
+        // close) triggered 100% suppression in that window. The Aug 29 regime
+        // audit already flagged LOW_VIX as the app's most common regime — this
+        // guard was structurally fighting that regime rather than just
+        // catching genuine reversal noise (its original 7 Aug intent). Keeping
+        // 15m strict (it's the more responsive leg and was never the problem)
+        // but loosening the 1h floor so an established, calm-but-real trend
+        // isn't held to the same bar as a fresh, untested direction flip.
         const adx15mForAlert = marketState.mtf?.tf15m?.adx;
         const adx1hForAlert  = marketState.mtf?.tf1h?.adx;
-        const MTF_REVERSAL_MIN_ADX = 20;   // same threshold as combineSignals()'s Trend Conviction override guard
+        const MTF_REVERSAL_MIN_ADX_15M = 20;   // unchanged — same threshold as combineSignals()'s Trend Conviction override guard
+        const MTF_REVERSAL_MIN_ADX_1H  = 15;   // was 20 — see note above
         const alignmentADXWeak = isFull3 && (
-            adx15mForAlert == null || adx15mForAlert < MTF_REVERSAL_MIN_ADX ||
-            adx1hForAlert  == null || adx1hForAlert  < MTF_REVERSAL_MIN_ADX
+            adx15mForAlert == null || adx15mForAlert < MTF_REVERSAL_MIN_ADX_15M ||
+            adx1hForAlert  == null || adx1hForAlert  < MTF_REVERSAL_MIN_ADX_1H
         );
 
         const exhaustionRisk = rsiExhausted || insideRangePocket || alignmentADXWeak;
@@ -4071,7 +4083,7 @@ async function checkTelegramAlerts(newSignal) {
         if (leadQuality.score >= 3 && _inSettlingWindow) {
             console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
         } else if (leadQuality.score >= 3 && exhaustionRisk) {
-            console.log(`[MTF] Suppressed Strong Confluence alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'}, ${alignmentADXWeak ? `weak ADX backing (15m ${adx15mForAlert?.toFixed?.(1) ?? '--'}, 1h ${adx1hForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX}+ on both)` : 'ADX ok'})`);
+            console.log(`[MTF] Suppressed Strong Confluence alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'}, ${alignmentADXWeak ? `weak ADX backing (15m ${adx15mForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_15M}+; 1h ${adx1hForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_1H}+)` : 'ADX ok'})`);
         } else if (willActuallySend) {
             await sendMTFAlert(mtfAlertSnapshot, mtfStrikeData, mtfAutoLogged);
             lastMTFAlertAt     = Date.now();
@@ -7353,7 +7365,7 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
 {"action":"BUY CE or BUY PE or WAIT","strike":24300,"entry":85,"sl":64,"target":128,"reasoning":"Two sentences max explaining why.","confidence":"HIGH or MEDIUM or LOW"}`;
 
         const res = await axios.post('https://api.anthropic.com/v1/messages', {
-            model: 'claude-sonnet-4-6',
+            model: 'claude-sonnet-5',
             max_tokens: 300,
             messages: [{ role: 'user', content: prompt }]
         }, {
