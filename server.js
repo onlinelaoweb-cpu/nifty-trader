@@ -2690,7 +2690,7 @@ function combineSignals(indicators) {
             } else if (dl.noTradeZone) {
                 if (DYNAMIC_LEVELS_HARD_GATE) {
                     reasons.push(`⛔ WAIT — price inside Dynamic H1(${dl.h1})–L1(${dl.l1}) range pocket (hard gate ON)`);
-                    signal = 'WAIT';
+                    signal = 'WAIT'; confidence = 0;
                 } else {
                     const before = confidence;
                     confidence = Math.min(confidence, 55);
