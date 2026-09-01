@@ -1699,7 +1699,7 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
             generatedAt: new Date().toISOString(),
         };
     } catch (e) {
-        console.warn('[NewsSentiment] scoring error:', e.message);
+        console.warn('[NewsSentiment] scoring error:', e.message, '| status:', e.response?.status, '| body:', JSON.stringify(e.response?.data)?.slice(0, 500));
         return { available: false, label: 'News Sentiment — scoring error' };
     }
 }
@@ -7401,7 +7401,7 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
         return parsed;
 
     } catch (e) {
-        console.error('AI suggestion error:', e.message);
+        console.error('AI suggestion error:', e.message, '| status:', e.response?.status, '| body:', JSON.stringify(e.response?.data)?.slice(0, 500));
         return null;
     }
 }
