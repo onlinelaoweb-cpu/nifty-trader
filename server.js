@@ -5401,7 +5401,30 @@ async function closeTradeAuto(t, exitPremium, skipPerfSync = false) {
     console.log(`📔 Auto-closed Trade #${t.id}: P&L ${t.pnl >= 0 ? '+' : ''}₹${t.pnl}`);
 }
 
+let _mtmInProgress = false; // re-entrancy guard — see note below
+
 async function updateOpenTradesMTM() {
+    // Guard against overlapping runs: this function is invoked from two
+    // independent, unsynchronized 30s schedules (the background
+    // syncOptionFlowFast interval, and the /api/signal route's own
+    // _lastMTMRun throttle, driven by the frontend's ~3s dashboard poll).
+    // If the two ever land close enough together, a second call could start
+    // before the first has finished awaiting closeTradeAuto()'s DB write —
+    // it would then still see the trade as OPEN and re-fire the same exit
+    // alert (observed live: Trade #186's Trailing SL alert + auto-close
+    // both fired twice, ~2s apart, on 1 Sep). Skip the run entirely if one
+    // is already in flight rather than trying to interleave two passes over
+    // the same trades[] array.
+    if (_mtmInProgress) return;
+    _mtmInProgress = true;
+    try {
+        await _updateOpenTradesMTM();
+    } finally {
+        _mtmInProgress = false;
+    }
+}
+
+async function _updateOpenTradesMTM() {
     const price = marketState.nifty;
     if (!price) return;
 
