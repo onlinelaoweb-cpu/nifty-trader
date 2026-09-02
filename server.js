@@ -5438,27 +5438,50 @@ async function _updateOpenTradesMTM() {
     // of t.strike. Confirmed from the 2:30pm 24400PE journal trade: spot was
     // 24467.85 (ATM=24450, not 24400), so the "+103.3% Target 1:1 HIT" fired
     // 8 seconds after entry was really just the ATM 24450PE's premium, not
-    // 24400PE's. Now looks up each trade's own strike from the option chain,
-    // same ATM-only fast path retained for the common case.
-    const atmCE     = marketState.optionFlow.atmCEpremium;
-    const atmPE     = marketState.optionFlow.atmPEpremium;
-    const pcrState  = getPCRState();
-    const atmStrike = Math.round(price / 50) * 50;
+    // 24400PE's. Now looks up each trade's own strike from the option chain.
+    //
+    // FIX (2026-09-02): the fast path this originally kept "for the common
+    // case" (skip the chain lookup when t.strike === atmStrike, and just
+    // read atmCE/atmPE directly) turned out to be the SAME bug class again,
+    // just narrower: atmStrike is recomputed instantly from the live tick,
+    // but atmCE/atmPE only refresh on the option-chain's ~60s cadence. When
+    // price crosses a strike-rounding boundary faster than that, atmStrike
+    // can momentarily equal a trade's own strike while atmCE/atmPE still
+    // hold the PREVIOUS ATM strike's premium. Confirmed live: a 24150 CE
+    // trade got a false "Full Target Hit" at ₹57.4 because atmCE was still
+    // holding 24100 CE's premium right as price briefly rounded to
+    // atmStrike=24150. Fast path removed entirely — always use the chain
+    // lookup, which tags each strike explicitly and has no such window.
+    const pcrState = getPCRState();
 
     for (const t of trades.filter(t => t.status === 'OPEN')) {
         // Nifty move (kept for UI display)
         t.niftyCurrent = price;
         t.niftyMove    = parseFloat((price - (t.niftyAtEntry || price)).toFixed(0));
 
-        // Pick the live premium that matches this trade's actual strike
-        let livePremium;
-        if (t.strike === atmStrike) {
-            livePremium = t.type === 'CE' ? atmCE : atmPE;
-        } else if (pcrState?.records?.length) {
+        // Pick the live premium that matches this trade's actual strike.
+        // NOTE (2 Sep): previously had a "fast path" that read atmCE/atmPE
+        // directly whenever t.strike === atmStrike, skipping the chain
+        // lookup below. That was unsafe: atmStrike is recomputed instantly
+        // from the live tick price, but atmCE/atmPE only refresh on the
+        // option-chain's own ~60s cadence — so when price oscillates across
+        // a strike-rounding boundary faster than that, atmStrike can
+        // momentarily match a trade's strike while atmCE/atmPE still hold
+        // the PREVIOUS ATM strike's premium. Confirmed live on 1 Sep: a
+        // 24150 CE trade got a false "Full Target Hit" at ₹57.4 because
+        // atmCE was still holding 24100 CE's premium (~57 at the time,
+        // per the option-chain not yet having caught up to the new ATM)
+        // right when price briefly rounded to atmStrike=24150. The chain
+        // lookup below doesn't have this failure mode — each record is
+        // tagged with its own strike regardless of which one is "ATM" —
+        // so it's now used unconditionally instead of only for non-ATM strikes.
+        let livePremium = null;
+        if (pcrState?.records?.length) {
             const chainRow = pcrState.records.find(r => r.strikePrice === t.strike);
             const ltp      = t.type === 'CE' ? chainRow?.CE?.lastPrice : chainRow?.PE?.lastPrice;
             livePremium    = (ltp > 0) ? ltp : null;
         }
+
 
         // ── EOD carry-over guard (7 Aug) — same class of bug the 6 Aug fix
         // closed for signal_performance, applied here to journal trades[].
@@ -6176,17 +6199,19 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
 // since that's still the common case and avoids an extra array scan.
 async function updateSignalPerformance() {
     if (openPerfRecords.length === 0) return;
-    const atmCE = marketState.optionFlow?.atmCEpremium;
-    const atmPE = marketState.optionFlow?.atmPEpremium;
     const pcrState = getPCRState();
-    const atmStrike = marketState.nifty ? Math.round(marketState.nifty / 50) * 50 : null;
     const stillOpen = [];
 
     for (const rec of openPerfRecords) {
-        let live;
-        if (rec.strike === atmStrike) {
-            live = rec.type === 'CE' ? atmCE : atmPE;
-        } else if (pcrState?.records?.length) {
+        // FIX (2026-09-02): same stale-ATM-fast-path bug as
+        // updateOpenTradesMTM() (see its comment for the full story) —
+        // atmCE/atmPE lag the option-chain's ~60s refresh while atmStrike
+        // tracks the live tick instantly, so matching on rec.strike ===
+        // atmStrike could misattribute a different strike's premium here
+        // too. Always use the chain lookup, which tags each strike
+        // explicitly regardless of which one is currently ATM.
+        let live = null;
+        if (pcrState?.records?.length) {
             const chainRow = pcrState.records.find(r => r.strikePrice === rec.strike);
             const liveLtp  = rec.type === 'CE' ? chainRow?.CE?.lastPrice : chainRow?.PE?.lastPrice;
             live = (liveLtp > 0) ? liveLtp : null;
@@ -6378,17 +6403,16 @@ async function updateSignalPerformance() {
 // stops — never reopens the trade, never touches target_hit/sl_hit/closed.
 async function updateShadowTracking() {
     if (shadowPerfRecords.length === 0) return;
-    const atmCE = marketState.optionFlow?.atmCEpremium;
-    const atmPE = marketState.optionFlow?.atmPEpremium;
     const pcrState = getPCRState();
-    const atmStrike = marketState.nifty ? Math.round(marketState.nifty / 50) * 50 : null;
     const stillTracking = [];
 
     for (const rec of shadowPerfRecords) {
-        let live;
-        if (rec.strike === atmStrike) {
-            live = rec.type === 'CE' ? atmCE : atmPE;
-        } else if (pcrState?.records?.length) {
+        // FIX (2026-09-02): same stale-ATM-fast-path bug as
+        // updateOpenTradesMTM()/updateSignalPerformance() — always use the
+        // chain lookup, which tags each strike explicitly regardless of
+        // which one is currently ATM.
+        let live = null;
+        if (pcrState?.records?.length) {
             const chainRow = pcrState.records.find(r => r.strikePrice === rec.strike);
             const liveLtp  = rec.type === 'CE' ? chainRow?.CE?.lastPrice : chainRow?.PE?.lastPrice;
             live = (liveLtp > 0) ? liveLtp : null;
@@ -6776,6 +6800,18 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
     // Now: look up the real LTP for the chosen strike first, BS is the fallback
     // only if that strike isn't present in the fetched chain (rare — chain covers
     // ATM±20 strikes, our OTM pick is only ±50 = 1 strike away).
+    //
+    // FIX (2026-09-02): dropped the 'strike === atm → use pcrState.atmCEpremium
+    // directly' shortcut this used to take. Same bug class found live in
+    // updateOpenTradesMTM()/updateSignalPerformance(): 'atm' here is computed
+    // fresh from the live 'nifty' price, but pcrState.atmCEpremium/atmPEpremium
+    // belong to whatever strike WAS ATM as of the chain's own last fetch. If
+    // price crossed a strike boundary since then, the shortcut could hand a
+    // brand-new signal the WRONG strike's premium as its Entry — wrong from
+    // the moment it's created, with SL/Target math built on top of it. The
+    // per-strike chain lookup below has no such window (each record is
+    // tagged with its own strike), so it's now used for every strike, ATM
+    // included, with BS as the fallback only when the chain lookup itself misses.
     const dte = daysToNextExpiry();   // real days to next Tuesday expiry
 
     // ── Days-to-expiry position-size suggestion (1 Aug audit) ───────────────
@@ -6792,10 +6828,7 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
     let premiumSource = 'bs';   // 'live' | 'bs' — surfaced to the trader below
     let premiumAgeSec = null;
 
-    if (strike === atm && pcrState && pcrState.atmCEpremium && pcrState.atmPEpremium) {
-        entryPremium = type === 'CE' ? pcrState.atmCEpremium : pcrState.atmPEpremium;
-        premiumSource = 'live';
-    } else if (pcrState?.records?.length) {
+    if (pcrState?.records?.length) {
         const rec = pcrState.records.find(r => r.strikePrice === strike);
         const liveLtp = type === 'CE' ? rec?.CE?.lastPrice : rec?.PE?.lastPrice;
         if (liveLtp > 0) { entryPremium = liveLtp; premiumSource = 'live'; }
