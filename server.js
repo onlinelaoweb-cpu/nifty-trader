@@ -5377,6 +5377,19 @@ async function closeLinkedPerfRecord(perfId, exitPremium) {
 }
 
 async function closeTradeAuto(t, exitPremium, skipPerfSync = false) {
+    // Idempotency guard (2 Sep) — closeTradeAuto() had no protection against
+    // being called twice for the same trade. Confirmed live: Trade #193 got
+    // closed twice in the same ~30s cycle (two different exitPremium snapshots,
+    // ~146ms apart, two different P&L values written to the DB in a row) —
+    // updateOpenTradesMTM()'s own SL-check loop and updateSignalPerformance()'s
+    // reverse-sync (fired via .catch() without awaiting it, so it runs
+    // concurrently rather than sequentially) both independently detected the
+    // SL breach and both called this function for the same trade. The earlier
+    // re-entrancy guard on updateOpenTradesMTM() only stops THAT function from
+    // overlapping with itself — it does nothing for a second, different
+    // function reaching the same trade. Guard it here instead, at the one
+    // choke point every closing path already goes through.
+    if (t.status === 'CLOSED') return;
     t.exitPremium = exitPremium;
     t.pnl = parseFloat(((exitPremium - t.premium) * t.lots * LOT_SIZE).toFixed(0));
     t.status = 'CLOSED';
