@@ -343,7 +343,6 @@ let orbHigh = null, orbLow = null, orbDate = null;
 // Used to detect "premium already overextended" before issuing a fresh entry.
 let atmCEpremiumOpen = null, atmPEpremiumOpen = null, premiumOpenDate = null;
 let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-direction MTF alerts
-let lastSuppressLogAt = 0, lastSuppressLogMsg = '';  // throttle: max once/60s per distinct suppression reason (see log sites below)
 // ── MTF-tracker reversal persistence (soft, informational-tier cooldown) ────
 // Problem observed live (10 Jul session): mtfSignalChanged bypasses the 60-min
 // cooldown entirely, so when the MTF vote whipsaws (CALL→PUT→CALL within
@@ -4082,22 +4081,9 @@ async function checkTelegramAlerts(newSignal) {
         // analytics even though only Strong fires, so you can still audit how
         // often each tier occurs.
         if (leadQuality.score >= 3 && _inSettlingWindow) {
-            const _key = 'settling';
-            if (_key !== lastSuppressLogMsg || Date.now() - lastSuppressLogAt > 60_000) {
-                console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
-                lastSuppressLogMsg = _key; lastSuppressLogAt = Date.now();
-            }
+            console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
         } else if (leadQuality.score >= 3 && exhaustionRisk) {
-            // Coarse key (which factors are true, not their exact decimal values) —
-            // comparing the full interpolated message would almost never match
-            // itself since RSI/ADX shift slightly every tick, silently defeating
-            // the throttle. This still logs immediately on a genuine state change
-            // (e.g. RSI crossing into EXTREME) since the key itself changes then.
-            const _key = `exhaustion:rsi=${rsiExhausted}:range=${insideRangePocket}:adx=${alignmentADXWeak}`;
-            if (_key !== lastSuppressLogMsg || Date.now() - lastSuppressLogAt > 60_000) {
-                console.log(`[MTF] Suppressed Strong Confluence alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'}, ${alignmentADXWeak ? `weak ADX backing (15m ${adx15mForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_15M}+; 1h ${adx1hForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_1H}+)` : 'ADX ok'})`);
-                lastSuppressLogMsg = _key; lastSuppressLogAt = Date.now();
-            }
+            console.log(`[MTF] Suppressed Strong Confluence alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'}, ${alignmentADXWeak ? `weak ADX backing (15m ${adx15mForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_15M}+; 1h ${adx1hForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_1H}+)` : 'ADX ok'})`);
         } else if (willActuallySend) {
             await sendMTFAlert(mtfAlertSnapshot, mtfStrikeData, mtfAutoLogged);
             lastMTFAlertAt     = Date.now();
@@ -5073,40 +5059,50 @@ async function refreshFyersVolume() {
         // even though O/H/L/LTP looked fine (those came from the index fallback).
         // Fixed: use the real current-month contract symbol, e.g. NSE:NIFTY26JULFUT.
         const futSymbol = getCurrentFyersFutSymbol();
-        let q = await fetchFyersQuote(futSymbol);
+        let futQ = await fetchFyersQuote(futSymbol);
 
-        // If futures volume still 0, the symbol format may have changed — log and skip
-        if (!q || !q.ltp) {
-            console.warn(`[Fyers Volume] ${futSymbol} failed — trying index as LTP-only`);
-            q = await fetchFyersQuote('NSE:NIFTY50-INDEX');
-        }
+        // FIX (4 Sep): O/H/L/LTP must come from the SPOT index, not futures.
+        // Futures carries a basis premium over spot (~120pt seen live on 4 Sep —
+        // spot WS tick ₹23,956 vs futures LTP ₹24,082) that was silently feeding
+        // into marketState.wsOpen/wsHigh/wsLow. Those feed computeDynamicLevels()
+        // (support/resistance) and the near-session-high/low proximity checks —
+        // both compare against spot-based candles/tick price, so a futures-basis
+        // series there was corrupting the levels by however wide the basis ran
+        // that day. Volume has no spot equivalent (index reports 0), so it still
+        // comes from futures — only O/H/L/LTP switch to the index quote.
+        let idxQ = await fetchFyersQuote('NSE:NIFTY50-INDEX');
 
-        if (!q || !q.ltp) {
-            console.warn('[Fyers Volume] No quote returned — token may need refresh');
+        if ((!futQ || !futQ.ltp) && (!idxQ || !idxQ.ltp)) {
+            console.warn('[Fyers Volume] No quote returned from futures or index — token may need refresh');
             return;
         }
 
-        marketState.wsVolume = q.volume;
-        marketState.wsOpen   = q.open;
-        marketState.wsHigh   = q.high;
-        marketState.wsLow    = q.low;
+        // Prefer the index for O/H/L/LTP; only fall back to futures (accepting
+        // the basis skew) if the index call itself failed.
+        const ref = (idxQ && idxQ.ltp) ? idxQ : futQ;
+        const usedFuturesFallback = !(idxQ && idxQ.ltp);
 
-        const volCr = q.volume > 0 ? (q.volume / 1e7).toFixed(2) + 'Cr' : '0 (index-only LTP)';
-        console.log(`[Fyers Volume] Vol:${volCr} | O:${q.open} H:${q.high} L:${q.low} | LTP:${q.ltp}`);
+        marketState.wsVolume = futQ?.volume || 0;
+        marketState.wsOpen   = ref.open;
+        marketState.wsHigh   = ref.high;
+        marketState.wsLow    = ref.low;
+
+        const volCr = marketState.wsVolume > 0 ? (marketState.wsVolume / 1e7).toFixed(2) + 'Cr' : '0 (index volume unavailable)';
+        console.log(`[Fyers Volume] Vol:${volCr} | O:${ref.open} H:${ref.high} L:${ref.low} | LTP:${ref.ltp}${usedFuturesFallback ? ' ⚠️ (index quote failed — using futures, basis-skewed)' : ' (spot)'}`);
 
         // Recompute live delta now that we have real volume — same logic as
         // the WS onTick() handler, but using Fyers' aggregate volume instead
         // of per-tick buy/sell qty (Fyers index quote doesn't expose those,
         // only NSE's order book does — so this is volume-weighted, not a true
         // buy/sell split, but still far better than the candle-body proxy).
-        if (q.volume > 0 && q.high > q.low) {
+        if (marketState.wsVolume > 0 && ref.high > ref.low) {
             // Approximate buy/sell split using where LTP sits in the day's range —
             // closer to high = more buying pressure, closer to low = more selling.
-            const rangePos = (q.ltp - q.low) / (q.high - q.low); // 0 = at low, 1 = at high
+            const rangePos = (ref.ltp - ref.low) / (ref.high - ref.low); // 0 = at low, 1 = at high
             const buyShare = Math.max(0.1, Math.min(0.9, rangePos));
-            const buyQty   = Math.round(q.volume * buyShare);
-            const sellQty  = q.volume - buyQty;
-            const deltaPct = parseFloat((((buyQty - sellQty) / q.volume) * 100).toFixed(1));
+            const buyQty   = Math.round(marketState.wsVolume * buyShare);
+            const sellQty  = marketState.wsVolume - buyQty;
+            const deltaPct = parseFloat((((buyQty - sellQty) / marketState.wsVolume) * 100).toFixed(1));
             const signal   = deltaPct > 10 ? 'BULLISH' : deltaPct < -10 ? 'BEARISH' : 'NEUTRAL';
 
             marketState.delta = {
