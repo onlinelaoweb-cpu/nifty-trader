@@ -343,6 +343,7 @@ let orbHigh = null, orbLow = null, orbDate = null;
 // Used to detect "premium already overextended" before issuing a fresh entry.
 let atmCEpremiumOpen = null, atmPEpremiumOpen = null, premiumOpenDate = null;
 let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-direction MTF alerts
+let lastSuppressLogAt = 0, lastSuppressLogMsg = '';  // throttle: max once/60s per distinct suppression reason (see log sites below)
 // ── MTF-tracker reversal persistence (soft, informational-tier cooldown) ────
 // Problem observed live (10 Jul session): mtfSignalChanged bypasses the 60-min
 // cooldown entirely, so when the MTF vote whipsaws (CALL→PUT→CALL within
@@ -4081,9 +4082,22 @@ async function checkTelegramAlerts(newSignal) {
         // analytics even though only Strong fires, so you can still audit how
         // often each tier occurs.
         if (leadQuality.score >= 3 && _inSettlingWindow) {
-            console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
+            const _key = 'settling';
+            if (_key !== lastSuppressLogMsg || Date.now() - lastSuppressLogAt > 60_000) {
+                console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
+                lastSuppressLogMsg = _key; lastSuppressLogAt = Date.now();
+            }
         } else if (leadQuality.score >= 3 && exhaustionRisk) {
-            console.log(`[MTF] Suppressed Strong Confluence alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'}, ${alignmentADXWeak ? `weak ADX backing (15m ${adx15mForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_15M}+; 1h ${adx1hForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_1H}+)` : 'ADX ok'})`);
+            // Coarse key (which factors are true, not their exact decimal values) —
+            // comparing the full interpolated message would almost never match
+            // itself since RSI/ADX shift slightly every tick, silently defeating
+            // the throttle. This still logs immediately on a genuine state change
+            // (e.g. RSI crossing into EXTREME) since the key itself changes then.
+            const _key = `exhaustion:rsi=${rsiExhausted}:range=${insideRangePocket}:adx=${alignmentADXWeak}`;
+            if (_key !== lastSuppressLogMsg || Date.now() - lastSuppressLogAt > 60_000) {
+                console.log(`[MTF] Suppressed Strong Confluence alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'}, ${alignmentADXWeak ? `weak ADX backing (15m ${adx15mForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_15M}+; 1h ${adx1hForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_1H}+)` : 'ADX ok'})`);
+                lastSuppressLogMsg = _key; lastSuppressLogAt = Date.now();
+            }
         } else if (willActuallySend) {
             await sendMTFAlert(mtfAlertSnapshot, mtfStrikeData, mtfAutoLogged);
             lastMTFAlertAt     = Date.now();
