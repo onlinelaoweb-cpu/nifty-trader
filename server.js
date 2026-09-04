@@ -5724,7 +5724,11 @@ async function initDB() {
                 dyn_zone    TEXT,          -- Dynamic Levels zone at fire time: ABOVE_H3/H1_H3/INSIDE/L1_L3/BELOW_L3
                 dyn_atr     NUMERIC,       -- ATR(14) used for that zone's H/L bands
                 gap_zone    TEXT,          -- Premarket/Opening Gap zone at fire time: GAP_UP/FLAT/GAP_DOWN
-                gap_pct     NUMERIC        -- Opening gap % vs prev close
+                gap_pct     NUMERIC,       -- Opening gap % vs prev close
+                mtf_5m_adx  NUMERIC,       -- per-TF ADX at fire/suppress time (4 Sep: added to
+                mtf_15m_adx NUMERIC,       -- analyze whether the 1h-ADX-must-be-15+ threshold in
+                mtf_1h_adx  NUMERIC        -- the MTF suppression check is too strict — was never
+                                           -- persisted per-TF before, only the single combined adx
             )
         `);
         console.log('✅ PostgreSQL signal_log table ready');
@@ -5749,7 +5753,10 @@ async function initDB() {
                 ADD COLUMN IF NOT EXISTS dyn_atr     NUMERIC,
                 ADD COLUMN IF NOT EXISTS gap_zone    TEXT,
                 ADD COLUMN IF NOT EXISTS gap_pct     NUMERIC,
-                ADD COLUMN IF NOT EXISTS breadth_sig TEXT
+                ADD COLUMN IF NOT EXISTS breadth_sig TEXT,
+                ADD COLUMN IF NOT EXISTS mtf_5m_adx  NUMERIC,
+                ADD COLUMN IF NOT EXISTS mtf_15m_adx NUMERIC,
+                ADD COLUMN IF NOT EXISTS mtf_1h_adx  NUMERIC
         `);
 
         // ── signal_performance table — automatic outcome tracking ──────────────
@@ -6093,8 +6100,9 @@ async function saveSignalToLog(signal, prevSig) {
             `INSERT INTO signal_log
               (signal, confidence, nifty, rsi, ema9, ema21, vwap, vix, pcr, atm_pcr,
                adx, mtf_signal, mtf_aligned, breadth_sig, prev_signal,
-               quality_gate, entry_window, reasons, dyn_zone, dyn_atr, gap_zone, gap_pct)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+               quality_gate, entry_window, reasons, dyn_zone, dyn_atr, gap_zone, gap_pct,
+               mtf_5m_adx, mtf_15m_adx, mtf_1h_adx)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
             [
                 signal, s.confidence, s.nifty, s.rsi, s.ema9, s.ema21, s.vwap,
                 s.vix, s.pcr, s.atmPcr, s.adx?.adx ?? null,
@@ -6108,7 +6116,15 @@ async function saveSignalToLog(signal, prevSig) {
                 s.qualityGate?.passed ?? false, s.entryWindow?.label ?? null,
                 JSON.stringify((s.reason || []).slice(0, 12)),
                 s.dynamicLevels?.zone ?? null, s.dynamicLevels?.atr ?? null,
-                s.premarketGap?.zone ?? null, s.premarketGap?.gapPct ?? null
+                s.premarketGap?.zone ?? null, s.premarketGap?.gapPct ?? null,
+                // 4 Sep: per-TF ADX at fire time, so we can later check whether the
+                // 1h-ADX-must-be-15+ suppression threshold is well-calibrated (e.g.
+                // is 15.1 as reliable as 25, or does real accuracy only kick in well
+                // past 15). Note: this only captures FIRED signals — the 1h ADX here
+                // will normally already be ≥15 (or the sweep-reversal exception,
+                // which bypasses this check entirely) since that's what let it fire;
+                // it does not capture what suppressed sub-15 attempts would have done.
+                s.mtf?.tf5m?.adx ?? null, s.mtf?.tf15m?.adx ?? null, s.mtf?.tf1h?.adx ?? null
             ]
         );
         console.log(`📝 Signal logged: ${signal} @ ₹${s.nifty} (conf:${s.confidence}%)`);
