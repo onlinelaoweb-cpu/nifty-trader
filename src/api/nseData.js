@@ -1203,20 +1203,79 @@ async function getScripMaster() {
         // MEM FIX: full ScripMaster is 50K-100K instruments (~50-100MB).
         // We only ever use NIFTY NFO index options — filter immediately and
         // discard everything else so it doesn't sit in memory all day.
+        // 4 Sep: also keep MCX CRUDEOIL futures (FUTCOM) — needed for the
+        // CRUDEOIL evening-session expansion (Phase 2a). Still a tiny set
+        // (a handful of expiry months) so no meaningful memory impact.
         const filtered = Array.isArray(res.data)
             ? res.data.filter(s =>
-                s.exch_seg === 'NFO' &&
-                s.instrumenttype === 'OPTIDX' &&
-                s.name === 'NIFTY' &&
-                s.expiry)
+                (s.exch_seg === 'NFO' &&
+                 s.instrumenttype === 'OPTIDX' &&
+                 s.name === 'NIFTY' &&
+                 s.expiry) ||
+                (s.exch_seg === 'MCX' &&
+                 s.instrumenttype === 'FUTCOM' &&
+                 s.name === 'CRUDEOIL' &&
+                 s.expiry))
             : res.data;
         _scripMasterCache = filtered;
         _scripMasterDate  = today;
-        console.log(`[ScripMaster] Loaded ${total} instruments → filtered to ${Array.isArray(filtered) ? filtered.length : 0} NIFTY NFO options`);
+        console.log(`[ScripMaster] Loaded ${total} instruments → filtered to ${Array.isArray(filtered) ? filtered.length : 0} NIFTY NFO options + MCX CRUDEOIL futures`);
         return filtered;
     } catch (e) {
         console.warn('[ScripMaster] Fetch failed:', e.message);
         return _scripMasterCache;  // use stale if available
+    }
+}
+
+// Phase 2a (4 Sep) — finds the current-month MCX CRUDEOIL futures contract's
+// Angel token/symbol, for the WS to subscribe to during the evening session.
+// Same nearest-non-expired-expiry logic as fetchPCRFromAngel's NIFTY lookup
+// below, just applied to the CRUDEOIL FUTCOM slice of the same cache.
+// Cached for the day (via getScripMaster's own cache) — cheap to call often.
+let _crudeTokenCache = null;
+let _crudeTokenDate  = null;
+async function getCrudeOilFutureToken() {
+    const today = new Date().toISOString().slice(0, 10);
+    if (_crudeTokenCache && _crudeTokenDate === today) return _crudeTokenCache;
+    try {
+        const scrips = await getScripMaster();
+        if (!scrips || !Array.isArray(scrips)) return null;
+
+        const crudeFuts = scrips.filter(s => s.name === 'CRUDEOIL' && s.exch_seg === 'MCX');
+        if (crudeFuts.length === 0) {
+            console.warn('[CrudeToken] No MCX CRUDEOIL futures in ScripMaster');
+            return null;
+        }
+
+        const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        const months = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
+        const todayStart = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate());
+
+        // ScripMaster expiry format: "DDMMMYYYY" e.g. "21SEP2026" — same
+        // pattern as fetchPCRFromAngel's nearestExpiry match below.
+        const withParsedExpiry = crudeFuts.map(s => {
+            const parts = s.expiry.match(/(\d{2})(\w{3})(\d{4})/);
+            if (!parts) return { s, expDate: null };
+            const mIdx = months[parts[2].toUpperCase()];
+            if (mIdx === undefined) return { s, expDate: null };
+            return { s, expDate: new Date(parseInt(parts[3]), mIdx, parseInt(parts[1])) };
+        }).filter(x => x.expDate && x.expDate >= todayStart)
+          .sort((a, b) => a.expDate - b.expDate);
+
+        if (withParsedExpiry.length === 0) {
+            console.warn('[CrudeToken] No valid upcoming CRUDEOIL futures expiry found');
+            return null;
+        }
+
+        const nearest = withParsedExpiry[0].s;
+        const result = { token: nearest.token, symbol: nearest.symbol, expiry: nearest.expiry, exch_seg: nearest.exch_seg };
+        _crudeTokenCache = result;
+        _crudeTokenDate  = today;
+        console.log(`[CrudeToken] Nearest CRUDEOIL future: ${nearest.symbol} (token:${nearest.token}, expiry:${nearest.expiry})`);
+        return result;
+    } catch (e) {
+        console.warn('[CrudeToken] Lookup failed:', e.message);
+        return _crudeTokenCache;  // use stale if available
     }
 }
 
@@ -1234,7 +1293,9 @@ async function fetchPCRFromAngel(spotPrice) {
         if (!scrips || !Array.isArray(scrips)) return null;
 
         // scrips is already pre-filtered to NIFTY NFO OPTIDX entries (see getScripMaster)
-        const niftyOptions = scrips;
+        // 4 Sep: scrips now also contains MCX CRUDEOIL futures (see getScripMaster) —
+        // filter explicitly instead of assuming the whole cache is NIFTY options.
+        const niftyOptions = scrips.filter(s => s.name === 'NIFTY');
         if (niftyOptions.length === 0) {
             console.warn('[PCR-Angel] No NIFTY option tokens in ScripMaster');
             return null;
@@ -2276,6 +2337,7 @@ module.exports = {
     // Real volume/OHLC for the index (Angel WS Mode 2 sends 0 for index tokens)
     fetchFyersQuote,
     getCurrentFyersFutSymbol,
+    getCrudeOilFutureToken,
 
     // Snapshots (for /debug routes)
     getPCRState,

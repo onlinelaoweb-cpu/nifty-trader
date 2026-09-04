@@ -53,6 +53,7 @@ const {
     injectAngelSession: injectAngelSessionNSE,   // nseData Angel session for PCR
     triggerInitialPCR,                            // fire first PCR after Angel login
     fetchFyersQuote,                              // real volume/OHLC for index (Angel WS sends 0)
+    getCrudeOilFutureToken,                       // Phase 2a: MCX CRUDEOIL futures token lookup
     getCurrentFyersFutSymbol,                     // correct NSE:NIFTY{YY}{MMM}FUT symbol (NIFTY-I is invalid on Fyers)
 } = require('./src/api/nseData');
 const {
@@ -7831,6 +7832,19 @@ app.get('/api/session', (req,res) => res.json({
     crudeSessionOpen: isCrudeSessionOpen(),
     istTime: getIST().toISOString(),
 }));
+
+// Phase 2a debug endpoint — MCX CRUDEOIL futures token lookup. Standalone;
+// does not touch the live NIFTY WS subscription. Lets Prabhash confirm the
+// Angel ScripMaster correctly resolves the current-month CRUDEOIL contract
+// before Phase 2b makes the WS actually subscribe to it.
+app.get('/api/crude-token', async (req,res) => {
+    try {
+        const result = await getCrudeOilFutureToken();
+        res.json(result || { error: 'No CRUDEOIL futures token resolved — check logs for [CrudeToken] warnings' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // PCR
 app.post('/api/pcr', requireToken, (req,res) => {
