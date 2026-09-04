@@ -49,6 +49,7 @@ const {
     interpretEarlyMomentum, interpretOIBuildup,
     isExpiryDay,
     isNSEHoliday,
+    isMCXEveningHoliday,
     injectAngelSession: injectAngelSessionNSE,   // nseData Angel session for PCR
     triggerInitialPCR,                            // fire first PCR after Angel login
     fetchFyersQuote,                              // real volume/OHLC for index (Angel WS sends 0)
@@ -464,6 +465,31 @@ function isNSEMarketDay() {
     if (day === 0 || day === 6) return false;   // Weekend
     if (isNSEHoliday(ist))     return false;   // NSE holiday
     return m >= 540 && m <= 935;                // 9:00 AM to 15:35 IST only
+}
+
+// ── CRUDEOIL evening-session router (Phase 1 of 4-Sep MCX expansion plan) ────
+// Mirrors isNSEMarketDay() but for MCX's evening window. Window is 5:30 PM–
+// 11:55 PM IST (1050–1435 min) per Prabhash's spec — deliberately NOT MCX's
+// full evening session (5:00 PM–11:30/11:55 PM) since he wants CRUDEOIL
+// signals starting 5:30, not 5:00.
+function isCrudeSessionOpen() {
+    const ist = getIST();
+    const day = ist.getDay();
+    if (day === 0 || day === 6) return false;         // Weekend
+    if (isMCXEveningHoliday(ist)) return false;        // MCX evening-session holiday
+    const m = ist.getHours()*60 + ist.getMinutes();
+    return m >= 1050 && m <= 1435;                     // 5:30 PM – 11:55 PM IST
+}
+
+// Single source of truth for "what should the app be doing right now" once
+// CRUDEOIL is wired in (Phase 2+). For now this is standalone and only feeds
+// the /api/session debug endpoint + heartbeat log below — nothing else reads
+// it yet, so it's safe to deploy and observe for a day before Phase 2 makes
+// anything depend on it.
+function getActiveSession() {
+    if (isNSEMarketDay())   return 'NIFTY';
+    if (isCrudeSessionOpen()) return 'CRUDEOIL';
+    return 'CLOSED';
 }
 
 // PCR label — displayed on UI (thresholds tuned for real Nifty option chain behaviour)
@@ -7791,7 +7817,19 @@ app.get('/api/health',  (req,res) => res.json({
     advances:marketState.breadth.advances,
     declines:marketState.breadth.declines,
     telegram:isConfigured()?'configured':'not configured',
-    source:marketState.source
+    source:marketState.source,
+    session:getActiveSession()   // 4 Sep Phase 1: NIFTY / CRUDEOIL / CLOSED
+}));
+
+// Phase 1 debug endpoint — CRUDEOIL evening-session router. Standalone for now
+// (nothing depends on it yet); lets Prabhash confirm from the dashboard/browser
+// that NIFTY/CRUDEOIL/CLOSED switches correctly across a full day before Phase 2
+// wires any real data feed to it.
+app.get('/api/session', (req,res) => res.json({
+    session: getActiveSession(),
+    nseMarketDay: isNSEMarketDay(),
+    crudeSessionOpen: isCrudeSessionOpen(),
+    istTime: getIST().toISOString(),
 }));
 
 // PCR
@@ -8239,6 +8277,12 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
     setTimeout(() => setInterval(syncOptionFlowFast,       30*1000), 5*1000);   // 3 Aug fix — no network call, just stops throwing away fresh nseData cache
+    // Phase 1 (4 Sep, MCX CRUDEOIL expansion) — session router heartbeat, log-only.
+    // Standalone check to confirm NIFTY/CRUDEOIL/CLOSED switches correctly across a
+    // full day before Phase 2 wires any real data feed to depend on getActiveSession().
+    setTimeout(() => setInterval(() => {
+        console.log(`[Session Router] Active: ${getActiveSession()} (NSE day:${isNSEMarketDay()} Crude window:${isCrudeSessionOpen()})`);
+    }, 5*60*1000), 10*1000);
     // ── EOD carry-over safety net (14 Aug) ────────────────────────────────────
     // syncOptionFlowFast (above) already calls updateOpenTradesMTM() every 30s
     // once isMarketOpen() is true, which SHOULD catch any overnight EOD

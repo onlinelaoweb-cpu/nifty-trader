@@ -1146,6 +1146,33 @@ function isNSEHoliday(dateObj) {
     return NSE_HOLIDAYS.has(yyyy+'-'+mm+'-'+dd);
 }
 
+// MCX 2026 evening-session holidays (4 Sep 2026 — added for CRUDEOIL evening-session
+// signal work). Sourced from MCX's official 2026 holiday calendar (cross-checked via
+// Groww's published MCX holiday table). MCX has a MORNING session (9:00 AM–5:00 PM)
+// and a separate EVENING session (5:00 PM–11:30/11:55 PM) — most MCX holidays close
+// only the morning session and leave the evening open (Holi, Ram Navmi, Mahavir
+// Jayanti, Ambedkar Jayanti, Maharashtra Day, Bakri Id, Moharram, Ganesh Chaturthi,
+// Dassera, Diwali Balipratipada, Guru Nanak Jayanti — all evening-OPEN). This list is
+// ONLY the dates where the evening session itself is closed — that's what actually
+// blocks the 5:30 PM–11:55 PM CRUDEOIL window:
+//   Jan 1  — New Year's Day (morning open, evening closed — the one counterintuitive one)
+//   Jan 26 — Republic Day (fully closed)
+//   Apr 3  — Good Friday (fully closed)
+//   Oct 2  — Gandhi Jayanti (fully closed)
+//   Dec 25 — Christmas (fully closed)
+// NOTE: Nov 8, 2026 (Sunday) has a special Muhurat trading session for Diwali Laxmi
+// Pujan — MCX conducts a one-off evening session on a Sunday with timings announced
+// separately each year. The weekend check below will correctly block it by default;
+// if you want the app live for Muhurat trading that year, override manually that day.
+const MCX_EVENING_HOLIDAYS = new Set([
+    '2026-01-01','2026-01-26','2026-04-03','2026-10-02','2026-12-25',
+]);
+function isMCXEveningHoliday(dateObj) {
+    const ist = dateObj || new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const yyyy = ist.getFullYear(), mm = String(ist.getMonth()+1).padStart(2,'0'), dd = String(ist.getDate()).padStart(2,'0');
+    return MCX_EVENING_HOLIDAYS.has(yyyy+'-'+mm+'-'+dd);
+}
+
 function isMarketHours() {
     const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const day = ist.getDay(); // 0=Sun, 6=Sat
@@ -2272,4 +2299,5 @@ module.exports = {
     isExpiryDay,
     isMarketHours,
     isNSEHoliday,
+    isMCXEveningHoliday,
 };
