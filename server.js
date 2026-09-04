@@ -4181,6 +4181,25 @@ async function updatePrice(price, change, changePct, source) {
 
     let { signal, confidence, reasons }=combineSignals(indicators);
 
+    // ── High-Conviction Filter (added 3 Sep, per user request) ───────────────
+    // Root cause found in signal_log review: weekly real (P&L) accuracy was
+    // only 14% despite 71% directional accuracy — the gap was almost entirely
+    // 55%-confidence "sweep-reversal exception" entries (theta-zone counter-
+    // trend trades that intentionally bypass qualityGate.mtfAligned, see the
+    // sweep-exception branch above). Those fire far more often than clean
+    // MTF-aligned setups and drag overall real accuracy down.
+    // This filter blocks ANY signal — normal path or sweep-reversal — below
+    // MIN_SIGNAL_CONFIDENCE from ever firing, logging, or alerting. It trades
+    // fewer signals for higher quality per signal; it does NOT make signals
+    // "sureshot" (no filter can), it just removes the low-conviction tail.
+    // Tune MIN_SIGNAL_CONFIDENCE based on real-world results — raise it
+    // further if 70% still isn't enough, lower it if too few signals fire.
+    const MIN_SIGNAL_CONFIDENCE = 70;
+    if (signal !== 'WAIT' && confidence < MIN_SIGNAL_CONFIDENCE) {
+        reasons.unshift(`🚫 High-Conviction Filter: ${confidence}% confidence < ${MIN_SIGNAL_CONFIDENCE}% required — held at WAIT`);
+        signal = 'WAIT'; confidence = 0;
+    }
+
     // ── Trend Lock — block instant CALL↔PUT reversals until confirmed ────────
     // Only applies to a FULL direction reversal (the last CONFIRMED directional
     // signal and the new signal are opposite non-WAIT directions). WAIT→CALL,
@@ -6069,7 +6088,12 @@ async function saveSignalToLog(signal, prevSig) {
             [
                 signal, s.confidence, s.nifty, s.rsi, s.ema9, s.ema21, s.vwap,
                 s.vix, s.pcr, s.atmPcr, s.adx?.adx ?? null,
-                s.mtf?.signal ?? null, s.mtf?.aligned ?? false,
+                // FIX (3 Sep): log qualityGate.mtfAligned — whether MTF direction
+                // agrees with THIS fired signal — not the raw mtf.aligned flag,
+                // which only means the 5m/15m/1h legs agree with each other and
+                // stayed true even for sweep-reversal trades explicitly fired
+                // counter to MTF (see qualityGate override in the sweep branch).
+                s.mtf?.signal ?? null, s.qualityGate?.mtfAligned ?? false,
                 s.breadth?.breadthSignal ?? null, prevSig,
                 s.qualityGate?.passed ?? false, s.entryWindow?.label ?? null,
                 JSON.stringify((s.reason || []).slice(0, 12)),
