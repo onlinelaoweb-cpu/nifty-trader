@@ -339,6 +339,37 @@ const TREND_LOCK_MS   = 10 * 60 * 1000; // 10 min — long enough to filter nois
 // session. Once that range is locked in, price breaking above/below it is a
 // meaningful intraday filter (per external feedback review).
 let orbHigh = null, orbLow = null, orbDate = null;
+// 5 Sep — Breakout regime freshness tracking (audit: weekly Breakout regime
+// showed -0.129R avg over 42 signals). Hypothesis: getORBStatus() is a pure
+// live price-vs-fixed-range check with no time dimension — it tags a fresh
+// 9:35am breakout thrust and a stale 1:45pm re-test of the same level
+// (after hours of chop) identically as "ORB Breakout". Rather than guess,
+// track WHEN each direction first broke today so signal_log can record the
+// breakout's age at fire time — then decide with data whether stale breakouts
+// are the ones dragging the regime negative, instead of blocking the whole
+// category and possibly discarding genuinely-fresh, well-performing ones.
+let orbBreakUpTime = null, orbBreakDownTime = null;
+function trackORBBreakoutFreshness(status) {
+    // Sets the timestamp on the FIRST tick of a new break, and clears it the
+    // moment price comes back inside the range (or flips to the other side)
+    // — so if it re-breaks later the same day, that's treated as a fresh
+    // breakout with its own age, not still "aged" from the earlier one.
+    // Reset also happens wholesale on day rollover, inside updateORB().
+    if (status === 'BROKEN_UP') {
+        if (orbBreakUpTime === null) orbBreakUpTime = Date.now();
+    } else {
+        orbBreakUpTime = null;
+    }
+    if (status === 'BROKEN_DOWN') {
+        if (orbBreakDownTime === null) orbBreakDownTime = Date.now();
+    } else {
+        orbBreakDownTime = null;
+    }
+}
+function getORBBreakoutAgeMin(status) {
+    const ts = status === 'BROKEN_UP' ? orbBreakUpTime : status === 'BROKEN_DOWN' ? orbBreakDownTime : null;
+    return ts ? Math.round((Date.now() - ts) / 60000) : null;
+}
 
 // ── Day-open option premium tracking (for Option Premium Filter) ──────────
 // Freshly-computed once per day from the first valid ATM CE/PE premium seen.
@@ -1088,7 +1119,7 @@ function detectLiquiditySweepReversal(candles) {
 // inside the morning's initial balance.
 function updateORB() {
     const todayStr = getIST().toISOString().slice(0, 10);
-    if (orbDate !== todayStr) { orbHigh = null; orbLow = null; orbDate = todayStr; }
+    if (orbDate !== todayStr) { orbHigh = null; orbLow = null; orbDate = todayStr; orbBreakUpTime = null; orbBreakDownTime = null; }
     if (orbHigh !== null) return; // already locked for today
 
     const candles = getSessionCandles(); // 9:15 IST onward, 1 candle per minute
@@ -2066,6 +2097,8 @@ function combineSignals(indicators) {
     try {
         updateORB();
         const orb = getORBStatus(marketState.nifty);
+        trackORBBreakoutFreshness(orb.status);
+        orb.ageMin = getORBBreakoutAgeMin(orb.status);   // 5 Sep: freshness tracking, see def above
         marketState.orb = orb;
         if (orb.status === 'BROKEN_UP')        { bull += 1; reasons.push(`${orb.label} ✅`); }
         else if (orb.status === 'BROKEN_DOWN') { bear += 1; reasons.push(`${orb.label} ⚠️`); }
@@ -5566,7 +5599,12 @@ async function _updateOpenTradesMTM() {
         // than let SL/trailing logic run against a cross-day price.
         const tradeDay = t.ts ? new Date(t.ts).toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' }) : null;
         const todayDay = getIST().toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
-        if (tradeDay && tradeDay !== todayDay) {
+        // FIX (5 Sep): same gap as signal_performance's EOD guard — a trade
+        // opened same-day but still open past 3:30pm close fell through this
+        // (only `tradeDay !== todayDay` closed), then had nothing left to
+        // evaluate it until the next stray call, hours/a day later.
+        const nowMinsJournal = getIST().getHours() * 60 + getIST().getMinutes();
+        if (tradeDay && (tradeDay !== todayDay || nowMinsJournal > 930)) {
             const eodPremium = t.lastLivePremium ?? t.currentPremium ?? t.premium;
             console.log(`📔 [EOD] Auto-closing carried-over Trade #${t.id} (${t.type} ${t.strike}, opened ${tradeDay}) — last known premium ₹${eodPremium}`);
             await closeTradeAuto(t, eodPremium);
@@ -5754,8 +5792,12 @@ async function initDB() {
                 gap_pct     NUMERIC,       -- Opening gap % vs prev close
                 mtf_5m_adx  NUMERIC,       -- per-TF ADX at fire/suppress time (4 Sep: added to
                 mtf_15m_adx NUMERIC,       -- analyze whether the 1h-ADX-must-be-15+ threshold in
-                mtf_1h_adx  NUMERIC        -- the MTF suppression check is too strict — was never
+                mtf_1h_adx  NUMERIC,       -- the MTF suppression check is too strict — was never
                                            -- persisted per-TF before, only the single combined adx
+                orb_breakout_age_min NUMERIC -- 5 Sep: minutes since price first crossed the ORB
+                                           -- level today (see trackORBBreakoutFreshness) — lets us
+                                           -- check if STALE "Breakout" tags are what's dragging that
+                                           -- regime negative (-0.129R, weekly review), vs fresh ones
             )
         `);
         console.log('✅ PostgreSQL signal_log table ready');
@@ -5783,7 +5825,8 @@ async function initDB() {
                 ADD COLUMN IF NOT EXISTS breadth_sig TEXT,
                 ADD COLUMN IF NOT EXISTS mtf_5m_adx  NUMERIC,
                 ADD COLUMN IF NOT EXISTS mtf_15m_adx NUMERIC,
-                ADD COLUMN IF NOT EXISTS mtf_1h_adx  NUMERIC
+                ADD COLUMN IF NOT EXISTS mtf_1h_adx  NUMERIC,
+                ADD COLUMN IF NOT EXISTS orb_breakout_age_min NUMERIC
         `);
 
         // ── signal_performance table — automatic outcome tracking ──────────────
@@ -6128,8 +6171,8 @@ async function saveSignalToLog(signal, prevSig) {
               (signal, confidence, nifty, rsi, ema9, ema21, vwap, vix, pcr, atm_pcr,
                adx, mtf_signal, mtf_aligned, breadth_sig, prev_signal,
                quality_gate, entry_window, reasons, dyn_zone, dyn_atr, gap_zone, gap_pct,
-               mtf_5m_adx, mtf_15m_adx, mtf_1h_adx)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
+               mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, orb_breakout_age_min)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
             [
                 signal, s.confidence, s.nifty, s.rsi, s.ema9, s.ema21, s.vwap,
                 s.vix, s.pcr, s.atmPcr, s.adx?.adx ?? null,
@@ -6151,7 +6194,8 @@ async function saveSignalToLog(signal, prevSig) {
                 // will normally already be ≥15 (or the sweep-reversal exception,
                 // which bypasses this check entirely) since that's what let it fire;
                 // it does not capture what suppressed sub-15 attempts would have done.
-                s.mtf?.tf5m?.adx ?? null, s.mtf?.tf15m?.adx ?? null, s.mtf?.tf1h?.adx ?? null
+                s.mtf?.tf5m?.adx ?? null, s.mtf?.tf15m?.adx ?? null, s.mtf?.tf1h?.adx ?? null,
+                s.orb?.ageMin ?? null
             ]
         );
         console.log(`📝 Signal logged: ${signal} @ ₹${s.nifty} (conf:${s.confidence}%)`);
@@ -6327,7 +6371,18 @@ async function updateSignalPerformance() {
         if (live) rec.lastLive = live;
         const recDay   = new Date(rec.startTs).toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
         const todayDay = getIST().toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
-        if (recDay !== todayDay) {
+        // FIX (5 Sep): previously only `recDay !== todayDay` (yesterday's
+        // leftovers) closed here — a SAME-day signal still open past 3:30pm
+        // close (e.g. generated 2:34pm, 90-min PERF_AUTOCLOSE_MIN not due
+        // till 4:04pm) fell through this check, then had nothing left to
+        // evaluate it since syncOptionFlowFast stops calling this the
+        // instant isMarketOpen() goes false — it just sat "open" until
+        // whatever next called updateOpenTradesMTM(), hours or a day later.
+        // Options don't trade past 3:30pm regardless of any timer, so
+        // same-day-but-past-close is just as much "nothing left to wait
+        // for" as a day-old leftover — close it the same way.
+        const nowMins = getIST().getHours() * 60 + getIST().getMinutes();
+        if (recDay !== todayDay || nowMins > 930) {
             const eodPremium = rec.lastLive ?? rec.high ?? rec.entry;
             const closedAt = new Date().toISOString();
             const maxGainPctEod = rec.entry > 0 ? Math.round(((rec.high - rec.entry) / rec.entry) * 1000) / 10 : 0;
@@ -7695,7 +7750,15 @@ app.get('/api/auth/check', requireToken, (req, res) => res.json({ ok: true }));
 
 app.get('/api/signal',  (req,res) => {
     const now = Date.now();
-    if (now - _lastMTMRun >= 30_000) { updateOpenTradesMTM(); _lastMTMRun = now; }
+    // FIX (5 Sep): this ran unconditionally — a pre-market dashboard visit
+    // (confirmed live: 8:41 AM) could trigger updateOpenTradesMTM()'s
+    // day-rollover close for yesterday's still-open signal BEFORE the market
+    // even opens, using whatever stale rec.lastLive was cached from
+    // yesterday, at a timestamp with no relationship to any real market
+    // event. Now gated the same way syncOptionFlowFast already is — the
+    // dedicated 9:15-9:20 EOD Catchup and 15:30-15:35 session-end sweep
+    // (see startPollingIntervals) are the deterministic paths for this now.
+    if (isMarketOpen() && now - _lastMTMRun >= 30_000) { updateOpenTradesMTM(); _lastMTMRun = now; }
     // Attach computed fields the frontend Strike Zone needs
     const atmStrike = marketState.nifty > 0 ? Math.round(marketState.nifty / 50) * 50 : null;
     const daysToExp = parseFloat(daysToNextExpiry().toFixed(2));
@@ -8318,6 +8381,31 @@ function startPollingIntervals() {
             _eodCatchupDoneToday = todayStr;
             console.log('[EOD Catchup] Running safety-net updateOpenTradesMTM() at market open');
             updateOpenTradesMTM().catch(e => console.warn('[EOD Catchup] error:', e.message));
+        }
+    }, 60 * 1000);
+    // ── Session-end sweep (5 Sep) — real fix for Bug #1 Prabhash flagged: a
+    // 2:34pm signal (90-min PERF_AUTOCLOSE_MIN would fire ~4:04pm, AFTER
+    // market close) sat open all evening/night because syncOptionFlowFast
+    // stops calling updateOpenTradesMTM() the instant isMarketOpen() goes
+    // false at 3:30pm — nothing evaluates timeout/target/SL again until
+    // whatever NEXT calls it, which could be hours or a full day later
+    // (confirmed live: a stray pre-market dashboard hit at 8:41am, now
+    // separately fixed above). This sweep runs once daily right at close,
+    // independent of isMarketOpen() (same pattern as the 9:15 EOD Catchup
+    // above), giving every still-open signal one final evaluation while
+    // rec.lastLive/live premiums are still fresh from seconds ago — so
+    // whichever of the EXISTING checks applies (timedOut, target, SL) closes
+    // it with an accurate, real 3:30pm-era price instead of stale data
+    // whenever a dashboard visit next happens to occur.
+    let _sessionEndSweepDoneToday = null;
+    setInterval(() => {
+        const ist = getIST();
+        const todayStr = ist.toISOString().slice(0, 10);
+        const mins = ist.getHours() * 60 + ist.getMinutes();
+        if (mins >= 930 && mins <= 935 && _sessionEndSweepDoneToday !== todayStr && marketState.nifty > 0) {
+            _sessionEndSweepDoneToday = todayStr;
+            console.log('[Session-End Sweep] Final updateOpenTradesMTM() pass at market close');
+            updateOpenTradesMTM().catch(e => console.warn('[Session-End Sweep] error:', e.message));
         }
     }, 60 * 1000);
     setTimeout(() => setInterval(refreshFyersVolume,      15*1000), 20*1000);   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
