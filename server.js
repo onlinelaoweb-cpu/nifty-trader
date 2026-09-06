@@ -5838,6 +5838,37 @@ async function initDB() {
                 ADD COLUMN IF NOT EXISTS orb_breakout_age_min NUMERIC
         `);
 
+        // ── market_snapshot_log table — periodic state snapshot, WAIT included ──
+        // Added 6 Sep, per Prabhash's request after a specific past moment (4 Sep
+        // ~10:11am) turned out to be unrecoverable: signal_log ONLY records rows
+        // when signal flips from WAIT to BUY CALL/PUT (see the `signal !== 'WAIT'
+        // && signal !== prevSignal` guard around its call site) — a WAIT-only
+        // stretch, however long, leaves zero rows there, in Railway's logs (once
+        // that deployment is replaced), or anywhere else. This table logs
+        // unconditionally on a fixed 5-min cadence during market hours instead,
+        // so "what was the app seeing at time X" has an answer even when nothing
+        // fired. Deliberately leaner than signal_log (no reasons/gate detail —
+        // this is for reconstructing market/indicator state at a point in time,
+        // not for signal-quality analysis, which is what signal_log is for).
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS market_snapshot_log (
+                id          SERIAL PRIMARY KEY,
+                ts          TIMESTAMPTZ DEFAULT NOW(),
+                signal      TEXT,          -- current marketState.signal, INCLUDING 'WAIT'
+                confidence  INT,
+                nifty       NUMERIC,
+                rsi         NUMERIC,
+                vix         NUMERIC,
+                pcr         NUMERIC,
+                atm_pcr     NUMERIC,
+                mtf_signal  TEXT,
+                mtf_5m_adx  NUMERIC,
+                mtf_15m_adx NUMERIC,
+                mtf_1h_adx  NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL market_snapshot_log table ready');
+
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
         // (fire-and-forget snapshot), this table AUTOMATICALLY tracks what happened
@@ -6214,6 +6245,29 @@ async function saveSignalToLog(signal, prevSig) {
             qualityGate: s.qualityGate?.passed ?? false, ts: new Date().toISOString() });
     } catch (e) {
         console.error('saveSignalToLog error:', e.message);
+    }
+}
+
+// ── Periodic market-state snapshot (6 Sep) — runs every 5 min regardless of
+// signal state, see market_snapshot_log's table comment above for why this
+// exists alongside saveSignalToLog (which only fires on WAIT→BUY transitions).
+async function saveMarketSnapshot() {
+    if (!dbPool) return;
+    try {
+        const s = marketState;
+        await dbPool.query(
+            `INSERT INTO market_snapshot_log
+              (signal, confidence, nifty, rsi, vix, pcr, atm_pcr, mtf_signal,
+               mtf_5m_adx, mtf_15m_adx, mtf_1h_adx)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            [
+                s.signal ?? null, s.confidence ?? null, s.nifty, s.rsi, s.vix,
+                s.pcr, s.atmPcr, s.mtf?.signal ?? null,
+                s.mtf?.tf5m?.adx ?? null, s.mtf?.tf15m?.adx ?? null, s.mtf?.tf1h?.adx ?? null
+            ]
+        );
+    } catch (e) {
+        console.error('saveMarketSnapshot error:', e.message);
     }
 }
 
@@ -7733,6 +7787,43 @@ app.get('/api/signal-log', async (req, res) => {
     }
 });
 
+// 6 Sep — query the periodic (WAIT-included) snapshot table. Supports the same
+// ?limit= as /api/signal-log, plus an optional ?around=<ISO timestamp> to pull
+// the rows closest to a specific past moment (the original use case: "what was
+// the app seeing at 10:11am on 4 Sep" — signal_log has no answer for a WAIT-only
+// moment, this table does going forward).
+app.get('/api/market-snapshot-log', async (req, res) => {
+    if (!dbPool) return res.json({ rows: [], msg: 'No DB — add DATABASE_URL to Railway' });
+    try {
+        const limit  = Math.min(parseInt(req.query.limit) || 50, 200);
+        const around = req.query.around || null;
+
+        let q, params;
+        if (around) {
+            // Nearest rows on either side of the given timestamp, by absolute
+            // time distance — more useful for "what was happening around X"
+            // than a plain ORDER BY ts DESC LIMIT would be.
+            q = `SELECT id,ts,signal,confidence,nifty,rsi,vix,pcr,atm_pcr,
+                        mtf_signal,mtf_5m_adx,mtf_15m_adx,mtf_1h_adx
+                 FROM market_snapshot_log
+                 ORDER BY ABS(EXTRACT(EPOCH FROM (ts - $1::timestamptz))) ASC
+                 LIMIT $2`;
+            params = [around, limit];
+        } else {
+            q = `SELECT id,ts,signal,confidence,nifty,rsi,vix,pcr,atm_pcr,
+                        mtf_signal,mtf_5m_adx,mtf_15m_adx,mtf_1h_adx
+                 FROM market_snapshot_log
+                 ORDER BY ts DESC LIMIT $1`;
+            params = [limit];
+        }
+
+        const r = await dbPool.query(q, params);
+        res.json({ rows: r.rows, count: r.rows.length });
+    } catch (e) {
+        res.json({ rows: [], error: e.message });
+    }
+});
+
 
 // ── Simple API token guard for manual POST endpoints ─────────────────────────
 // Set APP_TOKEN=yourSecretToken in Railway env vars to enable.
@@ -8423,6 +8514,11 @@ function startPollingIntervals() {
     // DB writes regardless of tick frequency (mtfWeak alone can increment
     // thousands of times/day) while keeping restart data-loss to under 30s.
     setTimeout(() => setInterval(flushDailySignalCountsIfDirty, 30*1000), 25*1000);
+    // 6 Sep — periodic market-state snapshot (WAIT included), see
+    // market_snapshot_log's table comment for why this exists.
+    setTimeout(() => setInterval(() => {
+        if (isNSEMarketDay()) saveMarketSnapshot().catch(e => console.error('[MarketSnapshot] error:', e.message));
+    }, 5*60*1000), 30*1000);
     setTimeout(() => setInterval(flushGateBlockCountsIfDirty, 30*1000), 25*1000);
     setTimeout(() => setInterval(async () => {
         try { marketState.signalHistory = await getRecentSignalHistory(); }
