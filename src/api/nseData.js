@@ -1206,6 +1206,16 @@ async function getScripMaster() {
         // 4 Sep: also keep MCX CRUDEOIL futures (FUTCOM) — needed for the
         // CRUDEOIL evening-session expansion (Phase 2a). Still a tiny set
         // (a handful of expiry months) so no meaningful memory impact.
+        // 6 Sep: also keep NSE-EQ tokens for the ~180-200 F&O stocks — needed
+        // for the volume-scanner feature (Phase 1). Two-pass: first collect
+        // FUTSTK underlying names (defines "has F&O" universe), then keep
+        // only NSE-EQ rows matching one of those names — NOT all ~2000 NSE
+        // equity listings, so the cache stays small.
+        const futstkNames = new Set(
+            Array.isArray(res.data)
+                ? res.data.filter(s => s.exch_seg === 'NFO' && s.instrumenttype === 'FUTSTK').map(s => s.name)
+                : []
+        );
         const filtered = Array.isArray(res.data)
             ? res.data.filter(s =>
                 (s.exch_seg === 'NFO' &&
@@ -1215,15 +1225,43 @@ async function getScripMaster() {
                 (s.exch_seg === 'MCX' &&
                  s.instrumenttype === 'FUTCOM' &&
                  s.name === 'CRUDEOIL' &&
-                 s.expiry))
+                 s.expiry) ||
+                (s.exch_seg === 'NSE' &&
+                 s.instrumenttype === '' &&
+                 typeof s.symbol === 'string' && s.symbol.endsWith('-EQ') &&
+                 futstkNames.has(s.name)))
             : res.data;
         _scripMasterCache = filtered;
         _scripMasterDate  = today;
-        console.log(`[ScripMaster] Loaded ${total} instruments → filtered to ${Array.isArray(filtered) ? filtered.length : 0} NIFTY NFO options + MCX CRUDEOIL futures`);
+        console.log(`[ScripMaster] Loaded ${total} instruments → filtered to ${Array.isArray(filtered) ? filtered.length : 0} (NIFTY options + MCX CRUDEOIL futures + F&O stock EQ tokens)`);
         return filtered;
     } catch (e) {
         console.warn('[ScripMaster] Fetch failed:', e.message);
         return _scripMasterCache;  // use stale if available
+    }
+}
+
+// Phase 1 (6 Sep, volume-scanner feature) — returns the full F&O stock
+// universe with each stock's NSE-EQ token/symbol, ready for Phase 2's
+// WebSocket subscription + volume-baseline tracking. Deliberately returns
+// the EQ (cash market) token, not the futures token — the point of this
+// feature is spotting unusual CASH MARKET volume (where real buying/selling
+// happens), not derivative volume, which is a different, leverage-driven
+// number. Cached via getScripMaster's own daily cache — cheap to call often.
+async function getFnOStockList() {
+    try {
+        const scrips = await getScripMaster();
+        if (!scrips || !Array.isArray(scrips)) return [];
+
+        const stocks = scrips
+            .filter(s => s.exch_seg === 'NSE' && s.instrumenttype === '' && s.symbol?.endsWith('-EQ'))
+            .map(s => ({ name: s.name, token: s.token, symbol: s.symbol }));
+
+        console.log(`[FnOStockList] Resolved ${stocks.length} F&O stocks with NSE-EQ tokens`);
+        return stocks;
+    } catch (e) {
+        console.warn('[FnOStockList] Lookup failed:', e.message);
+        return [];
     }
 }
 
@@ -2338,6 +2376,7 @@ module.exports = {
     fetchFyersQuote,
     getCurrentFyersFutSymbol,
     getCrudeOilFutureToken,
+    getFnOStockList,
 
     // Snapshots (for /debug routes)
     getPCRState,

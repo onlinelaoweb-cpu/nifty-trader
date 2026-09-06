@@ -28,6 +28,9 @@ const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
 const { fetchGlobalCues }           = require('./src/api/globalCues');
 const { fetchAdvanceDecline,
         injectAngelSession }        = require('./src/api/breadth');
+const { injectAngelSession: injectAngelSessionVolScan,
+        refreshVolumeBaselines, refreshLiveVolumes,
+        getVolumeScannerSnapshot, getVolumeScannerStatus } = require('./src/api/volumeScanner');
 const { calculateSRLevels }         = require('./src/api/levels');
 const { computeDynamicLevels, classifyDynamicLevels } = require('./src/api/dynamicLevels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo, detectBOSCHOCH } = require('./src/api/physicsOfTrading');
@@ -54,6 +57,7 @@ const {
     triggerInitialPCR,                            // fire first PCR after Angel login
     fetchFyersQuote,                              // real volume/OHLC for index (Angel WS sends 0)
     getCrudeOilFutureToken,                       // Phase 2a: MCX CRUDEOIL futures token lookup
+    getFnOStockList,                              // Volume scanner Phase 1: F&O stock universe + EQ tokens
     getCurrentFyersFutSymbol,                     // correct NSE:NIFTY{YY}{MMM}FUT symbol (NIFTY-I is invalid on Fyers)
 } = require('./src/api/nseData');
 const {
@@ -8009,6 +8013,28 @@ app.get('/api/crude-token', async (req,res) => {
     }
 });
 
+// Volume scanner Phase 1 debug endpoint — confirms the F&O stock universe
+// resolves correctly (expect ~180-200 stocks) before Phase 2 wires up live
+// WebSocket subscriptions + volume-baseline tracking.
+app.get('/api/fno-stocks', async (req,res) => {
+    try {
+        const stocks = await getFnOStockList();
+        res.json({ count: stocks.length, sample: stocks.slice(0, 10), stocks });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Volume scanner Phase 2 debug endpoint — live snapshot of stocks trading
+// unusual volume (ratio >= minRatio, default 2x their 20-day average).
+app.get('/api/volume-scanner', (req, res) => {
+    const minRatio = parseFloat(req.query.minRatio) || 2;
+    res.json({
+        status : getVolumeScannerStatus(),
+        results: getVolumeScannerSnapshot(minRatio),
+    });
+});
+
 // PCR
 app.post('/api/pcr', requireToken, (req,res) => {
     const {pcr,atmPcr}=req.body;
@@ -8510,6 +8536,24 @@ function startPollingIntervals() {
     }, 60 * 1000);
     setTimeout(() => setInterval(refreshFyersVolume,      15*1000), 20*1000);   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
     setTimeout(() => setInterval(computePremarketGap,     60*1000), 20*1000);   // opening gap vs prev close, via Fyers (see combineSignals note)
+    // Volume scanner (Phase 2, 6 Sep) — baseline refresh is self-guarded to
+    // run once/day (see _baselineDate check inside), so checking every 5 min
+    // just catches it promptly after Angel login rather than waiting for a
+    // full day. Live volume refresh only during market hours — no point
+    // polling Angel for cash-market volume when the cash market is closed.
+    setTimeout(() => setInterval(async () => {
+        try {
+            const stocks = await getFnOStockList();
+            if (stocks.length) await refreshVolumeBaselines(stocks);
+        } catch (e) { console.warn('[VolScan] Baseline interval error:', e.message); }
+    }, 5*60*1000), 15*1000);
+    setTimeout(() => setInterval(async () => {
+        if (!isMarketOpen()) return;
+        try {
+            const stocks = await getFnOStockList();
+            if (stocks.length) await refreshLiveVolumes(stocks);
+        } catch (e) { console.warn('[VolScan] Live volume interval error:', e.message); }
+    }, 90*1000), 25*1000);
     // Flush dailySignalCounts to DB only when dirty, at most every 30s — bounds
     // DB writes regardless of tick frequency (mtfWeak alone can increment
     // thousands of times/day) while keeping restart data-loss to under 30s.
@@ -8585,6 +8629,10 @@ async function tryAngelLogin() {
             apiKey   : process.env.ANGEL_API_KEY,
         });
         injectAngelSessionNSE({
+            jwtToken : auth.jwtToken,
+            apiKey   : process.env.ANGEL_API_KEY,
+        });
+        injectAngelSessionVolScan({
             jwtToken : auth.jwtToken,
             apiKey   : process.env.ANGEL_API_KEY,
         });
