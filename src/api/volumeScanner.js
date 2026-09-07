@@ -154,11 +154,13 @@ async function refreshVolumeBaselines(stockList) {
 // ── Live: today's volume + LTP, via Angel getMarketData (bulk, same pattern
 // breadth.js already uses safely for the Nifty 50 A/D panel) ─────────────────
 async function refreshLiveVolumes(stockList) {
-    const inBackoff = Date.now() < _angelVol.backoffUntil;
-    const haveAngel = !!_angelSession?.jwtToken && !inBackoff;
     const batches = chunk(stockList, 50);
 
     for (const batch of batches) {
+        // Re-checked per batch (not hoisted once above the loop) — otherwise
+        // backoff triggered mid-cycle (e.g. on batch 3) wouldn't stop the
+        // remaining batches in that same cycle from also hitting Angel.
+        const haveAngel = !!_angelSession?.jwtToken && Date.now() >= _angelVol.backoffUntil;
         let handledViaAngel = false;
         if (haveAngel) {
             try {
