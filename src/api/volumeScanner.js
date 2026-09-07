@@ -51,6 +51,13 @@ const _stockState   = new Map();
 let _baselineDate    = null;   // YYYY-MM-DD — baselines computed once/day
 let _baselineRunning = false;  // guard against overlapping runs
 
+// Backoff for Angel IP block — same pattern as breadth.js's _angelAD. Angel's
+// getMarketData is a documented, permanent HTML-block from Railway's IPs (see
+// breadth.js's own comment), so retrying it every 90s cycle just wastes 5
+// guaranteed-to-fail calls before falling back to Fyers anyway. After 3
+// consecutive failures, skip Angel for 30 min and go straight to Fyers.
+const _angelVol = { failStreak: 0, backoffUntil: 0 };
+
 function chunk(arr, size) {
     const out = [];
     for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
@@ -147,7 +154,8 @@ async function refreshVolumeBaselines(stockList) {
 // ── Live: today's volume + LTP, via Angel getMarketData (bulk, same pattern
 // breadth.js already uses safely for the Nifty 50 A/D panel) ─────────────────
 async function refreshLiveVolumes(stockList) {
-    const haveAngel = !!_angelSession?.jwtToken;
+    const inBackoff = Date.now() < _angelVol.backoffUntil;
+    const haveAngel = !!_angelSession?.jwtToken && !inBackoff;
     const batches = chunk(stockList, 50);
 
     for (const batch of batches) {
@@ -177,10 +185,19 @@ async function refreshLiveVolumes(stockList) {
                         });
                     }
                     handledViaAngel = true;
+                    _angelVol.failStreak = 0; _angelVol.backoffUntil = 0; // reset on success
                 } else if (isHtmlBlock) {
-                    console.warn('[VolScan] Angel getMarketData HTML block — falling back to Fyers for this batch');
+                    _angelVol.failStreak++;
+                    if (_angelVol.failStreak >= 3) {
+                        _angelVol.backoffUntil = Date.now() + 30 * 60 * 1000; // 30 min
+                        console.log(`[VolScan] Angel IP-blocked — backing off 30 min (streak ${_angelVol.failStreak}). Fyers fallback active.`);
+                    } else {
+                        console.warn(`[VolScan] Angel getMarketData HTML block (streak ${_angelVol.failStreak}/3) — falling back to Fyers for this batch`);
+                    }
                 }
             } catch (e) {
+                _angelVol.failStreak++;
+                if (_angelVol.failStreak >= 3) _angelVol.backoffUntil = Date.now() + 30 * 60 * 1000;
                 console.warn('[VolScan] Angel live volume batch error, falling back to Fyers:', e.message);
             }
         }
