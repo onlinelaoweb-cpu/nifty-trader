@@ -550,7 +550,25 @@ Status: ${note}
     await sendMessage(msg);
 }
 
-// ── Market Close Summary ──────────────────────────────
+// ── Volume Scanner Alert (6 Sep) — unusual cash-market volume in F&O stocks ──
+async function sendVolumeScannerAlert(stock) {
+    const burstLine = stock.burstRatio != null
+        ? `⚡ Last 10-min burst: <b>${stock.burstRatio}x</b> normal pace\n`
+        : '';
+    const chgSign = stock.pctChange > 0 ? '▲' : stock.pctChange < 0 ? '▼' : '▪';
+    const msg = `
+🔥 <b>UNUSUAL VOLUME — ${stock.name}</b>
+━━━━━━━━━━━━━━━━━━
+LTP: <b>₹${stock.ltp}</b>  ${chgSign} ${Math.abs(stock.pctChange).toFixed(2)}%
+📊 Volume: <b>${stock.ratio}x</b> its 20-day average
+${burstLine}━━━━━━━━━━━━━━━━━━
+<i>Descriptive only — not a trade recommendation. Check the chart before acting.</i>
+<i>VardaanNifty AI — Volume Scanner</i>
+`.trim();
+
+    await sendMessage(msg);
+}
+
 async function sendCloseSummary(state) {
     // FIX: this used to compute "day change" from TODAY'S OPEN (sessionOpenPrice),
     // while the morning summary and every single intraday alert all along used
@@ -965,6 +983,7 @@ module.exports = {
     sendPartialProfitAlert,
     sendMorningSummary,
     sendVIXAlert,
+    sendVolumeScannerAlert,
     sendCloseSummary,
     sendExitAlert,
     sendMomentumExitWarning,

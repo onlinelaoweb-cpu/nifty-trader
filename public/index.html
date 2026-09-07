@@ -3780,6 +3780,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     <button class="more-item" onclick="switchTabFromMore('tools')"><span>🔧</span>TOOLS</button>
     <button class="more-item" onclick="switchTabFromMore('analytics')"><span>📊</span>ANALYTICS</button>
     <button class="more-item" onclick="switchTabFromMore('global')"><span>🌍</span>GLOBAL</button>
+    <button class="more-item" onclick="switchTabFromMore('scanner')"><span>🔥</span>SCANNER</button>
   </div>
 </div>
 
@@ -3803,6 +3804,7 @@ function _initDesktopLayout() {
     { id: 'analytics', icon: '📊', label: 'ANALYTICS' },
     { id: 'physics',   icon: '⚛️', label: 'PHYSICS' },
     { id: 'guard',     icon: '🛡️', label: 'GUARD' },
+    { id: 'scanner',   icon: '🔥', label: 'SCANNER' },
   ];
 
   // Build sidebar
@@ -3992,6 +3994,7 @@ const TAB_LABELS = {
   tools:     { icon: '🔧', label: 'TOOLS' },
   analytics: { icon: '📊', label: 'ANALYTICS' },
   global:    { icon: '🌍', label: 'GLOBAL' },
+  scanner:   { icon: '🔥', label: 'SCANNER' },
 };
 
 function switchTab(name,btn){
@@ -4033,6 +4036,13 @@ function switchTab(name,btn){
   } else {
     // Stop polling when leaving breadth tab
     if (_breadthTabTimer) { clearInterval(_breadthTabTimer); _breadthTabTimer = null; }
+  }
+  if(name==='scanner'){
+    fetchVolumeScanner();
+    if (_scannerTabTimer) clearInterval(_scannerTabTimer);
+    _scannerTabTimer = setInterval(fetchVolumeScanner, 60000);
+  } else {
+    if (_scannerTabTimer) { clearInterval(_scannerTabTimer); _scannerTabTimer = null; }
   }
   if(name==='breadth'||name==='global'){
     // Render immediately from cache — no loading flicker
@@ -5331,6 +5341,7 @@ function renderDashboard(s) {
 // Fetch full breadth data including stocks[] from /api/breadth
 // Called when breadth tab opens + every 60s while on tab
 let _breadthTabTimer = null;
+let _scannerTabTimer = null;
 let _lastBreadthStocks = null;  // cache stocks[] for SSE merge
 async function fetchBreadthFull() {
   try {
@@ -9477,7 +9488,84 @@ function _statRow(label, val) {
   </div>
 </div>
 
-<!-- PANEL: AI INSIGHTS ─────────────────────────────────── -->
+<!-- PANEL: VOLUME SCANNER ─────────────────────────────── -->
+<div class="panel" id="panel-scanner">
+  <div style="padding:10px 12px 80px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div style="font-family:'Orbitron',monospace;font-size:14.5px;letter-spacing:1px;color:var(--accent);">🔥 VOLUME SCANNER</div>
+      <span id="scanner-status" style="font-size:10.5px;color:var(--dim);font-family:monospace;"></span>
+    </div>
+    <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:10px;">
+      F&amp;O stocks trading unusual cash-market volume vs their own 20-day average. "Burst" = last ~10 min pace vs normal pace for that window — separate from NIFTY/CRUDEOIL options signals.
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;">
+      <button id="scanner-sort-ratio" class="more-item" style="flex:1;padding:6px;" onclick="scannerSetSort('ratio')">📊 Sort: Day Ratio</button>
+      <button id="scanner-sort-burst" class="more-item" style="flex:1;padding:6px;" onclick="scannerSetSort('burst')">⚡ Sort: Burst</button>
+    </div>
+    <div id="scanner-table-wrap" style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead>
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.1);color:var(--dim);text-align:left;">
+            <th style="padding:6px 4px;">Stock</th>
+            <th style="padding:6px 4px;text-align:right;">LTP</th>
+            <th style="padding:6px 4px;text-align:right;">%Chg</th>
+            <th style="padding:6px 4px;text-align:right;">Day Ratio</th>
+            <th style="padding:6px 4px;text-align:right;">Burst</th>
+          </tr>
+        </thead>
+        <tbody id="scanner-tbody">
+          <tr><td colspan="5" style="padding:16px 4px;text-align:center;color:var(--dim);">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+let _scannerSortBy = 'ratio';
+function scannerSetSort(mode) {
+  _scannerSortBy = mode;
+  document.getElementById('scanner-sort-ratio').style.opacity = mode === 'ratio' ? '1' : '0.5';
+  document.getElementById('scanner-sort-burst').style.opacity = mode === 'burst' ? '1' : '0.5';
+  fetchVolumeScanner();
+}
+async function fetchVolumeScanner() {
+  try {
+    const r = await fetch('/api/volume-scanner?minRatio=1.5&sortBy=' + _scannerSortBy);
+    if (!r.ok) return;
+    const d = await r.json();
+    renderVolumeScannerUI(d);
+  } catch (e) { console.warn('[Scanner] fetch error:', e.message); }
+}
+function renderVolumeScannerUI(d) {
+  const statusEl = document.getElementById('scanner-status');
+  if (statusEl) {
+    const s = d.status || {};
+    statusEl.textContent = s.baselineDate ? ('Baseline: ' + s.baselineDate + ' · ' + s.stocksTracked + ' tracked')
+                          : s.baselineRunning ? 'Computing baselines...' : 'Waiting for baseline...';
+  }
+  const tbody = document.getElementById('scanner-tbody');
+  if (!tbody) return;
+  const rows = d.results || [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="padding:16px 4px;text-align:center;color:var(--dim);">No unusual volume right now</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(s => {
+    const chgColor = s.pctChange > 0 ? 'var(--green)' : s.pctChange < 0 ? 'var(--red)' : 'var(--dim)';
+    const burstTxt = s.burstRatio != null ? s.burstRatio.toFixed(1) + 'x' : '--';
+    const burstColor = s.burstRatio >= 3 ? 'var(--green)' : s.burstRatio >= 1.5 ? 'var(--amber)' : 'var(--dim)';
+    return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+      <td style="padding:6px 4px;font-weight:600;">${s.name}</td>
+      <td style="padding:6px 4px;text-align:right;">${s.ltp?.toFixed(1) ?? '--'}</td>
+      <td style="padding:6px 4px;text-align:right;color:${chgColor};">${s.pctChange?.toFixed(2) ?? '--'}%</td>
+      <td style="padding:6px 4px;text-align:right;color:var(--accent);">${s.ratio.toFixed(2)}x</td>
+      <td style="padding:6px 4px;text-align:right;color:${burstColor};">${burstTxt}</td>
+    </tr>`;
+  }).join('');
+}
+</script>
+
 <div class="panel" id="panel-insights">
   <div style="padding:10px 12px 80px;">
 

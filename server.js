@@ -62,7 +62,7 @@ const {
 } = require('./src/api/nseData');
 const {
     sendSignalAlert, sendMTFAlert,
-    sendMorningSummary, sendVIXAlert,
+    sendMorningSummary, sendVIXAlert, sendVolumeScannerAlert,
     sendCloseSummary, sendExitAlert, sendMomentumExitWarning,
     sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured,
     sendScalpAlert, sendSignalTimeline, sendPartialProfitAlert,
@@ -8029,9 +8029,10 @@ app.get('/api/fno-stocks', async (req,res) => {
 // unusual volume (ratio >= minRatio, default 2x their 20-day average).
 app.get('/api/volume-scanner', (req, res) => {
     const minRatio = parseFloat(req.query.minRatio) || 2;
+    const sortBy   = req.query.sortBy === 'burst' ? 'burst' : 'ratio';
     res.json({
         status : getVolumeScannerStatus(),
-        results: getVolumeScannerSnapshot(minRatio),
+        results: getVolumeScannerSnapshot(minRatio, sortBy),
     });
 });
 
@@ -8499,6 +8500,8 @@ function startPollingIntervals() {
     // updateOpenTradesMTM() directly regardless of what else is healthy —
     // worst case it's a harmless no-op if syncOptionFlowFast already handled it.
     let _eodCatchupDoneToday = null;
+    let _volAlertedToday = new Set();
+    let _volAlertDate = null;
     setInterval(() => {
         const ist = getIST();
         const todayStr = ist.toISOString().slice(0, 10);
@@ -8552,6 +8555,18 @@ function startPollingIntervals() {
         try {
             const stocks = await getFnOStockList();
             if (stocks.length) await refreshLiveVolumes(stocks);
+
+            // Telegram alert (6 Sep) — fires once per stock per day, only when
+            // it FIRST crosses the threshold (3x). Without this dedupe, a
+            // stock sitting at 4x for hours would spam an alert every 90s.
+            const today = getIST().toISOString().slice(0, 10);
+            if (_volAlertDate !== today) { _volAlertedToday.clear(); _volAlertDate = today; }
+            const hot = getVolumeScannerSnapshot(3, 'ratio');
+            for (const s of hot) {
+                if (_volAlertedToday.has(s.name)) continue;
+                _volAlertedToday.add(s.name);
+                sendVolumeScannerAlert(s).catch(e => console.warn('[VolScan] Telegram alert error:', e.message));
+            }
         } catch (e) { console.warn('[VolScan] Live volume interval error:', e.message); }
     }, 90*1000), 25*1000);
     // Flush dailySignalCounts to DB only when dirty, at most every 30s — bounds

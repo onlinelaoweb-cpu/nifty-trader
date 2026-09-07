@@ -22,6 +22,7 @@
 // WS feed, PCR, or any existing signal logic.
 
 const axios = require('axios');
+const { fetchFyersQuotesBulk, fetchFyersStockHistory } = require('./nseData');
 
 // ── Angel session (same pattern as breadth.js / nseData.js) ──────────────────
 let _angelSession = null;
@@ -57,6 +58,25 @@ function chunk(arr, size) {
 }
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// Phase 3 (6 Sep) — shared updater for both Angel/Fyers live-volume paths.
+// Pushes a {ts, cumVolume} snapshot to a rolling per-stock history so
+// getBurstRatio() can measure "volume in the last N minutes" — cumulative
+// day volume alone can't show a sudden acceleration, only the running total.
+// Capped to the last 12 samples (~18 min at the 90s poll interval) — more
+// than enough for a 5-10 min burst window, without growing unbounded.
+function updateStockLive(name, { token, symbol, volume, ltp, pctChange, source }) {
+    const st = _stockState.get(name) || { token, symbol, name, history: [] };
+    st.liveVolume = volume;
+    st.ltp        = ltp;
+    st.pctChange  = pctChange;
+    st.lastLiveAt = Date.now();
+    st.source     = source;
+    if (!st.history) st.history = [];
+    st.history.push({ ts: Date.now(), cumVolume: volume });
+    if (st.history.length > 12) st.history.shift();
+    _stockState.set(name, st);
+}
+
 // ── Baseline: 20-day average volume per stock, via Angel historical candles ──
 async function fetchStockDailyVolumes(token) {
     const to   = new Date();
@@ -87,14 +107,22 @@ async function fetchStockDailyVolumes(token) {
 async function refreshVolumeBaselines(stockList) {
     const today = new Date().toISOString().slice(0, 10);
     if (_baselineDate === today || _baselineRunning) return;
-    if (!_angelSession?.jwtToken) { console.warn('[VolScan] No Angel session — skipping baseline refresh'); return; }
 
     _baselineRunning = true;
-    console.log(`[VolScan] Refreshing 20-day volume baselines for ${stockList.length} stocks...`);
-    let ok = 0, failed = 0;
+    const haveAngel = !!_angelSession?.jwtToken;
+    console.log(`[VolScan] Refreshing 20-day volume baselines for ${stockList.length} stocks... (Angel:${haveAngel ? 'yes' : 'no, using Fyers'})`);
+    let ok = 0, failed = 0, viaFyers = 0;
     for (const stock of stockList) {
         try {
-            const vols = await fetchStockDailyVolumes(stock.token);
+            let vols = [];
+            if (haveAngel) {
+                try { vols = await fetchStockDailyVolumes(stock.token); }
+                catch (e) { /* fall through to Fyers below */ }
+            }
+            if (!vols.length) {
+                vols = await fetchFyersStockHistory(`NSE:${stock.name}-EQ`);
+                if (vols.length) viaFyers++;
+            }
             // Exclude today's (possibly still-forming) candle if present — use the
             // most recent 20 COMPLETE days.
             const last20 = vols.slice(0, -1).slice(-20);
@@ -105,7 +133,7 @@ async function refreshVolumeBaselines(stockList) {
             const st = _stockState.get(stock.name);
             st.token = stock.token; st.symbol = stock.symbol; st.name = stock.name;
             st.baseline20d = avg;
-            ok++;
+            if (avg) ok++; else failed++;
         } catch (e) {
             failed++;
         }
@@ -113,49 +141,100 @@ async function refreshVolumeBaselines(stockList) {
     }
     _baselineDate = today;
     _baselineRunning = false;
-    console.log(`[VolScan] Baselines done: ${ok} ok, ${failed} failed`);
+    console.log(`[VolScan] Baselines done: ${ok} ok (${viaFyers} via Fyers fallback), ${failed} failed`);
 }
 
 // ── Live: today's volume + LTP, via Angel getMarketData (bulk, same pattern
 // breadth.js already uses safely for the Nifty 50 A/D panel) ─────────────────
 async function refreshLiveVolumes(stockList) {
-    if (!_angelSession?.jwtToken) return;
-    const batches = chunk(stockList.map(s => s.token), 50);
+    const haveAngel = !!_angelSession?.jwtToken;
+    const batches = chunk(stockList, 50);
 
     for (const batch of batches) {
-        try {
-            const res = await axios.post(
-                'https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/getMarketData',
-                { mode: 'FULL', exchangeTokens: { NSE: batch } },
-                { headers: angelHeaders(), timeout: 8_000 }
-            );
-            if (typeof res.data === 'string' && res.data.includes('<html')) {
-                console.warn('[VolScan] Angel getMarketData HTML block (IP throttled) — skipping this batch');
-                continue;
+        let handledViaAngel = false;
+        if (haveAngel) {
+            try {
+                const res = await axios.post(
+                    'https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/getMarketData',
+                    { mode: 'FULL', exchangeTokens: { NSE: batch.map(s => s.token) } },
+                    { headers: angelHeaders(), timeout: 8_000 }
+                );
+                const isHtmlBlock = typeof res.data === 'string' && res.data.includes('<html');
+                const fetched = Array.isArray(res.data?.data?.fetched) ? res.data.data.fetched
+                              : Array.isArray(res.data?.data)           ? res.data.data
+                              : [];
+                if (!isHtmlBlock && fetched.length) {
+                    for (const item of fetched) {
+                        const token = String(item.symbolToken || item.symboltoken || '');
+                        const match = batch.find(s => String(s.token) === token);
+                        if (!match) continue;
+                        updateStockLive(match.name, {
+                            token: match.token, symbol: match.symbol,
+                            volume: Number(item.tradeVolume ?? item.totalTradedVolume ?? item.volume ?? 0),
+                            ltp: Number(item.ltp ?? item.lastPrice ?? 0),
+                            pctChange: Number(item.percentChange ?? item.pChange ?? 0),
+                            source: 'angel',
+                        });
+                    }
+                    handledViaAngel = true;
+                } else if (isHtmlBlock) {
+                    console.warn('[VolScan] Angel getMarketData HTML block — falling back to Fyers for this batch');
+                }
+            } catch (e) {
+                console.warn('[VolScan] Angel live volume batch error, falling back to Fyers:', e.message);
             }
-            const fetched = Array.isArray(res.data?.data?.fetched) ? res.data.data.fetched
-                          : Array.isArray(res.data?.data)           ? res.data.data
-                          : [];
-            for (const item of fetched) {
-                const token  = String(item.symbolToken || item.symboltoken || '');
-                const match  = stockList.find(s => String(s.token) === token);
+        }
+
+        if (!handledViaAngel) {
+            // Fyers fallback — same batch, via bulk quotes
+            const fyersSymbols = batch.map(s => `NSE:${s.name}-EQ`);
+            const quotes = await fetchFyersQuotesBulk(fyersSymbols);
+            for (const q of quotes) {
+                const stockName = q.symbol?.replace('NSE:', '').replace('-EQ', '');
+                const match = batch.find(s => s.name === stockName);
                 if (!match) continue;
-                const st = _stockState.get(match.name) || { token: match.token, symbol: match.symbol, name: match.name };
-                st.liveVolume = Number(item.tradeVolume ?? item.totalTradedVolume ?? item.volume ?? 0);
-                st.ltp        = Number(item.ltp ?? item.lastPrice ?? 0);
-                st.pctChange  = Number(item.percentChange ?? item.pChange ?? 0);
-                st.lastLiveAt = Date.now();
-                _stockState.set(match.name, st);
+                updateStockLive(match.name, {
+                    token: match.token, symbol: match.symbol,
+                    volume: q.volume, ltp: q.ltp, pctChange: q.pctChange,
+                    source: 'fyers',
+                });
             }
-        } catch (e) {
-            console.warn('[VolScan] Live volume batch error:', e.message);
         }
     }
 }
 
+// ── Phase 3 (6 Sep) — 5-10 min burst detection ────────────────────────────────
+// Cumulative day-volume alone can't show "this just started happening" — a
+// stock could hit 3x its daily average by 3pm from a slow steady grind all
+// day (already visible in the ratio) OR from a sudden burst in the last few
+// minutes (the more actionable, momentum-worthy case). This measures the
+// LATTER: volume actually traded in the last `windowMin` minutes, compared
+// to what "average pace" would predict for that same window using the
+// 20-day baseline spread evenly across the ~375-minute NSE trading day.
+const NSE_TRADING_MINUTES = 375; // 9:15 AM – 3:30 PM
+function computeBurstRatio(st, windowMin = 10) {
+    if (!st.baseline20d || !st.history || st.history.length < 2) return null;
+    const now = Date.now();
+    const cutoff = now - windowMin * 60 * 1000;
+    // Find the oldest snapshot that's still within the window (or the
+    // earliest available if history doesn't go back that far yet).
+    const past = st.history.find(h => h.ts >= cutoff) || st.history[0];
+    const latest = st.history[st.history.length - 1];
+    if (!past || past.ts === latest.ts) return null;
+
+    const actualSpanMin = (latest.ts - past.ts) / 60000;
+    if (actualSpanMin < 1) return null; // too little elapsed to mean anything
+
+    const volumeInWindow  = latest.cumVolume - past.cumVolume;
+    const expectedInWindow = (st.baseline20d / NSE_TRADING_MINUTES) * actualSpanMin;
+    if (volumeInWindow <= 0 || expectedInWindow <= 0) return null;
+
+    return parseFloat((volumeInWindow / expectedInWindow).toFixed(2));
+}
+
 // ── Public: scanner snapshot, sorted by volume ratio descending ──────────────
 // minRatio filters out noise (e.g. 1.2x isn't "unusual") — default 2x.
-function getVolumeScannerSnapshot(minRatio = 2) {
+function getVolumeScannerSnapshot(minRatio = 2, sortBy = 'ratio') {
     const rows = [];
     for (const st of _stockState.values()) {
         if (!st.baseline20d || !st.liveVolume) continue;
@@ -165,10 +244,16 @@ function getVolumeScannerSnapshot(minRatio = 2) {
                 name: st.name, symbol: st.symbol, ltp: st.ltp, pctChange: st.pctChange,
                 liveVolume: st.liveVolume, baseline20d: Math.round(st.baseline20d),
                 ratio: parseFloat(ratio.toFixed(2)),
+                burstRatio: computeBurstRatio(st),   // null until ~2+ live polls in
+                source: st.source || null,
             });
         }
     }
-    rows.sort((a, b) => b.ratio - a.ratio);
+    if (sortBy === 'burst') {
+        rows.sort((a, b) => (b.burstRatio ?? -1) - (a.burstRatio ?? -1));
+    } else {
+        rows.sort((a, b) => b.ratio - a.ratio);
+    }
     return rows;
 }
 

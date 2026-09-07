@@ -1662,6 +1662,84 @@ async function fetchFyersQuote(symbol = 'NSE:NIFTY50-INDEX') {
     }
 }
 
+// ── Fyers bulk quotes (6 Sep) — volume-scanner fallback for when Angel is
+// down. Fyers' /data/quotes accepts comma-separated symbols (up to 50 per
+// call per Fyers docs) and returns one entry per symbol in d.d[] — same
+// endpoint fetchFyersQuote already uses, just handling every entry instead
+// of only d.d[0]. Takes Fyers-format symbols (e.g. "NSE:RELIANCE-EQ").
+async function fetchFyersQuotesBulk(symbols) {
+    if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return [];
+    if (!symbols || symbols.length === 0) return [];
+
+    try {
+        const res = await axios.get(
+            'https://api-t1.fyers.in/data/quotes',
+            {
+                params: { symbols: symbols.join(',') },
+                headers: {
+                    'Authorization': `${FYERS_APP_ID}:${FYERS_ACCESS_TOKEN}`,
+                    'Content-Type' : 'application/json',
+                },
+                timeout: 10_000,
+            }
+        );
+        if (typeof res.data === 'string' && res.data.includes('<html')) {
+            console.warn('[Fyers Bulk Quote] HTML response — auth/IP issue');
+            return [];
+        }
+        const d = res.data;
+        if (!d || d.s !== 'ok' || !Array.isArray(d.d)) {
+            console.warn(`[Fyers Bulk Quote] Bad response: s=${d?.s} | code=${d?.code}`);
+            return [];
+        }
+        return d.d.map(item => ({
+            symbol : item.n,
+            ltp    : parseFloat(item.v?.lp)             || 0,
+            volume : parseInt(item.v?.volume, 10)       || 0,
+            pctChange: parseFloat(item.v?.chp)          || 0,
+        })).filter(x => x.ltp > 0);
+    } catch (e) {
+        console.warn(`[Fyers Bulk Quote] error: ${e.response?.status || e.message}`);
+        return [];
+    }
+}
+
+// ── Fyers historical daily volume (6 Sep) — volume-scanner baseline
+// fallback for when Angel's historical API is down. Takes a Fyers-format
+// symbol, returns an array of daily volumes (oldest→newest), same shape as
+// the Angel historical function so volumeScanner.js can treat them
+// interchangeably.
+async function fetchFyersStockHistory(symbol, daysBack = 32) {
+    if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return [];
+    try {
+        const to   = new Date();
+        const from = new Date(to.getTime() - daysBack * 24 * 60 * 60 * 1000);
+        const fmt  = (d) => d.toISOString().slice(0, 10);
+        const res  = await axios.get(
+            'https://api-t1.fyers.in/data/history',
+            {
+                params: {
+                    symbol, resolution: 'D', date_format: '1',
+                    range_from: fmt(from), range_to: fmt(to), cont_flag: '1',
+                },
+                headers: {
+                    'Authorization': `${FYERS_APP_ID}:${FYERS_ACCESS_TOKEN}`,
+                    'Content-Type' : 'application/json',
+                },
+                timeout: 10_000,
+            }
+        );
+        if (typeof res.data === 'string' && res.data.includes('<html')) return [];
+        const d = res.data;
+        if (!d || d.s !== 'ok' || !Array.isArray(d.candles)) return [];
+        // candle row: [epoch, open, high, low, close, volume]
+        return d.candles.map(row => Number(row[5]) || 0).filter(v => v > 0);
+    } catch (e) {
+        console.warn(`[Fyers History] ${symbol} error: ${e.response?.status || e.message}`);
+        return [];
+    }
+}
+
 // ── Fyers API PCR ─────────────────────────────────────────────────────────────
 // Fetches Nifty option chain from Fyers API v3 → computes PCR, ATM PCR, walls.
 // Primary PCR source. Update FYERS_ACCESS_TOKEN daily before 9:15 AM.
@@ -2374,6 +2452,8 @@ module.exports = {
 
     // Real volume/OHLC for the index (Angel WS Mode 2 sends 0 for index tokens)
     fetchFyersQuote,
+    fetchFyersQuotesBulk,
+    fetchFyersStockHistory,
     getCurrentFyersFutSymbol,
     getCrudeOilFutureToken,
     getFnOStockList,
