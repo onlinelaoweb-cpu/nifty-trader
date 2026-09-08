@@ -105,6 +105,11 @@ const LOT_SIZE = 65;   // Nifty 50 lot size (revised Jan 2026 by NSE: 75 → 65)
 // ── Market State ──────────────────────────────────────
 let marketState = {
     nifty: 0, lastClose: 0, change: 0, changePct: 0, marketClosed: true,
+    // Phase 2b (8 Sep) — isolated CRUDEOIL live state. Deliberately its own
+    // small object, NOT mixed into any of the NIFTY fields below — the WS
+    // tick handler (onTick) branches on getActiveSession() and routes crude
+    // ticks here exclusively, never touching marketState.nifty/wsVolume/etc.
+    crudeoil: { price: 0, volume: 0, open: 0, high: 0, low: 0, lastUpdate: null, symbol: null, token: null },
     signal: 'WAIT', confidence: 0,
     rsi: null, ema9: null, ema21: null, vwap: null,
     pcr: null, atmPcr: null, pcrSignal: 'N/A', atmPcrSignal: 'N/A',
@@ -4597,6 +4602,36 @@ let _lastIndicatorRun = 0;  // throttle: only recalculate indicators once per se
 async function onTick(tickData) {
     const price=tickData.price; if(!price||price<=0) return;
 
+    // ── Phase 2b (8 Sep) — session-aware routing ──────────────────────────────
+    // CRUDEOIL ticks are handled entirely separately and return immediately —
+    // they never reach the NIFTY sanity-check/delta/divergence logic below.
+    // Only branches into the crude path when session is EXPLICITLY 'CRUDEOIL'
+    // (isCrudeSessionOpen() true) — any other state (NIFTY, CLOSED, or a
+    // getActiveSession() failure) falls through to the existing NIFTY handling
+    // unchanged, so this can never accidentally divert a real NIFTY tick.
+    if (getActiveSession() === 'CRUDEOIL') {
+        // Sanity check mirrors NIFTY's >5% guard, scaled to crude's own price,
+        // so a genuine wrong-offset packet doesn't corrupt crude state either.
+        const lastCrude = marketState.crudeoil.price;
+        if (lastCrude > 0) {
+            const pctMove = Math.abs((price - lastCrude) / lastCrude) * 100;
+            if (pctMove > 5) {
+                console.warn(`[WS-Crude] Tick rejected: ${price} is ${pctMove.toFixed(1)}% from last known ${lastCrude}`);
+                return;
+            }
+        }
+        marketState.crudeoil.price      = price;
+        if (tickData.volume > 0) marketState.crudeoil.volume = tickData.volume;
+        if (tickData.open   > 0) marketState.crudeoil.open   = tickData.open;
+        if (tickData.high   > 0) marketState.crudeoil.high   = tickData.high;
+        if (tickData.low    > 0) marketState.crudeoil.low    = tickData.low;
+        marketState.crudeoil.lastUpdate = Date.now();
+        _lastTickAt = Date.now(); // shared watchdog — a live crude tick counts as "connected" too
+        return;
+    }
+
+    // ── Everything below this line is the existing NIFTY tick path, unchanged ──
+
     // ── Sanity check: reject ticks that are >5% away from last known price ────
     // Prevents wrong-offset prices (sequence numbers misread as LTP) from
     // corrupting ADX/VWAP/EMA calculations. If last price is unknown, accept.
@@ -8013,6 +8048,13 @@ app.get('/api/crude-token', async (req,res) => {
     }
 });
 
+// Phase 2b debug endpoint — live CRUDEOIL WS state, completely isolated from
+// the main NIFTY marketState. Empty/zero values outside the 5:30pm-11:55pm
+// window are expected — the WS isn't subscribed to crude then.
+app.get('/api/crude-live', (req, res) => {
+    res.json({ session: getActiveSession(), ...marketState.crudeoil });
+});
+
 // Volume scanner Phase 1 debug endpoint — confirms the F&O stock universe
 // resolves correctly (expect ~180-200 stocks) before Phase 2 wires up live
 // WebSocket subscriptions + volume-baseline tracking.
@@ -8681,7 +8723,33 @@ async function tryAngelLogin() {
                 }
             }, 5000);
         }
-        startWebSocket(auth, onTick);
+        // Phase 2b (8 Sep) — decides which instrument the WebSocket should be
+// subscribed to right now. Returns NIFTY's config for anything that isn't
+// explicitly the CRUDEOIL evening window (including 'CLOSED', as a safe
+// default — subscribing to NIFTY's token when the market is shut is
+// harmless, just idle). MCX exchangeType is 5 per Angel SmartAPI's
+// exchangeType enum (1=NSE_CM, 2=NSE_FO, 3=BSE_CM, 4=BSE_FO, 5=MCX_FO).
+async function getWSInstrumentConfig() {
+    if (getActiveSession() !== 'CRUDEOIL') {
+        return { token: '26000', exchangeType: 1, label: 'NIFTY 50', priceMin: 15000, priceMax: 35000 };
+    }
+    try {
+        const crude = await getCrudeOilFutureToken();
+        if (crude?.token) {
+            // Wide-but-sane band around crude's actual trading range (seen
+            // live: ~8500-8600 on 4 Sep) — generous margin for normal
+            // day-to-day moves without accidentally admitting a garbled packet.
+            return { token: String(crude.token), exchangeType: 5, label: 'CRUDEOIL', priceMin: 3000, priceMax: 20000 };
+        }
+    } catch (e) {
+        console.warn('[WS] getWSInstrumentConfig crude lookup failed, falling back to NIFTY:', e.message);
+    }
+    // Crude token lookup failed — fall back to NIFTY rather than leave the
+    // WS with an invalid/missing token.
+    return { token: '26000', exchangeType: 1, label: 'NIFTY 50', priceMin: 15000, priceMax: 35000 };
+}
+
+startWebSocket(auth, onTick, getWSInstrumentConfig);
         _angelLoggedIn = true;
         // On retry logins (after init is complete), immediately refresh breadth
         // with the real Angel Nifty50 data. During initial startup this is skipped

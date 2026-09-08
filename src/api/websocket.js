@@ -2,15 +2,15 @@ const WebSocket  = require('ws');
 const loginAngel = require('./angelAuth');
 
 // Re-authenticates and reconnects — never reuses a potentially-expired JWT
-async function reconnectWebSocket(onTick, delayMs = 5000) {
+async function reconnectWebSocket(onTick, delayMs = 5000, getInstrumentConfig = null) {
     console.log(`🔄 WebSocket reconnecting in ${delayMs / 1000}s (fresh auth)...`);
     await new Promise(resolve => setTimeout(resolve, delayMs));
     const freshAuth = await loginAngel();
     if (freshAuth) {
-        startWebSocket(freshAuth, onTick);
+        startWebSocket(freshAuth, onTick, getInstrumentConfig);
     } else {
         console.error('❌ Re-auth failed — retrying in 60s');
-        reconnectWebSocket(onTick, 60000);
+        reconnectWebSocket(onTick, 60000, getInstrumentConfig);
     }
 }
 
@@ -39,7 +39,7 @@ async function reconnectWebSocket(onTick, delayMs = 5000) {
 //
 // Returns { price, volume, buyQty, sellQty, open, high, low, close, exchTs }
 // or null if packet is not parseable.
-function parseQuotePacket(buf) {
+function parseQuotePacket(buf, priceMin = 15000, priceMax = 35000) {
     // Mode 2 full quote — v2 = 123 bytes, v1 = 195 bytes
     if (buf.length >= 123) {
         const mode = buf.readUInt8(0);
@@ -51,8 +51,8 @@ function parseQuotePacket(buf) {
         const ltpPaise = buf.readUInt32LE(43);
         const price    = ltpPaise / 100;
 
-        if (price < 15000 || price > 35000) {
-            if (ltpPaise > 0) console.warn(`[WS] Price out of range: ${price}`);
+        if (price < priceMin || price > priceMax) {
+            if (ltpPaise > 0) console.warn(`[WS] Price out of range: ${price} (expected ${priceMin}-${priceMax})`);
             return null;
         }
 
@@ -75,7 +75,7 @@ function parseQuotePacket(buf) {
         if (mode === 1) {
             const ltpPaise = buf.readUInt32LE(43);
             const price    = ltpPaise / 100;
-            if (price >= 15000 && price <= 35000) {
+            if (price >= priceMin && price <= priceMax) {
                 console.warn(`[WS] Mode1 fallback packet (${buf.length}b) — volume unavailable`);
                 return { price, volume: 0, buyQty: 0, sellQty: 0, open: 0, high: 0, low: 0, close: 0, exchTs: 0 };
             }
@@ -86,7 +86,9 @@ function parseQuotePacket(buf) {
     return null;
 }
 
-function startWebSocket(authData, onTick) {
+const NIFTY_CONFIG = { token: '26000', exchangeType: 1, label: 'NIFTY 50', priceMin: 15000, priceMax: 35000 };
+
+async function startWebSocket(authData, onTick, getInstrumentConfig = null) {
     try {
         console.log('Starting WebSocket (Mode 2 — Quote + Volume)...');
 
@@ -94,6 +96,21 @@ function startWebSocket(authData, onTick) {
             console.error('❌ feedToken missing');
             return;
         }
+
+        // Phase 2b (8 Sep) — resolve which instrument to subscribe to. Falls
+        // back to NIFTY if no provider is given, or if the provider throws/
+        // returns nothing — this must never leave the app subscribed to
+        // nothing, and NIFTY is the safe, always-valid default.
+        let config = NIFTY_CONFIG;
+        if (typeof getInstrumentConfig === 'function') {
+            try {
+                const resolved = await getInstrumentConfig();
+                if (resolved?.token && resolved?.exchangeType) config = resolved;
+            } catch (e) {
+                console.warn('[WS] getInstrumentConfig failed, defaulting to NIFTY:', e.message);
+            }
+        }
+        const subscribedSessionAtConnect = config.label; // for the boundary watcher below
 
         const ws = new WebSocket(
             'wss://smartapisocket.angelone.in/smart-stream',
@@ -108,6 +125,7 @@ function startWebSocket(authData, onTick) {
         );
 
         let heartbeat = null;
+        let sessionWatcher = null;
         let tickCount = 0;
 
         ws.on('open', () => {
@@ -119,17 +137,37 @@ function startWebSocket(authData, onTick) {
                 params       : {
                     mode     : 2,
                     tokenList: [{
-                        exchangeType: 1,
-                        tokens      : ['26000']
+                        exchangeType: config.exchangeType,
+                        tokens      : [config.token]
                     }]
                 }
             }));
 
-            console.log('📊 Subscribed NIFTY 50 — mode 2 Quote (price + volume + buy/sell qty)');
+            console.log(`📊 Subscribed ${config.label} (token:${config.token}, exch:${config.exchangeType}) — mode 2 Quote`);
 
             heartbeat = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) ws.ping();
             }, 30000);
+
+            // Phase 2b — session-boundary watcher. Checks every 60s whether
+            // the instrument we SHOULD be subscribed to (per getInstrumentConfig)
+            // still matches what we connected with. If the session has moved
+            // on (e.g. NIFTY closed at 3:30, or CRUDEOIL opened at 5:30), force
+            // a clean reconnect rather than trying to juggle subscribe/
+            // unsubscribe messages on the same socket — a fresh connection
+            // guarantees no stale double-subscription state.
+            if (typeof getInstrumentConfig === 'function') {
+                sessionWatcher = setInterval(async () => {
+                    try {
+                        const nowConfig = await getInstrumentConfig();
+                        if (nowConfig?.label && nowConfig.label !== subscribedSessionAtConnect) {
+                            console.log(`[WS] Session changed (${subscribedSessionAtConnect} → ${nowConfig.label}) — reconnecting for new subscription`);
+                            clearInterval(sessionWatcher);
+                            ws.close(); // triggers the normal close→reconnect path below
+                        }
+                    } catch (e) { /* transient — try again next tick */ }
+                }, 60 * 1000);
+            }
         });
 
         ws.on('message', (rawData) => {
@@ -150,10 +188,10 @@ function startWebSocket(authData, onTick) {
                     return;
                 }
 
-                const tick = parseQuotePacket(buf);
+                const tick = parseQuotePacket(buf, config.priceMin, config.priceMax);
                 if (tick !== null) {
                     if (tickCount <= 10 || tickCount % 100 === 0) {
-                        console.log(`NIFTY WS tick #${tickCount}: ₹${tick.price} | Vol:${tick.volume} | Buy:${tick.buyQty} Sell:${tick.sellQty} | O:${tick.open} H:${tick.high} L:${tick.low}`);
+                        console.log(`${config.label} WS tick #${tickCount}: ₹${tick.price} | Vol:${tick.volume} | Buy:${tick.buyQty} Sell:${tick.sellQty} | O:${tick.open} H:${tick.high} L:${tick.low}`);
                     }
                     if (typeof onTick === 'function') {
                         onTick({
@@ -180,13 +218,14 @@ function startWebSocket(authData, onTick) {
         ws.on('close',  (code) => {
             console.log('🔴 WebSocket Closed:', code);
             clearInterval(heartbeat);
-            reconnectWebSocket(onTick, 5000);
+            clearInterval(sessionWatcher);
+            reconnectWebSocket(onTick, 5000, getInstrumentConfig);
         });
         ws.on('ping', () => ws.pong());
 
     } catch (err) {
         console.error('SOCKET START ERROR:', err.message);
-        reconnectWebSocket(onTick, 10000);
+        reconnectWebSocket(onTick, 10000, getInstrumentConfig);
     }
 }
 
