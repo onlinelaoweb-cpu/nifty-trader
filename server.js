@@ -109,7 +109,7 @@ let marketState = {
     // small object, NOT mixed into any of the NIFTY fields below — the WS
     // tick handler (onTick) branches on getActiveSession() and routes crude
     // ticks here exclusively, never touching marketState.nifty/wsVolume/etc.
-    crudeoil: { price: 0, volume: 0, open: 0, high: 0, low: 0, lastUpdate: null, symbol: null, token: null },
+    crudeoil: { price: 0, volume: 0, open: 0, high: 0, low: 0, lastUpdate: null, symbol: null, token: null, candles1m: [] },
     signal: 'WAIT', confidence: 0,
     rsi: null, ema9: null, ema21: null, vwap: null,
     pcr: null, atmPcr: null, pcrSignal: 'N/A', atmPcrSignal: 'N/A',
@@ -523,15 +523,50 @@ function isCrudeSessionOpen() {
     return m >= 1050 && m <= 1435;                     // 5:30 PM – 11:55 PM IST
 }
 
-// Single source of truth for "what should the app be doing right now" once
-// CRUDEOIL is wired in (Phase 2+). For now this is standalone and only feeds
-// the /api/session debug endpoint + heartbeat log below — nothing else reads
-// it yet, so it's safe to deploy and observe for a day before Phase 2 makes
-// anything depend on it.
+// Single source of truth for "what should the app be doing right now" —
+// read by onTick() (routes ticks to NIFTY vs CRUDEOIL handling) and
+// getWSInstrumentConfig() (decides what the WebSocket subscribes to).
 function getActiveSession() {
     if (isNSEMarketDay())   return 'NIFTY';
     if (isCrudeSessionOpen()) return 'CRUDEOIL';
     return 'CLOSED';
+}
+
+// ── CRUDEOIL candle-builder (Phase 3, mirrors NIFTY's indicators.js addTick())
+// Deliberately a separate, self-contained function rather than reusing
+// indicators.js's addTick() — that function's currentCandle/candleHistory/
+// priceHistory are NIFTY-only singleton module state (module-level `let`,
+// one instance per process). Feeding it crude's ~3000-9000 price range
+// through the exact same variables NIFTY's RSI/ADX/EMA depend on would
+// corrupt every NIFTY indicator the moment a crude tick arrived — even
+// though crude and NIFTY sessions don't overlap in time (crude is
+// 5:30-11:55pm, NIFTY is 9:15am-3:30pm), leaving NIFTY's own state mixed
+// with crude's last-known candle the next NIFTY session starts. A fully
+// separate builder, writing only into marketState.crudeoil.candles1m,
+// can't touch NIFTY's indicators no matter what.
+let _crudeCurrentCandle = null;
+let _crudeLastMinute    = null;
+const CRUDE_CANDLE_CAP  = 150; // same cap as NIFTY's candleHistory, for consistency
+
+function addCrudeTick(price) {
+    const ist    = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istMin = ist.getHours() * 60 + ist.getMinutes();
+
+    if (!_crudeCurrentCandle || istMin !== _crudeLastMinute) {
+        if (_crudeCurrentCandle) {
+            marketState.crudeoil.candles1m.push({ ..._crudeCurrentCandle });
+            if (marketState.crudeoil.candles1m.length > CRUDE_CANDLE_CAP) {
+                marketState.crudeoil.candles1m.shift();
+            }
+        }
+        _crudeCurrentCandle = { open: price, high: price, low: price, close: price, volume: 1, time: Date.now() };
+        _crudeLastMinute    = istMin;
+    } else {
+        _crudeCurrentCandle.high   = Math.max(_crudeCurrentCandle.high, price);
+        _crudeCurrentCandle.low    = Math.min(_crudeCurrentCandle.low, price);
+        _crudeCurrentCandle.close  = price;
+        _crudeCurrentCandle.volume += 1;
+    }
 }
 
 // PCR label — displayed on UI (thresholds tuned for real Nifty option chain behaviour)
@@ -4626,6 +4661,7 @@ async function onTick(tickData) {
         if (tickData.high   > 0) marketState.crudeoil.high   = tickData.high;
         if (tickData.low    > 0) marketState.crudeoil.low    = tickData.low;
         marketState.crudeoil.lastUpdate = Date.now();
+        addCrudeTick(price); // Phase 3 — build 1m candles from accepted ticks only
         _lastTickAt = Date.now(); // shared watchdog — a live crude tick counts as "connected" too
         return;
     }
@@ -8048,11 +8084,19 @@ app.get('/api/crude-token', async (req,res) => {
     }
 });
 
-// Phase 2b debug endpoint — live CRUDEOIL WS state, completely isolated from
-// the main NIFTY marketState. Empty/zero values outside the 5:30pm-11:55pm
-// window are expected — the WS isn't subscribed to crude then.
+// Phase 2b/3 debug endpoint — live CRUDEOIL WS state + candle-build progress,
+// completely isolated from the main NIFTY marketState. Empty/zero values
+// outside the 5:30pm-11:55pm window are expected — the WS isn't subscribed
+// to crude then. candles1m is summarized (count + last 5), not dumped in
+// full, to keep this endpoint lean.
 app.get('/api/crude-live', (req, res) => {
-    res.json({ session: getActiveSession(), ...marketState.crudeoil });
+    const { candles1m, ...rest } = marketState.crudeoil;
+    res.json({
+        session: getActiveSession(),
+        ...rest,
+        candles1mCount: candles1m.length,
+        candles1mRecent: candles1m.slice(-5),
+    });
 });
 
 // Volume scanner Phase 1 debug endpoint — confirms the F&O stock universe
