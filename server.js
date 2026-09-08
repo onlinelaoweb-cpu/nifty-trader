@@ -4,6 +4,7 @@ const express  = require('express');
 const http     = require('http');
 const cors     = require('cors');
 const axios    = require('axios');
+const { RSI, EMA } = require('technicalindicators'); // Phase 4 (8 Sep) — pure crude indicators, see computeCrudeIndicators()
 
 const loginAngel                    = require('./src/api/angelAuth');
 const startWebSocket                = require('./src/api/websocket');
@@ -547,6 +548,47 @@ function getActiveSession() {
 let _crudeCurrentCandle = null;
 let _crudeLastMinute    = null;
 const CRUDE_CANDLE_CAP  = 150; // same cap as NIFTY's candleHistory, for consistency
+
+// ── CRUDEOIL indicators (Phase 4, 8 Sep) — pure function, no state of its own.
+// Deliberately NOT following indicators.js's calcRSI()/calcEMA() pattern
+// (which read module-level `priceHistory` — NIFTY-only singleton state, the
+// same class of risk Phase 3's addCrudeTick() was built to avoid). Instead
+// this takes a candles array as an argument and returns computed values —
+// safe to call with ANY candle series, crude's included, with zero risk of
+// touching or being touched by NIFTY's own indicator state. calculateADX()
+// (above) is reused as-is since it's already this same kind of pure
+// function — no need to duplicate ADX math for crude.
+function computeCrudeIndicators(candles1m) {
+    const closes = candles1m.filter(c => c.close != null).map(c => c.close);
+
+    // RSI(9) — same period as NIFTY's 1m RSI (indicators.js calcRSI), for a
+    // consistent "how it reads" comparison between the two instruments.
+    let rsi = null;
+    if (closes.length >= 10) {
+        const r = RSI.calculate({ values: closes, period: 9 });
+        if (r.length > 0) rsi = parseFloat(r[r.length - 1].toFixed(2));
+    }
+
+    let ema9 = null, ema21 = null;
+    if (closes.length >= 9) {
+        const e = EMA.calculate({ values: closes, period: 9 });
+        if (e.length > 0) ema9 = parseFloat(e[e.length - 1].toFixed(2));
+    }
+    if (closes.length >= 21) {
+        const e = EMA.calculate({ values: closes, period: 21 });
+        if (e.length > 0) ema21 = parseFloat(e[e.length - 1].toFixed(2));
+    }
+
+    const adxResult = calculateADX(candles1m, 14); // null until 30+ candles, same as NIFTY
+
+    return {
+        rsi, ema9, ema21,
+        adx    : adxResult?.adx     ?? null,
+        diPlus : adxResult?.diPlus  ?? null,
+        diMinus: adxResult?.diMinus ?? null,
+        candleCount: candles1m.length,
+    };
+}
 
 function addCrudeTick(price) {
     const ist    = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
@@ -8084,11 +8126,13 @@ app.get('/api/crude-token', async (req,res) => {
     }
 });
 
-// Phase 2b/3 debug endpoint — live CRUDEOIL WS state + candle-build progress,
-// completely isolated from the main NIFTY marketState. Empty/zero values
-// outside the 5:30pm-11:55pm window are expected — the WS isn't subscribed
-// to crude then. candles1m is summarized (count + last 5), not dumped in
-// full, to keep this endpoint lean.
+// Phase 2b/3/4 debug endpoint — live CRUDEOIL WS state + candle-build
+// progress + computed indicators, completely isolated from the main NIFTY
+// marketState. Empty/zero values outside the 5:30pm-11:55pm window are
+// expected — the WS isn't subscribed to crude then. candles1m is
+// summarized (count + last 5), not dumped in full, to keep this lean.
+// indicators is computed fresh on every request (pure function, cheap) —
+// nothing about Phase 4 is cached or stored beyond candles1m itself.
 app.get('/api/crude-live', (req, res) => {
     const { candles1m, ...rest } = marketState.crudeoil;
     res.json({
@@ -8096,6 +8140,7 @@ app.get('/api/crude-live', (req, res) => {
         ...rest,
         candles1mCount: candles1m.length,
         candles1mRecent: candles1m.slice(-5),
+        indicators: computeCrudeIndicators(candles1m),
     });
 });
 
