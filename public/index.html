@@ -3781,6 +3781,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     <button class="more-item" onclick="switchTabFromMore('analytics')"><span>📊</span>ANALYTICS</button>
     <button class="more-item" onclick="switchTabFromMore('global')"><span>🌍</span>GLOBAL</button>
     <button class="more-item" onclick="switchTabFromMore('scanner')"><span>🔥</span>SCANNER</button>
+    <button class="more-item" onclick="switchTabFromMore('crude')"><span>🛢️</span>CRUDEOIL</button>
   </div>
 </div>
 
@@ -3805,6 +3806,7 @@ function _initDesktopLayout() {
     { id: 'physics',   icon: '⚛️', label: 'PHYSICS' },
     { id: 'guard',     icon: '🛡️', label: 'GUARD' },
     { id: 'scanner',   icon: '🔥', label: 'SCANNER' },
+    { id: 'crude',     icon: '🛢️', label: 'CRUDEOIL' },
   ];
 
   // Build sidebar
@@ -3995,6 +3997,7 @@ const TAB_LABELS = {
   analytics: { icon: '📊', label: 'ANALYTICS' },
   global:    { icon: '🌍', label: 'GLOBAL' },
   scanner:   { icon: '🔥', label: 'SCANNER' },
+  crude:     { icon: '🛢️', label: 'CRUDEOIL' },
 };
 
 function switchTab(name,btn){
@@ -4043,6 +4046,13 @@ function switchTab(name,btn){
     _scannerTabTimer = setInterval(fetchVolumeScanner, 60000);
   } else {
     if (_scannerTabTimer) { clearInterval(_scannerTabTimer); _scannerTabTimer = null; }
+  }
+  if(name==='crude'){
+    fetchCrudeLive();
+    if (_crudeTabTimer) clearInterval(_crudeTabTimer);
+    _crudeTabTimer = setInterval(fetchCrudeLive, 20000);
+  } else {
+    if (_crudeTabTimer) { clearInterval(_crudeTabTimer); _crudeTabTimer = null; }
   }
   if(name==='breadth'||name==='global'){
     // Render immediately from cache — no loading flicker
@@ -5342,6 +5352,7 @@ function renderDashboard(s) {
 // Called when breadth tab opens + every 60s while on tab
 let _breadthTabTimer = null;
 let _scannerTabTimer = null;
+let _crudeTabTimer = null;
 let _lastBreadthStocks = null;  // cache stocks[] for SSE merge
 async function fetchBreadthFull() {
   try {
@@ -9488,7 +9499,120 @@ function _statRow(label, val) {
   </div>
 </div>
 
-<!-- PANEL: VOLUME SCANNER ─────────────────────────────── -->
+<!-- PANEL: CRUDEOIL ─────────────────────────────────── -->
+<div class="panel" id="panel-crude">
+  <div style="padding:10px 12px 80px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div style="font-family:'Orbitron',monospace;font-size:14.5px;letter-spacing:1px;color:var(--accent);">🛢️ CRUDEOIL</div>
+      <span id="crude-session-badge" style="font-size:10.5px;color:var(--dim);font-family:monospace;"></span>
+    </div>
+    <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:10px;">
+      Evening session (5:30 PM – 11:55 PM). Own signal engine, separate from NIFTY — RSI/EMA/ADX + 1m/5m MTF + PCR. Not wired to live trades yet.
+    </div>
+
+    <div id="crude-price-block" style="text-align:center;padding:14px 0;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:10px;">
+      <div id="crude-price" style="font-family:'Orbitron',monospace;font-size:32px;font-weight:700;color:var(--fg);">--</div>
+      <div id="crude-ohl" style="font-size:11px;color:var(--dim);margin-top:4px;">O:-- H:-- L:--</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-bottom:10px;">
+      <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:8px 4px;text-align:center;">
+        <div style="font-size:9.5px;color:var(--dim);">RSI</div>
+        <div id="crude-rsi" style="font-size:14px;font-weight:600;">--</div>
+      </div>
+      <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:8px 4px;text-align:center;">
+        <div style="font-size:9.5px;color:var(--dim);">ADX</div>
+        <div id="crude-adx" style="font-size:14px;font-weight:600;">--</div>
+      </div>
+      <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:8px 4px;text-align:center;">
+        <div style="font-size:9.5px;color:var(--dim);">EMA9</div>
+        <div id="crude-ema9" style="font-size:12px;font-weight:600;">--</div>
+      </div>
+      <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:8px 4px;text-align:center;">
+        <div style="font-size:9.5px;color:var(--dim);">EMA21</div>
+        <div id="crude-ema21" style="font-size:12px;font-weight:600;">--</div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-bottom:10px;">
+      <div style="flex:1;background:rgba(255,255,255,0.03);border-radius:8px;padding:8px;text-align:center;">
+        <div style="font-size:9.5px;color:var(--dim);">1m Trend</div>
+        <div id="crude-mtf-1m" style="font-size:13px;font-weight:600;">--</div>
+      </div>
+      <div style="flex:1;background:rgba(255,255,255,0.03);border-radius:8px;padding:8px;text-align:center;">
+        <div style="font-size:9.5px;color:var(--dim);">5m Trend</div>
+        <div id="crude-mtf-5m" style="font-size:13px;font-weight:600;">--</div>
+      </div>
+      <div style="flex:1;background:rgba(255,255,255,0.03);border-radius:8px;padding:8px;text-align:center;">
+        <div style="font-size:9.5px;color:var(--dim);">PCR</div>
+        <div id="crude-pcr" style="font-size:13px;font-weight:600;">--</div>
+      </div>
+    </div>
+
+    <div id="crude-signal-card" style="border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:14px;text-align:center;margin-bottom:10px;">
+      <div id="crude-signal-text" style="font-family:'Orbitron',monospace;font-size:22px;font-weight:700;">WAIT</div>
+      <div style="font-size:10.5px;color:var(--dim);margin-top:4px;">Confidence: <span id="crude-confidence">0</span>%</div>
+    </div>
+
+    <div style="font-size:10.5px;color:var(--dim);margin-bottom:6px;">REASONS</div>
+    <div id="crude-reasons" style="font-size:11.5px;line-height:1.6;color:var(--fg);opacity:0.85;">Loading...</div>
+  </div>
+</div>
+
+<script>
+async function fetchCrudeLive() {
+  try {
+    const r = await fetch('/api/crude-live');
+    if (!r.ok) return;
+    const d = await r.json();
+    renderCrudeLiveUI(d);
+  } catch (e) { console.warn('[Crude] fetch error:', e.message); }
+}
+function renderCrudeLiveUI(d) {
+  const badge = document.getElementById('crude-session-badge');
+  if (badge) badge.textContent = d.session === 'CRUDEOIL' ? '🟢 LIVE' : ('⚪ ' + d.session);
+
+  const priceEl = document.getElementById('crude-price');
+  if (priceEl) priceEl.textContent = d.price ? ('₹' + d.price.toFixed(2)) : '--';
+  const ohlEl = document.getElementById('crude-ohl');
+  if (ohlEl) ohlEl.textContent = `O:${d.open || '--'} H:${d.high || '--'} L:${d.low || '--'}`;
+
+  const ind = d.indicators || {};
+  document.getElementById('crude-rsi').textContent   = ind.rsi   != null ? ind.rsi.toFixed(1)   : '--';
+  document.getElementById('crude-adx').textContent   = ind.adx   != null ? ind.adx.toFixed(1)   : '--';
+  document.getElementById('crude-ema9').textContent  = ind.ema9  != null ? ind.ema9.toFixed(1)  : '--';
+  document.getElementById('crude-ema21').textContent = ind.ema21 != null ? ind.ema21.toFixed(1) : '--';
+
+  const sig = d.signal || {};
+  const mtf = sig.mtf || {};
+  const mtfColor = (dir) => dir === 'BULL' ? 'var(--green)' : dir === 'BEAR' ? 'var(--red)' : 'var(--dim)';
+  const mtf1mEl = document.getElementById('crude-mtf-1m');
+  const mtf5mEl = document.getElementById('crude-mtf-5m');
+  if (mtf1mEl) { mtf1mEl.textContent = mtf.tf1m || '--'; mtf1mEl.style.color = mtfColor(mtf.tf1m); }
+  if (mtf5mEl) { mtf5mEl.textContent = mtf.tf5m || '--'; mtf5mEl.style.color = mtfColor(mtf.tf5m); }
+
+  const pcrEl = document.getElementById('crude-pcr');
+  if (pcrEl) pcrEl.textContent = d.pcr?.pcr != null ? d.pcr.pcr.toFixed(2) : '--';
+
+  const signalTextEl = document.getElementById('crude-signal-text');
+  const confEl = document.getElementById('crude-confidence');
+  const cardEl = document.getElementById('crude-signal-card');
+  if (signalTextEl) {
+    signalTextEl.textContent = sig.signal || 'WAIT';
+    signalTextEl.style.color = sig.signal === 'BUY CALL' ? 'var(--green)' : sig.signal === 'BUY PUT' ? 'var(--red)' : 'var(--fg)';
+  }
+  if (confEl) confEl.textContent = sig.confidence ?? 0;
+  if (cardEl) cardEl.style.borderColor = sig.signal === 'BUY CALL' ? 'var(--green)' : sig.signal === 'BUY PUT' ? 'var(--red)' : 'rgba(255,255,255,0.1)';
+
+  const reasonsEl = document.getElementById('crude-reasons');
+  if (reasonsEl) {
+    const reasons = sig.reasons || [];
+    reasonsEl.innerHTML = reasons.length ? reasons.map(r => `<div>• ${r}</div>`).join('') : '<div style="color:var(--dim);">No reasons yet — waiting for enough candles.</div>';
+  }
+}
+</script>
+
+
 <div class="panel" id="panel-scanner">
   <div style="padding:10px 12px 80px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
