@@ -3035,6 +3035,54 @@ function combineSignals(indicators) {
         }
     }
 
+    // ── Breakout regime penalty (10 Sep, data-backed) ─────────────────────────
+    // 180-day performance analytics: Breakout-tagged trades (raw ORB break,
+    // no other structural confirmation) = 24% win rate, -0.129R avg over 42
+    // trades — the ONLY negative-expectancy regime bucket, confirmed
+    // identically across both a 30-day and a 180-day pull (same 42 trades,
+    // same numbers both times — a stable finding, not diluting with more
+    // data). Soft penalty only (same additive-only philosophy as the
+    // range-pocket cap above) — doesn't block, just reduces confidence when
+    // an ORB break fires WITHOUT MTF or Trend Conviction backing it (setups
+    // that DO have that backing perform fine — see BOS+Delta+3/3MTF+
+    // TrendConviction in the DNA leaderboard, +0.591R).
+    {
+        const orbStatus = marketState.orb?.status;
+        const isBreakoutSetup = signal !== 'WAIT' && (
+            (signal === 'BUY CALL' && orbStatus === 'BROKEN_UP') ||
+            (signal === 'BUY PUT'  && orbStatus === 'BROKEN_DOWN')
+        );
+        const hasBackup = marketState.mtf?.aligned ||
+            marketState.trendConviction?.active === (signal === 'BUY CALL' ? 'BULLISH' : 'BEARISH');
+        if (isBreakoutSetup && !hasBackup) {
+            const before = confidence;
+            confidence = Math.min(confidence, 60);
+            if (confidence < before) reasons.push(`⚠️ Confidence capped at 60% — raw ORB break without MTF/Trend Conviction backing (historically -0.129R, 24% win over 42 trades)`);
+        }
+    }
+
+    // ── Delta+MTF+DynLevel-without-TrendConviction penalty (10 Sep, data-backed) ─
+    // DNA leaderboard: "Delta Confirm + 3/3 MTF + Below Dyn L3" WITHOUT Trend
+    // Conviction = 38% win, -0.066R avg (13 trades) — a LOSING setup on its
+    // own. The exact same base combo WITH Trend Conviction added = 73% win,
+    // +1.509R avg (11 trades) — the single best performer in the leaderboard.
+    // Identical sample sizes across a 30-day and a 180-day pull (no new
+    // trades in this bucket since — consistent with the recent
+    // over-filtering issue, now separately addressed). Scoped ONLY to this
+    // confirmed bearish/Below-L3 case — no data exists yet for the
+    // symmetric bullish/Above-H3 case, so it's deliberately not assumed.
+    {
+        const deltaPct = marketState.delta?.deltaPct;
+        const hasDeltaConfirm = signal === 'BUY PUT' && deltaPct != null && deltaPct <= -40;
+        const hasDynL3 = marketState.dynamicLevels?.available && marketState.dynamicLevels.belowL3;
+        const hasTrendConviction = marketState.trendConviction?.active === 'BEARISH';
+        if (signal === 'BUY PUT' && hasDeltaConfirm && marketState.mtf?.aligned && hasDynL3 && !hasTrendConviction) {
+            const before = confidence;
+            confidence = Math.min(confidence, 55);
+            if (confidence < before) reasons.push(`⚠️ Confidence capped at 55% — Delta+3/3MTF+Below-Dyn-L3 without Trend Conviction (historically -0.066R, 38% win, N=13; same combo WITH Trend Conviction: +1.509R, 73% win, N=11)`);
+        }
+    }
+
     // ── Premarket/Opening Gap Gate (prev close → today's open, via Fyers) ────
     // True sub-9:15 GIFT Nifty premarket isn't used here — no verified Fyers
     // symbol for it (guessing one risks repeating the silent "NSE:NIFTY-I"
