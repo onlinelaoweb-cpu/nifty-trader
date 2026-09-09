@@ -590,6 +590,90 @@ function computeCrudeIndicators(candles1m) {
     };
 }
 
+// ── CRUDEOIL signal generation (Phase 5, 8 Sep) — direction + confidence,
+// mirroring NIFTY's core option-buyer philosophy as closely as the data we
+// actually have (Phase 3/4: 1m candles → RSI/EMA9/EMA21/ADX/DI+/DI-) allows.
+// Deliberately narrower than NIFTY's combineSignals() by design, not by
+// oversight — NIFTY's PCR gate, dynamic S/R, physics-law (BOS/CHOCH), and
+// POC/delta gates all depend on data (option chain, multi-day history,
+// volume profile) that doesn't exist for crude at all yet. What IS mirrored
+// exactly: safety-first default to WAIT, the RSI-not-overbought/oversold
+// gate (rsi<70 for calls / rsi>30 for puts — NIFTY's own thresholds, see
+// combineSignals' rsiClean check), ADX>=20 "a trend must exist before
+// betting directional premium" gate with NIFTY's same 20/30 strength bands,
+// and NIFTY's two-layer minimum-confidence structure (a base gate + a
+// separately-tunable stricter filter, same shape as NIFTY's 65% base +
+// 70% High-Conviction filter added 3 Sep after real-world tuning).
+//
+// Pure function — no state of its own, same reasoning as computeCrudeIndicators().
+const CRUDE_MIN_CONFIDENCE      = 65; // base gate, mirrors NIFTY's combineSignals()
+const CRUDE_HIGH_CONVICTION_MIN = 70; // stricter filter, mirrors NIFTY's 3-Sep addition —
+                                       // tune independently once real crude signals accumulate,
+                                       // exactly like NIFTY's own filter was tuned after the fact.
+
+function computeCrudeSignal(candles1m) {
+    const ind = computeCrudeIndicators(candles1m);
+    const reasons = [];
+
+    // Not enough data yet for the indicators this depends on (ADX needs 30+
+    // candles = 30 min into the session) — WAIT, not a guess.
+    if (ind.rsi == null || ind.ema9 == null || ind.ema21 == null || ind.adx == null) {
+        return { signal: 'WAIT', confidence: 0, reasons: ['⏳ Not enough candles yet for a signal'], indicators: ind };
+    }
+
+    // Directional bias: EMA9/EMA21 crossover confirmed by DI+/DI- dominance —
+    // both must agree, otherwise there's no clean signal to act on.
+    const emaBullish = ind.ema9 > ind.ema21;
+    const diBullish   = ind.diPlus > ind.diMinus;
+    let signal = 'WAIT';
+    if (emaBullish && diBullish)   { signal = 'BUY CALL'; reasons.push(`📈 EMA9>EMA21 (${ind.ema9} vs ${ind.ema21}) + DI+ ${ind.diPlus} > DI- ${ind.diMinus}`); }
+    else if (!emaBullish && !diBullish) { signal = 'BUY PUT'; reasons.push(`📉 EMA9<EMA21 (${ind.ema9} vs ${ind.ema21}) + DI- ${ind.diMinus} > DI+ ${ind.diPlus}`); }
+    else { reasons.push('↔️ EMA and DI direction disagree — no clean bias'); return { signal: 'WAIT', confidence: 0, reasons, indicators: ind }; }
+
+    // RSI-clean gate — exact same thresholds as NIFTY (combineSignals' rsiClean).
+    if (signal === 'BUY CALL' && ind.rsi >= 70) {
+        reasons.push(`⛔ RSI ${ind.rsi} overbought (need <70) — WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind };
+    }
+    if (signal === 'BUY PUT' && ind.rsi <= 30) {
+        reasons.push(`⛔ RSI ${ind.rsi} oversold (need >30) — WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind };
+    }
+
+    // ADX trend-existence gate — same 20 floor NIFTY uses ("trend must exist
+    // before betting directional premium").
+    if (ind.adx < 20) {
+        reasons.push(`⛔ ADX ${ind.adx} < 20 — no real trend, WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind };
+    }
+
+    // Confidence scoring — simple, transparent, same graduated ADX bands
+    // NIFTY's own confidence math uses (30+=strong, 20-30=weak).
+    let confidence = 50;
+    if (ind.adx >= 30) { confidence += 20; reasons.push(`ADX ${ind.adx} strong (+20)`); }
+    else                { confidence += 8;  reasons.push(`ADX ${ind.adx} weak (+8)`); }
+
+    const emaGapPct = Math.abs(ind.ema9 - ind.ema21) / ind.ema21 * 100;
+    if (emaGapPct > 0.1) { confidence += 15; reasons.push(`EMA gap ${emaGapPct.toFixed(2)}% — real separation, not razor-edge (+15)`); }
+
+    const diDominance = Math.abs(ind.diPlus - ind.diMinus);
+    if (diDominance > 10) { confidence += 10; reasons.push(`DI dominance ${diDominance.toFixed(1)} — clear direction (+10)`); }
+
+    confidence = Math.min(95, confidence); // never claim near-certain — same ceiling philosophy as NIFTY
+
+    // Two-layer minimum-confidence gate — mirrors NIFTY's structure exactly.
+    if (confidence < CRUDE_MIN_CONFIDENCE) {
+        reasons.unshift(`⛔ Confidence ${confidence}% < ${CRUDE_MIN_CONFIDENCE}% minimum — edge too thin for option buyer, WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind };
+    }
+    if (confidence < CRUDE_HIGH_CONVICTION_MIN) {
+        reasons.unshift(`🚫 High-Conviction Filter: ${confidence}% < ${CRUDE_HIGH_CONVICTION_MIN}% required — held at WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind };
+    }
+
+    return { signal, confidence, reasons, indicators: ind };
+}
+
 function addCrudeTick(price) {
     const ist    = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const istMin = ist.getHours() * 60 + ist.getMinutes();
