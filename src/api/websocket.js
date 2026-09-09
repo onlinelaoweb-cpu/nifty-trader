@@ -1,6 +1,29 @@
 const WebSocket  = require('ws');
 const loginAngel = require('./angelAuth');
 
+// Phase 2b fix (9 Sep) — module-level tracking of the live connection and
+// what it's currently subscribed to. Replaces a per-connection setInterval
+// closure (nested inside ws.on('open')) that was found NOT to reliably
+// detect the 5:30pm NIFTY→CRUDEOIL boundary on a long-running connection —
+// confirmed via cross-referencing against the independently-working Session
+// Router heartbeat, which correctly saw CRUDEOIL active while the WS stayed
+// on NIFTY all evening. A single top-level watcher in server.js (driven by
+// getCurrentWSLabel()/closeCurrentWS() below) is much easier to reason about
+// and matches the same proven pattern already used for the EOD/session-end
+// sweeps — explicit shared state, checked by one independent timer, instead
+// of a timer's fate being tied to a specific connection's closure lifetime.
+let _currentWS    = null;
+let _currentLabel = null;
+function getCurrentWSLabel() { return _currentLabel; }
+function closeCurrentWS() {
+    if (_currentWS && _currentWS.readyState === WebSocket.OPEN) {
+        console.log('[WS] Forcing reconnect — session boundary crossed');
+        _currentWS.close(); // triggers the normal close→reconnect path
+        return true;
+    }
+    return false;
+}
+
 // Re-authenticates and reconnects — never reuses a potentially-expired JWT
 async function reconnectWebSocket(onTick, delayMs = 5000, getInstrumentConfig = null) {
     console.log(`🔄 WebSocket reconnecting in ${delayMs / 1000}s (fresh auth)...`);
@@ -110,7 +133,8 @@ async function startWebSocket(authData, onTick, getInstrumentConfig = null) {
                 console.warn('[WS] getInstrumentConfig failed, defaulting to NIFTY:', e.message);
             }
         }
-        const subscribedSessionAtConnect = config.label; // for the boundary watcher below
+        const subscribedSessionAtConnect = config.label;
+        _currentLabel = config.label; // module-level, for the top-level watcher in server.js
 
         const ws = new WebSocket(
             'wss://smartapisocket.angelone.in/smart-stream',
@@ -123,9 +147,9 @@ async function startWebSocket(authData, onTick, getInstrumentConfig = null) {
                 }
             }
         );
+        _currentWS = ws; // module-level — lets forceWSReconnectIfStale() reach this connection
 
         let heartbeat = null;
-        let sessionWatcher = null;
         let tickCount = 0;
 
         ws.on('open', () => {
@@ -148,26 +172,6 @@ async function startWebSocket(authData, onTick, getInstrumentConfig = null) {
             heartbeat = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) ws.ping();
             }, 30000);
-
-            // Phase 2b — session-boundary watcher. Checks every 60s whether
-            // the instrument we SHOULD be subscribed to (per getInstrumentConfig)
-            // still matches what we connected with. If the session has moved
-            // on (e.g. NIFTY closed at 3:30, or CRUDEOIL opened at 5:30), force
-            // a clean reconnect rather than trying to juggle subscribe/
-            // unsubscribe messages on the same socket — a fresh connection
-            // guarantees no stale double-subscription state.
-            if (typeof getInstrumentConfig === 'function') {
-                sessionWatcher = setInterval(async () => {
-                    try {
-                        const nowConfig = await getInstrumentConfig();
-                        if (nowConfig?.label && nowConfig.label !== subscribedSessionAtConnect) {
-                            console.log(`[WS] Session changed (${subscribedSessionAtConnect} → ${nowConfig.label}) — reconnecting for new subscription`);
-                            clearInterval(sessionWatcher);
-                            ws.close(); // triggers the normal close→reconnect path below
-                        }
-                    } catch (e) { /* transient — try again next tick */ }
-                }, 60 * 1000);
-            }
         });
 
         ws.on('message', (rawData) => {
@@ -218,7 +222,7 @@ async function startWebSocket(authData, onTick, getInstrumentConfig = null) {
         ws.on('close',  (code) => {
             console.log('🔴 WebSocket Closed:', code);
             clearInterval(heartbeat);
-            clearInterval(sessionWatcher);
+            if (_currentWS === ws) { _currentWS = null; _currentLabel = null; }
             reconnectWebSocket(onTick, 5000, getInstrumentConfig);
         });
         ws.on('ping', () => ws.pong());
@@ -229,4 +233,4 @@ async function startWebSocket(authData, onTick, getInstrumentConfig = null) {
     }
 }
 
-module.exports = startWebSocket;
+module.exports = { startWebSocket, getCurrentWSLabel, closeCurrentWS };

@@ -7,7 +7,7 @@ const axios    = require('axios');
 const { RSI, EMA } = require('technicalindicators'); // Phase 4 (8 Sep) — pure crude indicators, see computeCrudeIndicators()
 
 const loginAngel                    = require('./src/api/angelAuth');
-const startWebSocket                = require('./src/api/websocket');
+const { startWebSocket, getCurrentWSLabel, closeCurrentWS } = require('./src/api/websocket');
 
 // ── SSE: Server-Sent Events for instant frontend push ────────────────────────
 const _sseClients = new Set();
@@ -4783,9 +4783,17 @@ async function onTick(tickData) {
         }
         marketState.crudeoil.price      = price;
         if (tickData.volume > 0) marketState.crudeoil.volume = tickData.volume;
-        if (tickData.open   > 0) marketState.crudeoil.open   = tickData.open;
-        if (tickData.high   > 0) marketState.crudeoil.high   = tickData.high;
-        if (tickData.low    > 0) marketState.crudeoil.low    = tickData.low;
+        // FIX (9 Sep) — confirmed live: crude's O/H/L fields sometimes arrive
+        // as garbage (Low seen as 46530980243759430) — likely an MCX-specific
+        // packet-offset issue not yet root-caused (needs raw hex bytes from a
+        // live crude tick to diagnose properly). Reject anything wildly off
+        // from the current price so garbage doesn't corrupt the candle
+        // builder feeding Phase 3/4/5's indicators. LTP itself isn't affected
+        // by this guard — only O/H/L, which are supplementary.
+        const sane = (v) => v > 0 && v > price * 0.5 && v < price * 1.5;
+        if (sane(tickData.open)) marketState.crudeoil.open = tickData.open;
+        if (sane(tickData.high)) marketState.crudeoil.high = tickData.high;
+        if (sane(tickData.low))  marketState.crudeoil.low  = tickData.low;
         marketState.crudeoil.lastUpdate = Date.now();
         addCrudeTick(price); // Phase 3 — build 1m candles from accepted ticks only
         _lastTickAt = Date.now(); // shared watchdog — a live crude tick counts as "connected" too
@@ -8752,6 +8760,24 @@ function startPollingIntervals() {
             updateOpenTradesMTM().catch(e => console.warn('[Session-End Sweep] error:', e.message));
         }
     }, 60 * 1000);
+    // ── WS session-boundary watcher (9 Sep fix) — replaces a per-connection
+    // closure-based watcher that was confirmed NOT firing reliably (Session
+    // Router heartbeat correctly saw CRUDEOIL active for hours on 9 Sep while
+    // the WS itself stayed silently subscribed to NIFTY the whole evening —
+    // zero live crude ticks that day). This is now a single, independent,
+    // top-level timer — same proven pattern as the EOD Catchup / Session-End
+    // Sweep above — comparing explicit shared state instead of depending on
+    // a timer nested inside a specific WebSocket connection's lifecycle.
+    setTimeout(() => setInterval(async () => {
+        try {
+            const expected = await getWSInstrumentConfig();
+            const current  = getCurrentWSLabel();
+            if (expected?.label && current && expected.label !== current) {
+                console.log(`[WS Watcher] Mismatch: subscribed to ${current}, should be ${expected.label} — forcing reconnect`);
+                closeCurrentWS();
+            }
+        } catch (e) { console.warn('[WS Watcher] error:', e.message); }
+    }, 60 * 1000), 30 * 1000);
     setTimeout(() => setInterval(refreshFyersVolume,      15*1000), 20*1000);   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
     setTimeout(() => setInterval(computePremarketGap,     60*1000), 20*1000);   // opening gap vs prev close, via Fyers (see combineSignals note)
     // Volume scanner (Phase 2, 6 Sep) — baseline refresh is self-guarded to
