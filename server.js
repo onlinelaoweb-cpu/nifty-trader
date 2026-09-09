@@ -547,7 +547,7 @@ function getActiveSession() {
 // can't touch NIFTY's indicators no matter what.
 let _crudeCurrentCandle = null;
 let _crudeLastMinute    = null;
-const CRUDE_CANDLE_CAP  = 150; // same cap as NIFTY's candleHistory, for consistency
+const CRUDE_CANDLE_CAP  = 400; // 10 Sep: raised from 150 — covers a full ~385min evening session so the 5m-aggregated MTF tier (below) has enough bars for ADX well before close, not just in the final hour
 
 // ── CRUDEOIL indicators (Phase 4, 8 Sep) — pure function, no state of its own.
 // Deliberately NOT following indicators.js's calcRSI()/calcEMA() pattern
@@ -611,6 +611,64 @@ const CRUDE_HIGH_CONVICTION_MIN = 70; // stricter filter, mirrors NIFTY's 3-Sep 
                                        // tune independently once real crude signals accumulate,
                                        // exactly like NIFTY's own filter was tuned after the fact.
 
+// ── CRUDEOIL multi-timeframe confirmation (Phase 5.1, 10 Sep) ────────────────
+// Audit finding (independently verified, 9 Sep): Phase 5's single-timeframe
+// (1m only) signal fired a confident BUY on PURE 50/50 random-walk noise in
+// 5/20 test seeds (25%) — a single-timeframe EMA/ADX/DI combo can't tell a
+// real trend from a random walk that happened to drift. NIFTY's own engine
+// solves this with 5m/15m/1h MTF alignment; crude only has 1m candles built
+// up live (Phase 3), so this resamples that SAME data into a 5m tier —
+// no new data source needed, same principle as NIFTY's own resampling.
+// 15m is DELIBERATELY not attempted: it needs ~450min of history for a
+// period-14 ADX, longer than the ~385min evening session itself — with only
+// intra-session 1m candles (no cross-day persistence yet), 15m would almost
+// always return null and contribute nothing. Honest 2-tier beats a fake 3rd.
+function aggregateCandles(candles1m, minutesPerBar) {
+    if (!candles1m || candles1m.length === 0) return [];
+    const bars = [];
+    let current = null, barStartMin = null;
+    for (const c of candles1m) {
+        const d = new Date(c.time);
+        const istMin = Math.floor(d.getTime() / 60000); // minute-resolution bucket key
+        const bucket = Math.floor(istMin / minutesPerBar);
+        if (barStartMin !== bucket) {
+            if (current) bars.push(current);
+            current = { open: c.open, high: c.high, low: c.low, close: c.close, time: c.time };
+            barStartMin = bucket;
+        } else {
+            current.high  = Math.max(current.high, c.high);
+            current.low   = Math.min(current.low, c.low);
+            current.close = c.close;
+        }
+    }
+    if (current) bars.push(current);
+    return bars;
+}
+
+// Direction from indicators — same EMA9/EMA21 + DI dominance rule
+// computeCrudeSignal uses for its own 1m directional bias, applied here to
+// whichever tier is being checked. Returns 'BULL' | 'BEAR' | null (either
+// not enough data yet, or EMA/DI disagree — no clean read on that tier).
+function crudeTFDirection(candles) {
+    const ind = computeCrudeIndicators(candles);
+    if (ind.ema9 == null || ind.ema21 == null || ind.diPlus == null || ind.diMinus == null) return null;
+    const emaBullish = ind.ema9 > ind.ema21;
+    const diBullish  = ind.diPlus > ind.diMinus;
+    if (emaBullish && diBullish)   return 'BULL';
+    if (!emaBullish && !diBullish) return 'BEAR';
+    return null; // disagree — no clean read
+}
+
+function computeCrudeMTF(candles1m) {
+    const tf1m = crudeTFDirection(candles1m);
+    const tf5m = crudeTFDirection(aggregateCandles(candles1m, 5));
+    // 15m intentionally omitted — see comment above.
+    const available = [tf1m, tf5m].filter(x => x !== null);
+    const bullCount = available.filter(x => x === 'BULL').length;
+    const bearCount = available.filter(x => x === 'BEAR').length;
+    return { tf1m, tf5m, availableCount: available.length, bullCount, bearCount };
+}
+
 function computeCrudeSignal(candles1m) {
     const ind = computeCrudeIndicators(candles1m);
     const reasons = [];
@@ -629,6 +687,27 @@ function computeCrudeSignal(candles1m) {
     if (emaBullish && diBullish)   { signal = 'BUY CALL'; reasons.push(`📈 EMA9>EMA21 (${ind.ema9} vs ${ind.ema21}) + DI+ ${ind.diPlus} > DI- ${ind.diMinus}`); }
     else if (!emaBullish && !diBullish) { signal = 'BUY PUT'; reasons.push(`📉 EMA9<EMA21 (${ind.ema9} vs ${ind.ema21}) + DI- ${ind.diMinus} > DI+ ${ind.diPlus}`); }
     else { reasons.push('↔️ EMA and DI direction disagree — no clean bias'); return { signal: 'WAIT', confidence: 0, reasons, indicators: ind }; }
+
+    // Phase 5.1 (10 Sep) — MTF confirmation gate. Direct fix for the audited
+    // finding: single-timeframe (1m only) fired confidently on pure random
+    // noise 25% of the time. Requires the independently-resampled 5m tier to
+    // agree with 1m's direction before proceeding — random noise smoothing
+    // out differently across two different bar sizes is far less likely to
+    // agree by chance than a single series is to fool itself. Doesn't block
+    // when 5m doesn't have enough data yet (~35min into session) — same
+    // "don't guess on missing data" principle as the null-indicator check
+    // above, not a free pass.
+    const mtf = computeCrudeMTF(candles1m);
+    const signalDir = signal === 'BUY CALL' ? 'BULL' : 'BEAR';
+    if (mtf.tf5m !== null && mtf.tf5m !== signalDir) {
+        reasons.push(`⛔ 5m timeframe disagrees (1m:${signalDir} vs 5m:${mtf.tf5m}) — no MTF confirmation, WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind, mtf };
+    }
+    if (mtf.tf5m === signalDir) {
+        reasons.push(`✅ 5m timeframe confirms ${signalDir}`);
+    } else {
+        reasons.push('⏳ 5m timeframe not enough data yet — proceeding on 1m alone');
+    }
 
     // RSI-clean gate — exact same thresholds as NIFTY (combineSignals' rsiClean).
     if (signal === 'BUY CALL' && ind.rsi >= 70) {
@@ -671,7 +750,7 @@ function computeCrudeSignal(candles1m) {
         return { signal: 'WAIT', confidence: 0, reasons, indicators: ind };
     }
 
-    return { signal, confidence, reasons, indicators: ind };
+    return { signal, confidence, reasons, indicators: ind, mtf };
 }
 
 function addCrudeTick(price) {

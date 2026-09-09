@@ -14,6 +14,7 @@ const loginAngel = require('./angelAuth');
 // of a timer's fate being tied to a specific connection's closure lifetime.
 let _currentWS    = null;
 let _currentLabel = null;
+let _crudeDiagCount = 0; // 10 Sep — caps the O/H/L diagnostic hex logging below
 function getCurrentWSLabel() { return _currentLabel; }
 function closeCurrentWS() {
     if (_currentWS && _currentWS.readyState === WebSocket.OPEN) {
@@ -196,6 +197,25 @@ async function startWebSocket(authData, onTick, getInstrumentConfig = null) {
                 if (tick !== null) {
                     if (tickCount <= 10 || tickCount % 100 === 0) {
                         console.log(`${config.label} WS tick #${tickCount}: ₹${tick.price} | Vol:${tick.volume} | Buy:${tick.buyQty} Sell:${tick.sellQty} | O:${tick.open} H:${tick.high} L:${tick.low}`);
+                    }
+                    // Diagnostic (10 Sep) — CRUDEOIL O/H/L sometimes arrives
+                    // implausible (confirmed live: Low as 46530980243759430).
+                    // Working theory: Angel's first-tick-after-subscribe
+                    // "snapshot" packet is commonly incomplete (NIFTY's own
+                    // tick #1 shows O:0 H:0 L:0 — same pattern, zeros instead
+                    // of garbage) rather than a genuine offset bug. Log raw
+                    // hex ONLY when O/H/L looks implausible (>3x or <0.3x
+                    // LTP) so tonight's session gives real bytes to confirm —
+                    // capped at 5 occurrences/connection to avoid log spam if
+                    // it turns out to recur past tick #1.
+                    if (config.label === 'CRUDEOIL' && tick.price > 0) {
+                        const implausible = (v) => v !== 0 && (v > tick.price * 3 || v < tick.price * 0.3);
+                        if (implausible(tick.open) || implausible(tick.high) || implausible(tick.low)) {
+                            _crudeDiagCount++;
+                            if (_crudeDiagCount <= 5) {
+                                console.warn(`[WS-Crude Diag #${_crudeDiagCount}] tick#${tickCount} implausible O/H/L — LTP:${tick.price} O:${tick.open} H:${tick.high} L:${tick.low} | raw hex: ${buf.toString('hex')}`);
+                            }
+                        }
                     }
                     if (typeof onTick === 'function') {
                         onTick({
