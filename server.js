@@ -4634,11 +4634,19 @@ async function updatePrice(price, change, changePct, source) {
         // this runs, so use its bullCount/bearCount here too — same source as
         // Probability Engine, MTF kept only as a fallback if it's unavailable.
         const tcForHealth = marketState.trendConviction;
-        const biasIsBull = tcForHealth
-            ? (tcForHealth.bullCount ?? 0) >= (tcForHealth.bearCount ?? 0)
-            : (marketState.mtf?.bullCount ?? 0) >= (marketState.mtf?.bearCount ?? 0);
-        const healthLabel = healthTotal >= 80 ? (biasIsBull ? 'Strong Bullish Trend' : 'Strong Bearish Trend')
-                           : healthTotal >= 60 ? (biasIsBull ? 'Moderate Bullish Bias' : 'Moderate Bearish Bias')
+        const bullN = tcForHealth ? (tcForHealth.bullCount ?? 0) : (marketState.mtf?.bullCount ?? 0);
+        const bearN = tcForHealth ? (tcForHealth.bearCount ?? 0) : (marketState.mtf?.bearCount ?? 0);
+        // FIX (10 Sep) — confirmed live: a 2-2 tie was silently labeled
+        // "Bullish" because this used >= instead of a real tie check. When
+        // Trend Conviction itself reports "Not active — no one-sided stack"
+        // (a genuine tie), the health label should say so too, not invent a
+        // direction — especially misleading since every OTHER indicator
+        // (RSI, MTF 3/3, VWAP, Renko) can be pointing the opposite way while
+        // this tie-break silently called it "bullish".
+        const biasIsBull = bullN > bearN;
+        const biasIsTied = bullN === bearN;
+        const healthLabel = healthTotal >= 80 ? (biasIsTied ? 'Strong Trend (Mixed Signals)' : biasIsBull ? 'Strong Bullish Trend' : 'Strong Bearish Trend')
+                           : healthTotal >= 60 ? (biasIsTied ? 'Moderate Trend (Mixed Signals)' : biasIsBull ? 'Moderate Bullish Bias' : 'Moderate Bearish Bias')
                            : healthTotal >= 40 ? 'Choppy / Mixed'
                            :                     'Weak / Avoid Trading';
 
