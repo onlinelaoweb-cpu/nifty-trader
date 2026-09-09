@@ -4537,7 +4537,22 @@ async function updatePrice(price, change, changePct, source) {
     // "sureshot" (no filter can), it just removes the low-conviction tail.
     // Tune MIN_SIGNAL_CONFIDENCE based on real-world results — raise it
     // further if 70% still isn't enough, lower it if too few signals fire.
-    const MIN_SIGNAL_CONFIDENCE = 70;
+    //
+    // ADJUSTED 70→60 (10 Sep, controlled test, data-backed): 9-day
+    // daily_signal_counts history showed 6/9 days (67%) with ZERO signals
+    // actually sent — despite 7,000-15,000+ "Strong" classifications/day —
+    // and only 2 closed trades total in the last 7 days via
+    // /api/performance-analytics (too few to judge whether 70% was even
+    // producing good quality, just that it was producing almost nothing).
+    // This compounds with the separate 55% range-pocket confidence cap
+    // (found 8 Sep) — a signal capped at 55% could never clear a 70% floor
+    // regardless of MTF/ADX strength; a 60% floor still respects that cap's
+    // intent (still blocks the weakest range-pocket cases) while letting
+    // through moderately-capped ones. Revisit with 1-2 more weeks of
+    // crude_signal_log-style data — raise back toward 70% if 60% lets in
+    // too much noise, or address the range-pocket interaction directly if
+    // it's still the dominant blocker.
+    const MIN_SIGNAL_CONFIDENCE = 60;
     if (signal !== 'WAIT' && confidence < MIN_SIGNAL_CONFIDENCE) {
         reasons.unshift(`🚫 High-Conviction Filter: ${confidence}% confidence < ${MIN_SIGNAL_CONFIDENCE}% required — held at WAIT`);
         signal = 'WAIT'; confidence = 0;
