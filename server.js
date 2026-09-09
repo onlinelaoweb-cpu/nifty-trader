@@ -58,6 +58,7 @@ const {
     triggerInitialPCR,                            // fire first PCR after Angel login
     fetchFyersQuote,                              // real volume/OHLC for index (Angel WS sends 0)
     getCrudeOilFutureToken,                       // Phase 2a: MCX CRUDEOIL futures token lookup
+    fetchCrudePCR,                                 // Phase 5.2: independent crude PCR confirmation
     getFnOStockList,                              // Volume scanner Phase 1: F&O stock universe + EQ tokens
     getCurrentFyersFutSymbol,                     // correct NSE:NIFTY{YY}{MMM}FUT symbol (NIFTY-I is invalid on Fyers)
 } = require('./src/api/nseData');
@@ -110,7 +111,7 @@ let marketState = {
     // small object, NOT mixed into any of the NIFTY fields below — the WS
     // tick handler (onTick) branches on getActiveSession() and routes crude
     // ticks here exclusively, never touching marketState.nifty/wsVolume/etc.
-    crudeoil: { price: 0, volume: 0, open: 0, high: 0, low: 0, lastUpdate: null, symbol: null, token: null, candles1m: [] },
+    crudeoil: { price: 0, volume: 0, open: 0, high: 0, low: 0, lastUpdate: null, symbol: null, token: null, candles1m: [], pcr: null },
     signal: 'WAIT', confidence: 0,
     rsi: null, ema9: null, ema21: null, vwap: null,
     pcr: null, atmPcr: null, pcrSignal: 'N/A', atmPcrSignal: 'N/A',
@@ -669,7 +670,7 @@ function computeCrudeMTF(candles1m) {
     return { tf1m, tf5m, availableCount: available.length, bullCount, bearCount };
 }
 
-function computeCrudeSignal(candles1m) {
+function computeCrudeSignal(candles1m, crudePCR = null) {
     const ind = computeCrudeIndicators(candles1m);
     const reasons = [];
 
@@ -707,6 +708,30 @@ function computeCrudeSignal(candles1m) {
         reasons.push(`✅ 5m timeframe confirms ${signalDir}`);
     } else {
         reasons.push('⏳ 5m timeframe not enough data yet — proceeding on 1m alone');
+    }
+
+    // Phase 5.2 (10 Sep) — PCR confirmation gate. Unlike the MTF-lite tier
+    // above (which turned out correlated with the same 1m price series and
+    // didn't reduce false positives on independent testing), PCR comes from
+    // OPTIONS POSITIONING — genuinely different information from price
+    // action, the same reason NIFTY's own PCR gate is a real second opinion,
+    // not just another view of the same series. Same convention as NIFTY's
+    // pcrLabel(): PCR>1.3 reads BULLISH (heavy put OI = support), PCR<0.8
+    // reads BEARISH. Doesn't block when PCR data isn't available (Fyers
+    // down, or too early in session) — same missing-data principle as the
+    // other gates above.
+    const pcrDir = crudePCR?.pcr == null ? null
+                 : crudePCR.pcr > 1.3 ? 'BULL'
+                 : crudePCR.pcr < 0.8 ? 'BEAR'
+                 : 'NEUTRAL';
+    if (pcrDir && pcrDir !== 'NEUTRAL' && pcrDir !== signalDir) {
+        reasons.push(`⛔ PCR ${crudePCR.pcr} disagrees (signal:${signalDir} vs PCR:${pcrDir}) — WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind, mtf, pcr: crudePCR };
+    }
+    if (pcrDir === signalDir) {
+        reasons.push(`✅ PCR ${crudePCR.pcr} confirms ${signalDir}`);
+    } else if (!crudePCR) {
+        reasons.push('⏳ PCR not available yet — proceeding without it');
     }
 
     // RSI-clean gate — exact same thresholds as NIFTY (combineSignals' rsiClean).
@@ -750,7 +775,7 @@ function computeCrudeSignal(candles1m) {
         return { signal: 'WAIT', confidence: 0, reasons, indicators: ind };
     }
 
-    return { signal, confidence, reasons, indicators: ind, mtf };
+    return { signal, confidence, reasons, indicators: ind, mtf, pcr: crudePCR };
 }
 
 function addCrudeTick(price) {
@@ -6165,6 +6190,36 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL market_snapshot_log table ready');
 
+        // ── crude_signal_log table (Phase 5.3, 10 Sep) ──────────────────────────
+        // Structural gap noticed during audit: computeCrudeSignal() (Phase 5) has
+        // never had anywhere to log its output, so there's no way to ever measure
+        // "was it actually right" — unlike NIFTY's signal_log, which is what let
+        // us find the mtf_aligned bug, calibrate the 70% confidence filter, etc.
+        // Logs every FIRED signal (not WAIT — same fire-only pattern as NIFTY's
+        // signal_log, see its own comment for why). Deliberately lean: no target/
+        // SL/outcome tracking yet (Phase 5 isn't live-wired to real trades), just
+        // enough to see what it WOULD have said and start accumulating a record.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS crude_signal_log (
+                id          SERIAL PRIMARY KEY,
+                ts          TIMESTAMPTZ DEFAULT NOW(),
+                signal      TEXT,
+                confidence  INT,
+                price       NUMERIC,
+                rsi         NUMERIC,
+                ema9        NUMERIC,
+                ema21       NUMERIC,
+                adx         NUMERIC,
+                di_plus     NUMERIC,
+                di_minus    NUMERIC,
+                mtf_1m      TEXT,
+                mtf_5m      TEXT,
+                pcr         NUMERIC,
+                reasons     TEXT
+            )
+        `);
+        console.log('✅ PostgreSQL crude_signal_log table ready');
+
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
         // (fire-and-forget snapshot), this table AUTOMATICALLY tracks what happened
@@ -6498,6 +6553,32 @@ function buildSignalPayload() {
 // Called every time combineSignals() produces a FRESH BUY CALL or BUY PUT
 // (i.e. signal changed from previous). Records full market snapshot so you can
 // review past setups, filter by quality gate, and spot patterns over time.
+// Phase 5.3 (10 Sep) — crude equivalent of saveSignalToLog below, same
+// fire-only pattern (logs on a fresh non-WAIT signal, not every WAIT tick).
+async function saveCrudeSignalToLog(result, price) {
+    if (!dbPool || !result || result.signal === 'WAIT') return;
+    try {
+        const ind = result.indicators || {};
+        await dbPool.query(
+            `INSERT INTO crude_signal_log
+              (signal, confidence, price, rsi, ema9, ema21, adx, di_plus, di_minus,
+               mtf_1m, mtf_5m, pcr, reasons)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+            [
+                result.signal, result.confidence, price,
+                ind.rsi ?? null, ind.ema9 ?? null, ind.ema21 ?? null,
+                ind.adx ?? null, ind.diPlus ?? null, ind.diMinus ?? null,
+                result.mtf?.tf1m ?? null, result.mtf?.tf5m ?? null,
+                result.pcr?.pcr ?? null,
+                JSON.stringify((result.reasons || []).slice(0, 12)),
+            ]
+        );
+        console.log(`📝 [Crude] Signal logged: ${result.signal} @ ₹${price} (conf:${result.confidence}%)`);
+    } catch (e) {
+        console.warn('[Crude Signal Log] save error:', e.message);
+    }
+}
+
 async function saveSignalToLog(signal, prevSig) {
     if (!dbPool) return;
     try {
@@ -8320,6 +8401,7 @@ app.get('/api/crude-live', (req, res) => {
         candles1mCount: candles1m.length,
         candles1mRecent: candles1m.slice(-5),
         indicators: computeCrudeIndicators(candles1m),
+        signal: computeCrudeSignal(candles1m, marketState.crudeoil.pcr),
     });
 });
 
@@ -8675,6 +8757,40 @@ app.get('/api/performance-analytics', async (req, res) => {
     }
 });
 
+// 10 Sep — daily signal-count history, to check whether the "0 Strong
+// signals sent" pattern (first seen 4 Sep audit) recurs regularly or was a
+// one-off. Pulls straight from daily_signal_counts (see its table comment
+// for why it's DB-backed, not just in-memory).
+app.get('/api/daily-signal-history', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const days = Math.min(parseInt(req.query.days) || 14, 60);
+        const r = await dbPool.query(
+            `SELECT trade_date, main, mtf_strong, mtf_moderate, mtf_weak, mtf_strong_sent
+             FROM daily_signal_counts
+             WHERE trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '${days} days'
+             ORDER BY trade_date DESC`
+        );
+        const zeroSentDays = r.rows.filter(row => (row.mtf_strong_sent || 0) === 0 && (row.mtf_strong || 0) > 0).length;
+        res.json({ success: true, days: r.rows, zeroSentDaysCount: zeroSentDays, totalDays: r.rows.length });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 10 Sep — crude signal log viewer. Empty until tonight's session produces
+// at least one fired signal (WAIT states aren't logged, same as NIFTY).
+app.get('/api/crude-signal-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+        const r = await dbPool.query(`SELECT * FROM crude_signal_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // ── EVENTS CALENDAR ───────────────────────────────────
 app.post('/api/event', requireToken, (req,res) => {
     const {time,title,impact}=req.body;
@@ -8865,6 +8981,35 @@ function startPollingIntervals() {
             }
         } catch (e) { console.warn('[WS Watcher] error:', e.message); }
     }, 60 * 1000), 30 * 1000);
+    // Phase 5.2 (10 Sep) — CRUDEOIL PCR refresh, session-gated (only fetches
+    // when isCrudeSessionOpen() — no point hitting Fyers for crude options
+    // outside the evening window). ~90s cadence matches the other crude
+    // polling intervals; PCR doesn't need NIFTY's faster 30s cadence since
+    // it's a confirmation gate, not the primary driver.
+    setTimeout(() => setInterval(async () => {
+        if (!isCrudeSessionOpen()) return;
+        try {
+            const result = await fetchCrudePCR();
+            if (result) marketState.crudeoil.pcr = result;
+        } catch (e) { console.warn('[Crude PCR] interval error:', e.message); }
+    }, 90*1000), 35*1000);
+    // Phase 5.3 (10 Sep) — crude signal tracking. Checks every 60s during the
+    // crude session; logs only when a FRESH non-WAIT signal appears (not
+    // every poll while it stays the same direction) — same dedup principle
+    // as NIFTY's prevSig tracking for signal_log.
+    let _lastCrudeSignalLogged = null;
+    setTimeout(() => setInterval(async () => {
+        if (!isCrudeSessionOpen()) { _lastCrudeSignalLogged = null; return; }
+        try {
+            const result = computeCrudeSignal(marketState.crudeoil.candles1m, marketState.crudeoil.pcr);
+            if (result.signal !== 'WAIT' && result.signal !== _lastCrudeSignalLogged) {
+                await saveCrudeSignalToLog(result, marketState.crudeoil.price);
+                _lastCrudeSignalLogged = result.signal;
+            } else if (result.signal === 'WAIT') {
+                _lastCrudeSignalLogged = null; // reset so the next fire (even same direction) logs fresh
+            }
+        } catch (e) { console.warn('[Crude Signal] tracking interval error:', e.message); }
+    }, 60*1000), 40*1000);
     setTimeout(() => setInterval(refreshFyersVolume,      15*1000), 20*1000);   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
     setTimeout(() => setInterval(computePremarketGap,     60*1000), 20*1000);   // opening gap vs prev close, via Fyers (see combineSignals note)
     // Volume scanner (Phase 2, 6 Sep) — baseline refresh is self-guarded to

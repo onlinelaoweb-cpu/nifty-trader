@@ -1322,6 +1322,69 @@ async function getCrudeOilFutureToken() {
     }
 }
 
+// Builds the Fyers-format CRUDEOIL futures symbol (e.g. "MCX:CRUDEOIL26SEPFUT")
+// from getCrudeOilFutureToken()'s Angel-format expiry ("21SEP2026") — avoids
+// duplicating NIFTY's own expiry-cycle date math, since Angel's ScripMaster
+// already gives us the authoritative correct expiry.
+async function getCrudeFyersSymbol() {
+    const crude = await getCrudeOilFutureToken();
+    if (!crude?.expiry) return null;
+    const m = crude.expiry.match(/\d{2}(\w{3})(\d{4})/);
+    if (!m) return null;
+    return `MCX:CRUDEOIL${m[2].slice(2)}${m[1].toUpperCase()}FUT`;
+}
+
+// Phase 5.2 (10 Sep) — CRUDEOIL PCR, a genuinely independent confirming
+// signal for the signal engine (unlike the MTF-lite resampling attempt,
+// which turned out correlated with the same 1m price series and didn't
+// reduce false positives on testing). PCR comes from options positioning,
+// not price action — a real second opinion. Deliberately lean: crude's
+// Fyers option-chain-v3 response already includes pre-aggregated
+// data.callOi/data.putOi at the top level (confirmed live, Phase 0
+// testing) — no need for NIFTY PCR's per-strike summation loop, ATM
+// premium tracking, or wall detection, none of which crude's signal
+// engine uses yet.
+async function fetchCrudePCR() {
+    if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return null;
+    try {
+        const fyersSymbol = await getCrudeFyersSymbol();
+        if (!fyersSymbol) return null;
+
+        const res = await axios.get(
+            'https://api-t1.fyers.in/data/options-chain-v3',
+            {
+                params : { symbol: fyersSymbol, strikecount: 10, timestamp: '' },
+                headers: {
+                    'Authorization': `${FYERS_APP_ID}:${FYERS_ACCESS_TOKEN}`,
+                    'Content-Type' : 'application/json',
+                    'version'      : '3',
+                },
+                timeout: 10_000,
+            }
+        );
+        if (typeof res.data === 'string' && res.data.includes('<html')) {
+            console.warn('[Crude PCR] HTML response — IP block or auth issue');
+            return null;
+        }
+        const d = res.data;
+        if (!d || d.s !== 'ok' || !d.data) {
+            console.warn(`[Crude PCR] Bad response: s=${d?.s} | code=${d?.code}`);
+            return null;
+        }
+        const callOi = Number(d.data.callOi || 0);
+        const putOi  = Number(d.data.putOi  || 0);
+        if (callOi === 0 && putOi === 0) {
+            console.warn('[Crude PCR] Both callOi and putOi are zero');
+            return null;
+        }
+        const pcr = callOi > 0 ? parseFloat((putOi / callOi).toFixed(3)) : null;
+        return { pcr, callOi, putOi, symbol: fyersSymbol };
+    } catch (e) {
+        console.warn('[Crude PCR] error:', e.response?.status || e.message);
+        return null;
+    }
+}
+
 async function fetchPCRFromAngel(spotPrice) {
     if (!_angelSession?.jwtToken) return null;
     if (!spotPrice || spotPrice <= 0) return null;
@@ -2461,6 +2524,8 @@ module.exports = {
     fetchFyersStockHistory,
     getCurrentFyersFutSymbol,
     getCrudeOilFutureToken,
+    fetchCrudePCR,
+    getCrudeFyersSymbol,
     getFnOStockList,
 
     // Snapshots (for /debug routes)
