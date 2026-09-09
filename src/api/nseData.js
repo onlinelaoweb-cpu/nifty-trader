@@ -1255,6 +1255,11 @@ async function getFnOStockList() {
 
         const stocks = scrips
             .filter(s => s.exch_seg === 'NSE' && s.instrumenttype === '' && s.symbol?.endsWith('-EQ'))
+            // FIX (10 Sep) — confirmed live: Angel's ScripMaster includes NSE
+            // exchange-test scrips (e.g. "011NSETEST") among real F&O
+            // underlyings — not real tradable securities. 18/228 were this,
+            // each failing baseline history lookup with a 422 every day.
+            .filter(s => !/NSETEST/i.test(s.name || ''))
             .map(s => ({ name: s.name, token: s.token, symbol: s.symbol }));
 
         console.log(`[FnOStockList] Resolved ${stocks.length} F&O stocks with NSE-EQ tokens`);

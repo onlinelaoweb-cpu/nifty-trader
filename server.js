@@ -8884,6 +8884,32 @@ function startPollingIntervals() {
 }
 
 // Retries Angel login only — intervals and initial data are already running
+// Phase 2b (8 Sep) — decides which instrument the WebSocket should be
+// subscribed to right now. Returns NIFTY's config for anything that isn't
+// explicitly the CRUDEOIL evening window (including 'CLOSED', as a safe
+// default — subscribing to NIFTY's token when the market is shut is
+// harmless, just idle). MCX exchangeType is 5 per Angel SmartAPI's
+// exchangeType enum (1=NSE_CM, 2=NSE_FO, 3=BSE_CM, 4=BSE_FO, 5=MCX_FO).
+async function getWSInstrumentConfig() {
+    if (getActiveSession() !== 'CRUDEOIL') {
+        return { token: '26000', exchangeType: 1, label: 'NIFTY 50', priceMin: 15000, priceMax: 35000 };
+    }
+    try {
+        const crude = await getCrudeOilFutureToken();
+        if (crude?.token) {
+            // Wide-but-sane band around crude's actual trading range (seen
+            // live: ~8500-8600 on 4 Sep) — generous margin for normal
+            // day-to-day moves without accidentally admitting a garbled packet.
+            return { token: String(crude.token), exchangeType: 5, label: 'CRUDEOIL', priceMin: 3000, priceMax: 20000 };
+        }
+    } catch (e) {
+        console.warn('[WS] getWSInstrumentConfig crude lookup failed, falling back to NIFTY:', e.message);
+    }
+    // Crude token lookup failed — fall back to NIFTY rather than leave the
+    // WS with an invalid/missing token.
+    return { token: '26000', exchangeType: 1, label: 'NIFTY 50', priceMin: 15000, priceMax: 35000 };
+}
+
 async function tryAngelLogin() {
     const auth = await loginAngel();
     if (auth) {
@@ -8931,32 +8957,24 @@ async function tryAngelLogin() {
             }, 5000);
         }
         // Phase 2b (8 Sep) — decides which instrument the WebSocket should be
-// subscribed to right now. Returns NIFTY's config for anything that isn't
-// explicitly the CRUDEOIL evening window (including 'CLOSED', as a safe
-// default — subscribing to NIFTY's token when the market is shut is
-// harmless, just idle). MCX exchangeType is 5 per Angel SmartAPI's
-// exchangeType enum (1=NSE_CM, 2=NSE_FO, 3=BSE_CM, 4=BSE_FO, 5=MCX_FO).
-async function getWSInstrumentConfig() {
-    if (getActiveSession() !== 'CRUDEOIL') {
-        return { token: '26000', exchangeType: 1, label: 'NIFTY 50', priceMin: 15000, priceMax: 35000 };
-    }
-    try {
-        const crude = await getCrudeOilFutureToken();
-        if (crude?.token) {
-            // Wide-but-sane band around crude's actual trading range (seen
-            // live: ~8500-8600 on 4 Sep) — generous margin for normal
-            // day-to-day moves without accidentally admitting a garbled packet.
-            return { token: String(crude.token), exchangeType: 5, label: 'CRUDEOIL', priceMin: 3000, priceMax: 20000 };
-        }
-    } catch (e) {
-        console.warn('[WS] getWSInstrumentConfig crude lookup failed, falling back to NIFTY:', e.message);
-    }
-    // Crude token lookup failed — fall back to NIFTY rather than leave the
-    // WS with an invalid/missing token.
-    return { token: '26000', exchangeType: 1, label: 'NIFTY 50', priceMin: 15000, priceMax: 35000 };
-}
-
-startWebSocket(auth, onTick, getWSInstrumentConfig);
+        // subscribed to right now. Returns NIFTY's config for anything that isn't
+        // explicitly the CRUDEOIL evening window (including 'CLOSED', as a safe
+        // default — subscribing to NIFTY's token when the market is shut is
+        // harmless, just idle). MCX exchangeType is 5 per Angel SmartAPI's
+        // exchangeType enum (1=NSE_CM, 2=NSE_FO, 3=BSE_CM, 4=BSE_FO, 5=MCX_FO).
+        //
+        // FIX (10 Sep) — this was accidentally nested inside tryAngelLogin()
+        // (bad indentation masked it looking top-level) since the day it was
+        // written. That meant startWebSocket()'s call to it (right below,
+        // from within tryAngelLogin — still fine, same scope) worked, but the
+        // NEW top-level WS Watcher added in startPollingIntervals() — a
+        // SIBLING function — couldn't see it at all: "getWSInstrumentConfig
+        // is not defined", every 60s, silently swallowed by its own
+        // try/catch. Net effect: today's session-switch fix never actually
+        // ran even once since deploy. Moved to genuine top-level scope now,
+        // BEFORE tryAngelLogin so hoisting isn't even a question — accessible
+        // from both tryAngelLogin and startPollingIntervals.
+        startWebSocket(auth, onTick, getWSInstrumentConfig);
         _angelLoggedIn = true;
         // On retry logins (after init is complete), immediately refresh breadth
         // with the real Angel Nifty50 data. During initial startup this is skipped
