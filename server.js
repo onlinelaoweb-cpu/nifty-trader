@@ -671,13 +671,31 @@ function computeCrudeMTF(candles1m) {
 }
 
 function computeCrudeSignal(candles1m, crudePCR = null) {
-    const ind = computeCrudeIndicators(candles1m);
+    // FIX (10 Sep, evening) — primary indicator basis changed from 1m to 3m.
+    // Tonight's own testing proved two things: (1) 1m-based RSI/EMA/ADX fired
+    // confidently on pure random-walk noise in 5/20 (25%) synthetic seeds —
+    // a single short-bar series can't distinguish a real trend from a random
+    // walk that happened to drift; (2) adding a 1m/5m "MTF" confirmation
+    // gate on TOP of that didn't help (30% vs 25% baseline on re-test) —
+    // because 5m was just the SAME 1m series resampled, not independent
+    // information, so noise that fooled 1m often fooled 5m identically.
+    // 3m candles are a genuinely different series (more raw ticks averaged
+    // per bar than 1m), not another layer resampling the same short window —
+    // the actual lever that can reduce noise, unlike stacking more same-
+    // session tiers. RSI/EMA/ADX/DI below are ALL now computed on this
+    // 3m-aggregated series; every gate downstream (RSI-clean, ADX-floor,
+    // confidence scoring) inherits the change automatically since they all
+    // read from `ind`.
+    const candles3m = aggregateCandles(candles1m, 3);
+    const ind = computeCrudeIndicators(candles3m);
     const reasons = [];
 
-    // Not enough data yet for the indicators this depends on (ADX needs 30+
-    // candles = 30 min into the session) — WAIT, not a guess.
+    // Not enough data yet for the indicators this depends on — WAIT, not a
+    // guess. 3m basis needs more wall-clock time to warm up than 1m did
+    // (ADX(14) needs 30 bars = 90min of 1m ticks, vs 30min before) — that's
+    // the accepted tradeoff for a less noisy signal later in the session.
     if (ind.rsi == null || ind.ema9 == null || ind.ema21 == null || ind.adx == null) {
-        return { signal: 'WAIT', confidence: 0, reasons: ['⏳ Not enough candles yet for a signal'], indicators: ind };
+        return { signal: 'WAIT', confidence: 0, reasons: ['⏳ Not enough candles yet for a signal (3m basis needs ~90min into session for ADX)'], indicators: ind };
     }
 
     // Directional bias: EMA9/EMA21 crossover confirmed by DI+/DI- dominance —
@@ -689,25 +707,17 @@ function computeCrudeSignal(candles1m, crudePCR = null) {
     else if (!emaBullish && !diBullish) { signal = 'BUY PUT'; reasons.push(`📉 EMA9<EMA21 (${ind.ema9} vs ${ind.ema21}) + DI- ${ind.diMinus} > DI+ ${ind.diPlus}`); }
     else { reasons.push('↔️ EMA and DI direction disagree — no clean bias'); return { signal: 'WAIT', confidence: 0, reasons, indicators: ind }; }
 
-    // Phase 5.1 (10 Sep) — MTF confirmation gate. Direct fix for the audited
-    // finding: single-timeframe (1m only) fired confidently on pure random
-    // noise 25% of the time. Requires the independently-resampled 5m tier to
-    // agree with 1m's direction before proceeding — random noise smoothing
-    // out differently across two different bar sizes is far less likely to
-    // agree by chance than a single series is to fool itself. Doesn't block
-    // when 5m doesn't have enough data yet (~35min into session) — same
-    // "don't guess on missing data" principle as the null-indicator check
-    // above, not a free pass.
+    // MTF (10 Sep, evening) — DEMOTED from a blocking gate to informational
+    // display only. Tested and confirmed NOT to reduce false positives (see
+    // comment at the top of this function) — kept computing/returning it
+    // only because the CRUDEOIL dashboard tab shows 1m/5m trend context;
+    // it no longer forces WAIT on disagreement.
     const mtf = computeCrudeMTF(candles1m);
     const signalDir = signal === 'BUY CALL' ? 'BULL' : 'BEAR';
-    if (mtf.tf5m !== null && mtf.tf5m !== signalDir) {
-        reasons.push(`⛔ 5m timeframe disagrees (1m:${signalDir} vs 5m:${mtf.tf5m}) — no MTF confirmation, WAIT`);
-        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind, mtf };
-    }
     if (mtf.tf5m === signalDir) {
-        reasons.push(`✅ 5m timeframe confirms ${signalDir}`);
-    } else {
-        reasons.push('⏳ 5m timeframe not enough data yet — proceeding on 1m alone');
+        reasons.push(`ℹ️ 1m/5m context: 5m agrees (${signalDir})`);
+    } else if (mtf.tf5m !== null) {
+        reasons.push(`ℹ️ 1m/5m context: 5m shows ${mtf.tf5m} (informational only, not blocking)`);
     }
 
     // Phase 5.2 (10 Sep) — PCR confirmation gate. Unlike the MTF-lite tier
