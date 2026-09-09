@@ -9499,8 +9499,8 @@ function _statRow(label, val) {
       F&amp;O stocks trading unusual cash-market volume vs their own 20-day average. "Burst" = last ~10 min pace vs normal pace for that window — separate from NIFTY/CRUDEOIL options signals.
     </div>
     <div style="display:flex;gap:8px;margin-bottom:10px;">
-      <button id="scanner-sort-ratio" class="more-item" style="flex:1;padding:6px;" onclick="scannerSetSort('ratio')">📊 Sort: Day Ratio</button>
-      <button id="scanner-sort-burst" class="more-item" style="flex:1;padding:6px;" onclick="scannerSetSort('burst')">⚡ Sort: Burst</button>
+      <button id="scanner-sort-ratio" class="more-item" style="flex:1;padding:6px;" onclick="scannerSetSort('ratio')">📊 Sort: 20d Ratio</button>
+      <button id="scanner-sort-burst" class="more-item" style="flex:1;padding:6px;" onclick="scannerSetSort('burst')">⚡ Sort: 10m Burst</button>
     </div>
     <div id="scanner-table-wrap" style="overflow-x:auto;">
       <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -9509,8 +9509,8 @@ function _statRow(label, val) {
             <th style="padding:6px 4px;">Stock</th>
             <th style="padding:6px 4px;text-align:right;">LTP</th>
             <th style="padding:6px 4px;text-align:right;">%Chg</th>
-            <th style="padding:6px 4px;text-align:right;">Day Ratio</th>
-            <th style="padding:6px 4px;text-align:right;">Burst</th>
+            <th style="padding:6px 4px;text-align:right;">20d Ratio</th>
+            <th style="padding:6px 4px;text-align:right;">10m Burst</th>
           </tr>
         </thead>
         <tbody id="scanner-tbody">
