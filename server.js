@@ -8540,6 +8540,23 @@ app.get('/api/fyers-token-check', async (req, res) => {
     }
 });
 
+// 10 Sep — simple GET Telegram sync check, no POST/auth needed (unlike the
+// existing /api/telegram/test, which requires a POST + X-App-Token). Opens
+// directly in a browser — sends a lightweight confirmation message so you
+// can see it land in the actual Telegram chat, not just check config status.
+app.get('/api/telegram-sync-check', async (req, res) => {
+    if (!isConfigured()) {
+        return res.json({ success: false, message: 'Not configured — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing in Railway variables' });
+    }
+    try {
+        const now = getIST().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+        await sendRawMessage(`✅ Telegram sync check — ${now}\nVardaanNifty AI is connected and can send messages.`);
+        res.json({ success: true, message: 'Sent — check your Telegram chat now' });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 app.get('/api/crude-token', async (req,res) => {
     try {
         const result = await getCrudeOilFutureToken();
