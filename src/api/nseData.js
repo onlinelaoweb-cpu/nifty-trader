@@ -1778,7 +1778,7 @@ async function fetchFyersQuotesBulk(symbols) {
 // the Angel historical function so volumeScanner.js can treat them
 // interchangeably.
 async function fetchFyersStockHistory(symbol, daysBack = 32) {
-    if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return [];
+    if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return { volumes: [], closes: [] };
     try {
         const to   = new Date();
         const from = new Date(to.getTime() - daysBack * 24 * 60 * 60 * 1000);
@@ -1797,14 +1797,18 @@ async function fetchFyersStockHistory(symbol, daysBack = 32) {
                 timeout: 10_000,
             }
         );
-        if (typeof res.data === 'string' && res.data.includes('<html')) return [];
+        if (typeof res.data === 'string' && res.data.includes('<html')) return { volumes: [], closes: [] };
         const d = res.data;
-        if (!d || d.s !== 'ok' || !Array.isArray(d.candles)) return [];
+        if (!d || d.s !== 'ok' || !Array.isArray(d.candles)) return { volumes: [], closes: [] };
         // candle row: [epoch, open, high, low, close, volume]
-        return d.candles.map(row => Number(row[5]) || 0).filter(v => v > 0);
+        // 10 Sep — also keep closes (for 20-day high/low price-action context
+        // in the volume scanner), not just volume.
+        const volumes = d.candles.map(row => Number(row[5]) || 0).filter(v => v > 0);
+        const closes  = d.candles.map(row => Number(row[4]) || 0).filter(v => v > 0);
+        return { volumes, closes };
     } catch (e) {
         console.warn(`[Fyers History] ${symbol} error: ${e.response?.status || e.message}`);
-        return [];
+        return { volumes: [], closes: [] };
     }
 }
 

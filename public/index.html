@@ -9679,8 +9679,11 @@ function renderVolumeScannerUI(d) {
     const chgColor = s.pctChange > 0 ? 'var(--green)' : s.pctChange < 0 ? 'var(--red)' : 'var(--dim)';
     const burstTxt = s.burstRatio != null ? s.burstRatio.toFixed(1) + 'x' : '--';
     const burstColor = s.burstRatio >= 3 ? 'var(--green)' : s.burstRatio >= 1.5 ? 'var(--amber)' : 'var(--dim)';
-    return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
-      <td style="padding:6px 4px;font-weight:600;">${s.name}</td>
+    const priceIcon = s.priceContext === '20d high breakout' ? ' 🚀' : s.priceContext === '20d low breakdown' ? ' 🔻' : '';
+    const sectorTag = s.sector && s.sector !== 'Other'
+      ? `<div style="font-size:9px;color:var(--dim);opacity:0.7;">${s.sector}</div>` : '';
+    return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);" title="${s.priceContext || ''}">
+      <td style="padding:6px 4px;font-weight:600;">${s.name}${priceIcon}${sectorTag}</td>
       <td style="padding:6px 4px;text-align:right;">${s.ltp?.toFixed(1) ?? '--'}</td>
       <td style="padding:6px 4px;text-align:right;color:${chgColor};">${s.pctChange?.toFixed(2) ?? '--'}%</td>
       <td style="padding:6px 4px;text-align:right;color:var(--accent);">${s.ratio.toFixed(2)}x</td>

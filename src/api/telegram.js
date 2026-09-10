@@ -555,13 +555,16 @@ async function sendVolumeScannerAlert(stock) {
     const burstLine = stock.burstRatio != null
         ? `⚡ Last 10-min burst: <b>${stock.burstRatio}x</b> normal pace\n`
         : '';
+    const priceContextLine = stock.priceContext
+        ? `🎯 ${stock.priceContext}\n`
+        : '';
     const chgSign = stock.pctChange > 0 ? '▲' : stock.pctChange < 0 ? '▼' : '▪';
     const msg = `
 🔥 <b>UNUSUAL VOLUME — ${stock.name}</b>
 ━━━━━━━━━━━━━━━━━━
 LTP: <b>₹${stock.ltp}</b>  ${chgSign} ${Math.abs(stock.pctChange).toFixed(2)}%
 📊 Volume: <b>${stock.ratio}x</b> its 20-day average
-${burstLine}━━━━━━━━━━━━━━━━━━
+${burstLine}${priceContextLine}━━━━━━━━━━━━━━━━━━
 <i>Descriptive only — not a trade recommendation. Check the chart before acting.</i>
 <i>VardaanNifty AI — Volume Scanner</i>
 `.trim();

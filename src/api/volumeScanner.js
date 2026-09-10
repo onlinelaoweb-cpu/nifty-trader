@@ -24,6 +24,66 @@
 const axios = require('axios');
 const { fetchFyersQuotesBulk, fetchFyersStockHistory } = require('./nseData');
 
+// ── Sector classification (10 Sep) ────────────────────────────────────────
+// Static mapping — no reliable free/live per-stock sector source exists
+// (NSE's equity-stockIndices endpoint is confirmed 404 on Railway IPs
+// elsewhere in this codebase, and Angel's ScripMaster carries no sector
+// field). Scoped to the major, well-known F&O stocks — anything not listed
+// here is honestly bucketed as "Other" rather than guessed, since a wrong
+// sector label is worse than an admitted gap.
+const SECTOR_MAP = {
+    // Banking / Financial Services
+    HDFCBANK:'Banking', ICICIBANK:'Banking', SBIN:'Banking', KOTAKBANK:'Banking',
+    AXISBANK:'Banking', INDUSINDBK:'Banking', BANKBARODA:'Banking', PNB:'Banking',
+    IDFCFIRSTB:'Banking', FEDERALBNK:'Banking', AUBANK:'Banking', BANDHANBNK:'Banking',
+    BAJFINANCE:'Financial Services', BAJAJFINSV:'Financial Services', HDFCLIFE:'Financial Services',
+    SBILIFE:'Financial Services', ICICIGI:'Financial Services', ICICIPRULI:'Financial Services',
+    SHRIRAMFIN:'Financial Services', CHOLAFIN:'Financial Services', MUTHOOTFIN:'Financial Services',
+    LICHSGFIN:'Financial Services', PFC:'Financial Services', RECLTD:'Financial Services',
+    LICI:'Financial Services', SBICARD:'Financial Services', PAYTM:'Financial Services',
+    // IT
+    TCS:'IT', INFY:'IT', WIPRO:'IT', HCLTECH:'IT', TECHM:'IT', LTIM:'IT',
+    PERSISTENT:'IT', COFORGE:'IT', MPHASIS:'IT', LTTS:'IT',
+    // Auto
+    MARUTI:'Auto', TATAMOTORS:'Auto', M_M:'Auto', BAJAJ_AUTO:'Auto', EICHERMOT:'Auto',
+    HEROMOTOCO:'Auto', TVSMOTOR:'Auto', ASHOKLEY:'Auto', BALKRISIND:'Auto', BOSCHLTD:'Auto',
+    MRF:'Auto', APOLLOTYRE:'Auto', MOTHERSON:'Auto', BHARATFORG:'Auto',
+    // Pharma
+    SUNPHARMA:'Pharma', DRREDDY:'Pharma', CIPLA:'Pharma', DIVISLAB:'Pharma', LUPIN:'Pharma',
+    AUROPHARMA:'Pharma', BIOCON:'Pharma', TORNTPHARM:'Pharma', ALKEM:'Pharma', ZYDUSLIFE:'Pharma',
+    LAURUSLABS:'Pharma', GLENMARK:'Pharma', ABBOTINDIA:'Pharma',
+    // FMCG
+    HINDUNILVR:'FMCG', ITC:'FMCG', NESTLEIND:'FMCG', BRITANNIA:'FMCG', TATACONSUM:'FMCG',
+    DABUR:'FMCG', GODREJCP:'FMCG', MARICO:'FMCG', COLPAL:'FMCG', VBL:'FMCG', UBL:'FMCG',
+    // Metal / Mining
+    TATASTEEL:'Metal', JSWSTEEL:'Metal', HINDALCO:'Metal', VEDL:'Metal', SAIL:'Metal',
+    NMDC:'Metal', JINDALSTEL:'Metal', NATIONALUM:'Metal', HINDZINC:'Metal', COALINDIA:'Metal',
+    // Energy / Oil & Gas
+    RELIANCE:'Energy', ONGC:'Energy', BPCL:'Energy', IOC:'Energy', GAIL:'Energy',
+    HINDPETRO:'Energy', OIL:'Energy', ADANIGREEN:'Energy', ADANIENSOL:'Energy', NTPC:'Energy',
+    POWERGRID:'Energy', TATAPOWER:'Energy', NHPC:'Energy',
+    // Realty / Infra / Cement
+    DLF:'Realty', GODREJPROP:'Realty', OBEROIRLTY:'Realty', PRESTIGE:'Realty',
+    ULTRACEMCO:'Cement', SHREECEM:'Cement', AMBUJACEM:'Cement', ACC:'Cement', GRASIM:'Cement',
+    LT:'Infra', ADANIPORTS:'Infra', GMRINFRA:'Infra', IRCTC:'Infra', CONCOR:'Infra',
+    // Telecom / Media
+    BHARTIARTL:'Telecom', IDEA:'Telecom', INDUSTOWER:'Telecom',
+    ZEEL:'Media', SUNTV:'Media', PVRINOX:'Media',
+    // Consumer Durables / Retail
+    TITAN:'Consumer Durables', ASIANPAINT:'Consumer Durables', HAVELLS:'Consumer Durables',
+    VOLTAS:'Consumer Durables', DIXON:'Consumer Durables', TRENT:'Retail', DMART:'Retail',
+    // Chemicals
+    PIDILITIND:'Chemicals', SRF:'Chemicals', UPL:'Chemicals', PIIND:'Chemicals',
+    DEEPAKNTR:'Chemicals', AARTIIND:'Chemicals',
+    // PSU / Defence
+    BEL:'Defence', HAL:'Defence', BHEL:'PSU', BEML:'Defence',
+    // Adani group / Conglomerate
+    ADANIENT:'Conglomerate', ADANIPOWER:'Energy',
+};
+function getStockSector(name) {
+    return SECTOR_MAP[name] || 'Other';
+}
+
 // ── Angel session (same pattern as breadth.js / nseData.js) ──────────────────
 let _angelSession = null;
 function injectAngelSession({ jwtToken, apiKey }) {
@@ -103,9 +163,13 @@ async function fetchStockDailyVolumes(token) {
         },
         { headers: angelHeaders(), timeout: 10_000 }
     );
-    if (!res.data?.status || !Array.isArray(res.data?.data)) return [];
+    if (!res.data?.status || !Array.isArray(res.data?.data)) return { volumes: [], closes: [] };
     // Each row: [timestamp, open, high, low, close, volume]
-    return res.data.data.map(row => Number(row[5]) || 0).filter(v => v > 0);
+    // 10 Sep — also keep closes (for 20-day high/low price-action context),
+    // not just volume.
+    const volumes = res.data.data.map(row => Number(row[5]) || 0).filter(v => v > 0);
+    const closes  = res.data.data.map(row => Number(row[4]) || 0).filter(v => v > 0);
+    return { volumes, closes };
 }
 
 // Runs once per day (guarded by _baselineDate) — sequential + throttled to
@@ -121,25 +185,36 @@ async function refreshVolumeBaselines(stockList) {
     let ok = 0, failed = 0, viaFyers = 0;
     for (const stock of stockList) {
         try {
-            let vols = [];
+            let hist = { volumes: [], closes: [] };
             if (haveAngel) {
-                try { vols = await fetchStockDailyVolumes(stock.token); }
+                try { hist = await fetchStockDailyVolumes(stock.token); }
                 catch (e) { /* fall through to Fyers below */ }
             }
-            if (!vols.length) {
-                vols = await fetchFyersStockHistory(`NSE:${stock.name}-EQ`);
-                if (vols.length) viaFyers++;
+            if (!hist.volumes.length) {
+                hist = await fetchFyersStockHistory(`NSE:${stock.name}-EQ`);
+                if (hist.volumes.length) viaFyers++;
             }
+            const vols = hist.volumes, closes = hist.closes;
             // Exclude today's (possibly still-forming) candle if present — use the
             // most recent 20 COMPLETE days.
             const last20 = vols.slice(0, -1).slice(-20);
             const usable = last20.length >= 5 ? last20 : vols.slice(-20); // fallback if too few
             const avg = usable.length ? usable.reduce((a, b) => a + b, 0) / usable.length : null;
 
+            // 10 Sep — 20-day high/low from closes, for price-action context
+            // ("is this stock ALSO breaking a level, not just moving volume").
+            // Same exclude-today, min-5-days fallback logic as the volume avg.
+            const closes20 = closes.slice(0, -1).slice(-20);
+            const usableCloses = closes20.length >= 5 ? closes20 : closes.slice(-20);
+            const high20d = usableCloses.length ? Math.max(...usableCloses) : null;
+            const low20d  = usableCloses.length ? Math.min(...usableCloses) : null;
+
             if (!_stockState.has(stock.name)) _stockState.set(stock.name, {});
             const st = _stockState.get(stock.name);
             st.token = stock.token; st.symbol = stock.symbol; st.name = stock.name;
             st.baseline20d = avg;
+            st.high20d = high20d;
+            st.low20d  = low20d;
             if (avg) ok++; else failed++;
         } catch (e) {
             failed++;
@@ -259,12 +334,20 @@ function getVolumeScannerSnapshot(minRatio = 2, sortBy = 'ratio') {
         if (!st.baseline20d || !st.liveVolume) continue;
         const ratio = st.liveVolume / st.baseline20d;
         if (ratio >= minRatio) {
+            // 10 Sep — price-action context: is this ALSO a 20-day high/low
+            // break, or just a volume spike with no new price extreme?
+            let priceContext = null;
+            if (st.ltp && st.high20d && st.ltp > st.high20d) priceContext = '20d high breakout';
+            else if (st.ltp && st.low20d && st.ltp < st.low20d) priceContext = '20d low breakdown';
+
             rows.push({
                 name: st.name, symbol: st.symbol, ltp: st.ltp, pctChange: st.pctChange,
                 liveVolume: st.liveVolume, baseline20d: Math.round(st.baseline20d),
                 ratio: parseFloat(ratio.toFixed(2)),
                 burstRatio: computeBurstRatio(st),   // null until ~2+ live polls in
                 source: st.source || null,
+                priceContext,
+                sector: getStockSector(st.name),
             });
         }
     }
@@ -284,10 +367,31 @@ function getVolumeScannerStatus() {
     };
 }
 
+// 10 Sep — sector-grouped rollup. Groups the same unusual-volume results by
+// sector (see SECTOR_MAP above) — e.g. "is this a Banking-wide move, or one
+// isolated stock?" Stocks not in SECTOR_MAP land under "Other".
+function getVolumeScannerBySector(minRatio = 2) {
+    const rows = getVolumeScannerSnapshot(minRatio, 'ratio');
+    const bySector = {};
+    for (const r of rows) {
+        const sec = r.sector || 'Other';
+        if (!bySector[sec]) bySector[sec] = { sector: sec, count: 0, avgRatio: 0, stocks: [] };
+        bySector[sec].count++;
+        bySector[sec].stocks.push(r.name);
+        bySector[sec].avgRatio += r.ratio;
+    }
+    const grouped = Object.values(bySector).map(g => ({
+        ...g, avgRatio: parseFloat((g.avgRatio / g.count).toFixed(2)),
+    }));
+    grouped.sort((a, b) => b.count - a.count);
+    return grouped;
+}
+
 module.exports = {
     injectAngelSession,
     refreshVolumeBaselines,
     refreshLiveVolumes,
     getVolumeScannerSnapshot,
     getVolumeScannerStatus,
+    getVolumeScannerBySector,
 };

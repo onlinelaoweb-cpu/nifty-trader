@@ -31,7 +31,8 @@ const { fetchAdvanceDecline,
         injectAngelSession }        = require('./src/api/breadth');
 const { injectAngelSession: injectAngelSessionVolScan,
         refreshVolumeBaselines, refreshLiveVolumes,
-        getVolumeScannerSnapshot, getVolumeScannerStatus } = require('./src/api/volumeScanner');
+        getVolumeScannerSnapshot, getVolumeScannerStatus,
+        getVolumeScannerBySector } = require('./src/api/volumeScanner');
 const { calculateSRLevels }         = require('./src/api/levels');
 const { computeDynamicLevels, classifyDynamicLevels } = require('./src/api/dynamicLevels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo, detectBOSCHOCH } = require('./src/api/physicsOfTrading');
@@ -6293,6 +6294,30 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL crude_signal_log table ready');
 
+        // ── volume_scanner_log table (10 Sep) ────────────────────────────────
+        // Historical record of unusual-volume crossings — one row per stock
+        // per day, logged at the same moment the Telegram alert fires (first
+        // crossing of the threshold that day, same _volAlertedToday dedup).
+        // Without this, the scanner only ever shows "right now" — no way to
+        // look back at which stocks had unusual volume yesterday or last week.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS volume_scanner_log (
+                id          SERIAL PRIMARY KEY,
+                ts          TIMESTAMPTZ DEFAULT NOW(),
+                trade_date  DATE DEFAULT (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE,
+                name        TEXT,
+                symbol      TEXT,
+                ltp         NUMERIC,
+                pct_change  NUMERIC,
+                ratio       NUMERIC,
+                burst_ratio NUMERIC,
+                live_volume BIGINT,
+                baseline_20d NUMERIC,
+                price_context TEXT
+            )
+        `);
+        console.log('✅ PostgreSQL volume_scanner_log table ready');
+
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
         // (fire-and-forget snapshot), this table AUTOMATICALLY tracks what happened
@@ -8501,6 +8526,33 @@ app.get('/api/volume-scanner', (req, res) => {
     });
 });
 
+// 10 Sep — sector-grouped rollup: "is this a whole-sector move, or one
+// isolated stock?"
+app.get('/api/volume-scanner-sectors', (req, res) => {
+    const minRatio = parseFloat(req.query.minRatio) || 2;
+    res.json({ sectors: getVolumeScannerBySector(minRatio) });
+});
+
+// 10 Sep — historical unusual-volume crossings. ?days=N (default 7), or
+// ?name=STOCKNAME to see one stock's history specifically.
+app.get('/api/volume-scanner-history', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const days = Math.min(parseInt(req.query.days) || 7, 90);
+        const name = req.query.name ? String(req.query.name).toUpperCase() : null;
+        const nameClause = name ? 'AND name = $1' : '';
+        const r = await dbPool.query(
+            `SELECT * FROM volume_scanner_log
+             WHERE trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '${days} days' ${nameClause}
+             ORDER BY ts DESC`,
+            name ? [name] : []
+        );
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // PCR
 app.post('/api/pcr', requireToken, (req,res) => {
     const {pcr,atmPcr}=req.body;
@@ -9112,6 +9164,13 @@ function startPollingIntervals() {
                 if (_volAlertedToday.has(s.name)) continue;
                 _volAlertedToday.add(s.name);
                 sendVolumeScannerAlert(s).catch(e => console.warn('[VolScan] Telegram alert error:', e.message));
+                if (dbPool) {
+                    dbPool.query(
+                        `INSERT INTO volume_scanner_log (name, symbol, ltp, pct_change, ratio, burst_ratio, live_volume, baseline_20d, price_context)
+                         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                        [s.name, s.symbol, s.ltp, s.pctChange, s.ratio, s.burstRatio ?? null, s.liveVolume, s.baseline20d, s.priceContext ?? null]
+                    ).catch(e => console.warn('[VolScan] History log error:', e.message));
+                }
             }
         } catch (e) { console.warn('[VolScan] Live volume interval error:', e.message); }
     }, 90*1000), 25*1000);
