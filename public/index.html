@@ -3781,7 +3781,8 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     <button class="more-item" onclick="switchTabFromMore('analytics')"><span>📊</span>ANALYTICS</button>
     <button class="more-item" onclick="switchTabFromMore('global')"><span>🌍</span>GLOBAL</button>
     <button class="more-item" onclick="switchTabFromMore('scanner')"><span>🔥</span>SCANNER</button>
-    <button class="more-item" onclick="switchTabFromMore('crude')"><span>🛢️</span>CRUDEOIL</button>
+    <button class="more-item" onclick="switchTabFromMore('crude')"><span>🛢️</span>CRUDE LIVE</button>
+    <button class="more-item" onclick="switchTabFromMore('crudeInsights')"><span>🔍</span>CRUDE INSIGHTS</button>
   </div>
 </div>
 
@@ -3795,7 +3796,7 @@ function _initDesktopLayout() {
   if (window.innerWidth < 900) return;
 
   const TAB_META = [
-    { id: 'dashboard', icon: '📊', label: 'LIVE' },
+    { id: 'dashboard', icon: '📊', label: 'NIFTY LIVE' },
     { id: 'journal',   icon: '📔', label: 'JOURNAL' },
     { id: 'breadth',   icon: '📈', label: 'BREADTH' },
     { id: 'insights',  icon: '🧠', label: 'INSIGHTS' },
@@ -3806,7 +3807,8 @@ function _initDesktopLayout() {
     { id: 'physics',   icon: '⚛️', label: 'PHYSICS' },
     { id: 'guard',     icon: '🛡️', label: 'GUARD' },
     { id: 'scanner',   icon: '🔥', label: 'SCANNER' },
-    { id: 'crude',     icon: '🛢️', label: 'CRUDEOIL' },
+    { id: 'crude',     icon: '🛢️', label: 'CRUDE LIVE' },
+    { id: 'crudeInsights', icon: '🔍', label: 'CRUDE INSIGHTS' },
   ];
 
   // Build sidebar
@@ -3986,7 +3988,7 @@ function switchTabFromMore(name) {
 }
 
 const TAB_LABELS = {
-  dashboard: { icon: '📊', label: 'LIVE' },
+  dashboard: { icon: '📊', label: 'NIFTY LIVE' },
   chart:     { icon: '🕯️', label: 'CHART' },
   breadth:   { icon: '📈', label: 'BREADTH' },
   insights:  { icon: '🧠', label: 'INSIGHTS' },
@@ -3997,7 +3999,8 @@ const TAB_LABELS = {
   analytics: { icon: '📊', label: 'ANALYTICS' },
   global:    { icon: '🌍', label: 'GLOBAL' },
   scanner:   { icon: '🔥', label: 'SCANNER' },
-  crude:     { icon: '🛢️', label: 'CRUDEOIL' },
+  crude:     { icon: '🛢️', label: 'CRUDE LIVE' },
+  crudeInsights: { icon: '🔍', label: 'CRUDE INSIGHTS' },
 };
 
 function switchTab(name,btn){
@@ -4053,6 +4056,13 @@ function switchTab(name,btn){
     _crudeTabTimer = setInterval(fetchCrudeLive, 20000);
   } else {
     if (_crudeTabTimer) { clearInterval(_crudeTabTimer); _crudeTabTimer = null; }
+  }
+  if(name==='crudeInsights'){
+    fetchCrudeInsights();
+    if (_crudeInsightsTabTimer) clearInterval(_crudeInsightsTabTimer);
+    _crudeInsightsTabTimer = setInterval(fetchCrudeInsights, 60000);
+  } else {
+    if (_crudeInsightsTabTimer) { clearInterval(_crudeInsightsTabTimer); _crudeInsightsTabTimer = null; }
   }
   if(name==='breadth'||name==='global'){
     // Render immediately from cache — no loading flicker
@@ -5353,6 +5363,7 @@ function renderDashboard(s) {
 let _breadthTabTimer = null;
 let _scannerTabTimer = null;
 let _crudeTabTimer = null;
+let _crudeInsightsTabTimer = null;
 let _lastBreadthStocks = null;  // cache stocks[] for SSE merge
 async function fetchBreadthFull() {
   try {
@@ -9499,7 +9510,107 @@ function _statRow(label, val) {
   </div>
 </div>
 
-<!-- PANEL: CRUDEOIL ─────────────────────────────────── -->
+<!-- PANEL: CRUDE INSIGHTS ───────────────────────────────── -->
+<div class="panel" id="panel-crudeInsights">
+  <div style="padding:10px 12px 80px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div style="font-family:'Orbitron',monospace;font-size:14.5px;letter-spacing:1px;color:var(--accent);">🔍 CRUDE INSIGHTS</div>
+      <span id="ci-status" style="font-size:10.5px;color:var(--dim);font-family:monospace;"></span>
+    </div>
+    <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:10px;">
+      Crude's signal engine is newer and simpler than NIFTY's — no PCR-walls, Renko, BOS/CHOCH, or Trend Conviction yet, just RSI/EMA/ADX (3m basis) + 1m/5m context + PCR. This shows what actually exists: fired-signal history, not placeholder sections.
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:14px;">
+      <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 4px;text-align:center;">
+        <div style="font-size:9.5px;color:var(--dim);">Signals Today</div>
+        <div id="ci-today-count" style="font-size:18px;font-weight:700;color:var(--accent);">--</div>
+      </div>
+      <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 4px;text-align:center;">
+        <div style="font-size:9.5px;color:var(--dim);">Avg Confidence</div>
+        <div id="ci-avg-conf" style="font-size:18px;font-weight:700;">--</div>
+      </div>
+      <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 4px;text-align:center;">
+        <div style="font-size:9.5px;color:var(--dim);">CALL / PUT</div>
+        <div id="ci-call-put" style="font-size:18px;font-weight:700;">--</div>
+      </div>
+    </div>
+
+    <div style="font-size:10.5px;color:var(--dim);margin-bottom:6px;">SIGNAL HISTORY (last 30 days, fired signals only)</div>
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:11.5px;">
+        <thead>
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.1);color:var(--dim);text-align:left;">
+            <th style="padding:6px 4px;">Time</th>
+            <th style="padding:6px 4px;">Signal</th>
+            <th style="padding:6px 4px;text-align:right;">Conf</th>
+            <th style="padding:6px 4px;text-align:right;">Price</th>
+            <th style="padding:6px 4px;text-align:right;">PCR</th>
+          </tr>
+        </thead>
+        <tbody id="ci-tbody">
+          <tr><td colspan="5" style="padding:16px 4px;text-align:center;color:var(--dim);">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div style="font-size:9.5px;color:var(--dim);opacity:0.7;margin-top:10px;">
+      Not wired to live trades — this is descriptive history of what the engine WOULD have signaled, for building a track record before trusting it live.
+    </div>
+  </div>
+</div>
+
+<script>
+async function fetchCrudeInsights() {
+  try {
+    const r = await fetch('/api/crude-signal-log?limit=30');
+    if (!r.ok) return;
+    const d = await r.json();
+    renderCrudeInsightsUI(d);
+  } catch (e) { console.warn('[CrudeInsights] fetch error:', e.message); }
+}
+function renderCrudeInsightsUI(d) {
+  const rows = d.rows || [];
+  const statusEl = document.getElementById('ci-status');
+  if (statusEl) statusEl.textContent = d.count + ' logged';
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayRows = rows.filter(r => (r.ts || '').startsWith(todayStr));
+  const todayCountEl = document.getElementById('ci-today-count');
+  if (todayCountEl) todayCountEl.textContent = todayRows.length;
+
+  const avgConfEl = document.getElementById('ci-avg-conf');
+  if (avgConfEl) {
+    avgConfEl.textContent = rows.length
+      ? Math.round(rows.reduce((s, r) => s + (r.confidence || 0), 0) / rows.length) + '%'
+      : '--';
+  }
+
+  const callCount = rows.filter(r => r.signal === 'BUY CALL').length;
+  const putCount  = rows.filter(r => r.signal === 'BUY PUT').length;
+  const callPutEl = document.getElementById('ci-call-put');
+  if (callPutEl) callPutEl.textContent = `${callCount} / ${putCount}`;
+
+  const tbody = document.getElementById('ci-tbody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="padding:16px 4px;text-align:center;color:var(--dim);">No signals logged yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const sigColor = r.signal === 'BUY CALL' ? 'var(--green)' : r.signal === 'BUY PUT' ? 'var(--red)' : 'var(--dim)';
+    const time = r.ts ? new Date(r.ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '--';
+    return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+      <td style="padding:6px 4px;color:var(--dim);">${time}</td>
+      <td style="padding:6px 4px;font-weight:600;color:${sigColor};">${r.signal}</td>
+      <td style="padding:6px 4px;text-align:right;">${r.confidence}%</td>
+      <td style="padding:6px 4px;text-align:right;">${r.price ? Number(r.price).toFixed(0) : '--'}</td>
+      <td style="padding:6px 4px;text-align:right;">${r.pcr ? Number(r.pcr).toFixed(2) : '--'}</td>
+    </tr>`;
+  }).join('');
+}
+</script>
+
+<!-- PANEL: CRUDE LIVE ─────────────────────────────────── -->
 <div class="panel" id="panel-crude">
   <div style="padding:10px 12px 80px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">

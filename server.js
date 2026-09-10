@@ -112,7 +112,7 @@ let marketState = {
     // small object, NOT mixed into any of the NIFTY fields below — the WS
     // tick handler (onTick) branches on getActiveSession() and routes crude
     // ticks here exclusively, never touching marketState.nifty/wsVolume/etc.
-    crudeoil: { price: 0, volume: 0, open: 0, high: 0, low: 0, lastUpdate: null, symbol: null, token: null, candles1m: [], pcr: null },
+    crudeoil: { price: 0, volume: 0, open: null, high: null, low: null, lastUpdate: null, symbol: null, token: null, candles1m: [], pcr: null },
     signal: 'WAIT', confidence: 0,
     rsi: null, ema9: null, ema21: null, vwap: null,
     pcr: null, atmPcr: null, pcrSignal: 'N/A', atmPcrSignal: 'N/A',
@@ -5030,17 +5030,23 @@ async function onTick(tickData) {
         }
         marketState.crudeoil.price      = price;
         if (tickData.volume > 0) marketState.crudeoil.volume = tickData.volume;
-        // FIX (9 Sep) — confirmed live: crude's O/H/L fields sometimes arrive
-        // as garbage (Low seen as 46530980243759430) — likely an MCX-specific
-        // packet-offset issue not yet root-caused (needs raw hex bytes from a
-        // live crude tick to diagnose properly). Reject anything wildly off
-        // from the current price so garbage doesn't corrupt the candle
-        // builder feeding Phase 3/4/5's indicators. LTP itself isn't affected
-        // by this guard — only O/H/L, which are supplementary.
-        const sane = (v) => v > 0 && v > price * 0.5 && v < price * 1.5;
-        if (sane(tickData.open)) marketState.crudeoil.open = tickData.open;
-        if (sane(tickData.high)) marketState.crudeoil.high = tickData.high;
-        if (sane(tickData.low))  marketState.crudeoil.low  = tickData.low;
+        // FIX (10 Sep) — confirmed live over 15+ consecutive ticks tonight
+        // that O/H/L are ALL structurally unreliable for CRUDEOIL, not just
+        // occasional garbage. High/Low were already correctly rejected by
+        // the sane() range-check below (High ~490-520, Low ~4.65e16 — both
+        // wildly outside 50-150% of price). But Open (~9345-9350) happened
+        // to land WITHIN that range despite drifting tick-to-tick — a real
+        // session Open shouldn't move at all — so it was silently slipping
+        // through as a plausible-looking but still-wrong value. Pattern
+        // (LTP correct, Open close-but-drifting, High/Low increasingly far
+        // off) suggests MCX Mode 2 packets likely have extra bytes between
+        // LTP and Open that this NSE-based parser wasn't built to expect —
+        // needs fresh raw hex to properly root-cause (see the [WS-Crude
+        // Diag] logging in websocket.js). Until then: don't populate O/H/L
+        // for crude at all rather than show numbers that might look
+        // plausible but probably aren't. LTP/volume/candles are unaffected
+        // — confirmed working (a real signal fired tonight: BUY CALL @
+        // ₹9548, 85% confidence).
         marketState.crudeoil.lastUpdate = Date.now();
         addCrudeTick(price); // Phase 3 — build 1m candles from accepted ticks only
         _lastTickAt = Date.now(); // shared watchdog — a live crude tick counts as "connected" too
@@ -9233,17 +9239,22 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshFyersVolume,      15*1000), 20*1000);   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
     setTimeout(() => setInterval(computePremarketGap,     60*1000), 20*1000);   // opening gap vs prev close, via Fyers (see combineSignals note)
     // Volume scanner (Phase 2, 6 Sep) — baseline refresh is self-guarded to
-    // run once/day (see _baselineDate check inside), so checking every 5 min
-    // just catches it promptly after Angel login rather than waiting for a
-    // full day. Live volume refresh only during market hours — no point
-    // polling Angel for cash-market volume when the cash market is closed.
-    setTimeout(() => setInterval(async () => {
+    // run once/day (see _baselineDate check inside).
+    // FIX (10 Sep) — confirmed live: the old setTimeout(() => setInterval(...),
+    // 15s) pattern does NOT run the callback at 15s like the comment used to
+    // claim; setInterval's first fire is 5min AFTER it's registered, so the
+    // real first attempt was 15s+5min ≈ 5min15s post-boot. That meant every
+    // deploy/restart left the Scanner tab empty for 5+ minutes with nothing
+    // populated yet. Now runs once immediately (still after Angel login has
+    // had a moment to settle), then every 5 min after that.
+    const volBaselineTick = async () => {
         try {
             const stocks = await getFnOStockList();
             if (stocks.length) await refreshVolumeBaselines(stocks);
         } catch (e) { console.warn('[VolScan] Baseline interval error:', e.message); }
-    }, 5*60*1000), 15*1000);
-    setTimeout(() => setInterval(async () => {
+    };
+    setTimeout(() => { volBaselineTick(); setInterval(volBaselineTick, 5*60*1000); }, 15*1000);
+    const volLiveTick = async () => {
         if (!isMarketOpen()) return;
         try {
             const stocks = await getFnOStockList();
@@ -9268,7 +9279,8 @@ function startPollingIntervals() {
                 }
             }
         } catch (e) { console.warn('[VolScan] Live volume interval error:', e.message); }
-    }, 90*1000), 25*1000);
+    };
+    setTimeout(() => { volLiveTick(); setInterval(volLiveTick, 90*1000); }, 25*1000);
     // Flush dailySignalCounts to DB only when dirty, at most every 30s — bounds
     // DB writes regardless of tick frequency (mtfWeak alone can increment
     // thousands of times/day) while keeping restart data-loss to under 30s.
