@@ -2049,6 +2049,20 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
 }
 
 function combineSignals(indicators) {
+    // FIX (10 Sep) — these three risk-based confidence caps (Dynamic Levels
+    // range-pocket, Breakout regime, Delta+MTF+DynLevel-without-TrendConviction)
+    // were found to be erodable: they use Math.min correctly at THEIR point in
+    // the code, but several unrelated +boost mechanisms (Premarket Gap +3,
+    // News Sentiment +5, Smart Money Bias +boost, BOS/CHOCH +5) run AFTER them
+    // and can push confidence back up past the cap before the final gates.
+    // These flags capture WHETHER each cap's condition fired (set at the
+    // cap's own location, unchanged), then get re-asserted right before the
+    // Minimum Confidence Gate at the end — guaranteeing the risk cap always
+    // has final say regardless of what fired in between.
+    let _rangePocketCapped = false, _rangePocketCapValue = 55;
+    let _breakoutCapped = false, _breakoutCapValue = 60;
+    let _deltaMtfCapped = false, _deltaMtfCapValue = 55;
+
     // ── Gate 1: safe time window (IST) ────────────────
     const ew = isSafeEntryWindow();
     marketState.entryWindow = ew;
@@ -3040,6 +3054,7 @@ function combineSignals(indicators) {
                 } else {
                     const before = confidence;
                     confidence = Math.min(confidence, 55);
+                    _rangePocketCapped = true;
                     if (confidence < before) reasons.push(`⚠️ Confidence capped at 55% — price inside Dynamic H1(${dl.h1})–L1(${dl.l1}) range pocket, false-breakout risk higher`);
                 }
             }
@@ -3068,6 +3083,7 @@ function combineSignals(indicators) {
         if (isBreakoutSetup && !hasBackup) {
             const before = confidence;
             confidence = Math.min(confidence, 60);
+            _breakoutCapped = true;
             if (confidence < before) reasons.push(`⚠️ Confidence capped at 60% — raw ORB break without MTF/Trend Conviction backing (historically -0.129R, 24% win over 42 trades)`);
         }
     }
@@ -3090,6 +3106,7 @@ function combineSignals(indicators) {
         if (signal === 'BUY PUT' && hasDeltaConfirm && marketState.mtf?.aligned && hasDynL3 && !hasTrendConviction) {
             const before = confidence;
             confidence = Math.min(confidence, 55);
+            _deltaMtfCapped = true;
             if (confidence < before) reasons.push(`⚠️ Confidence capped at 55% — Delta+3/3MTF+Below-Dyn-L3 without Trend Conviction (historically -0.066R, 38% win, N=13; same combo WITH Trend Conviction: +1.509R, 73% win, N=11)`);
         }
     }
@@ -3272,12 +3289,30 @@ function combineSignals(indicators) {
         if (confidence < before) reasons.push(`⚠️ Caution zone 14:00–14:30 — confidence capped at 70%, reduce size`);
     }
 
-    // ── Minimum confidence gate — 65% ────────────────────────────────────────
+    // ── Risk-cap re-assertion (10 Sep fix) ────────────────────────────────────
+    // Guarantees the three risk-based caps above can't be silently eroded by
+    // intervening +boost mechanisms (Premarket Gap, News Sentiment, Smart
+    // Money Bias, BOS/CHOCH all run between those caps and here). Re-applies
+    // whichever cap(s) fired, using Math.min so multiple simultaneous caps
+    // correctly take the tightest one.
+    if (_rangePocketCapped) confidence = Math.min(confidence, _rangePocketCapValue);
+    if (_breakoutCapped)    confidence = Math.min(confidence, _breakoutCapValue);
+    if (_deltaMtfCapped)    confidence = Math.min(confidence, _deltaMtfCapValue);
+
+    // ── Minimum confidence gate — 60% ────────────────────────────────────────
     // As an option buyer, low-confidence entries lose to theta.
-    // Only trade when confidence is ≥65% — below that, the edge doesn't justify premium cost.
-    if (signal !== 'WAIT' && confidence < 65) {
+    // FIX (10 Sep) — was hardcoded 65%, found to be a SEPARATE gate from the
+    // "High-Conviction Filter" / MIN_SIGNAL_CONFIDENCE in the caller (~1000
+    // lines after this function returns). This one runs FIRST and is
+    // stricter, so it silently made the external filter dead code whenever
+    // this stayed above it — confirmed live: lowering the external filter
+    // 70→60 earlier tonight had NO real effect, since anything already
+    // surviving THIS gate is guaranteed >=65%, and 65 is never < 60. Aligned
+    // both to 60% so the intended controlled test (9 days of daily_signal_
+    // counts data showing 67% zero-signal days) actually takes effect.
+    if (signal !== 'WAIT' && confidence < 60) {
         signal = 'WAIT';
-        reasons.push(`⛔ Confidence ${confidence}% < 65% minimum — edge too thin for option buyer, wait`);
+        reasons.push(`⛔ Confidence ${confidence}% < 60% minimum — edge too thin for option buyer, wait`);
     }
 
     // ── Consecutive signal confirmation — 2 cycles needed ────────────────────
@@ -4611,6 +4646,19 @@ async function updatePrice(price, change, changePct, source) {
     // crude_signal_log-style data — raise back toward 70% if 60% lets in
     // too much noise, or address the range-pocket interaction directly if
     // it's still the dominant blocker.
+    // FIX (10 Sep) — discovered this filter had become DEAD CODE: combineSignals()
+    // has its OWN separate "Minimum confidence gate" (hardcoded, ~1000 lines
+    // earlier in that function) that runs FIRST and already sets signal='WAIT'
+    // below its threshold. Whenever that internal gate was stricter than this
+    // one (it was hardcoded 65% while this was lowered to 60% tonight),
+    // anything reaching this check already had confidence>=65% by definition —
+    // making "confidence < 60" here impossible to ever trigger. That means
+    // lowering this 70→60 earlier tonight had ZERO real effect on live
+    // behavior; the actual controlling threshold was still the untouched
+    // internal 65%. Both are now aligned to 60% (see combineSignals()'s gate)
+    // so they can't silently diverge again — this one now acts as a backup/
+    // safety-net rather than the sole authority. If you ever want to change
+    // the effective floor, change BOTH together.
     const MIN_SIGNAL_CONFIDENCE = 60;
     if (signal !== 'WAIT' && confidence < MIN_SIGNAL_CONFIDENCE) {
         reasons.unshift(`🚫 High-Conviction Filter: ${confidence}% confidence < ${MIN_SIGNAL_CONFIDENCE}% required — held at WAIT`);
