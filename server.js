@@ -2029,8 +2029,21 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
         });
 
         const text = res.data?.content?.[0]?.text || '';
-        const cleaned = text.replace(/```json|```/g, '').trim();
-        const parsed = JSON.parse(cleaned);
+        // FIX (10 Sep) — confirmed live: "Unexpected end of JSON input" with
+        // status:undefined/body:undefined — the HTTP call succeeded (no
+        // status code to report), so the failure was in parsing `text`
+        // itself, most likely empty/incomplete despite the "reply ONLY
+        // JSON" instruction. Extract just the {...} object via regex
+        // instead of assuming the whole string is clean JSON — robust to
+        // any stray preamble/trailing text. If still empty, log the RAW
+        // text (not just the error) so the actual cause is visible next
+        // time instead of another "undefined/undefined".
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+            console.warn('[NewsSentiment] No JSON object found in response. Raw text:', text.slice(0, 300) || '(empty)');
+            return { available: false, label: 'News Sentiment — empty/malformed response from model' };
+        }
+        const parsed = JSON.parse(jsonMatch[0]);
 
         return {
             available: true,
