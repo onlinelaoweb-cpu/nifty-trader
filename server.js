@@ -8475,6 +8475,23 @@ app.get('/api/session', (req,res) => res.json({
 // does not touch the live NIFTY WS subscription. Lets Prabhash confirm the
 // Angel ScripMaster correctly resolves the current-month CRUDEOIL contract
 // before Phase 2b makes the WS actually subscribe to it.
+// 10 Sep — ungated Fyers token check. All other Fyers-dependent code (PCR,
+// volume refresh) is market-hour-gated, so there's no way to verify a fresh
+// token outside trading hours without this. Just a plain quote lookup —
+// works any time, reveals immediately if the token is valid or not.
+app.get('/api/fyers-token-check', async (req, res) => {
+    try {
+        const q = await fetchFyersQuote('NSE:NIFTY50-INDEX');
+        if (q && q.ltp > 0) {
+            res.json({ valid: true, ltp: q.ltp, message: 'Fyers token is working' });
+        } else {
+            res.json({ valid: false, message: 'Fyers returned no data — token likely invalid/expired. Check Railway logs for [Fyers Quote] error.' });
+        }
+    } catch (e) {
+        res.json({ valid: false, error: e.message });
+    }
+});
+
 app.get('/api/crude-token', async (req,res) => {
     try {
         const result = await getCrudeOilFutureToken();
