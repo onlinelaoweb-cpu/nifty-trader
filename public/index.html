@@ -5284,6 +5284,28 @@ function renderDashboard(s) {
   // Physics of Trading tab
   updatePhysicsTab(s);
 
+  // 12 Sep — live-tick candle animation. Previously the chart only updated
+  // via its periodic re-fetch (30s for 1m, up to 5min for 1D) — between
+  // those fetches, the current candle sat frozen even though price was
+  // ticking continuously (this IS the same live feed every other tab uses).
+  // Made the chart feel sluggish/dead compared to a real trading chart that
+  // tracks every tick. This updates just the last (currently-forming)
+  // candle's close/high/low from the live price and redraws — no network
+  // fetch, so it's cheap — only when the CHART tab is actually visible.
+  if (s.nifty > 0 && typeof _chartAllCandles !== 'undefined' && _chartAllCandles && _chartAllCandles.length) {
+    const chartPanel = document.getElementById('panel-chart');
+    if (chartPanel && chartPanel.classList.contains('active')) {
+      const lastCandle = _chartAllCandles[_chartAllCandles.length - 1];
+      if (lastCandle) {
+        lastCandle.close = s.nifty;
+        if (s.nifty > lastCandle.high) lastCandle.high = s.nifty;
+        if (s.nifty < lastCandle.low)  lastCandle.low  = s.nifty;
+        const canvas = document.getElementById('chart-canvas');
+        if (canvas) _drawChart(canvas);
+      }
+    }
+  }
+
   // Breadth UI — always update so data is fresh when user switches to tab
   if (s.breadth) updateBreadthUI(s.breadth);
   // Global UI — only re-render when data actually changes (sector heatmap is DOM-heavy)
