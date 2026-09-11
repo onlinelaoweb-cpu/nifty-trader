@@ -4031,6 +4031,7 @@ function switchTab(name,btn){
     autoATM();
   }
   if(name==='journal'){loadJournal();}
+  if(name==='guard'){ fetchGuardJournalActual(); }
   if(name==='insights'){ fetchSignalPerformance(); if(_lastState) updateInsightsUI(_lastState); }
   if(name==='analytics'){ if(!_anLoaded){ loadAnalytics(); } else { anRenderAll(anApplyDateFilter(_anSignals), _anSignals); } }
   if(name==='physics' && _lastState) updatePhysicsTab(_lastState);
@@ -9416,6 +9417,12 @@ function _statRow(label, val) {
       </div>
     </div>
 
+    <!-- 12 Sep — read-only actual Journal P&L, separate from the manual
+         checklist-driven numbers above. Doesn't affect lock/cooldown — just
+         visibility for whoever isn't running every trade through the
+         checklist ritual. -->
+    <div id="guard-journal-actual" style="font-size:11px;color:var(--dim);text-align:center;margin-bottom:10px;opacity:0.8;">Loading actual Journal P&L...</div>
+
     <!-- Rules card -->
     <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
       <div style="font-size:12px;color:var(--dim);margin-bottom:10px;letter-spacing:1px;">⚙️ PROTECTION RULES</div>
@@ -10197,6 +10204,33 @@ function renderVolumeScannerUI(d) {
     if(_cdInterval){ clearInterval(_cdInterval); _cdInterval=null; }
     G = { pnl:0, trades:[], lossLimit:G.lossLimit, profitLock:G.profitLock, maxTrades:G.maxTrades, cooldownOn:G.cooldownOn, cooldownActive:false, cooldownSecs:1800, consecutive:0, locked:false, checks:[false,false,false,false,false] };
     render(); save();
+  };
+
+  // 12 Sep — read-only actual Journal P&L (see guard-journal-actual div in
+  // the HTML above). Separate from G.pnl/G.trades — does NOT touch lock,
+  // cooldown, or consecutive-loss tracking, all of which stay tied to the
+  // deliberate manual checklist ritual above (that friction is the point).
+  window.fetchGuardJournalActual = async function(){
+    const el = document.getElementById('guard-journal-actual');
+    if (!el) return;
+    try {
+      const r = await fetch('/api/trades');
+      const d = await r.json();
+      const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
+      const todayTrades = (d.trades || []).filter(t => {
+        const tDate = new Date(t.ts).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        return tDate === todayIST && t.status === 'CLOSED';
+      });
+      if (!todayTrades.length) {
+        el.textContent = 'Actual Journal P&L today: no closed trades yet';
+        return;
+      }
+      const totalPnl = todayTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+      const color = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+      el.innerHTML = `Actual Journal P&L today: <span style="color:${color};font-weight:600;">₹${totalPnl.toLocaleString('en-IN')}</span> (${todayTrades.length} closed trades)`;
+    } catch (e) {
+      el.textContent = 'Actual Journal P&L — failed to load';
+    }
   };
 
   // Init
