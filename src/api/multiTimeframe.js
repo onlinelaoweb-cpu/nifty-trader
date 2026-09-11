@@ -554,9 +554,30 @@ async function analyzeMultiTimeframe(vix = null) {
         tf5m.signal === tf15m.signal &&         // 5m and 15m agree with each other
         tf5m.signal !== tf1h.signal;            // but both disagree with 1H
 
-    // When 1H is lagging, exclude it from the vote so 5m+15m consensus drives the signal
+    // ── 15m lag detection (11 Sep) ────────────────────────────────────────────
+    // Symmetric case to oneHourLagging above, found via market_snapshot_log
+    // during a real fast move: NIFTY ran ~51pts in ~50min (RSI 25→76), 5m ADX
+    // was solid (21-36) and 1h agreed the whole time, but 15m ADX stayed weak
+    // (~12-14, below its own floor*1.5) and kept flip-flopping between BUY
+    // CALL/PUT/WAIT — blocking mtfAligned for the ENTIRE window even though
+    // the fast (5m) and slow (1h) reads were consistent throughout. Only
+    // fires when 15m's OWN trend strength is weak — a strong-ADX 15m
+    // disagreement is a genuine signal worth respecting, not lag, so this
+    // does NOT override that case.
+    const fifteenMinLagging =
+        !oneHourLagging &&                      // don't double-fire both lag patterns at once
+        tf15m.signal !== 'INSUFFICIENT' &&
+        tf5m.signal  !== 'INSUFFICIENT' && tf5m.signal  !== 'NEUTRAL' &&
+        tf1h.signal  !== 'INSUFFICIENT' && tf1h.signal  !== 'NEUTRAL' &&
+        tf5m.signal === tf1h.signal &&          // 5m and 1h agree with each other
+        tf5m.signal !== tf15m.signal &&         // but 15m disagrees
+        tf15m.adx !== null && tf15m.adx < adxFloors[1] * 1.5; // AND 15m's own trend is weak
+
+    // When 1H (or 15m) is lagging, exclude it from the vote so the other two's consensus drives the signal
     const voteTFs    = oneHourLagging
         ? [tf5m, tf15m]                         // ignore lagging 1H
+        : fifteenMinLagging
+        ? [tf5m, tf1h]                          // ignore lagging 15m
         : validTFs;
     const voteBull   = voteTFs.filter(tf => tf.signal === 'BULLISH').length;
     const voteBear   = voteTFs.filter(tf => tf.signal === 'BEARISH').length;
@@ -657,6 +678,7 @@ async function analyzeMultiTimeframe(vix = null) {
         aligned,
         softAligned,   // true when 15m+1h agree but 5m dissents — used by server.js quality gate
         oneHourLagging,// true when 5m+15m both flip against 1H → 1H excluded from vote
+        fifteenMinLagging, // true when 5m+1h agree but 15m (weak ADX) dissents → 15m excluded from vote
         validTFCount: validCount,
         tf5mWarming: tf5m.signal === 'INSUFFICIENT', // true during first ~22 min after restart
         tf5mBarsNeeded: tf5m.signal === 'INSUFFICIENT' ? (MIN_BARS['5m'] - (tf5m.barCount ?? 0)) : 0,

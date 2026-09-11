@@ -388,6 +388,9 @@ function getORBBreakoutAgeMin(status) {
 // Used to detect "premium already overextended" before issuing a fresh entry.
 let atmCEpremiumOpen = null, atmPEpremiumOpen = null, premiumOpenDate = null;
 let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-direction MTF alerts
+// FIX (11 Sep) — Fast Momentum Trigger tracking. Separate, exploratory alert
+// type — see checkFastMomentumTrigger() below for full rationale.
+let lastFastMomentumAlertAt = 0, lastFastMomentumDirection = '';
 let lastSuppressLogAt = 0, lastSuppressLogMsg = '';  // throttle: max once/60s per distinct suppression reason (see log sites below)
 // ── MTF-tracker reversal persistence (soft, informational-tier cooldown) ────
 // Problem observed live (10 Jul session): mtfSignalChanged bypasses the 60-min
@@ -4106,6 +4109,172 @@ ${vixFmt}
     }
 }
 
+// ── Fast Momentum Trigger (11 Sep) ────────────────────────────────────────
+// Genuinely SEPARATE from both the main engine (combineSignals) and the
+// MTF-tracker — doesn't touch either, doesn't require MTF alignment at all.
+// Built specifically for the gap confirmed via market_snapshot_log on 11 Sep:
+// NIFTY moved ~70pts in ~25min (23277→23347) while mtf_signal stayed "BUY
+// PUT" the entire way, because 15m (ADX~24, still reading the old trend) and
+// 1h (ADX~45, even slower) hadn't caught up — and 5m itself was too weak
+// (ADX 13-19) to override them. No MTF-alignment-based fix can catch this
+// specific pattern (all 3 TFs unreliable in different ways at once), so this
+// reacts to raw price velocity instead — a fundamentally different, faster,
+// noisier signal, not a replacement for the main engine's confirmation-based
+// approach. Deliberately conservative on WHEN it can fire (cooldown +
+// direction-change dedup) but not on confirmation quality — this trades
+// precision for speed by design, so it must never be presented as
+// equivalent-confidence to a main-engine or MTF-tracker signal.
+const FAST_MOMENTUM_WINDOW_MIN   = 15;  // rolling window to measure the move over
+const FAST_MOMENTUM_MIN_PTS      = 30;  // absolute floor — never fire on tiny ATR readings during ultra-quiet periods
+const FAST_MOMENTUM_ATR_MULT     = 2.5; // volatility-adaptive: move must clear this many ATR(14) units too
+const FAST_MOMENTUM_COOLDOWN_MS  = 20 * 60 * 1000; // shorter than MTF's 60min — this is meant to react faster by nature
+
+async function checkFastMomentumTrigger() {
+    if (!isConfigured() || !isMarketOpen()) return;
+    try {
+        const candles = getCandleHistory(true);
+        if (!candles || candles.length < FAST_MOMENTUM_WINDOW_MIN + 1) return;
+
+        const nowClose = candles[candles.length - 1].close;
+        const pastCandle = candles[candles.length - 1 - FAST_MOMENTUM_WINDOW_MIN];
+        if (!pastCandle) return;
+        const movePts = nowClose - pastCandle.close;
+
+        const atr = marketState.dynamicLevels?.atr ?? null;
+        const threshold = atr ? Math.max(FAST_MOMENTUM_MIN_PTS, FAST_MOMENTUM_ATR_MULT * atr) : FAST_MOMENTUM_MIN_PTS;
+
+        if (Math.abs(movePts) < threshold) return;
+
+        const direction = movePts > 0 ? 'BULLISH' : 'BEARISH';
+
+        // Dedup: skip if same direction fired within cooldown. A direction
+        // FLIP is allowed to fire immediately (that's a genuinely new event,
+        // not a repeat of the same move).
+        const sinceLastMs = Date.now() - lastFastMomentumAlertAt;
+        if (direction === lastFastMomentumDirection && sinceLastMs < FAST_MOMENTUM_COOLDOWN_MS) return;
+
+        lastFastMomentumAlertAt = Date.now();
+        lastFastMomentumDirection = direction;
+
+        const msg = `
+⚡ <b>FAST MOMENTUM — ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+NIFTY moved <b>${movePts > 0 ? '+' : ''}${movePts.toFixed(1)}pts</b> in last ${FAST_MOMENTUM_WINDOW_MIN}min → ${nowClose.toFixed(1)}
+Threshold: ${threshold.toFixed(1)}pts (ATR-adjusted)
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>RAW PRICE VELOCITY ONLY — NOT MTF or Main Engine confirmed.</b>
+This reacts fast on purpose and WILL be wrong sometimes. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>VardaanNifty AI — Fast Momentum Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`⚡ [Fast Momentum] ${direction} — ${movePts.toFixed(1)}pts in ${FAST_MOMENTUM_WINDOW_MIN}min (threshold:${threshold.toFixed(1)})`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO fast_momentum_log (direction, nifty, move_pts, window_min, atr, threshold, rsi, mtf_signal)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                [direction, nowClose, movePts, FAST_MOMENTUM_WINDOW_MIN, atr, threshold, marketState.rsi ?? null, marketState.mtf?.mtfSignal ?? null]
+            ).catch(e => console.warn('[Fast Momentum] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Fast Momentum] error:', e.message);
+    }
+}
+
+// ── S/R Bounce Trigger (11 Sep) ────────────────────────────────────────────
+// Third standalone exploratory trigger (alongside Fast Momentum). Directly
+// addresses data from the 11 Sep weekly review: "Clear of S/R Wall" blocked
+// 40% of all evaluations this week, "Clear of POC" blocked 52% — the two
+// biggest gates after RSI Clean. That gate (in combineSignals(), ~line 2630)
+// is a blanket block: ANY price within 30-50pts of a known S/R level kills
+// the signal outright, regardless of whether price is actually bouncing off
+// it (a genuine, often high-probability setup) or just grinding into it.
+// This reuses the SAME srLevels data the block gate already computes, but
+// looks for the OPPOSITE pattern: price recently tested a level, RSI was at
+// an extreme there, and price has since started moving away — the bounce
+// itself, not the approach. Standalone from combineSignals() and the MTF
+// pipeline, same conservative cooldown+dedup discipline as Fast Momentum.
+const SR_BOUNCE_BUFFER      = 15;  // pts — must have come within this of a level to count as "tested"
+const SR_BOUNCE_RSI_SUPPORT = 50;  // RSI at/below this after a support bounce = still recovering from oversold, not yet overheated
+const SR_BOUNCE_RSI_RESIST  = 50;  // RSI at/above this after a resistance reject = still cooling from overbought, not yet oversold
+const SR_BOUNCE_MIN_PULLBACK = 8;  // pts — price must have already moved this far away from the tested level (confirms it's bouncing, not still approaching)
+const SR_BOUNCE_LOOKBACK_MIN = 10; // how far back to look for the closest approach to the level
+const SR_BOUNCE_COOLDOWN_MS  = 30 * 60 * 1000;
+
+let lastSRBounceAlertAt = 0, lastSRBounceLevel = null;
+
+async function checkSRBounceTrigger() {
+    if (!isConfigured() || !isMarketOpen()) return;
+    try {
+        const srLvls = marketState.srLevels?.levels;
+        const nifty = marketState.nifty;
+        if (!srLvls?.length || !nifty) return;
+
+        const candles = getCandleHistory(true);
+        if (!candles || candles.length < SR_BOUNCE_LOOKBACK_MIN + 1) return;
+        const recent = candles.slice(-SR_BOUNCE_LOOKBACK_MIN);
+
+        for (const lvl of srLvls) {
+            const distNow = nifty - lvl.price; // signed: positive = price above level
+            if (Math.abs(distNow) > SR_BOUNCE_BUFFER * 3) continue; // quick skip, not even in the neighborhood
+
+            // Closest approach to this level within the lookback window
+            let closestDist = Infinity;
+            for (const c of recent) {
+                const d = Math.abs(c.close - lvl.price);
+                if (d < closestDist) closestDist = d;
+            }
+            if (closestDist > SR_BOUNCE_BUFFER) continue; // never actually tested this level recently
+
+            const pulledBack = Math.abs(distNow) - closestDist; // how far price has moved away since closest approach
+            if (pulledBack < SR_BOUNCE_MIN_PULLBACK) continue; // still sitting at the level, not bouncing yet
+
+            const rsi = marketState.rsi;
+            if (rsi == null) continue;
+
+            let direction = null;
+            // Bounced UP off a level that was acting as support (price now above it, RSI still shows recent-oversold recovery, not yet overheated)
+            if (distNow > 0 && rsi <= SR_BOUNCE_RSI_SUPPORT) direction = 'BULLISH';
+            // Rejected DOWN off a level that was acting as resistance (price now below it, RSI still cooling, not yet oversold)
+            else if (distNow < 0 && rsi >= SR_BOUNCE_RSI_RESIST) direction = 'BEARISH';
+            if (!direction) continue;
+
+            const levelKey = `${lvl.type}:${lvl.price}`;
+            const sinceLastMs = Date.now() - lastSRBounceAlertAt;
+            if (levelKey === lastSRBounceLevel && sinceLastMs < SR_BOUNCE_COOLDOWN_MS) continue;
+
+            lastSRBounceAlertAt = Date.now();
+            lastSRBounceLevel = levelKey;
+
+            const msg = `
+🎯 <b>S/R BOUNCE — ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+Level: ${lvl.label || lvl.type} @ ${lvl.price}
+NIFTY: ${nifty.toFixed(1)} (pulled back ${pulledBack.toFixed(1)}pts since testing it)
+RSI: ${rsi.toFixed(1)}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT Main Engine confirmed.</b> Price+RSI pattern only, no MTF check. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>VardaanNifty AI — S/R Bounce Trigger (exploratory)</i>
+`.trim();
+            await sendRawMessage(msg);
+            console.log(`🎯 [S/R Bounce] ${direction} — ${lvl.label || lvl.type}@${lvl.price}, pullback:${pulledBack.toFixed(1)}pts, RSI:${rsi.toFixed(1)}`);
+
+            if (dbPool) {
+                dbPool.query(
+                    `INSERT INTO sr_bounce_log (direction, nifty, level_type, level_price, pullback_pts, rsi, mtf_signal)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+                    [direction, nifty, lvl.type, lvl.price, pulledBack, rsi, marketState.mtf?.signal ?? null]
+                ).catch(e => console.warn('[S/R Bounce] log error:', e.message));
+            }
+            return; // one alert per check cycle — avoid firing on multiple levels simultaneously
+        }
+    } catch (e) {
+        console.warn('[S/R Bounce] error:', e.message);
+    }
+}
+
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return false;
     // ── Race-condition guard: onTick fires synchronously on every websocket tick,
@@ -6409,6 +6578,51 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL volume_scanner_log table ready');
 
+        // ── fast_momentum_log table (11 Sep) ─────────────────────────────────
+        // Tracks Fast Momentum Trigger fires (see checkFastMomentumTrigger()) —
+        // a genuinely separate, exploratory signal that reacts to raw price
+        // velocity instead of requiring MTF alignment, built specifically to
+        // catch fast reversal moves where 15m/1h's own indicators haven't
+        // caught up yet (confirmed via market_snapshot_log on 11 Sep: a 70pt
+        // NIFTY move in ~25min where mtf_signal stayed BUY PUT the whole way).
+        // Deliberately lean, same as crude_signal_log — no target/SL/outcome
+        // tracking yet, just enough to see what it WOULD have caught and
+        // start building a track record before trusting it live.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS fast_momentum_log (
+                id          SERIAL PRIMARY KEY,
+                ts          TIMESTAMPTZ DEFAULT NOW(),
+                direction   TEXT,
+                nifty       NUMERIC,
+                move_pts    NUMERIC,
+                window_min  INT,
+                atr         NUMERIC,
+                threshold   NUMERIC,
+                rsi         NUMERIC,
+                mtf_signal  TEXT
+            )
+        `);
+        console.log('✅ PostgreSQL fast_momentum_log table ready');
+
+        // ── sr_bounce_log table (11 Sep) ──────────────────────────────────────
+        // Tracks S/R Bounce Trigger fires — see checkSRBounceTrigger() for
+        // full rationale (built off the weekly review finding that S/R Wall
+        // and POC proximity block 40%+/52% of all evaluations).
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS sr_bounce_log (
+                id           SERIAL PRIMARY KEY,
+                ts           TIMESTAMPTZ DEFAULT NOW(),
+                direction    TEXT,
+                nifty        NUMERIC,
+                level_type   TEXT,
+                level_price  NUMERIC,
+                pullback_pts NUMERIC,
+                rsi          NUMERIC,
+                mtf_signal   TEXT
+            )
+        `);
+        console.log('✅ PostgreSQL sr_bounce_log table ready');
+
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
         // (fire-and-forget snapshot), this table AUTOMATICALLY tracks what happened
@@ -8678,6 +8892,30 @@ app.get('/api/volume-scanner-history', async (req, res) => {
     }
 });
 
+// 11 Sep — Fast Momentum Trigger fire history
+app.get('/api/fast-momentum-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM fast_momentum_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 11 Sep — S/R Bounce Trigger fire history
+app.get('/api/sr-bounce-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM sr_bounce_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // PCR
 app.post('/api/pcr', requireToken, (req,res) => {
     const {pcr,atmPcr}=req.body;
@@ -9231,6 +9469,14 @@ function startPollingIntervals() {
             }
         } catch (e) { console.warn('[WS Watcher] error:', e.message); }
     }, 60 * 1000), 30 * 1000);
+    // Fast Momentum Trigger (11 Sep) — checks every 2 min, runs promptly on
+    // boot (same immediate-then-interval pattern as the Volume Scanner
+    // timing fix) rather than waiting the full interval for its first check.
+    const fastMomentumTick = () => checkFastMomentumTrigger().catch(e => console.warn('[Fast Momentum] tick error:', e.message));
+    setTimeout(() => { fastMomentumTick(); setInterval(fastMomentumTick, 2 * 60 * 1000); }, 45 * 1000);
+    // S/R Bounce Trigger (11 Sep) — same immediate-then-interval pattern.
+    const srBounceTick = () => checkSRBounceTrigger().catch(e => console.warn('[S/R Bounce] tick error:', e.message));
+    setTimeout(() => { srBounceTick(); setInterval(srBounceTick, 2 * 60 * 1000); }, 50 * 1000);
     // Phase 5.2 (10 Sep) — CRUDEOIL PCR refresh, session-gated (only fetches
     // when isCrudeSessionOpen() — no point hitting Fyers for crude options
     // outside the evening window). ~90s cadence matches the other crude
