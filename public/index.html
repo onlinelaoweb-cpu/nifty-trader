@@ -3761,28 +3761,36 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
   <button class="btab active" id="btab-more" onclick="toggleMoreMenu(this)" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:8px 16px;">
     <span style="display:flex;align-items:center;gap:8px;">
       <span class="bi" id="collapsed-tab-icon">📊</span>
-      <span id="collapsed-tab-label">LIVE</span>
+      <span id="collapsed-tab-label">NIFTY LIVE</span>
     </span>
     <span id="collapsed-chevron" style="font-size:11px;color:var(--dim);">▲ MENU</span>
   </button>
 </div>
 
-<!-- Full navigation list — collapsible, all tabs in one place, in order -->
+<!-- Full navigation list — grouped into sections for easier scanning (12 Sep reorg) -->
 <div id="more-menu" style="display:none;position:fixed;bottom:62px;right:0;left:0;z-index:300;background:rgba(6,13,20,0.97);border-top:1px solid rgba(0,255,136,0.15);backdrop-filter:blur(16px);padding:8px;">
   <div style="display:flex;flex-direction:column;gap:3px;max-height:60vh;overflow-y:auto;">
-    <button class="more-item" onclick="switchTabFromMore('dashboard')"><span>📊</span>LIVE</button>
+
+    <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:6px 6px 2px;opacity:0.65;">MAIN</div>
+    <button class="more-item" onclick="switchTabFromMore('dashboard')"><span>📊</span>NIFTY LIVE</button>
     <button class="more-item" onclick="switchTabFromMore('chart')"><span>🕯️</span>CHART</button>
-    <button class="more-item" onclick="switchTabFromMore('breadth')"><span>📈</span>BREADTH</button>
     <button class="more-item" onclick="switchTabFromMore('insights')"><span>🧠</span>INSIGHTS</button>
     <button class="more-item" onclick="switchTabFromMore('journal')"><span>📔</span>JOURNAL</button>
-    <button class="more-item" onclick="switchTabFromMore('physics')"><span>⚛️</span>PHYSICS</button>
-    <button class="more-item" onclick="switchTabFromMore('guard')"><span>🛡️</span>GUARD</button>
-    <button class="more-item" onclick="switchTabFromMore('tools')"><span>🔧</span>TOOLS</button>
-    <button class="more-item" onclick="switchTabFromMore('analytics')"><span>📊</span>ANALYTICS</button>
-    <button class="more-item" onclick="switchTabFromMore('global')"><span>🌍</span>GLOBAL</button>
-    <button class="more-item" onclick="switchTabFromMore('scanner')"><span>🔥</span>SCANNER</button>
+
+    <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">CRUDE OIL</div>
     <button class="more-item" onclick="switchTabFromMore('crude')"><span>🛢️</span>CRUDE LIVE</button>
     <button class="more-item" onclick="switchTabFromMore('crudeInsights')"><span>🔍</span>CRUDE INSIGHTS</button>
+
+    <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">MARKET DATA</div>
+    <button class="more-item" onclick="switchTabFromMore('breadth')"><span>📈</span>BREADTH</button>
+    <button class="more-item" onclick="switchTabFromMore('global')"><span>🌍</span>GLOBAL</button>
+    <button class="more-item" onclick="switchTabFromMore('scanner')"><span>🔥</span>SCANNER</button>
+
+    <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">TOOLS & ANALYSIS</div>
+    <button class="more-item" onclick="switchTabFromMore('analytics')"><span>📊</span>ANALYTICS</button>
+    <button class="more-item" onclick="switchTabFromMore('tools')"><span>🔧</span>TOOLS</button>
+    <button class="more-item" onclick="switchTabFromMore('physics')"><span>⚛️</span>PHYSICS</button>
+    <button class="more-item" onclick="switchTabFromMore('guard')"><span>🛡️</span>GUARD</button>
   </div>
 </div>
 
@@ -3797,18 +3805,18 @@ function _initDesktopLayout() {
 
   const TAB_META = [
     { id: 'dashboard', icon: '📊', label: 'NIFTY LIVE' },
-    { id: 'journal',   icon: '📔', label: 'JOURNAL' },
-    { id: 'breadth',   icon: '📈', label: 'BREADTH' },
-    { id: 'insights',  icon: '🧠', label: 'INSIGHTS' },
-    { id: 'global',    icon: '🌍', label: 'GLOBAL' },
     { id: 'chart',     icon: '🕯️', label: 'CHART' },
-    { id: 'tools',     icon: '🔧', label: 'TOOLS' },
-    { id: 'analytics', icon: '📊', label: 'ANALYTICS' },
-    { id: 'physics',   icon: '⚛️', label: 'PHYSICS' },
-    { id: 'guard',     icon: '🛡️', label: 'GUARD' },
-    { id: 'scanner',   icon: '🔥', label: 'SCANNER' },
+    { id: 'insights',  icon: '🧠', label: 'INSIGHTS' },
+    { id: 'journal',   icon: '📔', label: 'JOURNAL' },
     { id: 'crude',     icon: '🛢️', label: 'CRUDE LIVE' },
     { id: 'crudeInsights', icon: '🔍', label: 'CRUDE INSIGHTS' },
+    { id: 'breadth',   icon: '📈', label: 'BREADTH' },
+    { id: 'global',    icon: '🌍', label: 'GLOBAL' },
+    { id: 'scanner',   icon: '🔥', label: 'SCANNER' },
+    { id: 'analytics', icon: '📊', label: 'ANALYTICS' },
+    { id: 'tools',     icon: '🔧', label: 'TOOLS' },
+    { id: 'physics',   icon: '⚛️', label: 'PHYSICS' },
+    { id: 'guard',     icon: '🛡️', label: 'GUARD' },
   ];
 
   // Build sidebar
