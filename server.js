@@ -4384,6 +4384,19 @@ async function checkTelegramAlerts(newSignal) {
         };
         if (mtfStrikeData) mtfStrikeData.leadQuality = leadQuality;
         marketState.mtf.leadQuality = leadQuality;
+        // FIX (11 Sep) — diagnostic log. Confirmed live confusion: the raw
+        // MTF log line's "(MODERATE)" is mtfStrength (multiTimeframe.js's
+        // OWN vote-alignment concept — all valid TFs having data and voting
+        // the same way, with 1h sometimes excluded via oneHourLagging), a
+        // DIFFERENT thing from leadQuality.label (this 4-factor confluence
+        // score: isFull3 + deltaMatches + highConf + mainConfluence) used
+        // for the actual Telegram alert decision below. A user saw "BUY PUT
+        // (MODERATE)" in logs and no Telegram alert with NO suppression
+        // message either — because leadQuality.score was <2 (e.g. only
+        // isFull3 true), which doesn't match ANY of the score>=2 branches
+        // below (send OR suppress-log), so it fell through completely
+        // silently. This makes that always visible going forward.
+        console.log(`[MTF] leadQuality: ${leadQuality.label} (score:${leadQuality.score}/4 — full3:${isFull3} delta:${deltaMatches} highConf:${highConf} mainConfluence:${mainConfluence})`);
         marketState.momentumDecayWarning = checkMomentumDecay(
             marketState.mtf.signal, deltaPct, marketState.rsi,
             (marketState.nifty > marketState.vwap) ? 'ABOVE' : 'BELOW',
