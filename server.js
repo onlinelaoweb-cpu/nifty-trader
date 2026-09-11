@@ -4476,7 +4476,18 @@ async function checkTelegramAlerts(newSignal) {
         );
 
         const exhaustionRisk = rsiExhausted || insideRangePocket || alignmentADXWeak;
-        const willActuallySend = leadQuality.score >= 3 && !_inSettlingWindow && !exhaustionRisk;
+        // FIX (11 Sep) — lowered from score>=3 (Strong Confluence only) to
+        // score>=2 (Strong Confluence + Moderate), per explicit user request:
+        // wants Moderate leads for quick 10-20pt scalp trades and to start
+        // collecting outcome data on that tier (previously mtfModerate was
+        // just a count, never tracked to an actual result). The Telegram
+        // message template (sendMTFAlert's verdictLine) already had Moderate-
+        // specific framing ready — "WEAK — only partial confluence, skip
+        // unless you have your own confirmation" — so this only required
+        // changing the gate, not the message. Was raised to 3 on 22 Jul
+        // after a Weak-tier false alert; that decision stands for Weak, this
+        // only reopens Moderate specifically.
+        const willActuallySend = leadQuality.score >= 2 && !_inSettlingWindow && !exhaustionRisk;
 
         // Only track Strong Confluence (3-4/4) MTF-tracker leads for exit-warning
         // purposes — tracking every Weak/Isolated ping as an "open position"
@@ -4522,16 +4533,16 @@ async function checkTelegramAlerts(newSignal) {
         // above (mtfWeak/mtfModerate/mtfStrong) still track ALL tiers for
         // analytics even though only Strong fires, so you can still audit how
         // often each tier occurs.
-        if (leadQuality.score >= 3 && _inSettlingWindow) {
+        if (leadQuality.score >= 2 && _inSettlingWindow) {
             const _key = 'settling';
             if (_key !== lastSuppressLogMsg || Date.now() - lastSuppressLogAt > 60_000) {
-                console.log(`[MTF] Suppressed Strong Confluence alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
+                console.log(`[MTF] Suppressed ${leadQuality.label} alert — still in market-open settling window (${_minsSinceOpen}min since open, need 5)`);
                 lastSuppressLogMsg = _key; lastSuppressLogAt = Date.now();
             }
-        } else if (leadQuality.score >= 3 && exhaustionRisk) {
+        } else if (leadQuality.score >= 2 && exhaustionRisk) {
             const _key = `exhaustion:rsi=${rsiExhausted}:range=${insideRangePocket}:adx=${alignmentADXWeak}`;
             if (_key !== lastSuppressLogMsg || Date.now() - lastSuppressLogAt > 60_000) {
-                console.log(`[MTF] Suppressed Strong Confluence alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'}, ${alignmentADXWeak ? `weak ADX backing (15m ${adx15mForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_15M}+; 1h ${adx1hForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_1H}+)` : 'ADX ok'})`);
+                console.log(`[MTF] Suppressed ${leadQuality.label} alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'}, ${alignmentADXWeak ? `weak ADX backing (15m ${adx15mForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_15M}+; 1h ${adx1hForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_1H}+)` : 'ADX ok'})`);
                 lastSuppressLogMsg = _key; lastSuppressLogAt = Date.now();
             }
         } else if (willActuallySend) {
