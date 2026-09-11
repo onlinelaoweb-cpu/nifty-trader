@@ -4174,7 +4174,7 @@ This reacts fast on purpose and WILL be wrong sometimes. Use your own judgment, 
             dbPool.query(
                 `INSERT INTO fast_momentum_log (direction, nifty, move_pts, window_min, atr, threshold, rsi, mtf_signal)
                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-                [direction, nowClose, movePts, FAST_MOMENTUM_WINDOW_MIN, atr, threshold, marketState.rsi ?? null, marketState.mtf?.mtfSignal ?? null]
+                [direction, nowClose, movePts, FAST_MOMENTUM_WINDOW_MIN, atr, threshold, marketState.rsi ?? null, marketState.mtf?.signal ?? null]
             ).catch(e => console.warn('[Fast Momentum] log error:', e.message));
         }
     } catch (e) {
@@ -5498,6 +5498,7 @@ async function refreshMTF() {
             aligned       : preMarket ? false      : d.aligned,
             softAligned   : preMarket ? false      : (d.softAligned ?? false),  // 15m+1h agree, 5m dissents
             oneHourLagging: preMarket ? false      : (d.oneHourLagging ?? false), // 5m+15m flipped vs 1H → 1H excluded
+            fifteenMinLagging: preMarket ? false   : (d.fifteenMinLagging ?? false), // 5m+1h agree, weak-ADX 15m excluded
             bullCount     : preMarket ? 0          : d.bullCount,
             bearCount     : preMarket ? 0          : d.bearCount,
             validTFCount  : preMarket ? 0          : d.validTFCount ?? 0,  // used by telegram.js title
