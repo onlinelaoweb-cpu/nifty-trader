@@ -807,7 +807,13 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 #vn-splash.hide{opacity:0;visibility:hidden;pointer-events:none;}
 #vn-splash .splash-icon{width:90px;height:90px;filter:drop-shadow(0 0 18px rgba(0,255,136,0.7));animation:splashPulse 1.6s ease-in-out infinite;}
 #vn-splash .splash-brand{font-family:'Orbitron',monospace;font-size:16px;font-weight:900;letter-spacing:3px;color:#00ff88;margin-top:22px;text-shadow:0 0 20px rgba(0,255,136,0.7);animation:splashFadeIn 0.8s ease 0.3s both;}
-#vn-splash .splash-tagline{font-family:'Share Tech Mono',monospace;font-size:12px;letter-spacing:2px;color:rgba(0,255,136,0.5);margin-top:8px;animation:splashFadeIn 0.8s ease 0.6s both;}
+#vn-splash .splash-tagline{font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:1.5px;color:#ffd700;opacity:0.95;margin-top:10px;text-shadow:0 0 10px rgba(255,215,0,0.5);animation:splashFadeIn 0.8s ease 0.6s both;}
+.dedication-line{font-size:11px;color:#ffd700;opacity:0.9;margin-top:3px;letter-spacing:0.5px;text-shadow:0 0 8px rgba(255,215,0,0.4);}
+.gold-header-text{color:#ffd700;}
+/* Day mode — bright gold has poor contrast on the light background, use a deeper amber that stays readable */
+html.vn-day #vn-splash .splash-tagline,
+html.vn-day .dedication-line,
+html.vn-day .gold-header-text{color:#8b6508;text-shadow:none;opacity:1;}
 #vn-splash .splash-dots{display:flex;gap:7px;margin-top:28px;animation:splashFadeIn 0.8s ease 0.9s both;}
 #vn-splash .splash-dot{width:6px;height:6px;border-radius:50%;background:#00ff88;animation:splashBounce 1.2s ease-in-out infinite;}
 #vn-splash .splash-dot:nth-child(2){animation-delay:0.2s;}
@@ -2141,7 +2147,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
       <polygon points="60,5 25,55 50,55 40,95 75,45 50,45" fill="#00ff88"/>
     </svg>
     <div class="login-title">VARDAAN AI</div>
-    <div style="font-size:11px;color:#ffd700;opacity:0.85;margin-top:2px;letter-spacing:0.5px;">🪔 in loving memory of Asha</div>
+    <div class="dedication-line">🪔 in loving memory of Asha</div>
     <div class="login-sub">ENTER ACCESS PASSWORD</div>
     <div class="login-input-wrap">
       <input class="login-input" id="login-pass" type="password" placeholder="Password" autocomplete="current-password"
@@ -3714,7 +3720,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
        actionable, not just historical trivia. -->
   <div style="padding:8px 10px 0;">
     <div style="border:1px solid rgba(255,215,0,0.25);border-radius:10px;padding:12px;background:rgba(255,215,0,0.03);">
-      <div style="font-size:12px;color:#ffd700;letter-spacing:1px;margin-bottom:8px;">🏆 BEST HISTORICAL SETUPS <span style="font-size:9.5px;color:var(--dim);font-weight:400;">(180-day, confirmed stable across 3 pulls)</span></div>
+      <div class="gold-header-text" style="font-size:12px;letter-spacing:1px;margin-bottom:8px;">🏆 BEST HISTORICAL SETUPS <span style="font-size:9.5px;color:var(--dim);font-weight:400;">(180-day, confirmed stable across 3 pulls)</span></div>
       <div id="best-setup-body" style="font-size:12px;line-height:1.7;">Loading...</div>
       <div style="font-size:9.5px;color:var(--dim);opacity:0.7;margin-top:8px;">Informational only — doesn't gate or change any live signal. "Trend Conviction" is the key differentiator: same base setup without it sits at 38% win.</div>
     </div>
@@ -4338,7 +4344,7 @@ let _clCalendarReady = false; // becomes true once calendar API returns data
 // ─── POLL /api/signal ────────────────────────────────────
 
 // ── Splash state ─────────────────────────────────────────
-const _splashMinMs  = 2500;          // minimum visible time (ms)
+const _splashMinMs  = 4000;          // minimum visible time (ms)
 const _splashShownAt = Date.now();   // set at parse time — conservative (slightly early)
 let   _splashDone   = false;         // guard: run dismiss + render exactly once
 let   _splashTimer  = null;          // pending min-wait timer — cancelled on early dismiss
@@ -5184,7 +5190,8 @@ function renderDashboard(s) {
     const listEl = document.getElementById('sr-levels-list');
     if (listEl && s.srLevels.levels && s.srLevels.levels.length && s.srLevels.updatedAt !== _lastSRUpdatedAt) {
       _lastSRUpdatedAt = s.srLevels.updatedAt;
-      const TYPE_COLOR = { R3:'#ff4d4d', R2:'#ff6b6b', R1:'#ff9999', PP:'#ffd700',
+      const isDayMode = document.documentElement.classList.contains('vn-day');
+      const TYPE_COLOR = { R3:'#ff4d4d', R2:'#ff6b6b', R1:'#ff9999', PP: isDayMode ? '#8b6508' : '#ffd700',
                            S1:'#99ddff', S2:'#66bbff', S3:'#3399ff',
                            PDH:'#ffaa55', PDL:'#55aaff', WH:'#ff77aa', WL:'#77aaff', MP:'#cc88ff' };
       listEl.innerHTML = s.srLevels.levels.map(lv => {
