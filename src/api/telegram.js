@@ -345,7 +345,7 @@ ${strikeBlock}
 ${checklistLine}${probLine ? '\n' + probLine : ''}
 ━━━━━━━━━━━━━━━━━━
 ${detailsBlock}⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
-<i>VardaanNifty AI</i>
+<i>Vardaan AI</i>
 `.trim();
 
     // ── Auto-punch to Journal (1 Aug audit, replaces the earlier one-tap
@@ -499,7 +499,7 @@ ${emoji} <b>${state.mtf.signal}</b> — ${state.mtf.strength} | NIFTY: ${state.n
 ${referenceOnlyNote}${levelsBlock}
 ━━━━━━━━━━━━━━━━━━${detailsBlock}
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
-<i>VardaanNifty AI</i>
+<i>Vardaan AI</i>
 `.trim();
 
     // Journal was already auto-punched in server.js BEFORE this alert was
@@ -527,7 +527,7 @@ ${state.change >= 0 ? '▲' : '▼'} ${Math.abs(state.change).toFixed(2)} (${sta
 📌 Enter PCR on dashboard:
 web-production-886aa.up.railway.app
 ━━━━━━━━━━━━━━━━━━
-<i>VardaanNifty AI — Good luck today!</i>
+<i>Vardaan AI — Good luck today!</i>
 `.trim();
 
     await sendMessage(msg);
@@ -544,7 +544,7 @@ Status: ${note}
 🛡️ Reduce position size!
 ❌ Avoid far OTM options
 ━━━━━━━━━━━━━━━━━━
-<i>VardaanNifty AI</i>
+<i>Vardaan AI</i>
 `.trim();
 
     await sendMessage(msg);
@@ -566,7 +566,7 @@ LTP: <b>₹${stock.ltp}</b>  ${chgSign} ${Math.abs(stock.pctChange).toFixed(2)}%
 📊 Volume: <b>${stock.ratio}x</b> its 20-day average
 ${burstLine}${priceContextLine}━━━━━━━━━━━━━━━━━━
 <i>Descriptive only — not a trade recommendation. Check the chart before acting.</i>
-<i>VardaanNifty AI — Volume Scanner</i>
+<i>Vardaan AI — Volume Scanner</i>
 `.trim();
 
     await sendMessage(msg);
@@ -629,7 +629,7 @@ ${dayChange >= 0 ? '▲' : '▼'} ${Math.abs(dayChange).toFixed(2)} (${dayPct.to
 VIX: ${state.vix || '--'}
 RSI: ${state.rsi || '--'}${digestBlock}
 ━━━━━━━━━━━━━━━━━━
-<i>VardaanNifty AI — See you tomorrow!</i>
+<i>Vardaan AI — See you tomorrow!</i>
 `.trim();
 
     await sendMessage(msg);
@@ -661,7 +661,7 @@ smaller, faster one for when you just want in-and-out within 10-20 min
 instead of riding the full swing target.
 ⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
-<i>VardaanNifty AI</i>
+<i>Vardaan AI</i>
 `.trim();
 
     await sendMessage(msg);
@@ -708,7 +708,7 @@ async function sendSignalTimeline(rec, outcomeLabel, maxGainPct, elapsedMin, clo
 ${rec.exitWarned ? `⚠️ Weakened    conviction faded before this closed — you got a heads-up at the time\n` : ''}🏁 Closed      ${closedTimeLabel} — <b>${outcomeLabel}</b>
 ━━━━━━━━━━━━━━━━━━
 ⏱ Duration: ${elapsedMin} min · Best price reached: +${maxGainPct}%${maeLine}
-<i>VardaanNifty AI</i>
+<i>Vardaan AI</i>
 `.trim();
 
     await sendMessage(msg);
@@ -769,7 +769,7 @@ P&L : ${pnlSign}₹${Math.abs(totalPnl)} (${pnlSign}₹${Math.abs(pnlPerLot)}/lo
 ━━━━━━━━━━━━━━━━━━
 ⚡ <b>Action: ${action}</b>
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
-<i>VardaanNifty AI</i>
+<i>Vardaan AI</i>
 `.trim();
 
     await sendMessage(msg);
@@ -798,7 +798,7 @@ ${signalLine}
 🎯 Theta decay starting: target quick 30–40% premium gain
 ❌ Avoid holding past 14:30
 ━━━━━━━━━━━━━━━━━━
-<i>VardaanNifty AI — Murarka Strategy</i>
+<i>Vardaan AI — Murarka Strategy</i>
 `.trim();
 
     await sendMessage(msg);
@@ -850,7 +850,7 @@ ${beLine ? beLine + '\n' : ''}🎯 Profit Zone: ${spread.profitZone}
 📝 ${spread.note}
 ━━━━━━━━━━━━━━━━━━
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
-<i>VardaanNifty AI — Spread Strategy</i>
+<i>Vardaan AI — Spread Strategy</i>
 `.trim();
 
     await sendMessage(msg);
@@ -888,7 +888,7 @@ ${confLine}${thetaLine}
 Price hasn't hit SL or target — this isn't an auto-exit. Just a heads-up to reassess: book partial, tighten SL, or hold with awareness.
 ━━━━━━━━━━━━━━━━━━
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
-<i>VardaanNifty AI</i>
+<i>Vardaan AI</i>
 `.trim();
     await sendMessage(msg);
 }
@@ -918,7 +918,7 @@ ${confLine}${thetaLine}
 This isn't a target hit or an auto-exit. But with this much R:R already banked and conviction cooling, booking part of the position now is usually smarter than waiting for a fixed price target that may not come.
 ━━━━━━━━━━━━━━━━━━
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
-<i>VardaanNifty AI</i>
+<i>Vardaan AI</i>
 `.trim();
     await sendMessage(msg);
 }
@@ -928,7 +928,7 @@ This isn't a target hit or an auto-exit. But with this much R:R already banked a
 // from computeWeeklyGateReview() in server.js. Sent once, Friday close.
 async function sendWeeklyGateReview(review, analytics) {
     if (!review || review.totalEvals === 0) {
-        await sendMessage(`📅 <b>WEEKLY SELF-REVIEW</b>\n━━━━━━━━━━━━━━━━━━\nNo directional signal evaluations logged this week — nothing to review yet.\n<i>VardaanNifty AI</i>`);
+        await sendMessage(`📅 <b>WEEKLY SELF-REVIEW</b>\n━━━━━━━━━━━━━━━━━━\nNo directional signal evaluations logged this week — nothing to review yet.\n<i>Vardaan AI</i>`);
         return;
     }
     const top = review.stats.slice(0, 5);
@@ -973,7 +973,7 @@ This is descriptive, not a recommendation — a gate blocking often isn't wrong 
 ${analyticsBlock}
 ━━━━━━━━━━━━━━━━━━
 ⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
-<i>VardaanNifty AI</i>
+<i>Vardaan AI</i>
 `.trim();
     await sendMessage(msg);
 }
