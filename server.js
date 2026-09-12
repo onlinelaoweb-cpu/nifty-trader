@@ -9246,6 +9246,53 @@ app.get('/api/performance-analytics', async (req, res) => {
     }
 });
 
+// 12 Sep — live check for the two historically-best setups from the DNA
+// leaderboard (confirmed identically across 3 separate 180-day pulls: the
+// SAME sample sizes and ratios each time, so this is a stable finding, not
+// noise). The key differentiator in both is Trend Conviction being active —
+// the same Delta+3/3MTF base setup WITHOUT it sits at 38% win/~breakeven,
+// WITH it jumps to 73%/46% win. This doesn't gate or change any live signal
+// — purely informational, for the new dashboard card.
+app.get('/api/best-setup-status', (req, res) => {
+    try {
+        const deltaPct = marketState.delta?.deltaPct;
+        const mtfAligned = !!marketState.mtf?.aligned;
+        const tcActive = marketState.trendConviction?.active;
+        const belowL3 = !!marketState.dynamicLevels?.belowL3;
+        const bosEvent = marketState.physicsOfTrading?.bosChoch?.event;
+
+        // Setup #1 (best overall): Delta Confirm + 3/3 MTF + Trend Conviction
+        // BEARISH + Below Dyn L3 — 73% win, +1.509R avg (N=11)
+        const setup1Factors = {
+            deltaConfirm: deltaPct != null && deltaPct <= -40,
+            mtfAligned,
+            trendConviction: tcActive === 'BEARISH',
+            belowDynL3: belowL3,
+        };
+        const setup1Active = Object.values(setup1Factors).every(Boolean);
+
+        // Setup #2 (second-best): BOS Bullish + Delta Confirm + 3/3 MTF +
+        // Trend Conviction BULLISH — 46% win, +0.591R avg (N=26, larger sample)
+        const setup2Factors = {
+            bosBullish: bosEvent === 'BOS_BULLISH',
+            deltaConfirm: deltaPct != null && deltaPct >= 40,
+            mtfAligned,
+            trendConviction: tcActive === 'BULLISH',
+        };
+        const setup2Active = Object.values(setup2Factors).every(Boolean);
+
+        res.json({
+            success: true,
+            setups: [
+                { dna: 'Delta Confirm + 3/3 MTF + Trend Conviction + Below Dyn L3', winRate: 73, avgR: 1.509, sampleSize: 11, active: setup1Active, factors: setup1Factors, direction: 'PUT' },
+                { dna: 'BOS Bullish + Delta Confirm + 3/3 MTF + Trend Conviction', winRate: 46, avgR: 0.591, sampleSize: 26, active: setup2Active, factors: setup2Factors, direction: 'CALL' },
+            ],
+        });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // 10 Sep — daily signal-count history, to check whether the "0 Strong
 // signals sent" pattern (first seen 4 Sep audit) recurs regularly or was a
 // one-off. Pulls straight from daily_signal_counts (see its table comment

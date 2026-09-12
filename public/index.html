@@ -3707,6 +3707,51 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
 
   </div><!-- end an-sticky-header -->
 
+  <!-- 12 Sep — Best Strategy card: historically top-performing setups from
+       the DNA leaderboard (confirmed identical across 3 separate 180-day
+       pulls — stable finding), with a LIVE active/inactive check so this is
+       actionable, not just historical trivia. -->
+  <div style="padding:8px 10px 0;">
+    <div style="border:1px solid rgba(255,215,0,0.25);border-radius:10px;padding:12px;background:rgba(255,215,0,0.03);">
+      <div style="font-size:12px;color:#ffd700;letter-spacing:1px;margin-bottom:8px;">🏆 BEST HISTORICAL SETUPS <span style="font-size:9.5px;color:var(--dim);font-weight:400;">(180-day, confirmed stable across 3 pulls)</span></div>
+      <div id="best-setup-body" style="font-size:12px;line-height:1.7;">Loading...</div>
+      <div style="font-size:9.5px;color:var(--dim);opacity:0.7;margin-top:8px;">Informational only — doesn't gate or change any live signal. "Trend Conviction" is the key differentiator: same base setup without it sits at 38% win.</div>
+    </div>
+  </div>
+
+  <script>
+  async function fetchBestSetupStatus() {
+    const body = document.getElementById('best-setup-body');
+    if (!body) return;
+    try {
+      const r = await fetch('/api/best-setup-status');
+      const d = await r.json();
+      if (!d.success || !d.setups) { body.textContent = 'Failed to load'; return; }
+      body.innerHTML = d.setups.map(s => {
+        const statusColor = s.active ? 'var(--green)' : 'var(--dim)';
+        const statusLabel = s.active ? '🟢 ACTIVE NOW' : '⚪ Not active';
+        const dirColor = s.direction === 'PUT' ? 'var(--red)' : 'var(--green)';
+        const factorsList = Object.entries(s.factors).map(([k, v]) =>
+          `<span style="color:${v ? 'var(--green)' : 'var(--dim)'};">${v ? '✓' : '✗'} ${k}</span>`
+        ).join(' &nbsp; ');
+        return `<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:${dirColor};font-weight:600;">${s.direction}</span>
+            <span style="color:${statusColor};font-weight:600;font-size:11px;">${statusLabel}</span>
+          </div>
+          <div style="color:var(--dim);font-size:11px;margin:3px 0;">${s.dna}</div>
+          <div style="font-size:11.5px;">Win: <b>${s.winRate}%</b> · Avg R: <b>${s.avgR > 0 ? '+' : ''}${s.avgR}</b> · N=${s.sampleSize}</div>
+          <div style="font-size:10px;margin-top:4px;">${factorsList}</div>
+        </div>`;
+      }).join('');
+    } catch (e) { body.textContent = 'Failed to load'; }
+  }
+  fetchBestSetupStatus();
+  setInterval(fetchBestSetupStatus, 60000);
+  </script>
+
+
+
   <!-- Last Signal highlight — scrolls with content -->
   <div style="padding:6px 10px 0;">
     <div id="an-last-signal" style="display:none;border-radius:8px;padding:8px 14px;border:1px solid rgba(0,255,136,0.2);background:rgba(0,255,136,0.05);font-family:var(--mono);font-size:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -4041,7 +4086,7 @@ function switchTab(name,btn){
   if(name==='journal'){loadJournal();}
   if(name==='guard'){ fetchGuardJournalActual(); }
   if(name==='insights'){ fetchSignalPerformance(); if(_lastState) updateInsightsUI(_lastState); }
-  if(name==='analytics'){ if(!_anLoaded){ loadAnalytics(); } else { anRenderAll(anApplyDateFilter(_anSignals), _anSignals); } }
+  if(name==='analytics'){ if(!_anLoaded){ loadAnalytics(); } else { anRenderAll(anApplyDateFilter(_anSignals), _anSignals); } fetchBestSetupStatus(); }
   if(name==='physics' && _lastState) updatePhysicsTab(_lastState);
   if(name==='breadth'){
     // Always fetch full breadth (with stocks[]) when tab opens — /api/signal strips stocks
