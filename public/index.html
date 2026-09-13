@@ -7598,13 +7598,13 @@ function updateChecklistAuto(s) {
     } else if (conf < 50 && netScore <= -4) {
       verdict = '🟡 BEAR SIGNAL — Low Confidence (' + conf + '%) · Wait';
       cls = 'side'; color = 'var(--amber)';
-    } else if (netScore >= 6) { verdict = '🟢 Strong Bull (8+/10)';    cls = 'bull'; color = 'var(--green)'; }
-    else if (netScore <= -6)   { verdict = '🔴 Strong Bear (8+/10)';   cls = 'bear'; color = 'var(--red)'; }
-    else if (netScore >= 4)    { verdict = '🟢 Bull (7-8/10)';          cls = 'bull'; color = 'var(--green)'; }
-    else if (netScore <= -4)   { verdict = '🔴 Bear (7-8/10)';         cls = 'bear'; color = 'var(--red)'; }
-    else if (netScore >= 2)    { verdict = '🟡 Cautious Bull (5-6/10)'; cls = 'side'; color = 'var(--amber)'; }
-    else if (netScore <= -2)   { verdict = '🟡 Cautious Bear (5-6/10)'; cls = 'side'; color = 'var(--amber)'; }
-    else                       { verdict = '⚪ Wait (5/10)';             cls = 'wait'; color = 'var(--dim)'; }
+    } else if (netScore >= 6) { verdict = `🟢 Strong Bull (${bullVotes}/${total})`;    cls = 'bull'; color = 'var(--green)'; }
+    else if (netScore <= -6)   { verdict = `🔴 Strong Bear (${bearVotes}/${total})`;   cls = 'bear'; color = 'var(--red)'; }
+    else if (netScore >= 4)    { verdict = `🟢 Bull (${bullVotes}/${total})`;          cls = 'bull'; color = 'var(--green)'; }
+    else if (netScore <= -4)   { verdict = `🔴 Bear (${bearVotes}/${total})`;         cls = 'bear'; color = 'var(--red)'; }
+    else if (netScore >= 2)    { verdict = `🟡 Cautious Bull (${bullVotes}/${total})`; cls = 'side'; color = 'var(--amber)'; }
+    else if (netScore <= -2)   { verdict = `🟡 Cautious Bear (${bearVotes}/${total})`; cls = 'side'; color = 'var(--amber)'; }
+    else                       { verdict = `⚪ Wait (${bullVotes}/${total})`;             cls = 'wait'; color = 'var(--dim)'; }
 
     if (verdEl) { verdEl.className = 'cl-verdict ' + cls; }
     if (mainEl) { mainEl.textContent = verdict; mainEl.style.color = color; }
