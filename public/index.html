@@ -1352,8 +1352,8 @@ html.vn-day .gold-header-text{color:#8b6508;text-shadow:none;opacity:1;}
 .rsi-needle{transition:transform 0.8s cubic-bezier(.34,1.2,.64,1);}
 .rsi-dial-val{font-family:'Orbitron',monospace;font-size:20px;font-weight:900;text-align:center;margin-top:2px;line-height:1;}
 .rsi-dial-zone{font-size:11px;font-weight:700;letter-spacing:2px;padding:2px 9px;border-radius:99px;margin-top:3px;display:inline-block;}
-.rsi-dial-zone.ob{background:rgba(255,34,68,0.15);color:var(--red);border:1px solid rgba(255,34,68,0.3);}
-.rsi-dial-zone.os{background:rgba(0,170,255,0.15);color:var(--blue);border:1px solid rgba(0,170,255,0.3);}
+.rsi-dial-zone.ob{background:rgba(0,255,136,0.15);color:var(--green);border:1px solid rgba(0,255,136,0.3);}
+.rsi-dial-zone.os{background:rgba(255,34,68,0.15);color:var(--red);border:1px solid rgba(255,34,68,0.3);}
 .rsi-dial-zone.neut{background:rgba(255,187,0,0.12);color:var(--amber);border:1px solid rgba(255,187,0,0.25);}
 /* ── RSI 3-meter row ── */
 .rsi-meters-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:2px;}
@@ -2435,6 +2435,11 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
   <div class="pcr-row">
     <div class="pv-card" style="color:var(--amber)" id="pcr-card"><div class="pv-label">PCR</div><div class="pv-val" id="pcr-val">--</div><div class="pv-sig" id="pcr-sig">FETCHING…</div><div class="pv-src" id="pcr-source-lbl" style="font-size:10px;letter-spacing:1px;margin-top:2px;color:var(--dim);">NSE AUTO</div></div>
     <div class="pv-card" style="color:var(--amber)" id="atm-pcr-card"><div class="pv-label">ATM PCR</div><div class="pv-val" id="atm-pcr-val">--</div><div class="pv-sig" id="atm-pcr-sig">FETCHING…</div><div class="pv-src" id="atm-pcr-source-lbl" style="font-size:10px;letter-spacing:1px;margin-top:2px;color:var(--dim);">NSE AUTO</div></div>
+    <!-- 13 Sep — Combined PCR (Nifty+BankNifty+Sensex+Top10 stocks). Separate
+         from PCR/ATM PCR above (those are load-bearing — Main Engine uses
+         them directly). This is exploratory broader-sentiment, informational
+         only, doesn't feed any live signal. -->
+    <div class="pv-card" style="color:var(--amber)" id="combined-pcr-card"><div class="pv-label">COMBINED</div><div class="pv-val" id="combined-pcr-val">--</div><div class="pv-sig" id="combined-pcr-sig">EXPLORATORY</div><div class="pv-src" style="font-size:10px;letter-spacing:1px;margin-top:2px;color:var(--dim);">N+BN+SX+T10</div></div>
     <!-- Manual PCR Override -->
     <div id="manual-pcr-wrap" style="grid-column:1/-1;margin:2px 0 6px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
@@ -4736,11 +4741,11 @@ function renderDashboard(s) {
     if (zoneEl) { zoneEl.textContent = zone; zoneEl.className = 'rsi-dial-zone ' + (s.rsi < 30 ? 'os' : s.rsi > 70 ? 'ob' : 'neut'); }
     const rsiZone = document.getElementById('rsi-zone');
     if (rsiZone) rsiZone.textContent = zone;
-    document.getElementById('rsi-val').style.color = s.rsi < 30 ? 'var(--blue)' : s.rsi > 70 ? 'var(--red)' : 'var(--green)';
+    document.getElementById('rsi-val').style.color = s.rsi < 30 ? 'var(--red)' : 'var(--green)';
 
     // ── Multi-TF RSI comparison row (1m / 5m / 15m) ──────────────────────────
     const rsiZoneLabel = (v) => v == null ? '--' : v < 30 ? 'OVERSOLD' : v > 70 ? 'OVERBOUGHT' : v > 55 ? 'BULLISH' : v < 45 ? 'BEARISH' : 'NEUTRAL';
-    const rsiZoneColor = (v) => v == null ? 'var(--dim)' : v < 30 ? 'var(--blue)' : v > 70 ? 'var(--red)' : v > 55 ? 'var(--green)' : v < 45 ? 'var(--red)' : 'var(--amber)';
+    const rsiZoneColor = (v) => v == null ? 'var(--dim)' : v < 30 ? 'var(--red)' : v > 70 ? 'var(--green)' : v > 55 ? 'var(--green)' : v < 45 ? 'var(--red)' : 'var(--amber)';
     const rsi1mV  = s.rsi;
     const rsi5mV  = s.mtf?.tf5m?.rsi  ?? null;
     const rsi15mV = s.mtf?.tf15m?.rsi ?? null;
@@ -6551,7 +6556,11 @@ function updateRsiMiniMeter(tf, val) {
   const card   = document.getElementById('rsi-mini-' + tf);
 
   const zone  = val == null ? 'NEUTRAL' : val < 30 ? 'OVERSOLD' : val > 70 ? 'OVERBOUGHT' : val > 55 ? 'BULLISH' : val < 45 ? 'BEARISH' : 'NEUTRAL';
-  const color = val == null ? 'var(--dim)' : val < 30 ? 'var(--blue)' : val > 70 ? 'var(--red)' : val > 55 ? 'var(--green)' : val < 45 ? 'var(--red)' : 'var(--amber)';
+  // 13 Sep — Overbought/Oversold now use the same green=bullish/red=bearish
+  // convention as the rest of the app (previously red for Overbought and
+  // blue for Oversold, which inverted the meaning for Overbought — RSI>70
+  // is extended-bullish territory, not bearish, so red was misleading).
+  const color = val == null ? 'var(--dim)' : val < 30 ? 'var(--red)' : val > 70 ? 'var(--green)' : val > 55 ? 'var(--green)' : val < 45 ? 'var(--red)' : 'var(--amber)';
   const cls   = val == null ? 'neut' : val < 30 ? 'os' : val > 70 ? 'ob' : 'neut';
 
   if (needle && val != null) {
@@ -6568,7 +6577,7 @@ function updateRsiMiniMeter(tf, val) {
   }
   // Glow border on card based on zone
   if (card) {
-    const borderCol = val == null ? 'var(--border)' : val < 30 ? 'rgba(0,170,255,0.4)' : val > 70 ? 'rgba(255,34,68,0.4)' : val > 55 ? 'rgba(0,255,136,0.3)' : val < 45 ? 'rgba(255,34,68,0.25)' : 'var(--border)';
+    const borderCol = val == null ? 'var(--border)' : val < 30 ? 'rgba(255,34,68,0.4)' : val > 70 ? 'rgba(0,255,136,0.4)' : val > 55 ? 'rgba(0,255,136,0.3)' : val < 45 ? 'rgba(255,34,68,0.25)' : 'var(--border)';
     card.style.borderColor  = borderCol;
     card.style.boxShadow    = val != null && (val < 30 || val > 70) ? `0 0 10px ${borderCol}` : 'none';
   }
@@ -9918,22 +9927,28 @@ function renderVolumeScannerUI(d) {
     <script>
     async function fetchCombinedPCR() {
       const body = document.getElementById('combined-pcr-body');
-      if (!body) return;
+      const miniVal = document.getElementById('combined-pcr-val');
+      const miniSig = document.getElementById('combined-pcr-sig');
+      if (!body && !miniVal) return;
       try {
         const r = await fetch('/api/combined-pcr');
         const d = await r.json();
         const cp = d.combinedPCR;
         if (!cp || cp.value == null) {
-          body.innerHTML = '<div style="color:var(--dim);">Not computed yet — needs market hours.</div>';
+          if (body) body.innerHTML = '<div style="color:var(--dim);">Not computed yet — needs market hours.</div>';
+          if (miniVal) { miniVal.textContent = '--'; if (miniSig) miniSig.textContent = 'EXPLORATORY'; }
           return;
         }
         const c = cp.components;
-        body.innerHTML = `
+        if (body) body.innerHTML = `
           <div style="font-size:16px;font-weight:600;margin-bottom:4px;">${cp.value}</div>
           <div style="font-size:10.5px;color:var(--dim);">
             Nifty: ${c.nifty ?? '--'} · BankNifty: ${c.bankNifty ?? '--'} · Sensex: ${c.sensex ?? '--'} · Top10 avg: ${c.top10StocksAvg ?? '--'} (${c.top10StocksCount}/10)
           </div>`;
-      } catch (e) { body.textContent = 'Failed to load'; }
+        if (miniVal) { miniVal.textContent = cp.value; if (miniSig) miniSig.textContent = 'EXPLORATORY'; }
+      } catch (e) {
+        if (body) body.textContent = 'Failed to load';
+      }
     }
     fetchCombinedPCR();
     setInterval(fetchCombinedPCR, 60000);
