@@ -2403,8 +2403,6 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
       <!-- MANUAL items -->
       <div class="cl-item auto-wait" id="cl-adx" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📈 ADX Trend Strength <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-adx-val" style="color:var(--dim);">Waiting for session candles…</div></div></div>
       <div class="cl-item auto-wait" id="cl-mtf" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">⚡ MTF Alignment <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-mtf-val" style="color:var(--dim);">Waiting for MTF data…</div></div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🛡️ Max loss limit set for today <span class="cl-auto-tag manual">MANUAL</span></div><div class="cl-auto-val" style="color:var(--dim);">Tap to confirm ₹ limit decided</div></div></div>
-      <div class="cl-item" onclick="toggleCL(this)"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🎯 ATM strike confirmed <span class="cl-auto-tag manual">MANUAL</span></div><div class="cl-auto-val" style="color:var(--dim);">Tap to confirm strike selected</div></div></div>
       <!-- VERDICT -->
       <div class="cl-verdict wait" id="cl-verdict">
         <div class="cl-verd-left">
@@ -7348,11 +7346,6 @@ function toggleChecklist() {
   const arrow = document.getElementById('cl-arrow');
   if (arrow) arrow.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
   try { localStorage.setItem('vn_cl_open', (!isOpen).toString()); } catch(e) {}
-}
-function toggleCL(el) {
-  if (el.dataset.auto === '1') return; // auto items not manually toggleable
-  el.classList.toggle('checked');
-  _updateCLProgress();
 }
 function _updateCLProgress() {
   const items = document.querySelectorAll('.cl-item');
