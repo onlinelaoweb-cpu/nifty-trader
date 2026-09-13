@@ -4376,6 +4376,87 @@ RSI: ${rsi.toFixed(1)}
     }
 }
 
+// ── Opening Range Breakout Trigger (13 Sep) ─────────────────────────────────
+// 4th standalone exploratory trigger. Built after researching expert-trader
+// consensus on the 9:15-10:00 "blocked" morning window: near-universal
+// advice is DON'T blind-enter the first 15-30min chop (wide spreads, gap
+// noise), but DO trade a confirmed breakout of that opening range — several
+// sources specifically note 9:15-9:45 concentrates the session's highest
+// institutional order flow. Our own data supported this too (MTF's
+// 9:15-10:00 leads already show 33% win / 47.5% avg gain, N=30, per
+// /api/time-window-analytics). This does NOT touch isSafeEntryWindow() or
+// the Main Engine's own gating — it's a separate, narrower signal scoped
+// specifically to the post-range-formation breakout window.
+const ORB_FORM_MIN       = 15;   // opening range = first 15 candles (9:15-9:30)
+const ORB_WATCH_START_MIN = 9 * 60 + 30;  // 9:30 IST — range must be formed
+const ORB_WATCH_END_MIN   = 10 * 60 + 30; // 10:30 IST — stop watching for a fresh breakout after this
+const ORB_MIN_BREAKOUT_PTS = 15; // absolute floor, same spirit as Fast Momentum's floor
+const ORB_ATR_MULT         = 1.5;
+
+let lastORBAlertDate = '', lastORBDirection = '';
+
+async function checkOpeningRangeBreakout() {
+    if (!isConfigured() || !isMarketOpen()) return;
+    try {
+        const ist = getIST();
+        const mins = ist.getHours() * 60 + ist.getMinutes();
+        if (mins < ORB_WATCH_START_MIN || mins > ORB_WATCH_END_MIN) return;
+
+        const todayStr = ist.toISOString().slice(0, 10);
+        if (lastORBAlertDate !== todayStr) { lastORBAlertDate = ''; lastORBDirection = ''; } // reset dedup on a new day
+
+        const candles = getSessionCandles();
+        if (!candles || candles.length < ORB_FORM_MIN) return; // range not formed yet
+
+        const rangeSet = candles.slice(0, ORB_FORM_MIN);
+        const rangeHigh = Math.max(...rangeSet.map(c => c.high ?? c.close));
+        const rangeLow  = Math.min(...rangeSet.map(c => c.low  ?? c.close));
+
+        const nifty = marketState.nifty;
+        if (!nifty || nifty <= 0) return;
+
+        const atr = marketState.dynamicLevels?.atr ?? null;
+        const threshold = atr ? Math.max(ORB_MIN_BREAKOUT_PTS, ORB_ATR_MULT * atr) : ORB_MIN_BREAKOUT_PTS;
+
+        let direction = null, breakoutPts = 0;
+        if (nifty > rangeHigh + threshold) { direction = 'BULLISH'; breakoutPts = nifty - rangeHigh; }
+        else if (nifty < rangeLow - threshold) { direction = 'BEARISH'; breakoutPts = rangeLow - nifty; }
+        if (!direction) return;
+
+        // Fire once per direction per day — a breakout that keeps extending
+        // shouldn't re-alert every 2 min, but a genuine reversal (opposite
+        // direction) is a new event worth flagging.
+        if (lastORBAlertDate === todayStr && lastORBDirection === direction) return;
+        lastORBAlertDate = todayStr;
+        lastORBDirection = direction;
+
+        const rsi = marketState.rsi;
+        const msg = `
+📐 <b>OPENING RANGE BREAKOUT — ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+Opening Range (9:15-9:30): ${rangeLow.toFixed(1)} – ${rangeHigh.toFixed(1)}
+NIFTY: ${nifty.toFixed(1)} (broke out by ${breakoutPts.toFixed(1)}pts)
+RSI: ${rsi != null ? rsi.toFixed(1) : '--'}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT Main Engine confirmed.</b> Based on expert-trader consensus (trade the range breakout, not the opening chaos) + our own data (MTF's morning leads already perform decently). Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Opening Range Breakout (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`📐 [ORB] ${direction} — range ${rangeLow.toFixed(1)}-${rangeHigh.toFixed(1)}, broke by ${breakoutPts.toFixed(1)}pts`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO orb_trigger_log (direction, nifty, range_high, range_low, breakout_pts, rsi)
+                 VALUES ($1,$2,$3,$4,$5,$6)`,
+                [direction, nifty, rangeHigh, rangeLow, breakoutPts, rsi]
+            ).catch(e => console.warn('[ORB] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[ORB] error:', e.message);
+    }
+}
+
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return false;
     // ── Race-condition guard: onTick fires synchronously on every websocket tick,
@@ -6820,6 +6901,28 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL combined_pcr_log table ready');
 
+        // ── orb_trigger_log table (13 Sep) ────────────────────────────────────
+        // Tracks the new Opening Range Breakout trigger (see
+        // checkOpeningRangeBreakout()) — built after researching expert
+        // consensus on the 9:15-10:00 morning window: don't blind-enter the
+        // first 15-30min chop, but DO trade a confirmed breakout of that
+        // range, since it concentrates real institutional order flow. Our
+        // own data supported this too (MTF's 9:15-10:00 leads already show
+        // 33% win / 47.5% avg gain, N=30).
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS orb_trigger_log (
+                id            SERIAL PRIMARY KEY,
+                ts            TIMESTAMPTZ DEFAULT NOW(),
+                direction     TEXT,
+                nifty         NUMERIC,
+                range_high    NUMERIC,
+                range_low     NUMERIC,
+                breakout_pts  NUMERIC,
+                rsi           NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL orb_trigger_log table ready');
+
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
         // (fire-and-forget snapshot), this table AUTOMATICALLY tracks what happened
@@ -9218,6 +9321,18 @@ app.get('/api/murarka-log', async (req, res) => {
     }
 });
 
+// 13 Sep — Opening Range Breakout fire history
+app.get('/api/orb-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM orb_trigger_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // 12 Sep — Murarka-rule strike-selection A/B test. Joins with
 // signal_performance via perf_id so the real trade's own tracked outcome
 // (max_gain_pct/max_adverse_pct) sits alongside the Murarka-rule hypothetical
@@ -9987,6 +10102,10 @@ function startPollingIntervals() {
     // sentiment gauge, not a fast-reacting signal).
     const combinedPCRTick = () => computeCombinedPCR().catch(e => console.warn('[CombinedPCR] tick error:', e.message));
     setTimeout(() => { combinedPCRTick(); setInterval(combinedPCRTick, 3 * 60 * 1000); }, 55 * 1000);
+    // Opening Range Breakout (13 Sep) — 90s cadence, narrow window (9:30-10:30)
+    // so frequent-enough checking matters more here than for the slower ones.
+    const orbTick = () => checkOpeningRangeBreakout().catch(e => console.warn('[ORB] tick error:', e.message));
+    setTimeout(() => { orbTick(); setInterval(orbTick, 90 * 1000); }, 60 * 1000);
     // Phase 5.2 (10 Sep) — CRUDEOIL PCR refresh, session-gated (only fetches
     // when isCrudeSessionOpen() — no point hitting Fyers for crude options
     // outside the evening window). ~90s cadence matches the other crude
