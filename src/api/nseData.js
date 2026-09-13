@@ -1385,6 +1385,48 @@ async function fetchCrudePCR() {
     }
 }
 
+// ── Generic Fyers PCR fetch (12 Sep) — Combined PCR feature ─────────────────
+// Same lean pattern as fetchCrudePCR() above (confirmed: Fyers options-chain-v3
+// gives pre-aggregated callOi/putOi at the top level, no spot-price or
+// per-strike work needed) — parametrized by symbol + label so it covers
+// BankNifty, Sensex, and individual stocks without copy-pasting this 12
+// times. NEVER touches the existing NIFTY PCR path (fetchPCRFromFyers) —
+// completely separate function, completely separate marketState fields.
+async function fetchGenericPCR(fyersSymbol, label) {
+    if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return null;
+    try {
+        const res = await axios.get(
+            'https://api-t1.fyers.in/data/options-chain-v3',
+            {
+                params : { symbol: fyersSymbol, strikecount: 10, timestamp: '' },
+                headers: {
+                    'Authorization': `${FYERS_APP_ID}:${FYERS_ACCESS_TOKEN}`,
+                    'Content-Type' : 'application/json',
+                    'version'      : '3',
+                },
+                timeout: 10_000,
+            }
+        );
+        if (typeof res.data === 'string' && res.data.includes('<html')) {
+            console.warn(`[CombinedPCR:${label}] HTML response — IP block or auth issue`);
+            return null;
+        }
+        const d = res.data;
+        if (!d || d.s !== 'ok' || !d.data) {
+            console.warn(`[CombinedPCR:${label}] Bad response: s=${d?.s} | code=${d?.code}`);
+            return null;
+        }
+        const callOi = Number(d.data.callOi || 0);
+        const putOi  = Number(d.data.putOi  || 0);
+        if (callOi === 0 && putOi === 0) return null;
+        const pcr = callOi > 0 ? parseFloat((putOi / callOi).toFixed(3)) : null;
+        return { pcr, callOi, putOi, symbol: fyersSymbol, label };
+    } catch (e) {
+        console.warn(`[CombinedPCR:${label}] error:`, e.response?.status || e.message);
+        return null;
+    }
+}
+
 async function fetchPCRFromAngel(spotPrice) {
     if (!_angelSession?.jwtToken) return null;
     if (!spotPrice || spotPrice <= 0) return null;
@@ -2529,6 +2571,7 @@ module.exports = {
     getCurrentFyersFutSymbol,
     getCrudeOilFutureToken,
     fetchCrudePCR,
+    fetchGenericPCR,
     getCrudeFyersSymbol,
     getFnOStockList,
 

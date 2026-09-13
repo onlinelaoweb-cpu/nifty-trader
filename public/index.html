@@ -9903,24 +9903,56 @@ function renderVolumeScannerUI(d) {
 
     <!-- Exploratory Triggers (11 Sep) — Fast Momentum + S/R Bounce -->
     <div style="border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px;margin-bottom:12px;">
-      <div style="font-size:11px;color:var(--dim);margin-bottom:6px;">⚡🎯 EXPLORATORY TRIGGERS <span style="opacity:0.6;">(not Main Engine confirmed)</span></div>
+      <div style="font-size:11px;color:var(--dim);margin-bottom:6px;">⚡🎯🪔 EXPLORATORY TRIGGERS <span style="opacity:0.6;">(not Main Engine confirmed)</span></div>
       <div id="explore-triggers-body" style="font-size:11.5px;line-height:1.6;">Loading...</div>
     </div>
+
+    <!-- Combined PCR (12 Sep) — Nifty+BankNifty+Sensex+Top10-stocks blended -->
+    <div style="border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px;margin-bottom:12px;">
+      <div style="font-size:11px;color:var(--dim);margin-bottom:6px;">⚖️ COMBINED PCR <span style="opacity:0.6;">(exploratory — equal-weighted avg)</span></div>
+      <div id="combined-pcr-body" style="font-size:11.5px;line-height:1.6;">Loading...</div>
+    </div>
+
+    <script>
+    async function fetchCombinedPCR() {
+      const body = document.getElementById('combined-pcr-body');
+      if (!body) return;
+      try {
+        const r = await fetch('/api/combined-pcr');
+        const d = await r.json();
+        const cp = d.combinedPCR;
+        if (!cp || cp.value == null) {
+          body.innerHTML = '<div style="color:var(--dim);">Not computed yet — needs market hours.</div>';
+          return;
+        }
+        const c = cp.components;
+        body.innerHTML = `
+          <div style="font-size:16px;font-weight:600;margin-bottom:4px;">${cp.value}</div>
+          <div style="font-size:10.5px;color:var(--dim);">
+            Nifty: ${c.nifty ?? '--'} · BankNifty: ${c.bankNifty ?? '--'} · Sensex: ${c.sensex ?? '--'} · Top10 avg: ${c.top10StocksAvg ?? '--'} (${c.top10StocksCount}/10)
+          </div>`;
+      } catch (e) { body.textContent = 'Failed to load'; }
+    }
+    fetchCombinedPCR();
+    setInterval(fetchCombinedPCR, 60000);
+    </script>
 
     <script>
     async function fetchExploratoryTriggers() {
       const body = document.getElementById('explore-triggers-body');
       if (!body) return;
       try {
-        const [fm, sr] = await Promise.all([
+        const [fm, sr, mu] = await Promise.all([
           fetch('/api/fast-momentum-log?limit=5').then(r => r.json()),
           fetch('/api/sr-bounce-log?limit=5').then(r => r.json()),
+          fetch('/api/murarka-log?limit=5').then(r => r.json()),
         ]);
         const fmRows = (fm.rows || []).map(r => ({ ...r, kind: '⚡', label: `${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts/${r.window_min}min` }));
         const srRows = (sr.rows || []).map(r => ({ ...r, kind: '🎯', label: `${r.level_type}@${Number(r.level_price).toFixed(0)}` }));
-        const all = [...fmRows, ...srRows].sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, 6);
+        const muRows = (mu.rows || []).map(r => ({ ...r, kind: '🪔', direction: r.side === 'CE' ? 'BULLISH' : 'BEARISH', label: `PCR ${Number(r.pcr).toFixed(2)} + VWAP ${Number(r.vwap_dist_pct).toFixed(2)}%` }));
+        const all = [...fmRows, ...srRows, ...muRows].sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, 6);
         if (!all.length) {
-          body.innerHTML = '<div style="color:var(--dim);">No fires yet — these are new (11 Sep), still building a track record.</div>';
+          body.innerHTML = '<div style="color:var(--dim);">No fires yet — these are new (11-12 Sep), still building a track record.</div>';
           return;
         }
         body.innerHTML = all.map(r => {

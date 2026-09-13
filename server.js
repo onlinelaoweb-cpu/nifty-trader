@@ -60,6 +60,7 @@ const {
     fetchFyersQuote,                              // real volume/OHLC for index (Angel WS sends 0)
     getCrudeOilFutureToken,                       // Phase 2a: MCX CRUDEOIL futures token lookup
     fetchCrudePCR,                                 // Phase 5.2: independent crude PCR confirmation
+    fetchGenericPCR,                               // 12 Sep: Combined PCR feature (BankNifty/Sensex/stocks)
     getFnOStockList,                              // Volume scanner Phase 1: F&O stock universe + EQ tokens
     getCurrentFyersFutSymbol,                     // correct NSE:NIFTY{YY}{MMM}FUT symbol (NIFTY-I is invalid on Fyers)
 } = require('./src/api/nseData');
@@ -183,6 +184,11 @@ let marketState = {
     oiImbalanceRatio: null,
     // Murarka Entry Alert: fires when PCR zone is active + price near VWAP
     murarkaEntry: { active: false, side: null, label: 'No setup yet', reason: '' },
+    // 12 Sep — Combined PCR (Nifty + BankNifty + Sensex + Top-10 stocks avg).
+    // See computeCombinedPCR() for full rationale — informational only,
+    // does NOT feed into combineSignals() yet (exploratory, same as the
+    // other new triggers, until there's data on whether it adds value).
+    combinedPCR: { value: null, components: {}, updatedAt: null },
     entryWindow: { status:'closed', label:'Market Closed', safe:false },
     qualityGate: { mtfAligned:false, rsiClean:true, safeWindow:false, vixSafe:true, adxTrend:true, srClear:true, passed:false },
     calendarEvents: [],
@@ -268,6 +274,8 @@ const PERF_AUTOCLOSE_MIN = 90;  // auto-close untouched signals after 90 min (th
 // instead of adjusted off 2-3 screenshots (the same discipline this file
 // already applies everywhere else — e.g. MIN_STRIKE_OI/MIN_STRIKE_VOLUME).
 let shadowPerfRecords = [];
+// 12 Sep — Murarka-rule strike A/B tracking (see strike_ab_test table)
+let strikeABRecords = [];
 const SHADOW_TRACK_MIN = 60;   // extra minutes observed AFTER a TIMED OUT close
 // ── Liquidity/OI filter thresholds (pickStrikeAndPremium) ───────────────────
 // NIFTY weekly options: ATM/near-ATM strikes normally carry OI in the several-
@@ -391,6 +399,9 @@ let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-d
 // FIX (11 Sep) — Fast Momentum Trigger tracking. Separate, exploratory alert
 // type — see checkFastMomentumTrigger() below for full rationale.
 let lastFastMomentumAlertAt = 0, lastFastMomentumDirection = '';
+// 12 Sep — Murarka Entry logging/alert dedup (fire-once-per-fresh-activation,
+// same pattern as the other exploratory triggers).
+let lastMurarkaLoggedSide = null;
 let lastSuppressLogAt = 0, lastSuppressLogMsg = '';  // throttle: max once/60s per distinct suppression reason (see log sites below)
 // ── MTF-tracker reversal persistence (soft, informational-tier cooldown) ────
 // Problem observed live (10 Jul session): mtfSignalChanged bypasses the 60-min
@@ -872,6 +883,78 @@ function computeMurarkaZone(pcr, spot, vwap, isExpiry) {
     }
 
     return { pcrZone: { zone, label, color, pcr }, murarkaEntry };
+}
+
+// ── Combined PCR (12 Sep) ────────────────────────────────────────────────────
+// User request, sourced from a Nitin Murarka video: blend Nifty PCR +
+// BankNifty PCR + Sensex PCR + average of top-10 NIFTY-heavyweight stocks'
+// own PCR into one combined sentiment reading. No established "best" weight
+// found in research — even NiftyTrader.in's own live Combined-PCR tool keeps
+// weights user-configurable rather than prescribing one — so this starts at
+// equal weighting (matching the user's own "plus" framing), via the tunable
+// constants below, meant to be adjusted once real data shows what performs.
+// Sensex specifically needs live confirmation (Fyers BSE:SENSEX support has
+// had some reported community issues with live ticks — this uses the REST
+// snapshot only, which should be a different code path, but isn't confirmed
+// working until this actually runs against the live Fyers session). Built
+// defensively throughout: any component that fails just drops out of the
+// average rather than blocking the rest.
+// Exploratory — informational only, does NOT feed into combineSignals().
+const COMBINED_PCR_WEIGHTS = { nifty: 1, bankNifty: 1, sensex: 1, top10Stocks: 1 }; // equal by default — tune from data later
+// Our own reasonable current approximation of NIFTY's top-10 heaviest
+// constituents — index weights drift over time, revisit this list
+// periodically rather than treating it as permanently fixed.
+const TOP10_NIFTY_STOCKS = ['HDFCBANK', 'RELIANCE', 'ICICIBANK', 'INFY', 'TCS', 'BHARTIARTL', 'ITC', 'LT', 'KOTAKBANK', 'SBIN'];
+
+async function computeCombinedPCR() {
+    if (!isMarketOpen()) return;
+    try {
+        const niftyPCR = marketState.pcr; // already-live, reuse rather than re-fetch
+        const [bankNiftyResult, sensexResult, ...stockResults] = await Promise.all([
+            fetchGenericPCR('NSE:NIFTYBANK-INDEX', 'BankNifty'),
+            fetchGenericPCR('BSE:SENSEX-INDEX', 'Sensex'),
+            ...TOP10_NIFTY_STOCKS.map(sym => fetchGenericPCR(`NSE:${sym}-EQ`, sym)),
+        ]);
+
+        const stockPCRs = stockResults.filter(r => r?.pcr != null).map(r => r.pcr);
+        const top10AvgPCR = stockPCRs.length
+            ? parseFloat((stockPCRs.reduce((s, v) => s + v, 0) / stockPCRs.length).toFixed(3))
+            : null;
+
+        const components = {
+            nifty: niftyPCR ?? null,
+            bankNifty: bankNiftyResult?.pcr ?? null,
+            sensex: sensexResult?.pcr ?? null,
+            top10StocksAvg: top10AvgPCR,
+            top10StocksCount: stockPCRs.length,
+        };
+
+        // Weighted average across whichever components succeeded — a failed
+        // component (e.g. Sensex, if it's not actually reachable) just drops
+        // out rather than blocking the rest.
+        let weightedSum = 0, weightTotal = 0;
+        for (const [key, weightKey] of [['nifty', 'nifty'], ['bankNifty', 'bankNifty'], ['sensex', 'sensex'], ['top10StocksAvg', 'top10Stocks']]) {
+            if (components[key] != null) {
+                weightedSum += components[key] * COMBINED_PCR_WEIGHTS[weightKey];
+                weightTotal += COMBINED_PCR_WEIGHTS[weightKey];
+            }
+        }
+        const combined = weightTotal > 0 ? parseFloat((weightedSum / weightTotal).toFixed(3)) : null;
+
+        marketState.combinedPCR = { value: combined, components, updatedAt: new Date().toISOString() };
+
+        console.log(`⚖️ [Combined PCR] ${combined ?? '--'} (Nifty:${components.nifty ?? '--'} BankNifty:${components.bankNifty ?? '--'} Sensex:${components.sensex ?? '--'} Top10avg:${components.top10StocksAvg ?? '--'} [${components.top10StocksCount}/10 stocks ok])`);
+
+        if (dbPool && combined != null) {
+            dbPool.query(
+                `INSERT INTO combined_pcr_log (combined_pcr, nifty_pcr, banknifty_pcr, sensex_pcr, top10_avg_pcr, top10_count)
+                 VALUES ($1,$2,$3,$4,$5,$6)`,
+                [combined, components.nifty, components.bankNifty, components.sensex, components.top10StocksAvg, components.top10StocksCount]
+            ).catch(e => console.warn('[CombinedPCR] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[CombinedPCR] error:', e.message);
+    }
 }
 
 // ── ADX Calculator — Wilder's smoothing, period=14 ───────────────────────────
@@ -5738,6 +5821,28 @@ async function refreshPCR() {
         marketState.pcrZone     = pcrZone;
         marketState.murarkaEntry = murarkaEntry;
 
+        // 12 Sep — log + alert on fresh Murarka Entry activation (was
+        // previously computed continuously but never logged/alerted —
+        // dashboard-only, so there was no historical track record and no
+        // way to know it fired unless actively watching the panel).
+        if (murarkaEntry.active && murarkaEntry.side !== lastMurarkaLoggedSide) {
+            lastMurarkaLoggedSide = murarkaEntry.side;
+            const vwapDistPct = marketState.vwap > 0 ? Math.abs((marketState.nifty - marketState.vwap) / marketState.vwap) * 100 : null;
+            if (dbPool) {
+                dbPool.query(
+                    `INSERT INTO murarka_entry_log (side, pcr, spot, vwap, vwap_dist_pct) VALUES ($1,$2,$3,$4,$5)`,
+                    [murarkaEntry.side, marketState.pcr, marketState.nifty, marketState.vwap, vwapDistPct]
+                ).catch(e => console.warn('[Murarka] log error:', e.message));
+            }
+            if (isConfigured() && isMarketOpen()) {
+                sendRawMessage(`🎯 <b>Murarka Entry — BUY ${murarkaEntry.side}</b>\n━━━━━━━━━━━━━━━━━━\n${murarkaEntry.reason}\n━━━━━━━━━━━━━━━━━━\n⚠️ Exploratory — no historical track record yet, this is the first time it's being logged.\n<i>Vardaan AI — Murarka Strategy</i>`)
+                    .catch(e => console.warn('[Murarka] alert error:', e.message));
+            }
+        } else if (!murarkaEntry.active) {
+            lastMurarkaLoggedSide = null; // reset so the next fresh activation (even same side) logs again
+        }
+
+
         // ── FII/DII — sync from nseData auto-fetch ────────────────────────────
         // nseData fetches FII/DII every 15 min on its own; we read it here.
         const fiiState = getFIIState();
@@ -6199,6 +6304,7 @@ async function _updateOpenTradesMTM() {
     // independent of the trades[] journal below.
     updateSignalPerformance().catch(e => console.warn('[SignalPerf] update error:', e.message));
     updateShadowTracking().catch(e => console.warn('[Shadow] update error:', e.message));
+    updateStrikeABTracking().catch(e => console.warn('[StrikeAB] update error:', e.message));
 
     // FIX (2026-08-04): same bug class as updateSignalPerformance() had —
     // this loop was pricing every open trade off the ATM premium regardless
@@ -6623,6 +6729,78 @@ async function initDB() {
             )
         `);
         console.log('✅ PostgreSQL sr_bounce_log table ready');
+
+        // ── murarka_entry_log table (12 Sep) ──────────────────────────────────
+        // Tracks the "Murarka Entry" signal (computeMurarkaZone() — PCR zone +
+        // VWAP proximity combined, CA Nitin Murarka's methodology) — this was
+        // previously computed continuously and shown live in the dashboard
+        // panel, but NEVER logged anywhere, so there was no way to ever check
+        // its historical accuracy. Logs on fresh activation only (dedup via
+        // _lastMurarkaLoggedSide), same fire-only pattern as the other
+        // exploratory-trigger logs.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS murarka_entry_log (
+                id           SERIAL PRIMARY KEY,
+                ts           TIMESTAMPTZ DEFAULT NOW(),
+                side         TEXT,
+                pcr          NUMERIC,
+                spot         NUMERIC,
+                vwap         NUMERIC,
+                vwap_dist_pct NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL murarka_entry_log table ready');
+
+        // ── strike_ab_test table (12 Sep) ─────────────────────────────────────
+        // A/B comparison: our current pickStrikeAndPremium() VIX logic
+        // (OTM<13 / ATM 13-18 / ATM>18 — "don't go OTM, decay risk too high")
+        // vs the "Murarka rule" from a video the user shared (ATM<15 / OTM>15
+        // / Deep OTM>20) — these DIRECTLY CONFLICT in the high-VIX regime
+        // (ours says ATM, Murarka's says OTM/Deep OTM). Rather than guessing
+        // which is right, this logs what the Murarka rule WOULD have picked
+        // alongside every real signal, tracks its premium in parallel for the
+        // same PERF_AUTOCLOSE_MIN window the real trade gets, and compares
+        // hypothetical outcomes. perf_id links back to signal_performance so
+        // the real trade's own high/low/max_gain_pct can be joined in rather
+        // than duplicating that tracking here.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS strike_ab_test (
+                id              SERIAL PRIMARY KEY,
+                ts              TIMESTAMPTZ DEFAULT NOW(),
+                perf_id         INT,
+                signal          TEXT,
+                vix             NUMERIC,
+                current_strike  NUMERIC,
+                current_type    TEXT,
+                current_entry   NUMERIC,
+                murarka_strike  NUMERIC,
+                murarka_entry   NUMERIC,
+                murarka_high    NUMERIC,
+                murarka_low     NUMERIC,
+                murarka_max_gain_pct    NUMERIC,
+                murarka_max_adverse_pct NUMERIC,
+                status          TEXT DEFAULT 'TRACKING',
+                finalized_at    TIMESTAMPTZ
+            )
+        `);
+        console.log('✅ PostgreSQL strike_ab_test table ready');
+
+        // ── combined_pcr_log table (12 Sep) ───────────────────────────────────
+        // Tracks computeCombinedPCR() fires — see that function's header
+        // comment for full rationale.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS combined_pcr_log (
+                id             SERIAL PRIMARY KEY,
+                ts             TIMESTAMPTZ DEFAULT NOW(),
+                combined_pcr   NUMERIC,
+                nifty_pcr      NUMERIC,
+                banknifty_pcr  NUMERIC,
+                sensex_pcr     NUMERIC,
+                top10_avg_pcr  NUMERIC,
+                top10_count    INT
+            )
+        `);
+        console.log('✅ PostgreSQL combined_pcr_log table ready');
 
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
@@ -7157,6 +7335,35 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
             rec.id = r.rows[0]?.id ?? null;
         } catch (e) { console.warn('[SignalPerf] insert error:', e.message); }
     }
+
+    // 12 Sep — Murarka-rule A/B comparison (see strike_ab_test table header
+    // comment for full rationale). Separate try/catch so a failure here can
+    // never affect the real signal's own tracking above.
+    try {
+        const murarkaStrike = computeMurarkaRuleStrike(signal, marketState.nifty, marketState.vix);
+        if (murarkaStrike !== strikeData.strike) {
+            const pcrStateForAB = getPCRState();
+            let murarkaEntry = null;
+            if (pcrStateForAB?.records?.length) {
+                const chainRow = pcrStateForAB.records.find(r => r.strikePrice === murarkaStrike);
+                const liveLtp = strikeData.type === 'CE' ? chainRow?.CE?.lastPrice : chainRow?.PE?.lastPrice;
+                if (liveLtp > 0) murarkaEntry = liveLtp;
+            }
+            if (murarkaEntry != null && dbPool) {
+                const abRow = await dbPool.query(
+                    `INSERT INTO strike_ab_test (perf_id, signal, vix, current_strike, current_type, current_entry, murarka_strike, murarka_entry, murarka_high, murarka_low)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+                    [rec.id, signal, marketState.vix, strikeData.strike, strikeData.type, strikeData.entry, murarkaStrike, murarkaEntry, murarkaEntry, murarkaEntry]
+                );
+                strikeABRecords.push({
+                    id: abRow.rows[0]?.id, strike: murarkaStrike, type: strikeData.type,
+                    entry: murarkaEntry, high: murarkaEntry, low: murarkaEntry,
+                    startTs: Date.now(),
+                });
+            }
+        }
+    } catch (e) { console.warn('[StrikeAB] log error:', e.message); }
+
     return rec;
 }
 
@@ -7428,6 +7635,48 @@ async function updateShadowTracking() {
         }
     }
     shadowPerfRecords = stillTracking;
+}
+
+// 12 Sep — Murarka-rule A/B tracking. Mirrors updateShadowTracking()'s exact
+// pattern: track the Murarka strike's live premium in parallel, finalize
+// after PERF_AUTOCLOSE_MIN (same window the real trade's own max_gain_pct/
+// max_adverse_pct get computed over in signal_performance) so the two are
+// directly comparable.
+async function updateStrikeABTracking() {
+    if (strikeABRecords.length === 0) return;
+    const pcrState = getPCRState();
+    const stillTracking = [];
+
+    for (const rec of strikeABRecords) {
+        let live = null;
+        if (pcrState?.records?.length) {
+            const chainRow = pcrState.records.find(r => r.strikePrice === rec.strike);
+            const liveLtp  = rec.type === 'CE' ? chainRow?.CE?.lastPrice : chainRow?.PE?.lastPrice;
+            live = (liveLtp > 0) ? liveLtp : null;
+        }
+        if (live) {
+            rec.high = Math.max(rec.high, live);
+            rec.low  = Math.min(rec.low,  live);
+        }
+
+        const elapsedMin = Math.round((Date.now() - rec.startTs) / 60000);
+        if (elapsedMin >= PERF_AUTOCLOSE_MIN) {
+            const maxGainPct    = rec.entry > 0 ? Math.round(((rec.high - rec.entry) / rec.entry) * 1000) / 10 : 0;
+            const maxAdversePct = rec.entry > 0 ? Math.round(((rec.low  - rec.entry) / rec.entry) * 1000) / 10 : 0;
+            console.log(`⚖️ [StrikeAB] ${rec.strike}${rec.type} (Murarka rule) — ${PERF_AUTOCLOSE_MIN}min: High ${rec.high} (+${maxGainPct}%), Low ${rec.low} (${maxAdversePct}%)`);
+            if (dbPool) {
+                try {
+                    await dbPool.query(
+                        `UPDATE strike_ab_test SET murarka_high=$1, murarka_low=$2, murarka_max_gain_pct=$3, murarka_max_adverse_pct=$4, status='DONE', finalized_at=NOW() WHERE id=$5`,
+                        [rec.high, rec.low, maxGainPct, maxAdversePct, rec.id]
+                    );
+                } catch (e) { console.warn('[StrikeAB] DB update error:', e.message); }
+            }
+        } else {
+            stillTracking.push(rec);
+        }
+    }
+    strikeABRecords = stillTracking;
 }
 
 // Daily/weekly/monthly accuracy rollup — per feedback: "Over time you can
@@ -7759,6 +8008,28 @@ function buildSetupDNA(signal) {
 
     if (tags.length === 0) return 'Baseline Vote-Tally';   // fired on the general vote tally, no single named factor stood out
     return tags.slice(0, 4).join(' + ');
+}
+
+// ── Murarka Rule strike (12 Sep) — A/B comparison only, NEVER used for real
+// trades. From a video the user shared (CA Nitin Murarka), with exact
+// point-distances confirmed by the user: VIX 10-15 → 150pt OTM, VIX 15-20 →
+// 200pt OTM. This conflicts with pickStrikeAndPremium()'s existing high-VIX
+// logic (which goes ATM specifically to avoid OTM decay risk) — rather than
+// picking a side, both get tracked side by side (see strike_ab_test table)
+// to see which actually performs better on our data.
+// Edges NOT explicitly confirmed by the user — our own extrapolation of the
+// same +50pt-per-5-VIX-points pattern, clearly separate from the two
+// confirmed tiers: VIX<10 → ATM (calm enough that OTM decay risk dominates,
+// matching the original "VIX<15→ATM" framing before the tiers were
+// refined); VIX>20 → 250pt (continuing the pattern one step further).
+function computeMurarkaRuleStrike(signal, nifty, vix) {
+    const effectiveVix = vix || 15;
+    const isBull = signal === 'BUY CALL';
+    const atm = Math.round(nifty / 50) * 50;
+    if (effectiveVix > 20) return isBull ? atm + 250 : atm - 250; // extrapolated
+    if (effectiveVix > 15) return isBull ? atm + 200 : atm - 200; // confirmed
+    if (effectiveVix > 10) return isBull ? atm + 150 : atm - 150; // confirmed
+    return atm; // VIX <= 10 → ATM (extrapolated)
 }
 
 function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
@@ -8917,6 +9188,62 @@ app.get('/api/sr-bounce-log', async (req, res) => {
     }
 });
 
+// 12 Sep — Murarka Entry (PCR+VWAP) fire history
+app.get('/api/murarka-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM murarka_entry_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 12 Sep — Murarka-rule strike-selection A/B test. Joins with
+// signal_performance via perf_id so the real trade's own tracked outcome
+// (max_gain_pct/max_adverse_pct) sits alongside the Murarka-rule hypothetical
+// for direct comparison, plus a summary of DONE comparisons only (still-
+// TRACKING rows don't have a final number yet).
+app.get('/api/strike-ab-test', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+        const r = await dbPool.query(`
+            SELECT ab.*, sp.max_gain_pct AS current_max_gain_pct, sp.max_adverse_pct AS current_max_adverse_pct, sp.target_hit AS current_target_hit, sp.sl_hit AS current_sl_hit
+            FROM strike_ab_test ab
+            LEFT JOIN signal_performance sp ON sp.id = ab.perf_id
+            ORDER BY ab.ts DESC LIMIT ${limit}
+        `);
+        const done = r.rows.filter(row => row.status === 'DONE' && row.current_max_gain_pct != null);
+        const summary = done.length ? {
+            sampleSize: done.length,
+            avgCurrentMaxGainPct: parseFloat((done.reduce((s, r) => s + parseFloat(r.current_max_gain_pct), 0) / done.length).toFixed(2)),
+            avgMurarkaMaxGainPct: parseFloat((done.reduce((s, r) => s + parseFloat(r.murarka_max_gain_pct), 0) / done.length).toFixed(2)),
+        } : null;
+        res.json({ success: true, count: r.rows.length, summary, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 12 Sep — Combined PCR: live current value + component breakdown
+app.get('/api/combined-pcr', (req, res) => {
+    res.json({ success: true, combinedPCR: marketState.combinedPCR });
+});
+
+// 12 Sep — Combined PCR history
+app.get('/api/combined-pcr-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+        const r = await dbPool.query(`SELECT * FROM combined_pcr_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // PCR
 app.post('/api/pcr', requireToken, (req,res) => {
     const {pcr,atmPcr}=req.body;
@@ -9525,6 +9852,12 @@ function startPollingIntervals() {
     // S/R Bounce Trigger (11 Sep) — same immediate-then-interval pattern.
     const srBounceTick = () => checkSRBounceTrigger().catch(e => console.warn('[S/R Bounce] tick error:', e.message));
     setTimeout(() => { srBounceTick(); setInterval(srBounceTick, 2 * 60 * 1000); }, 50 * 1000);
+    // Combined PCR (12 Sep) — 3 min cadence (makes 12 Fyers calls per cycle:
+    // BankNifty + Sensex + 10 stocks — well within rate limits, but no need
+    // to run as often as the main NIFTY PCR since this is a broader
+    // sentiment gauge, not a fast-reacting signal).
+    const combinedPCRTick = () => computeCombinedPCR().catch(e => console.warn('[CombinedPCR] tick error:', e.message));
+    setTimeout(() => { combinedPCRTick(); setInterval(combinedPCRTick, 3 * 60 * 1000); }, 55 * 1000);
     // Phase 5.2 (10 Sep) — CRUDEOIL PCR refresh, session-gated (only fetches
     // when isCrudeSessionOpen() — no point hitting Fyers for crude options
     // outside the evening window). ~90s cadence matches the other crude
