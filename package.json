@@ -1,7 +1,7 @@
 {
-  "name": "vardaannifty-ai",
+  "name": "vardaan-ai",
   "version": "1.0.0",
-  "description": "AI-powered NIFTY option trading dashboard",
+  "description": "AI-powered NIFTY + CRUDEOIL options trading dashboard",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

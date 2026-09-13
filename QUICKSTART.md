@@ -2,15 +2,28 @@
 
 ## Step 1: Prepare Your Credentials
 
-Before you start, collect these from Angel One:
+At minimum, you need Angel One (for live price data). Everything else is optional but unlocks major features — see the table below.
 
 ```
-ANGEL_ONE_API_KEY = [from Angel One dashboard]
-ANGEL_ONE_CLIENT_ID = [your account ID]
-ANGEL_ONE_PASSWORD = [your login password]
+ANGEL_API_KEY = [from Angel One dashboard]
+ANGEL_CLIENT_ID = [your account ID]
+ANGEL_PASSWORD = [your login PIN]
+ANGEL_TOTP_SECRET = [TOTP secret from Angel One's API section — needed for auto-login]
 ```
 
-⚠️ **DON'T SHARE THESE** - Keep them private!
+⚠️ **DON'T SHARE THESE** — keep them private, and only ever paste them into Railway's Variables panel, never into code or GitHub.
+
+| Variable(s) | Unlocks | Required? |
+|---|---|---|
+| `ANGEL_API_KEY`, `ANGEL_CLIENT_ID`, `ANGEL_PASSWORD`, `ANGEL_TOTP_SECRET` | Live price/tick data (NIFTY + CRUDEOIL) | **Yes** |
+| `DATABASE_URL` | Journal, Analytics, all signal/performance history — without this, nothing persists | Strongly recommended |
+| `FYERS_APP_ID`, `FYERS_SECRET_ID`, `FYERS_ACCESS_TOKEN`, `FYERS_REFRESH_TOKEN`, `FYERS_PIN` | PCR / option-chain data (primary source), Combined PCR, crude PCR | Strongly recommended |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | All Telegram alerts | Recommended |
+| `ANTHROPIC_API_KEY` | News Sentiment scoring | Optional |
+| `APP_TOKEN` | Locks down API endpoints with a shared secret | Optional (recommended if the URL is ever shared) |
+| `NEWSAPI_KEY`, `FINNHUB_API_KEY`, `SCRAPERAPI_KEY` | Secondary/fallback data sources | Optional |
+
+Full descriptions of every variable are in `.env.example`.
 
 ---
 
@@ -24,7 +37,7 @@ cd nifty-trader
 # Or if starting fresh:
 git init
 git add .
-git commit -m "NIFTY Trader Dashboard"
+git commit -m "Vardaan AI"
 git branch -M main
 git remote add origin https://github.com/YOUR_USERNAME/nifty-trader.git
 git push -u origin main
@@ -34,10 +47,11 @@ git push -u origin main
 
 ## Step 3: Deploy on Railway (Click-Click!)
 
-1. **Go to**: https://railway.app (Sign up free)
+1. **Go to**: https://railway.app (sign up free)
 2. **Dashboard** → **Create Project** → **Deploy from GitHub**
-3. **Connect GitHub** → Select `nifty-trader`
-4. **Create Project** → Railway starts deploying automatically! ✅
+3. **Connect GitHub** → select `nifty-trader`
+4. **Add a PostgreSQL database** to the same project (Railway: "+ New" → "Database" → "PostgreSQL") — `DATABASE_URL` gets wired in automatically
+5. Railway starts deploying automatically ✅
 
 **Wait 1-2 minutes for deployment...**
 
@@ -45,17 +59,9 @@ git push -u origin main
 
 ## Step 4: Add Your Credentials
 
-1. **Go to Your Railway Project**
-2. **Settings Tab** → **Environment Variables**
-3. **Add Variables**:
-
-```
-ANGEL_ONE_API_KEY=your_api_key
-ANGEL_ONE_CLIENT_ID=your_client_id
-ANGEL_ONE_PASSWORD=your_password
-```
-
-4. **Save** → Railway auto-redeploys ✅
+1. Go to your Railway project → the **web** service → **Variables** tab
+2. Add the variables from the table above (at minimum, the 4 Angel One ones)
+3. **Save** → Railway auto-redeploys ✅
 
 ---
 
@@ -63,50 +69,42 @@ ANGEL_ONE_PASSWORD=your_password
 
 Railway gives you a URL like:
 ```
-https://nifty-trader-production.up.railway.app
+https://web-production-xxxxx.up.railway.app
 ```
 
 **Click the link → Done!** 🎉
-
-Your dashboard is now **live on the internet** and **accessible from mobile anywhere!**
 
 ---
 
 ## 📱 Access From Phone
 
-1. Copy your Railway URL
-2. Open in phone browser
-3. Data auto-refreshes every 5 seconds
-4. See live NIFTY price + all indicators
-5. Get trade alerts!
+1. Open the Railway URL in your phone's browser
+2. You'll be prompted to **Install as app** (PWA) — do this for a proper app-like experience with a home-screen icon
+3. Live data streams via SSE — no manual refresh needed
+4. Get Telegram alerts on your phone for anything the dashboard flags
 
 ---
 
 ## 🔄 Updates & Changes
 
-Want to update the code?
-
 ```bash
-# Make changes locally
 git add .
 git commit -m "Your changes"
 git push origin main
 ```
 
-Railway **auto-deploys** your changes! (Takes 1-2 min)
+Railway **auto-deploys** on push (1-2 min).
 
 ---
 
 ## ✅ You're Done!
 
-Your professional live trading dashboard is now:
+Your dashboard is now:
 - ✅ Running 24/7 on the cloud
-- ✅ Accessible from mobile anywhere
-- ✅ Fetching real Angel One data
-- ✅ Showing technical indicators
-- ✅ Alerting you to trade signals
-
-**Happy Trading!** 📈
+- ✅ Streaming live NIFTY + CRUDEOIL data
+- ✅ Running the full signal engine with quality gates
+- ✅ Logging everything to Postgres for the Analytics/Journal tabs
+- ✅ Sending Telegram alerts (if configured)
 
 ---
 
@@ -114,9 +112,10 @@ Your professional live trading dashboard is now:
 
 | Problem | Solution |
 |---------|----------|
-| "Cannot connect to Angel One" | Check API credentials in Railway Variables |
-| Dashboard blank/loading | Wait 30sec, refresh page (may need to wake backend) |
-| Indicators show 0 | Normal during market hours - live data only |
-| Mobile view broken | Rotate phone to landscape or use landscape mode |
+| "Angel One Auth Failed" | Double-check all 4 Angel variables, especially `ANGEL_TOTP_SECRET` — a wrong TOTP secret fails login silently |
+| Dashboard shows stale/no price | Check Railway logs (Deployments → Logs) — confirms whether it's actively falling back to Yahoo |
+| No PCR / option-chain data | `FYERS_*` variables missing or expired — Fyers access tokens need periodic refresh |
+| No Telegram alerts | Check `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, and use the in-app "Test Telegram" button |
+| Analytics/Journal empty | `DATABASE_URL` not set, or Postgres not attached to the project |
 
-For more detailed info → See **README.md**
+For more detail → see `README.md` and `SETUP.md`.

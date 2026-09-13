@@ -6324,6 +6324,14 @@ function renderMomentum(mom) {
 
     // Bars — show current values even if not firing
     if (mom && velBar) {
+      if (!mom.ready) {
+        // Genuinely no data yet (not enough candles) — show '--', not a
+        // misleading '0%' that could be read as a real zero-movement reading.
+        velBar.style.width = '0%'; velVal.textContent = '--';
+        bodyBar.style.width = '0%'; bodyVal.textContent = '--';
+        volBar.style.width = '0%'; volVal.textContent = '--';
+        if (fiveMBar && fiveMVal) { fiveMBar.style.width = '0%'; fiveMVal.textContent = '--'; }
+      } else {
       const vPct = Math.min(Math.abs(mom.velocity) / 1.5 * 100, 100);
       velBar.style.width  = vPct + '%';
       velBar.style.background = 'var(--amber)';
@@ -6342,6 +6350,7 @@ function renderMomentum(mom) {
         fiveMBar.style.width = has5m ? '100%' : '15%';
         fiveMBar.style.background = has5m ? 'var(--green)' : 'var(--amber)';
         fiveMVal.textContent = has5m ? 'AGREE ✓' : 'WAIT';
+      }
       }
     }
     dots.forEach(d => { if(d) d.className = 'mom-dot inactive'; });

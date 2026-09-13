@@ -529,22 +529,24 @@ let _momLastSignal    = 'NONE'; // signal that last fired
 const MOM_COOLDOWN_MS = 5 * 60 * 1000;  // 5-min cooldown — prevents re-voting on same momentum wave
 
 function calcMomentumBreakdown() {
-    const result = { signal: 'NONE', strength: 0, velocity: 0, volumeRatio: 0, candleBody: 0, reason: '', canTrade: false };
+    const result = { signal: 'NONE', strength: 0, velocity: 0, volumeRatio: 0, candleBody: 0, reason: '', canTrade: false, ready: false };
 
     // ── Use sessionCandles (today only, no overnight gaps) ────────────────────
     // candleHistory spans multiple days — overnight price gaps corrupt velocity.
     // sessionCandles resets at 9:15 IST so it's clean intraday data.
     const hist = sessionCandles.length >= 10 ? sessionCandles : candleHistory;
-    if (hist.length < 15) return result;   // need at least 15 bars
+    if (hist.length < 15) return result;   // need at least 15 bars — ready stays false
 
     const last  = hist[hist.length - 1];   // most recent closed 1m candle
     const prev1 = hist[hist.length - 2];
     const prev2 = hist[hist.length - 3];
     const prev3 = hist[hist.length - 4];
-    if (!last || !prev1 || !prev2 || !prev3) return result;
+    if (!last || !prev1 || !prev2 || !prev3) return result;   // ready stays false
 
     const price = last.close;
-    if (!price || price <= 0) return result;
+    if (!price || price <= 0) return result;   // ready stays false
+
+    result.ready = true;   // past this point, velocity/candleBody/volumeRatio are genuine computed values, not placeholders
 
     // ── Layer 1: Velocity — 3-candle 1m price move ───────────────────────────
     // Base threshold: 0.40% (96 pts on Nifty 24000) = genuine 3-min impulse.

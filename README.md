@@ -1,284 +1,94 @@
-# 📈 NIFTY Live Trader Dashboard
+# 🪔 Vardaan AI
 
-Real-time NIFTY 50 trading dashboard with Angel One SmartAPI integration, technical indicators, and automated trade signals.
+**in loving memory of Asha**
 
-## 🎯 Features
-
-✅ **Real-time NIFTY 50 Data** - Live price updates via Angel One SmartAPI  
-✅ **Technical Indicators** - RSI, ADX, EMA 9/21, +DI, -DI  
-✅ **Support & Resistance** - 4-hour timeframe analysis  
-✅ **Trade Signals** - Automated Buy Call/Put alerts with 1:2 risk-reward  
-✅ **9:20 AM Rule** - EMA-based market entry signals  
-✅ **Trend Detection** - Uptrend, Downtrend, Consolidation analysis  
-✅ **VIX Tracking** - Market volatility monitoring  
-✅ **Mobile Responsive** - Works perfectly on phones & tablets  
-✅ **Cloud Deployed** - Access from anywhere via Railway
+A real-time, multi-asset options trading dashboard covering **NIFTY** and **CRUDEOIL**, with a rule-based signal engine, live broker data (Angel One + Fyers), Telegram alerts, and a Postgres-backed analytics/journal system. Built and refined iteratively — most of the logic exists because a real trade or a real data pull showed a gap, not because it looked good on paper.
 
 ---
 
-## 🚀 Deployment on Railway (5 Minutes)
+## What This Actually Is
 
-### Step 1: Push Code to GitHub
+Not a toy demo — this runs live, trades real capital decisions, and every major rule in `combineSignals()` has a comment explaining what real-world observation led to it. It is also **not fully automated**: it generates signals and sends alerts, but the user places every trade manually. Two newer experimental pieces (Strike-Selection A/B Test, Combined PCR) exist specifically to test ideas against real data before anything is trusted.
+
+---
+
+## Core Feature Set
+
+### NIFTY Engine
+- **Main signal engine** (`combineSignals()`) — dozens of weighted factors: RSI, EMA9/21 cross, VWAP, ADX/DI (VIX-adjusted floor), Multi-Timeframe alignment (5m/15m/1h, with lag-detection for both 1h and 15m), Delta (order-flow), OI Buildup, FII/DII flow, PCR extremes, ATM CE/PE premium ratio, Early Momentum (7-vote leading indicator), Candle Pattern detection, BOS/CHOCH (break of structure), News Sentiment (via Claude), Trend Conviction, and more.
+- **Quality gates** — RSI-clean, ADX-trend, MTF-aligned, S/R-wall clearance, POC clearance, sequence-check, safe-entry-window. Each gate is independently toggleable and logged.
+- **Physics of Trading** — a 3-law framework (candle/force/swing) with its own confidence scoring, tracked separately from the main engine.
+- **Smart Money Bias** — 4-factor institutional-positioning read (OI Buildup + FII/DII + PCR + ATM premium ratio), −8 to +8 score.
+- **Momentum Detector** — 5-layer breakout/breakdown detector (velocity, candle body, volume surge, acceleration, 5m-slope confirmation).
+- **Murarka Strategy** — PCR-zone + VWAP-proximity combined entry (CA Nitin Murarka's methodology), with its own dashboard panel and Telegram alert.
+- **Dynamic Levels** — ATR-based H1–H3/L1–L3 bands plus classic pivots, prior-day/week/month highs-lows, and max pain.
+- **Volume Scanner** — 210 F&O stocks, 20-day volume baselines, live RVOL.
+
+### CRUDEOIL Engine (Phase 1–5)
+Independent signal pipeline for the MCX crude session (5:30 PM–11:55 PM IST): its own WS session-switching, 3-minute candle basis, PCR gate via Fyers option chain, and full signal logging — deliberately isolated from the NIFTY pipeline so a bug in one can never leak into the other.
+
+### Exploratory / Not-Yet-Trusted Features
+These log to their own tables and send clearly-labeled Telegram alerts, but do **not** gate or feed the main engine, precisely because they haven't earned that trust yet:
+- **Fast Momentum Trigger** — raw price-velocity, ATR-adjusted threshold, no MTF requirement (built to catch fast moves the main engine's confirmation lag misses).
+- **S/R Bounce Trigger** — price tests a known S/R level, pulls back with RSI confirmation.
+- **Murarka Entry logging** — the PCR+VWAP signal above, now with a persistent track record.
+- **Strike-Selection A/B Test** — runs our own VIX-based strike logic side-by-side against an alternative rule from a trading-education source, on real signals, to see which actually performs better.
+- **Combined PCR** — Nifty + BankNifty + Sensex + top-10-heavyweight-stocks PCR blended into one sentiment reading (equal-weighted by default — no externally-agreed "best" weighting exists, so this is tuned from our own data over time).
+
+### Data & Analytics
+- **PostgreSQL-backed logging** — 15 tables covering signal history, performance tracking (win rate, expectancy, profit factor, regime breakdown, setup-DNA leaderboard), daily gate-block stats, journal trades, and every exploratory feature above.
+- **Journal** — manual + auto-logged (from Telegram alerts) trade tracking with P&L.
+- **Analytics tab** — 30/180-day performance analytics, weekly self-review (which gates block the most and whether that's a problem), best-historical-setup live status.
+- **GUARD** — a discipline tool (pre-trade checklist, daily-loss-lock, revenge-trade cooldown) with a read-only live sync of the day's actual Journal P&L alongside the manual-entry flow.
+
+### Data Sources & Resilience
+- **Angel One SmartAPI** — primary WebSocket tick feed (NIFTY + CRUDEOIL), TOTP-based auth.
+- **Fyers** — primary PCR/option-chain source (`options-chain-v3`), also used for BankNifty/Sensex/stock PCR and quote data.
+- **NSE direct** — fallback option-chain source with URL rotation and cookie refresh.
+- **Yahoo Finance** — fallback price/candle source when NSE/Angel are unavailable (with an explicit "volume is fake on Yahoo" guard so momentum detection doesn't misfire on it).
+- Nearly every external fetch has a documented fallback chain — the app is built to degrade gracefully, not crash, when any one data source is down.
+
+### Frontend
+Single-page, mobile-first PWA (installable). 13 tabs grouped into 4 sections (Main / Crude Oil / Market Data / Tools & Analysis). Day/night theme. Live-tick chart animation (candle tracks price between periodic re-fetches). Splash + login screens carry a dedication to **Asha**.
+
+---
+
+## Tech Stack
+
+- **Backend**: Node.js + Express
+- **Database**: PostgreSQL
+- **Broker APIs**: Angel One SmartAPI (WebSocket + REST), Fyers (REST)
+- **Alerts**: Telegram Bot API
+- **AI**: Anthropic Claude API (News Sentiment scoring)
+- **Frontend**: Vanilla JS, single HTML file, no build step
+- **Hosting**: Railway
+
+---
+
+## Environment Variables
+
+See `.env.example` for the full, current list with descriptions. At minimum you need Angel One credentials for live price data; Fyers, Telegram, and Postgres are each optional but unlock major features (PCR/option-chain data, alerts, and all persistence/analytics respectively).
+
+---
+
+## Running Locally
 
 ```bash
-# Create new GitHub repo (or use existing)
-git init
-git add .
-git commit -m "Initial NIFTY trader dashboard"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/nifty-trader.git
-git push -u origin main
+npm install
+cp .env.example .env   # fill in your real credentials
+npm start
 ```
 
-**Files in repo:**
-- `server.js` - Express backend
-- `package.json` - Dependencies
-- `Procfile` - Railway config
-- `.env.example` - Environment variables template
-- `README.md` - This file
+Opens on `http://localhost:3000` (or `$PORT` if set).
 
 ---
 
-### Step 2: Connect to Railway
+## Deploying
 
-1. **Go to** [railway.app](https://railway.app)
-2. **Sign up** (free account)
-3. **Create New Project** → **Deploy from GitHub**
-4. **Connect your GitHub account** → Select `nifty-trader` repo
-5. **Create Project**
-
-Railway will auto-detect `Procfile` and start deploying! ✅
+See `QUICKSTART.md` for a 5-minute Railway deploy, or `SETUP.md` for the full environment-variable walkthrough.
 
 ---
 
-### Step 3: Add Environment Variables
+## ⚠️ Trading Disclaimer
 
-Once deployed, go to **Project Settings → Variables**
-
-Add these 3 variables (copy from your Angel One account):
-
-```
-ANGEL_ONE_API_KEY=your_actual_api_key
-ANGEL_ONE_CLIENT_ID=your_client_id
-ANGEL_ONE_PASSWORD=your_password
-```
-
-**How to find these:**
-1. Login to [Angel One account](https://www.angelone.in)
-2. Go to **Settings** → **API**
-3. Click **Generate API Key**
-4. Copy values:
-   - `API Key` → `ANGEL_ONE_API_KEY`
-   - `Client ID` → `ANGEL_ONE_CLIENT_ID`
-   - Your login password → `ANGEL_ONE_PASSWORD`
-
-5. Click **Deploy** (Railway will restart with your credentials)
-
----
-
-### Step 4: Access Your Dashboard
-
-Once deployed, Railway gives you a **public URL**:
-
-```
-https://nifty-trader-production.up.railway.app
-```
-
-✅ **This works on mobile, laptop, anywhere!**
-
----
-
-## 📱 Using the Dashboard
-
-### On Mobile:
-1. Open the Railway URL in your browser
-2. **Auto-refreshes every 5 seconds** with live data
-3. See all indicators, support/resistance, trade signals
-
-### What You'll See:
-
-| Section | What It Shows |
-|---------|---|
-| **NIFTY Price** | Live price + % change |
-| **RSI (14)** | Overbought (>70) / Oversold (<30) |
-| **ADX** | Trend strength (>25 = strong trend) |
-| **EMA 9/21** | Moving averages for trend |
-| **Support/Resistance** | 4H levels |
-| **Trend** | UPTREND / DOWNTREND / CONSOLIDATION |
-| **9:20 AM Rule** | BULLISH / BEARISH (EMA-based) |
-| **Trade Signals** | BUY CALL / BUY PUT alerts |
-
----
-
-## 🔔 Understanding Trade Signals
-
-### BUY CALL (Bullish Signal)
-```
-✅ When: RSI < 30 + ADX > 25 + Uptrend
-Entry: Current price
-Target: +2% above entry (Risk:Reward = 1:2)
-Stop Loss: -1% below entry
-```
-
-### BUY PUT (Bearish Signal)
-```
-✅ When: RSI > 70 + ADX > 25 + Downtrend
-Entry: Current price
-Target: -2% below entry (Risk:Reward = 1:2)
-Stop Loss: +1% above entry
-```
-
-### Signal Strength
-- **STRONG** - Confirmed by multiple indicators
-- **EXTREME_OVERSOLD** - RSI < 20 (reversal likely)
-- **EXTREME_OVERBOUGHT** - RSI > 80 (reversal likely)
-
----
-
-## 📊 Indicators Explained
-
-### RSI (Relative Strength Index)
-- **< 30** = Oversold (potential bounce)
-- **> 70** = Overbought (potential drop)
-- **30-70** = Neutral
-
-### ADX (Average Directional Index)
-- **> 25** = Strong trend (follow it)
-- **< 25** = Weak trend (avoid trading)
-- **> 50** = Extreme trend strength
-
-### EMA 9 & EMA 21
-- **EMA9 > EMA21** = Bullish crossover
-- **EMA9 < EMA21** = Bearish crossover
-- **9:20 AM Rule** = First 20min trend indicator
-
-### Support & Resistance
-- **Resistance** = Price ceiling (sell here)
-- **Support** = Price floor (buy here)
-- **Pivot** = Mid-point between S & R
-
-### VIX
-- **< 15** = Low volatility (calm market)
-- **15-25** = Normal
-- **> 25** = High volatility (choppy)
-
----
-
-## ⚙️ Configuration
-
-### Adjust Trade Signal Parameters
-
-Edit `server.js` function `generateSignals()`:
-
-```javascript
-// Change RSI thresholds
-if (rsi < 30 && adx.adx > 25) {  // ← Change 30 to your value
-  signals.push({
-    type: 'BUY_CALL',
-    target: currentPrice * 1.02,  // ← Change 1.02 to 1.03 for 3% target
-    stopLoss: currentPrice * 0.99,  // ← Adjust stop loss %
-  });
-}
-```
-
-Then **commit & push to GitHub** → Railway auto-deploys!
-
----
-
-## 🔐 Security Notes
-
-✅ **API Keys are SAFE:**
-- Stored in Railway's encrypted environment variables
-- Never exposed in frontend code
-- Never committed to GitHub
-- Accessible only to your backend server
-
-❌ **DON'T:**
-- Paste API keys in code
-- Commit `.env` file to GitHub
-- Share credentials
-
----
-
-## 🛠️ Troubleshooting
-
-### Dashboard shows "No Active Signals"
-- Signals only trigger on specific conditions (RSI < 30, ADX > 25, etc.)
-- This is normal! Wait for market condition to match
-
-### Error: "Angel One Auth Failed"
-- Check credentials in Railway Variables panel
-- Verify API Key is correct (copy-paste exactly)
-- Some Angel One accounts need TOTP setup (edit server.js `totp` parameter)
-
-### Not fetching real-time data
-- Demo version uses mock data for testing
-- For real Angel One data, add WebSocket listener (advanced)
-- Current version is ideal for learning
-
-### Mobile display looks weird
-- Refresh page (Ctrl+R or Cmd+R)
-- Use latest Chrome/Safari
-- Clear cache if needed
-
----
-
-## 📈 Next Steps (Advanced)
-
-### Real WebSocket Data (Live Updates)
-Replace mock data with Angel One WebSocket feeds:
-
-```javascript
-// Add this to server.js
-const WebSocket = require('ws');
-
-const smartAPISocket = new WebSocket('wss://smartapisocket.angelbroking.com');
-smartAPISocket.on('message', (data) => {
-  // Real NIFTY tick data here
-});
-```
-
-### Database Integration
-Store trade history in PostgreSQL:
-```javascript
-app.post('/api/trade-history', (req, res) => {
-  // Log every trade signal
-});
-```
-
-### Telegram Alerts
-Send alerts to your phone:
-```javascript
-const TelegramBot = require('node-telegram-bot-api');
-bot.sendMessage(chatId, `BUY CALL: ${signal.type}`);
-```
-
----
-
-## 📞 Support
-
-Having issues?
-
-1. **Check Railway Logs** - Project → Deployments → Logs
-2. **Verify Credentials** - Variables panel
-3. **Test Locally** - Run `npm install && npm start`
-
----
-
-## 📄 License
-
-Free to use and modify. Made for personal trading use.
-
----
-
-## 🎯 Trading Disclaimer
-
-⚠️ **Important:**
-- This dashboard is educational only
-- No guarantee of profits
-- Always use proper risk management
-- Past performance ≠ Future results
-- Trade with money you can afford to lose
-- Consult a financial advisor before trading
-
-**Happy Trading! 📈**
+This is a signal-generation and analytics tool, not financial advice, and it does not place trades automatically. Every signal — including the exploratory ones — can be wrong. Past performance shown in the Analytics tab does not guarantee future results. Trade with capital you can afford to lose, and use your own judgment alongside what this app shows you.
