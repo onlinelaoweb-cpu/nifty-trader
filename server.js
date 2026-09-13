@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const express  = require('express');
+const fs       = require('fs');
 const http     = require('http');
 const cors     = require('cors');
 const axios    = require('axios');
@@ -93,7 +94,24 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'X-App-Token'],
 }));
 app.use(express.json());
-app.use(express.static('public', { etag: false, maxAge: 0 }));
+app.use(express.static('public', { etag: false, maxAge: 0, index: false }));
+
+// 13 Sep — app-wide API auth. Protects every /api/ route in one place
+// (rather than editing 40+ individual routes, which risks missing one) —
+// except /api/health, left open since the splash screen's liveness check
+// hits it before the page has fully loaded, and it leaks only general
+// market data (nifty/vix/breadth), never personal trades/journal/P&L.
+// Fails open exactly like requireToken below when APP_TOKEN isn't set —
+// this is a genuine no-op until the user configures the env var.
+app.use('/api', (req, res, next) => {
+    if (req.path === '/health') return next();
+    const secret = process.env.APP_TOKEN;
+    if (!secret) return next();
+    const provided = req.headers['x-app-token'] || req.query.key;
+    if (provided === secret) return next();
+    console.warn(`[Auth] Blocked unauthorized ${req.method} to ${req.path} from ${req.ip}`);
+    return res.status(401).json({ success: false, msg: 'Unauthorized — set X-App-Token header or ?key= param' });
+});
 
 const PORT    = process.env.PORT || 8080;
 // ── Dynamic Levels hard-gate toggle ──────────────────────────────────────────
@@ -9685,7 +9703,47 @@ app.get('/', (req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.sendFile(__dirname + '/public/index.html');
+    // 13 Sep — inject APP_TOKEN into the served page so the frontend's own
+    // fetch()/EventSource calls can authenticate automatically once the
+    // token is set. Safe no-op when APP_TOKEN is unset (empty string
+    // injected, matching requireToken's own fail-open behavior below) —
+    // nothing changes until the user actually sets the env var in Railway.
+    try {
+        let html = fs.readFileSync(__dirname + '/public/index.html', 'utf8');
+        const token = process.env.APP_TOKEN || '';
+        // Injected at <head> level (not appended later in <body>) so this
+        // runs before ANY other script tag — several existing scripts call
+        // fetch()/EventSource immediately on page load, so the wrapper must
+        // be in place first. Empty token = no-op (matches requireToken's
+        // fail-open default): fetch/EventSource behave exactly as before.
+        const authScript = `<script>
+window.__APP_TOKEN__ = ${JSON.stringify(token)};
+(function() {
+    if (!window.__APP_TOKEN__) return; // no token configured — leave fetch/EventSource untouched
+    const _origFetch = window.fetch;
+    window.fetch = function(input, options) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        if (url.startsWith('/api/')) {
+            options = Object.assign({}, options);
+            options.headers = Object.assign({}, options.headers, { 'X-App-Token': window.__APP_TOKEN__ });
+        }
+        return _origFetch(input, options);
+    };
+    const _OrigEventSource = window.EventSource;
+    window.EventSource = function(url, opts) {
+        if (typeof url === 'string' && url.startsWith('/api/')) {
+            url += (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(window.__APP_TOKEN__);
+        }
+        return new _OrigEventSource(url, opts);
+    };
+})();
+</script>`;
+        html = html.replace('<head>', `<head>\n${authScript}`);
+        res.send(html);
+    } catch (e) {
+        console.warn('[Auth] Token injection failed, serving file directly:', e.message);
+        res.sendFile(__dirname + '/public/index.html');
+    }
 });
 
 // Serve stub sw.js
