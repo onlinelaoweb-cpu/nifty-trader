@@ -9584,9 +9584,13 @@ app.get('/api/timeout-audit', async (req, res) => {
 // 13 Sep — checks isSafeEntryWindow()'s time-based restrictions (esp. the
 // 9:15-10:00 "volatile gap-fill" block, sourced from Murarka's general
 // teaching rather than our own data) against actual signal_performance
-// outcomes, bucketed by IST entry-time window. Read-only, doesn't change
-// any gate — just gives a data-backed answer instead of following the rule
-// on faith either way.
+// outcomes, bucketed by IST entry-time window AND by source (main vs mtf) —
+// the ADX-warmup gate structurally can't pass before ~10:15 AM (needs 60
+// candles), so the 9:15-10:00 window's overall numbers are likely dominated
+// by MTF-tracker leads (a different, less strict gate), not Main Engine
+// signals. Splitting by source tells us what would actually happen if Main
+// Engine specifically were unblocked, rather than conflating the two.
+// Read-only, doesn't change any gate.
 app.get('/api/time-window-analytics', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
@@ -9594,39 +9598,55 @@ app.get('/api/time-window-analytics', async (req, res) => {
         const r = await dbPool.query(`
             SELECT
                 (ts AT TIME ZONE 'Asia/Kolkata')::time AS entry_time_ist,
-                target_hit, sl_hit, max_gain_pct
+                target_hit, sl_hit, max_gain_pct, source
             FROM signal_performance
             WHERE closed = true
               AND ts >= NOW() - INTERVAL '${windowDays} days'
         `);
 
-        const windows = {
-            '9:15-10:00 (volatile/blocked)': { total: 0, wins: 0, gainSum: 0 },
-            '10:00-14:00 (safe entry)':      { total: 0, wins: 0, gainSum: 0 },
-            '14:00-14:30 (caution)':          { total: 0, wins: 0, gainSum: 0 },
-            '14:30+ (theta/blocked)':         { total: 0, wins: 0, gainSum: 0 },
-        };
+        const windowLabels = ['9:15-10:00 (volatile/blocked)', '10:00-14:00 (safe entry)', '14:00-14:30 (caution)', '14:30+ (theta/blocked)'];
+        const makeBucket = () => ({ total: 0, wins: 0, gainSum: 0 });
+        const bySource = { main: {}, mtf: {}, other: {} };
+        for (const src of ['main', 'mtf', 'other']) {
+            for (const label of windowLabels) bySource[src][label] = makeBucket();
+        }
+
         for (const row of r.rows) {
             const t = row.entry_time_ist; // 'HH:MM:SS'
             const [h, m] = t.split(':').map(Number);
             const mins = h * 60 + m;
             let key;
-            if (mins < 600) key = '9:15-10:00 (volatile/blocked)';
-            else if (mins < 840) key = '10:00-14:00 (safe entry)';
-            else if (mins < 870) key = '14:00-14:30 (caution)';
-            else key = '14:30+ (theta/blocked)';
-            const w = windows[key];
+            if (mins < 600) key = windowLabels[0];
+            else if (mins < 840) key = windowLabels[1];
+            else if (mins < 870) key = windowLabels[2];
+            else key = windowLabels[3];
+
+            const src = (row.source === 'main' || row.source === 'mtf') ? row.source : 'other';
+            const w = bySource[src][key];
             w.total++;
             if (row.target_hit) w.wins++;
             if (row.max_gain_pct != null) w.gainSum += parseFloat(row.max_gain_pct);
         }
-        const summary = Object.entries(windows).map(([label, w]) => ({
-            label,
-            sampleSize: w.total,
-            winRate: w.total > 0 ? Math.round((w.wins / w.total) * 100) : null,
-            avgMaxGainPct: w.total > 0 ? parseFloat((w.gainSum / w.total).toFixed(2)) : null,
-        }));
-        res.json({ success: true, windowDays, summary });
+
+        const toSummary = (bucketsByLabel) => windowLabels.map(label => {
+            const w = bucketsByLabel[label];
+            return {
+                label,
+                sampleSize: w.total,
+                winRate: w.total > 0 ? Math.round((w.wins / w.total) * 100) : null,
+                avgMaxGainPct: w.total > 0 ? parseFloat((w.gainSum / w.total).toFixed(2)) : null,
+            };
+        });
+
+        res.json({
+            success: true,
+            windowDays,
+            bySource: {
+                main: toSummary(bySource.main),
+                mtf: toSummary(bySource.mtf),
+                other: toSummary(bySource.other),
+            },
+        });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
