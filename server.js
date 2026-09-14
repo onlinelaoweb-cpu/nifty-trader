@@ -88,6 +88,15 @@ const {
 }                                   = require('./src/api/telegram');
 
 const app    = express();
+// 14 Sep — Railway terminates TLS and proxies through one hop, so Express
+// sees X-Forwarded-For but doesn't trust it by default. Without this,
+// express-rate-limit can't safely read the real client IP and throws
+// ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on every request (seen in prod logs
+// right after the Phase 1 rate-limiter was added). `1` = trust exactly the
+// first hop (Railway's own proxy) — NOT `true`, which would trust every
+// hop in the chain and let a client spoof X-Forwarded-For to dodge the
+// rate limit entirely.
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 // CORS — allow only the Railway deployment domain and local dev.
 // RAILWAY_PUBLIC_DOMAIN is set automatically by Railway at runtime.
