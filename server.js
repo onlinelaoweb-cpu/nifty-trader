@@ -22,6 +22,11 @@ const { pcrLabel, pcrScore, calculateADX, _linRegSlope, _pcrTimeToMinutes,
         buildTradeCoach, buildScalpPlan, buildEngineChecklist, withTimeout,
         detectCandlePatternForTF, detectLiquiditySweepReversal, computeMurarkaZone,
         computeCrudeMTF, computeCrudeSignal } = require('./src/utils/pureCalc');
+const { computeSmartMoneyBias, computeDayType, computeConfidenceBreakdown,
+        computeTrapZone, computeDynamicLevelsState, computeContradictionScore,
+        checkAgreementSequence, computeTrendConviction, computeMarketRegime,
+        computeDataHealth, computeEventCountdown, computeProbabilityEngine,
+        buildSetupDNA, pickStrikeAndPremium } = require('./src/utils/signalReaders');
 
 // ── SSE: Server-Sent Events for instant frontend push ────────────────────────
 const _sseClients = new Set();
@@ -820,112 +825,8 @@ function updateOptionFlow(atmCE, atmPE) {
 //
 // Score range: −8 to +8.  >2 = BULLISH, <−2 = BEARISH, else NEUTRAL.
 // Returns: { bias, score, label, components[] }
-function computeSmartMoneyBias() {
-    let score = 0;
-    const components = [];
-
-    // ── 1. OI Buildup: price × OI direction ──────────────────────────────────
-    // Fresh Long (Price↑ OI↑) = smart money buying = +2
-    // Short Covering (Price↑ OI↓) = shorts covering, weak rally = +1
-    // Fresh Short (Price↓ OI↑) = smart money selling = −2
-    // Long Unwinding (Price↓ OI↓) = bulls exiting = −1
-    // interpretOIBuildup() returns signal:'BULL'|'BEAR'|'NEUTRAL' + strength:0|1|2
-    // strength 2 = strong confirmation (PCR confirms), strength 1 = moderate
-    const oi = marketState.oiBuildup;
-    if (oi && oi.signal && oi.signal !== 'NEUTRAL') {
-        const sig = oi.signal.toUpperCase();  // 'BULL' or 'BEAR'
-        const str = oi.strength || 1;         // 1 or 2
-        const pts = sig === 'BULL' ? str : -str;
-        const shortLabel = oi.label
-            ? oi.label.replace('OI Buildup — ', '').split(' — ')[0]  // trim prefix
-            : (sig === 'BULL' ? 'Bullish OI 🐂' : 'Bearish OI 🐻');
-        score += pts;
-        components.push({ label: 'OI Buildup', value: shortLabel, pts, bull: sig === 'BULL' });
-    } else {
-        components.push({ label: 'OI Buildup', value: 'Awaiting data', pts: 0, bull: null });
-    }
-
-    // ── 2. FII + DII combined net flow ───────────────────────────────────────
-    // FII net: strong institutional signal, weight 2 (±2 for >500Cr, ±1 otherwise)
-    // DII net: supporting signal, weight 1
-    const fii = marketState.fii;
-    const dii = marketState.dii;
-    // BUG2 FIX: use typeof check — net can be 0 (falsy) or non-numeric
-    const fiiNet = (fii && typeof fii.net === 'number') ? fii.net : null;
-    const diiNet = (dii && typeof dii.net === 'number') ? dii.net : null;
-    if (fiiNet !== null) {
-        const w = Math.abs(fiiNet) > 500 ? 2 : 1;
-        if (fiiNet > 0) {
-            score += w;
-            components.push({ label: 'FII Flow', value: `Net Buy ₹${fiiNet.toFixed(0)}Cr`, pts: +w, bull: true });
-        } else if (fiiNet < 0) {
-            score -= w;
-            components.push({ label: 'FII Flow', value: `Net Sell ₹${Math.abs(fiiNet).toFixed(0)}Cr`, pts: -w, bull: false });
-        } else {
-            components.push({ label: 'FII Flow', value: 'Net Flat ₹0Cr', pts: 0, bull: null });
-        }
-    } else {
-        components.push({ label: 'FII Flow', value: 'Awaiting data', pts: 0, bull: null });
-    }
-    if (diiNet !== null) {
-        if (diiNet > 0) {
-            score += 1;
-            components.push({ label: 'DII Flow', value: `Net Buy ₹${diiNet.toFixed(0)}Cr`, pts: +1, bull: true });
-        } else if (diiNet < 0) {
-            score -= 1;
-            components.push({ label: 'DII Flow', value: `Net Sell ₹${Math.abs(diiNet).toFixed(0)}Cr`, pts: -1, bull: false });
-        } else {
-            components.push({ label: 'DII Flow', value: 'Net Flat ₹0Cr', pts: 0, bull: null });
-        }
-    } else {
-        components.push({ label: 'DII Flow', value: 'Awaiting data', pts: 0, bull: null });
-    }
-
-    // ── 3. PCR Extreme Levels — institutional option writer intent ────────────
-    // PCR > 1.3  = institutions writing puts heavily = bullish intent  (+2)
-    // PCR 1.1-1.3 = mild bullish                                       (+1)
-    // PCR 0.7-0.9 = mild bearish                                       (−1)
-    // PCR < 0.7  = institutions writing calls heavily = bearish intent  (−2)
-    const pcr = marketState.pcr;
-    if (pcr !== null && pcr > 0) {
-        if      (pcr > 1.3)             { score += 2; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Put Writing 🐂`, pts: +2, bull: true }); }
-        else if (pcr >= 1.1)            { score += 1; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Mildly Bullish`, pts: +1, bull: true }); }
-        else if (pcr >= 0.9)            {             components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Neutral zone`, pts: 0, bull: null }); }
-        else if (pcr >= 0.7)            { score -= 1; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Mildly Bearish`, pts: -1, bull: false }); }
-        else                            { score -= 2; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Call Writing 🐻`, pts: -2, bull: false }); }
-    } else {
-        components.push({ label: 'PCR Level', value: 'Awaiting data', pts: 0, bull: null });
-    }
-
-    // ── 4. ATM CE vs PE premium ratio — real-money directional bet ───────────
-    // CE/PE ratio > 1.25 = call buyers more aggressive = bullish (+1)
-    // CE/PE ratio < 0.80 = put buyers more aggressive = bearish  (−1)
-    const optFlow = marketState.optionFlow;
-    if (optFlow && optFlow.atmCEpremium && optFlow.atmPEpremium && optFlow.atmCEpremium > 0 && optFlow.atmPEpremium > 0) {
-        const ratio = optFlow.atmCEpremium / optFlow.atmPEpremium;
-        if (ratio > 1.25) {
-            score += 1;
-            components.push({ label: 'ATM Flow', value: `CE/PE=${ratio.toFixed(2)} — Call buyers dominant`, pts: +1, bull: true });
-        } else if (ratio < 0.80) {
-            score -= 1;
-            components.push({ label: 'ATM Flow', value: `CE/PE=${ratio.toFixed(2)} — Put buyers dominant`, pts: -1, bull: false });
-        } else {
-            components.push({ label: 'ATM Flow', value: `CE/PE=${ratio.toFixed(2)} — Balanced`, pts: 0, bull: null });
-        }
-    } else {
-        components.push({ label: 'ATM Flow', value: 'Awaiting premium data', pts: 0, bull: null });
-    }
-
-    // ── Derive final bias ─────────────────────────────────────────────────────
-    let bias, label;
-    if      (score >= 4) { bias = 'STRONGLY_BULLISH'; label = '📈 Strongly Bullish — Institutions buying'; }
-    else if (score >= 2) { bias = 'BULLISH';           label = '📈 Bullish — Smart money positioned long'; }
-    else if (score <= -4){ bias = 'STRONGLY_BEARISH';  label = '📉 Strongly Bearish — Institutions selling'; }
-    else if (score <= -2){ bias = 'BEARISH';           label = '📉 Bearish — Smart money positioned short'; }
-    else                 { bias = 'NEUTRAL';            label = '⚖️ Neutral — No clear institutional bias'; }
-
-    return { bias, score, label, components, updatedAt: new Date().toISOString() };
-}
+// computeSmartMoneyBias() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
 
 // detectCandlePatternForTF() — moved to src/utils/pureCalc.js (13 Sep
@@ -1078,32 +979,8 @@ function getORBStatus(price) {
 // momentum-breakout strength into a single 0-100 trend-probability score.
 // Informational only — does NOT gate/block combineSignals(), it's a
 // strategy-selection aid shown to the trader each morning.
-function computeDayType() {
-    const adxVal = marketState.adx?.adx ?? null;
-    let trendScore = 0;
-    if (adxVal !== null) trendScore += Math.min((adxVal / 40) * 40, 40);   // up to 40 pts
-    if (marketState.mtf?.aligned)          trendScore += 30;               // all 3 TF agree
-    else if (marketState.mtf?.softAligned) trendScore += 15;               // 15m+1h agree, 5m dissents
-    const orbStatus = marketState.orb?.status;
-    if (orbStatus === 'BROKEN_UP' || orbStatus === 'BROKEN_DOWN') trendScore += 20;
-    const mom = marketState.momentum;
-    if (mom?.canTrade && mom.strength >= 3) trendScore += 10;
-
-    const trendProbability = Math.round(Math.min(trendScore, 100));
-    const rangeProbability = Math.round(100 - trendProbability);
-
-    const recommendation = trendProbability >= 60
-        ? { favor: 'OPTION_BUYING',    avoid: 'Selling / Iron Fly',                 label: '✅ Recommended: Option Buying' }
-        : rangeProbability >= 60
-        ? { favor: 'RANGE_STRATEGIES', avoid: 'Fresh directional option buying',    label: '✅ Recommended: Iron Fly / Option Selling / Quick Scalps' }
-        : { favor: 'NEUTRAL',          avoid: 'Oversized directional bets either way', label: '⚠️ Mixed signals — trade small, confirm before entry' };
-
-    return {
-        trendProbability, rangeProbability, recommendation,
-        adx: adxVal, mtfAligned: !!marketState.mtf?.aligned, orbStatus: orbStatus ?? 'FORMING',
-        generatedAt: new Date().toISOString(),
-    };
-}
+// computeDayType() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
 // ── Trap Zone Detector — VWAP/POC chop pocket ───────────────────────────────
 // When VWAP and POC sit close together AND price is squeezed inside that
@@ -1119,129 +996,18 @@ function computeDayType() {
 // engine has 25+ correlated inputs; a card listing all of them would be
 // unreadable). Computed AFTER combineSignals() so marketState.signal /
 // confidence are already final.
-function computeConfidenceBreakdown() {
-    const sig = marketState.signal;
-    if (sig === 'WAIT' || !sig) return { items: [], final: 0, label: 'No active signal' };
-    const isBull = sig === 'BUY CALL';
-    const items = [];
+// computeConfidenceBreakdown() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
-    // Trend — MTF alignment
-    if (marketState.mtf?.aligned) items.push({ label: 'Trend (3/3 TF aligned)', pts: 25 });
-    else if ((isBull && marketState.mtf?.bullCount === 2) || (!isBull && marketState.mtf?.bearCount === 2)) {
-        items.push({ label: 'Trend (2/3 TF aligned)', pts: 12 });
-    }
-
-    // Momentum — breakdown/breakout detector
-    const mom = marketState.momentum;
-    if (mom?.canTrade && ((isBull && mom.signal === 'BREAKOUT') || (!isBull && mom.signal === 'BREAKDOWN'))) {
-        items.push({ label: `Momentum (${mom.signal.toLowerCase()}, strength ${mom.strength})`, pts: Math.round((mom.strength / 4) * 20) });
-    }
-
-    // Delta — order flow
-    const deltaPct = marketState.delta?.deltaPct;
-    if (deltaPct != null && ((isBull && deltaPct > 0) || (!isBull && deltaPct < 0))) {
-        items.push({ label: `Delta (${deltaPct > 0 ? '+' : ''}${deltaPct}%)`, pts: Math.min(Math.round((Math.abs(deltaPct) / 100) * 15), 15) });
-    }
-
-    // PCR
-    if ((isBull && marketState.pcrSignal === 'BULLISH') || (!isBull && marketState.pcrSignal === 'BEARISH')) {
-        items.push({ label: `PCR (${marketState.pcr})`, pts: 10 });
-    }
-
-    // Proximity to Support/Resistance — penalty when signal direction is chasing INTO a wall
-    const srLvls = marketState.srLevels?.levels;
-    if (srLvls?.length && marketState.nifty > 0) {
-        const near = srLvls.find(l => Math.abs(marketState.nifty - l.price) <= 30);
-        if (near) {
-            const isRes = near.price > marketState.nifty;
-            if ((isBull && isRes) || (!isBull && !isRes)) {
-                items.push({ label: `Near ${isRes ? 'Resistance' : 'Support'} (${near.label || near.type} @ ${near.price})`, pts: -10 });
-            }
-        }
-    }
-
-    // RSI extreme — penalty for chasing an already-stretched move
-    const rsi = marketState.rsi;
-    if (isBull && rsi != null && rsi > 68) items.push({ label: `RSI Overbought (${rsi})`, pts: -5 });
-    if (!isBull && rsi != null && rsi < 32) items.push({ label: `RSI Oversold (${rsi})`, pts: -5 });
-
-    // Dynamic Levels (Punch-style H1-H3/L1-L3) — same factor combineSignals() nudges on
-    const dl = marketState.dynamicLevels;
-    if (dl?.available) {
-        if (isBull && dl.aboveH3) items.push({ label: `Above Dynamic H3 (${dl.h3})`, pts: 5 });
-        else if (!isBull && dl.belowL3) items.push({ label: `Below Dynamic L3 (${dl.l3})`, pts: 5 });
-        else if (dl.noTradeZone) items.push({ label: `Inside Dynamic H1–L1 range pocket`, pts: -10 });
-    }
-
-    // Premarket/Opening Gap — same factor combineSignals() nudges on
-    const pg = marketState.premarketGap;
-    if (pg?.available) {
-        if (isBull && pg.zone === 'GAP_UP') items.push({ label: `Gap-up open (+${pg.gapPct}%)`, pts: 3 });
-        else if (!isBull && pg.zone === 'GAP_DOWN') items.push({ label: `Gap-down open (${pg.gapPct}%)`, pts: 3 });
-    }
-
-    // Smart Money Bias — same factor combineSignals() nudges on
-    const sm = marketState.smartMoney;
-    if (sm) {
-        const bullish = sm.bias === 'BULLISH' || sm.bias === 'STRONGLY_BULLISH';
-        const bearish = sm.bias === 'BEARISH' || sm.bias === 'STRONGLY_BEARISH';
-        const strong  = sm.bias === 'STRONGLY_BULLISH' || sm.bias === 'STRONGLY_BEARISH';
-        if (isBull && bullish) items.push({ label: `Smart Money ${sm.bias.replace('_',' ')} (${sm.score})`, pts: strong ? 8 : 4 });
-        else if (!isBull && bearish) items.push({ label: `Smart Money ${sm.bias.replace('_',' ')} (${sm.score})`, pts: strong ? 8 : 4 });
-        else if (isBull && bearish) items.push({ label: `Smart Money ${sm.bias.replace('_',' ')} contradicts (${sm.score})`, pts: strong ? -15 : -8 });
-        else if (!isBull && bullish) items.push({ label: `Smart Money ${sm.bias.replace('_',' ')} contradicts (${sm.score})`, pts: strong ? -15 : -8 });
-    }
-
-    // BOS / CHOCH — same factor combineSignals() nudges on
-    const bc = marketState.physicsOfTrading?.bosChoch;
-    if (bc && bc.event !== 'NONE') {
-        if (isBull && bc.event === 'BOS_BULLISH') items.push({ label: `BOS Bullish (above ${bc.level})`, pts: 5 });
-        else if (!isBull && bc.event === 'BOS_BEARISH') items.push({ label: `BOS Bearish (below ${bc.level})`, pts: 5 });
-        else if (isBull && bc.event === 'CHOCH_BEARISH') items.push({ label: `CHOCH Bearish (below ${bc.level})`, pts: -12 });
-        else if (!isBull && bc.event === 'CHOCH_BULLISH') items.push({ label: `CHOCH Bullish (above ${bc.level})`, pts: -12 });
-    }
-
-    return { items, final: marketState.confidence, generatedAt: new Date().toISOString() };
-}
-
-function computeTrapZone() {
-    const price = marketState.nifty;
-    const vwap  = marketState.vwap;
-    const poc   = marketState.poc?.poc;
-    if (!price || !vwap || !poc) {
-        return { active: false, label: 'Trap Zone — awaiting data' };
-    }
-    const bandHi    = Math.max(vwap, poc);
-    const bandLo    = Math.min(vwap, poc);
-    const bandWidth = bandHi - bandLo;
-    const TIGHT_BAND = 40;   // pts — VWAP/POC within this = a real chop pocket
-    const BUFFER     = 10;   // pts — price also has to be inside/near the band
-    const inBand = price >= (bandLo - BUFFER) && price <= (bandHi + BUFFER);
-    const active = bandWidth <= TIGHT_BAND && inBand;
-
-    return {
-        active, vwap, poc, bandLo: Math.round(bandLo), bandHi: Math.round(bandHi), bandWidth: Math.round(bandWidth),
-        label: active
-            ? `⚠️ Trap Zone — between VWAP (${vwap.toFixed(0)}) and POC (${poc.toFixed(0)}) — expect whipsaws, wait for breakout`
-            : `Clear — VWAP (${vwap.toFixed(0)}) / POC (${poc.toFixed(0)}) not forming a chop pocket`,
-    };
-}
+// computeTrapZone() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
 // ── Dynamic Levels — Punch-style ATR H1-H3/L1-L3 intraday bands ────────────
 // See src/api/dynamicLevels.js header for formula + rollout rationale.
 // Computed at MTF-refresh cadence (levels only move as ATR/day-range shift,
 // no need for per-tick recompute — same reasoning as Renko just above).
-function computeDynamicLevelsState() {
-    try {
-        const candles = getCandleHistory(true);
-        const levels  = computeDynamicLevels(candles, marketState.wsHigh, marketState.wsLow);
-        const zoneInfo = classifyDynamicLevels(levels, marketState.nifty);
-        return { ...levels, ...zoneInfo };
-    } catch (e) {
-        console.warn('[DynamicLevels] compute error:', e.message);
-        return marketState.dynamicLevels || { available: false, label: 'Dynamic Levels — error' };
-    }
-}
+// computeDynamicLevelsState() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
 // ── Contradiction Score ──────────────────────────────────────────────────────
 // Per feedback: "Introduce a Contradiction Score" — instead of the many
@@ -1253,51 +1019,8 @@ function computeDynamicLevelsState() {
 // When that happens, forcing a BUY CALL/BUY PUT out of the raw vote tally
 // is exactly the failure mode flagged externally: "Bullish internals overpower
 // bearish momentum" style false calls. Result: NO TRADE instead of a forced pick.
-function computeContradictionScore() {
-    const bullFactors = [], bearFactors = [];
-    let bullWeight = 0, bearWeight = 0;
-
-    // MTF — 40% (full weight if all 3 TF aligned, half if 2/3)
-    const mtf = marketState.mtf;
-    if (mtf?.aligned) {
-        if (mtf.signal === 'BUY CALL') { bullWeight += 40; bullFactors.push('MTF (3/3 aligned)'); }
-        else if (mtf.signal === 'BUY PUT') { bearWeight += 40; bearFactors.push('MTF (3/3 aligned)'); }
-    } else if (mtf?.bullCount === 2) { bullWeight += 20; bullFactors.push('MTF (2/3 bullish)'); }
-    else if (mtf?.bearCount === 2) { bearWeight += 20; bearFactors.push('MTF (2/3 bearish)'); }
-
-    // PCR — 15%
-    if (marketState.pcrSignal === 'BULLISH') { bullWeight += 15; bullFactors.push('PCR'); }
-    else if (marketState.pcrSignal === 'BEARISH') { bearWeight += 15; bearFactors.push('PCR'); }
-
-    // Delta — 15%
-    if (marketState.delta?.signal === 'BULLISH') { bullWeight += 15; bullFactors.push('Delta'); }
-    else if (marketState.delta?.signal === 'BEARISH') { bearWeight += 15; bearFactors.push('Delta'); }
-
-    // VWAP — 10%
-    if (marketState.nifty && marketState.vwap) {
-        if (marketState.nifty > marketState.vwap) { bullWeight += 10; bullFactors.push('Above VWAP'); }
-        else if (marketState.nifty < marketState.vwap) { bearWeight += 10; bearFactors.push('Below VWAP'); }
-    }
-
-    // POC — 10%
-    if (marketState.poc?.signal === 'ABOVE_POC') { bullWeight += 10; bullFactors.push('Above POC'); }
-    else if (marketState.poc?.signal === 'BELOW_POC') { bearWeight += 10; bearFactors.push('Below POC'); }
-
-    // ORB — 10%
-    if (marketState.orb?.status === 'BROKEN_UP') { bullWeight += 10; bullFactors.push('ORB Broken Up'); }
-    else if (marketState.orb?.status === 'BROKEN_DOWN') { bearWeight += 10; bearFactors.push('ORB Broken Down'); }
-
-    // Contradiction = BOTH sides carry substantial, conflicting weight —
-    // not just one side dominating with the other side quiet/neutral.
-    const contradiction = bullWeight >= 30 && bearWeight >= 30;
-    const diff   = bullWeight - bearWeight;
-    const result = contradiction ? 'NO_TRADE' : diff > 0 ? 'BULLISH' : diff < 0 ? 'BEARISH' : 'NEUTRAL';
-
-    return {
-        bullWeight, bearWeight, diff, bullFactors, bearFactors, contradiction, result,
-        generatedAt: new Date().toISOString(),
-    };
-}
+// computeContradictionScore() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
 // ── Strict Sequential Agreement Gate ────────────────────────────────────────
 // This is the EXACT check requested:
@@ -1309,55 +1032,8 @@ function computeContradictionScore() {
 // stops at the FIRST factor that actively opposes the direction — a factor
 // reading NEUTRAL/unavailable does not fail the check, only an outright
 // opposite reading does.
-function checkAgreementSequence(direction) {
-    if (direction !== 'BUY CALL' && direction !== 'BUY PUT') {
-        return { passed: true, failedAt: null, steps: [] };
-    }
-    const isBull  = direction === 'BUY CALL';
-    const oppose  = isBull ? 'BEAR' : 'BULL';
-    const steps   = [];
-
-    // 1. MTF
-    const mtf = marketState.mtf;
-    const mtfDir = mtf?.aligned ? (mtf.signal === 'BUY CALL' ? 'BULL' : 'BEAR')
-                 : mtf?.bullCount === 2 ? 'BULL' : mtf?.bearCount === 2 ? 'BEAR' : 'NEUTRAL';
-    steps.push({ step: 'MTF', dir: mtfDir });
-
-    // 2. PCR
-    const pcrDir = marketState.pcrSignal === 'BULLISH' ? 'BULL' : marketState.pcrSignal === 'BEARISH' ? 'BEAR' : 'NEUTRAL';
-    steps.push({ step: 'PCR', dir: pcrDir });
-
-    // 3. Delta
-    const deltaDir = marketState.delta?.signal === 'BULLISH' ? 'BULL' : marketState.delta?.signal === 'BEARISH' ? 'BEAR' : 'NEUTRAL';
-    steps.push({ step: 'Delta', dir: deltaDir });
-
-    // 4. ORB
-    const orbDir = marketState.orb?.status === 'BROKEN_UP' ? 'BULL' : marketState.orb?.status === 'BROKEN_DOWN' ? 'BEAR' : 'NEUTRAL';
-    steps.push({ step: 'ORB', dir: orbDir });
-
-    // 5. VWAP
-    const vwapDir = (marketState.nifty && marketState.vwap)
-        ? (marketState.nifty > marketState.vwap ? 'BULL' : marketState.nifty < marketState.vwap ? 'BEAR' : 'NEUTRAL')
-        : 'NEUTRAL';
-    steps.push({ step: 'VWAP', dir: vwapDir });
-
-    // 6. Value Area (VAH/VAL from the POC/volume-profile calc)
-    const poc = marketState.poc;
-    let vaDir = 'NEUTRAL';
-    if (poc?.vah != null && poc?.val != null && marketState.nifty) {
-        if (marketState.nifty > poc.vah) vaDir = 'BULL';
-        else if (marketState.nifty < poc.val) vaDir = 'BEAR';
-    }
-    steps.push({ step: 'Value Area', dir: vaDir });
-
-    // Walk the chain in order — first outright opposing factor kills it
-    for (const s of steps) {
-        if (s.dir === oppose) {
-            return { passed: false, failedAt: s.step, steps };
-        }
-    }
-    return { passed: true, failedAt: null, steps };
-}
+// checkAgreementSequence() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
 // ── Trend Conviction Mode ────────────────────────────────────────────────────
 // Per external audit feedback (authenticity-checked — see notes below):
@@ -1372,51 +1048,8 @@ function checkAgreementSequence(direction) {
 // direction, that's "conviction" — strong enough that a raw signal pointing
 // the OPPOSITE way should be treated with suspicion unless MTF itself has
 // genuinely flipped (a real reversal), not just one factor (e.g. delta).
-function computeTrendConviction() {
-    const nifty = marketState.nifty;
-    const vwap  = marketState.vwap;
-    const val   = marketState.poc?.val;
-    const vah   = marketState.poc?.vah;
-    const pocSig = marketState.poc?.signal;
-    const delta = marketState.delta?.deltaPct;
-    const orbStatus = marketState.orb?.status;
-    const tf15m = marketState.mtf?.tf15m?.signal;
-    const tf1h  = marketState.mtf?.tf1h?.signal;
-
-    const bear = [], bull = [];
-
-    if (nifty && vwap) {
-        if (nifty < vwap) bear.push('Price below VWAP');
-        else if (nifty > vwap) bull.push('Price above VWAP');
-    }
-    if (tf15m === 'BEARISH') bear.push('15m Bearish');
-    if (tf15m === 'BULLISH') bull.push('15m Bullish');
-    if (tf1h === 'BEARISH') bear.push('1H Bearish');
-    if (tf1h === 'BULLISH') bull.push('1H Bullish');
-    if (delta != null && delta <= -40) bear.push(`Delta ${delta}%`);
-    if (delta != null && delta >=  40) bull.push(`Delta +${delta}%`);
-    if (val != null && nifty && nifty < val) bear.push('Price below VAL');
-    if (vah != null && nifty && nifty > vah) bull.push('Price above VAH');
-    // Explicit POC direction — added per 17 Jul audit, which specifically
-    // wanted "Price below/above POC" as its own required factor rather than
-    // relying only on VAL/VAH as a proxy (POC can sit between them and move
-    // independently as volume profile updates intraday).
-    if (pocSig === 'BELOW_POC') bear.push('Price below POC');
-    if (pocSig === 'ABOVE_POC') bull.push('Price above POC');
-    if (orbStatus === 'BROKEN_DOWN') bear.push('ORB Breakdown');
-    if (orbStatus === 'BROKEN_UP')   bull.push('ORB Breakout');
-
-    const CONVICTION_THRESHOLD = 4;   // of 7 possible independent conditions
-    const active = bear.length >= CONVICTION_THRESHOLD ? 'BEARISH'
-                 : bull.length >= CONVICTION_THRESHOLD ? 'BULLISH'
-                 : null;
-
-    return {
-        active, bearConditions: bear, bullConditions: bull,
-        bearCount: bear.length, bullCount: bull.length,
-        generatedAt: new Date().toISOString(),
-    };
-}
+// computeTrendConviction() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
 // ── Data Health / Self-Diagnosis ─────────────────────────────────────────────
 // ChatGPT audit ("Self-Diagnosis"): "If data is missing or unreliable —
@@ -1450,60 +1083,8 @@ function computeTrendConviction() {
 // actual new rules later, do it one regime at a time with live data to
 // justify each threshold, the same way every other gate in this file earned
 // its place.
-function computeMarketRegime() {
-    const dt = marketState.dayType;
-    const expiry = isExpiryDay();
-    const vixSpike = !!marketState.tradeQuality?.vixCapped;
-    const eventCaution = !!(marketState.eventCountdown?.available && marketState.eventCountdown.withinCautionWindow);
-    // GAP_DAY — 4th named day-type from the 22 Jul audit ("Trend Day / Range
-    // Day / Gap Day / Expiry Day"). Uses a meaningfully larger threshold
-    // (0.5%) than premarketGap's own 0.15% zone split, since that smaller
-    // threshold is tuned for the confidence-nudge use case and fires on most
-    // ordinary days — a "regime," by contrast, should mean something the
-    // trader should actually adjust their read of the day for.
-    const gapDay = Math.abs(marketState.premarketGap?.gapPct ?? 0) >= 0.5;
-    // LOW_VIX — added 28 Aug 2026 after an intensive audit for accuracy: the
-    // weekly self-review's own "by regime" breakdown (30d, 148 closed signals)
-    // showed Low VIX (<14) as BOTH the single most common regime (112 of ~290
-    // signals) AND the weakest among regimes with a real sample size — 40%
-    // win, +0.307R average, versus Trending's 59%/+0.694R and Range's
-    // 54%/+0.808R. Since this app runs almost entirely on low-VIX days (VIX
-    // has read 10-13 "VERY LOW" across nearly every session reviewed), this
-    // one regime alone was quietly dragging down blended performance more
-    // than any single gate. Threshold (14) matches the bucket the weekly
-    // report itself already uses, so this doesn't introduce a new number to
-    // separately justify. Following this file's own stated policy above
-    // ("graduate specific regimes to actual new rules later, one regime at a
-    // time with live data") — additive only, capped, same shape as the
-    // existing HIGH_VIX/EXPIRY size caps below, not a rewrite.
-    const lowVix = marketState.vix > 0 && marketState.vix < 14;
-
-    const tags = [];
-    if (expiry) tags.push('EXPIRY');
-    if (eventCaution) tags.push('EVENT_DAY');
-    if (vixSpike) tags.push('HIGH_VIX');
-    if (lowVix) tags.push('LOW_VIX');
-    if (gapDay) tags.push('GAP_DAY');
-    if (dt?.trendProbability >= 60) tags.push('TRENDING');
-    else if (dt?.rangeProbability >= 60) tags.push('RANGE');
-    if (tags.length === 0) tags.push('NORMAL');
-
-    const activeRules = [];
-    if (tags.includes('EXPIRY'))     activeRules.push('A+/A grade size capped 50% (Tuesday expiry)');
-    if (tags.includes('EVENT_DAY'))  activeRules.push(`Confidence capped 60% (${marketState.eventCountdown?.title || 'high-impact event'} approaching)`);
-    if (tags.includes('HIGH_VIX'))   activeRules.push('Size capped 50% (VIX spiked vs today\'s open)');
-    if (tags.includes('LOW_VIX'))    activeRules.push('Size capped 65% (Low VIX regime — historically weakest expectancy: +0.31R vs +0.69-0.81R in Trending/Range)');
-    if (tags.includes('GAP_DAY'))    activeRules.push(`Large ${marketState.premarketGap?.zone === 'GAP_UP' ? 'gap-up' : 'gap-down'} open (${marketState.premarketGap?.gapPct}%) — first-hour moves less reliable, gap-fill risk both ways`);
-    if (tags.includes('RANGE'))      activeRules.push('Dynamic Levels no-trade range-pocket cap active');
-    if (tags.includes('TRENDING'))   activeRules.push('Momentum/breakout confluence factors weighted normally');
-
-    return {
-        tags, activeRules,
-        label: `🗺️ Regime: ${tags.join(' + ')}`,
-        detail: activeRules.length ? activeRules.join(' · ') : 'No regime-specific overrides active right now',
-        generatedAt: new Date().toISOString(),
-    };
-}
+// computeMarketRegime() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
 
 // ── Data Health / Self-Diagnosis ─────────────────────────────────────────────
@@ -1513,57 +1094,16 @@ function computeMarketRegime() {
 // Delta, VIX, Breadth) and applies a small, capped confidence penalty in
 // combineSignals() when one or more are degraded — informational label +
 // soft cap, same rollout discipline as every other new gate in this file.
-function computeDataHealth() {
-    const issues = [];
-    if (marketState.pcr === null)                              issues.push('PCR unavailable');
-    if (marketState.vix === null)                              issues.push('India VIX unavailable');
-    if (!marketState.delta || /awaiting/i.test(marketState.delta.label || '')) issues.push('Delta unavailable');
-    if (!marketState.breadth?.updatedAt)                        issues.push('Market breadth unavailable');
-
-    const healthy = issues.length === 0;
-    const penalty = Math.min(issues.length * 8, 25);   // capped — same scale as other soft caps in this file
-    return {
-        healthy, issues, penalty,
-        label: healthy ? '✅ All data feeds healthy' : `⚠️ ${issues.length} feed(s) degraded: ${issues.join(', ')}`,
-        generatedAt: new Date().toISOString(),
-    };
-}
+// computeDataHealth() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
 // ── Economic Event Countdown ─────────────────────────────────────────────────
 // ChatGPT audit ("Economic Event Countdown"): show time-to-next-high-impact
 // event and automatically reduce confidence as it approaches. Reuses
 // marketState.calendarEvents (already fetched via fetchCalendarEvents() /
 // Finnhub + hardcoded India events) — no new data source needed.
-function computeEventCountdown() {
-    const events = marketState.calendarEvents || [];
-    const ist = getIST();
-    const nowMs = ist.getTime();
-    let nearest = null, minDiffMs = Infinity;
-
-    for (const ev of events) {
-        if (ev.impact !== 'high') continue;
-        const timeStr = (ev.time && ev.time !== '--:--') ? ev.time : '00:00';
-        const evMs = new Date(`${ev.date}T${timeStr}:00+05:30`).getTime();
-        const diff = evMs - nowMs;
-        if (diff > 0 && diff < minDiffMs) { minDiffMs = diff; nearest = ev; }
-    }
-
-    if (!nearest) return { available: false, label: 'No high-impact event in next 7 days' };
-
-    const hoursRemaining = minDiffMs / 3600000;
-    const h = Math.floor(hoursRemaining);
-    const m = Math.floor((hoursRemaining - h) * 60);
-    const withinCautionWindow = hoursRemaining <= 3;   // caution window before major event
-
-    return {
-        available: true, title: nearest.title, date: nearest.date, time: nearest.time,
-        hoursRemaining: parseFloat(hoursRemaining.toFixed(2)), withinCautionWindow,
-        label: withinCautionWindow
-            ? `⏳ ${nearest.title} in ${h}h ${m}m — reduce size / avoid fresh entries`
-            : `⏳ ${nearest.title} in ${h}h ${m}m`,
-        generatedAt: new Date().toISOString(),
-    };
-}
+// computeEventCountdown() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
 // ── Probability Engine (Bullish / Bearish / Sideways %) ──────────────────────
 // ChatGPT audit ("Probability Engine — Game Changer"): "Instead of just
@@ -1572,44 +1112,8 @@ function computeEventCountdown() {
 // trained statistical model — built from the same signal/confidence/Trend
 // Conviction numbers already on screen, re-expressed as a 3-way view. Labelled
 // honestly as such below so it isn't mistaken for independent forecasting.
-function computeProbabilityEngine() {
-    const sig  = marketState.signal;
-    const conf = marketState.confidence || 50;
-    const tc   = marketState.trendConviction;
-    let bullish, bearish, sideways;
-
-    if (sig === 'BUY CALL') {
-        bullish  = conf;
-        bearish  = Math.round((100 - conf) * 0.4);
-        sideways = 100 - bullish - bearish;
-    } else if (sig === 'BUY PUT') {
-        bearish  = conf;
-        bullish  = Math.round((100 - conf) * 0.4);
-        sideways = 100 - bullish - bearish;
-    } else {
-        const bc = tc?.bullCount ?? 0, brc = tc?.bearCount ?? 0;
-        const denom = bc + brc + 2;   // +2 damping so a 0/0 read doesn't divide by zero or look falsely extreme
-        bullish  = Math.round((bc  / denom) * 100);
-        bearish  = Math.round((brc / denom) * 100);
-        sideways = 100 - bullish - bearish;
-    }
-
-    // Clamp then re-normalize so the three always sum to exactly 100
-    bullish  = Math.max(2, Math.min(96, bullish));
-    bearish  = Math.max(2, Math.min(96, bearish));
-    sideways = Math.max(2, 100 - bullish - bearish);
-    const sum = bullish + bearish + sideways;
-    bullish  = Math.round((bullish  / sum) * 100);
-    bearish  = Math.round((bearish  / sum) * 100);
-    sideways = 100 - bullish - bearish;
-
-    return {
-        bullish, bearish, sideways,
-        label: `📊 Bullish ${bullish}% · Bearish ${bearish}% · Sideways ${sideways}%`,
-        note: 'Derived from current signal confidence + Trend Conviction condition counts — an illustrative split, not an independent statistical model.',
-        generatedAt: new Date().toISOString(),
-    };
-}
+// computeProbabilityEngine() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
 // ── News Sentiment Engine ─────────────────────────────────────────────────────
 // ChatGPT audit: "Your app should have a News & Macro Intelligence Engine
@@ -2421,7 +1925,7 @@ function combineSignals(indicators) {
     // through. Tracked + shown in INSIGHTS so real hit-rate can be observed
     // before re-enabling as a hard gate (likely with a higher threshold, e.g.
     // ≥40/≥40 instead of ≥30/≥30, once there's a few days of data).
-    const contradictionScore = computeContradictionScore();
+    const contradictionScore = computeContradictionScore(marketState);
     marketState.contradictionScore = contradictionScore;
     qualityGate.contradictionOk = !(rawSignal !== 'WAIT' && contradictionScore.result === 'NO_TRADE');   // tracked, not enforced below
 
@@ -2437,7 +1941,7 @@ function combineSignals(indicators) {
     // lag even on genuinely good trend days. Logged + shown in the INSIGHTS
     // tab so its real-world hit rate can be observed before ever making it a
     // hard gate again.
-    const agreementSequence = checkAgreementSequence(rawSignal);
+    const agreementSequence = checkAgreementSequence(rawSignal, marketState);
     marketState.agreementSequence = agreementSequence;
     qualityGate.sequenceAligned = agreementSequence.passed;   // tracked, not enforced below
 
@@ -2448,7 +1952,7 @@ function combineSignals(indicators) {
     // Block ONLY when conviction is strong (4+ of 6 independent conditions)
     // AND MTF itself hasn't genuinely confirmed the counter-direction — i.e.
     // this isn't a real reversal, just one factor outvoting a stacked trend.
-    const trendConviction = computeTrendConviction();
+    const trendConviction = computeTrendConviction(marketState);
     marketState.trendConviction = trendConviction;
     const convictionOpposesSignal =
         (trendConviction.active === 'BEARISH' && rawSignal === 'BUY CALL') ||
@@ -2553,7 +2057,7 @@ function combineSignals(indicators) {
         // see note above computeDayType() call for why the full regime object
         // can't be moved this early). dayType's own inputs (adx/orb/momentum/
         // mtf) are already fresh at this point in combineSignals().
-        const gateDayType = computeDayType();
+        const gateDayType = computeDayType(marketState);
         qualityGate.regimeClear = !(gateDayType.rangeProbability >= 60);
 
         const bosEvent = marketState.physicsOfTrading?.bosChoch?.event;
@@ -2793,7 +2297,7 @@ function combineSignals(indicators) {
     // reduce automatically — this prevents false confidence." Soft, capped
     // penalty (max -25%) — informational label always shown regardless.
     if (signal !== 'WAIT') {
-        const dh = computeDataHealth();
+        const dh = computeDataHealth(marketState);
         if (!dh.healthy && dh.penalty > 0) {
             confidence = Math.max(confidence - dh.penalty, 5);
             reasons.push(`⚠️ Confidence -${dh.penalty}% — ${dh.issues.join(', ')}`);
@@ -4105,7 +3609,7 @@ async function checkTelegramAlerts(newSignal) {
         let strikeDataForAlert = null;
         try {
             const pcrState = getPCRState();
-            strikeDataForAlert = pickStrikeAndPremium(newSignal, marketState.nifty, marketState.vix, pcrState);
+            strikeDataForAlert = pickStrikeAndPremium(newSignal, marketState.nifty, marketState.vix, pcrState, marketState);
             if (strikeDataForAlert) strikeDataForAlert.coach = buildTradeCoach(strikeDataForAlert);
         } catch(e) { console.warn('[Strike] compute error:', e.message); }
 
@@ -4240,7 +3744,7 @@ async function checkTelegramAlerts(newSignal) {
         let mtfStrikeData = null;
         try {
             const pcrStateMtf = getPCRState();
-            mtfStrikeData = pickStrikeAndPremium(marketState.mtf.signal, marketState.nifty, marketState.vix, pcrStateMtf);
+            mtfStrikeData = pickStrikeAndPremium(marketState.mtf.signal, marketState.nifty, marketState.vix, pcrStateMtf, marketState);
             if (mtfStrikeData) mtfStrikeData.coach = buildTradeCoach(mtfStrikeData);
         } catch(e) { console.warn('[MTF Strike] compute error:', e.message); }
 
@@ -4819,7 +4323,7 @@ async function updatePrice(price, change, changePct, source) {
     marketState.connected=true; marketState.source=source; marketState.dataPoints=indicators.priceCount;
     marketState.candleSource=getCandleSource();
     // ── Smart Money Bias ──────────────────────────────────────────────────────
-    marketState.smartMoney = computeSmartMoneyBias();
+    marketState.smartMoney = computeSmartMoneyBias(marketState);
     // (POC and Delta now computed earlier, before combineSignals() — see fixes above.)
     // ── Trend Day vs Range Day + Trap Zone — informational strategy guidance ──
     // NOTE: regimeClear (the hard-gate check) no longer reads this — it uses
@@ -4828,12 +4332,12 @@ async function updatePrice(price, change, changePct, source) {
     // Telegram display actually show, computed here (after tradeQuality) since
     // the full marketRegime object also needs vixCapped, which only exists
     // once tradeQuality (derived from `signal`) is known.
-    try { marketState.dayType  = computeDayType();  } catch(e) { console.warn('[DayType] error:', e.message); }
-    try { marketState.trapZone = computeTrapZone(); } catch(e) { console.warn('[TrapZone] error:', e.message); }
-    try { marketState.dataHealth = computeDataHealth(); } catch(e) { console.warn('[DataHealth] error:', e.message); }
-    try { marketState.probabilityEngine = computeProbabilityEngine(); } catch(e) { console.warn('[ProbabilityEngine] error:', e.message); }
-    try { marketState.marketRegime = computeMarketRegime(); } catch(e) { console.warn('[MarketRegime] error:', e.message); }
-    try { marketState.confidenceBreakdown = computeConfidenceBreakdown(); } catch(e) { console.warn('[ConfBreakdown] error:', e.message); }
+    try { marketState.dayType  = computeDayType(marketState);  } catch(e) { console.warn('[DayType] error:', e.message); }
+    try { marketState.trapZone = computeTrapZone(marketState); } catch(e) { console.warn('[TrapZone] error:', e.message); }
+    try { marketState.dataHealth = computeDataHealth(marketState); } catch(e) { console.warn('[DataHealth] error:', e.message); }
+    try { marketState.probabilityEngine = computeProbabilityEngine(marketState); } catch(e) { console.warn('[ProbabilityEngine] error:', e.message); }
+    try { marketState.marketRegime = computeMarketRegime(marketState); } catch(e) { console.warn('[MarketRegime] error:', e.message); }
+    try { marketState.confidenceBreakdown = computeConfidenceBreakdown(marketState); } catch(e) { console.warn('[ConfBreakdown] error:', e.message); }
     if (source==='yahoo') console.log(`NIFTY:${price} RSI:${indicators.rsi||'--'} → ${signal}(${confidence}%) | POC:${marketState.poc?.poc??'--'} Delta:${marketState.delta?.deltaPct??'--'}%`);
     // BTST/STBT evaluation DISABLED (1 Aug 2026, explicit user decision) — user
     // confirmed they never act on these alerts, and unlike Main Engine/MTF Tracker
@@ -5183,11 +4687,11 @@ async function refreshMTF() {
 
         // ── Dynamic Levels (Punch-style H1-H3/L1-L3, informational + light
         // confidence nudge only — see combineSignals() and dynamicLevels.js) ──
-        marketState.dynamicLevels = computeDynamicLevelsState();
+        marketState.dynamicLevels = computeDynamicLevelsState(marketState);
 
         // ── Economic Event Countdown — see combineSignals() for the caution-
         // window confidence cap this feeds ──────────────────────────────────
-        try { marketState.eventCountdown = computeEventCountdown(); } catch(e) { console.warn('[EventCountdown] error:', e.message); }
+        try { marketState.eventCountdown = computeEventCountdown(marketState); } catch(e) { console.warn('[EventCountdown] error:', e.message); }
 
         // ── Pre-market gate ────────────────────────────
         // Before 09:15 IST the candle history is overnight/multi-day data.
@@ -5492,7 +4996,7 @@ async function refreshPCR() {
             marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
         }
         // BUG3 FIX: Refresh Smart Money Bias whenever OI/FII data updates (not only on price ticks)
-        marketState.smartMoney = computeSmartMoneyBias();
+        marketState.smartMoney = computeSmartMoneyBias(marketState);
 
     } catch(e) {
         console.error('refreshPCR:', e.message);
@@ -5633,7 +5137,7 @@ function syncFIIToMarketState() {
             marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
         }
         if (fiiState.fiiNet !== null || fiiState.diiNet !== null) {
-            marketState.smartMoney = computeSmartMoneyBias();
+            marketState.smartMoney = computeSmartMoneyBias(marketState);
         }
     } catch(e) { console.error('syncFIIToMarketState:', e.message); }
 }
@@ -6982,7 +6486,7 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
         entryVixForTheta: marketState.vix ?? null,
         entryDTE: (typeof daysToNextExpiry === 'function' ? daysToNextExpiry() : null),
         // ── Setup DNA + entry VIX (8 Aug) — see buildSetupDNA() header ──────
-        setupDNA: buildSetupDNA(signal),
+        setupDNA: buildSetupDNA(signal, marketState),
         entryVix: marketState.vix ?? null,
     };
     openPerfRecords.push(rec);
@@ -7610,42 +7114,8 @@ async function getWinRateFromHistory(signalType) {
 // query can answer "does Liquidity Sweep + Delta Confirm actually outperform
 // plain ORB Breakout?" instead of only a flat win-rate. Purely descriptive —
 // never read by combineSignals() or any gate.
-function buildSetupDNA(signal) {
-    if (signal !== 'BUY CALL' && signal !== 'BUY PUT') return null;
-    const isBull = signal === 'BUY CALL';
-    const tags = [];
-
-    const sweep = marketState.sweepReversal;
-    if (sweep?.detected && ((isBull && sweep.direction === 'BULLISH') || (!isBull && sweep.direction === 'BEARISH'))) {
-        tags.push('Liquidity Sweep');
-    }
-    const bc = marketState.physicsOfTrading?.bosChoch?.event;
-    if (bc === 'BOS_BULLISH'   && isBull)  tags.push('BOS Bullish');
-    if (bc === 'BOS_BEARISH'   && !isBull) tags.push('BOS Bearish');
-    if (bc === 'CHOCH_BULLISH' && isBull)  tags.push('CHOCH Bullish');
-    if (bc === 'CHOCH_BEARISH' && !isBull) tags.push('CHOCH Bearish');
-
-    const orbStatus = marketState.orb?.status;
-    if (orbStatus === 'BROKEN_UP'   && isBull)  tags.push('ORB Breakout');
-    if (orbStatus === 'BROKEN_DOWN' && !isBull) tags.push('ORB Breakdown');
-
-    const deltaPct = marketState.delta?.deltaPct;
-    if (deltaPct != null && ((isBull && deltaPct >= 40) || (!isBull && deltaPct <= -40))) tags.push('Delta Confirm');
-
-    if (marketState.mtf?.aligned) tags.push('3/3 MTF');
-
-    const tc = marketState.trendConviction;
-    if (tc?.active === (isBull ? 'BULLISH' : 'BEARISH')) tags.push('Trend Conviction');
-
-    const dl = marketState.dynamicLevels;
-    if (dl?.available) {
-        if (isBull  && dl.aboveH3) tags.push('Above Dyn H3');
-        if (!isBull && dl.belowL3) tags.push('Below Dyn L3');
-    }
-
-    if (tags.length === 0) return 'Baseline Vote-Tally';   // fired on the general vote tally, no single named factor stood out
-    return tags.slice(0, 4).join(' + ');
-}
+// buildSetupDNA() — moved to src/utils/signalReaders.js (13 Sep refactor,
+// Phase 3), imported above.
 
 // ── Murarka Rule strike (12 Sep) — A/B comparison only, NEVER used for real
 // trades. From a video the user shared (CA Nitin Murarka), with exact
@@ -7662,204 +7132,8 @@ function buildSetupDNA(signal) {
 // computeMurarkaRuleStrike() — moved to src/utils/pureCalc.js (13 Sep
 // refactor, Phase 2), imported above.
 
-function pickStrikeAndPremium(signal, nifty, vix, pcrState) {
-    if (!nifty || nifty <= 0) return null;
-    // FIX: If VIX not yet fetched, use safe default (15 = moderate volatility)
-    // so Black-Scholes fallback always runs instead of returning null
-    const effectiveVix = vix || 15;
-
-    const isBull = signal === 'BUY CALL';
-    const type   = isBull ? 'CE' : 'PE';
-    const atm    = Math.round(nifty / 50) * 50;
-
-    // Strike selection logic:
-    // VIX < 13: market calm → OTM by 50pt (cheaper premium, more leverage)
-    // VIX 13-18: normal → ATM (best liquidity)
-    // VIX > 18: volatile → ATM (don't go OTM, decay risk too high)
-    let strike = atm;
-    if (effectiveVix < 13) {
-        strike = isBull ? atm + 50 : atm - 50;
-    }
-
-    // Try to get live LTP from pcrState option chain data
-    // FIX: previously, OTM strikes (VIX<13 → ATM±50) ALWAYS used a Black-Scholes
-    // estimate, even though the full option chain (pcrState.records) already has
-    // every strike's REAL live LTP — records was fetched but never consulted for
-    // non-ATM strikes. BS-vs-market divergence was 15-25%+ on observed signals
-    // (BS said ₹131 for a strike that never traded above ~₹115 that day).
-    // Now: look up the real LTP for the chosen strike first, BS is the fallback
-    // only if that strike isn't present in the fetched chain (rare — chain covers
-    // ATM±20 strikes, our OTM pick is only ±50 = 1 strike away).
-    //
-    // FIX (2026-09-02): dropped the 'strike === atm → use pcrState.atmCEpremium
-    // directly' shortcut this used to take. Same bug class found live in
-    // updateOpenTradesMTM()/updateSignalPerformance(): 'atm' here is computed
-    // fresh from the live 'nifty' price, but pcrState.atmCEpremium/atmPEpremium
-    // belong to whatever strike WAS ATM as of the chain's own last fetch. If
-    // price crossed a strike boundary since then, the shortcut could hand a
-    // brand-new signal the WRONG strike's premium as its Entry — wrong from
-    // the moment it's created, with SL/Target math built on top of it. The
-    // per-strike chain lookup below has no such window (each record is
-    // tagged with its own strike), so it's now used for every strike, ATM
-    // included, with BS as the fallback only when the chain lookup itself misses.
-    const dte = daysToNextExpiry();   // real days to next Tuesday expiry
-
-    // ── Days-to-expiry position-size suggestion (1 Aug audit) ───────────────
-    // Gamma/theta both accelerate sharply in the last 1-2 days before expiry —
-    // same directional move can produce a much bigger premium swing (both ways)
-    // on 0-1 DTE than on 4-5 DTE. This doesn't change Entry/SL/Target math,
-    // just surfaces a sizing heads-up, same "informational, not a hard rule"
-    // treatment as the AI Trade Coach block.
-    let positionSizeNote = null;
-    if (dte <= 1)      positionSizeNote = '0-1 DTE — gamma/theta both high, consider smaller size than usual';
-    else if (dte <= 2) positionSizeNote = '2 DTE — decay accelerating, size normal-to-slightly-reduced';
-    // 3+ DTE: no note — standard risk, nothing extra to flag
-    let entryPremium = null;
-    let premiumSource = 'bs';   // 'live' | 'bs' — surfaced to the trader below
-    let premiumAgeSec = null;
-
-    if (pcrState?.records?.length) {
-        const rec = pcrState.records.find(r => r.strikePrice === strike);
-        const liveLtp = type === 'CE' ? rec?.CE?.lastPrice : rec?.PE?.lastPrice;
-        if (liveLtp > 0) { entryPremium = liveLtp; premiumSource = 'live'; }
-    }
-    // FIX: premium comes from getPCRState(), which refreshes on a 3-minute
-    // cycle (see refreshPCR interval) — not re-fetched live at signal time.
-    // During a fast reversal (exactly when a SIGNAL CHANGED alert is likely
-    // to fire), the real market premium can already have moved well past
-    // this cached value by the time the trader reads the alert. Rather than
-    // hitting the option-chain API on every signal (rate-limit risk, adds
-    // latency), surface the cache's age so the trader can judge for
-    // themselves — the AI Trade Coach's "Do NOT chase above ₹X" ceiling is
-    // the actual safety net for this; the age just makes the risk visible.
-    if (premiumSource === 'live' && pcrState?.fetchedAt) {
-        premiumAgeSec = Math.round((Date.now() - new Date(pcrState.fetchedAt).getTime()) / 1000);
-    }
-
-    // If no live premium available, use Black-Scholes with real DTE (not hardcoded 3 days)
-    if (!entryPremium) {  // always try BS — effectiveVix guaranteed
-        const sigma = effectiveVix / 100;
-        const T = dte / 365;  // FIX: real days to expiry, not hardcoded 3
-        entryPremium = parseFloat(bsEstimate(nifty, strike, T, sigma, type).toFixed(2));
-    }
-
-    if (!entryPremium || entryPremium <= 0) return null;
-
-    // ── Liquidity/OI filter ────────────────────────────────────────────────
-    // Strike selection above is purely premium/greeks driven — it never checks
-    // whether the picked strike actually has enough open interest and today's
-    // trading volume to be easily fillable. A signal on a thin strike can look
-    // identical to one on a liquid strike right up until the trader tries to
-    // place the order and gets a bad fill or a wide spread. This doesn't block
-    // the signal (that's the agent's earlier "soft nudge, not hard gate" rule
-    // for new unproven checks) — it surfaces a visible warning so the trader
-    // can judge for themselves, same pattern as the premium-staleness warning.
-    let strikeOI = 0, strikeVolume = 0, lowLiquidity = false;
-    if (pcrState?.records?.length) {
-        const rec = pcrState.records.find(r => r.strikePrice === strike);
-        const side = rec ? (type === 'CE' ? rec.CE : rec.PE) : null;
-        if (side) {
-            strikeOI     = side.openInterest || 0;
-            strikeVolume = side.volume || 0;
-            // Only flag when we actually have OI data to judge — a record with
-            // OI=0 AND volume=0 usually means the field wasn't populated by
-            // this data source (not that the strike is untraded), so we don't
-            // false-flag every alert when running on a source that lacks volume.
-            if (strikeOI > 0 && (strikeOI < MIN_STRIKE_OI || strikeVolume < MIN_STRIKE_VOLUME)) {
-                lowLiquidity = true;
-            }
-        }
-    }
-
-    const sigma = effectiveVix / 100;
-    const T     = dte / 365;
-
-    // ── VIX-dynamic SL (Murarka strategy) — baseline / fallback ──────────────
-    // Flat 25% SL is too tight on high-VIX days (frequent noise stops) and
-    // too loose on calm days (poor R:R). Scale SL width with realised volatility:
-    //   VIX < 12  → 20% SL (tight, calm market, premiums cheap)
-    //   VIX 12-16 → 25% SL (baseline)
-    //   VIX 16-20 → 30% SL (wider, more premium noise)
-    //   VIX > 20  → 35% SL (very wide, but signal is blocked by gate anyway)
-    // ── R:R now ALSO scales with VIX (7 Aug, per Prabhash request) ───────────
-    // For an option BUYER specifically: low-VIX days tend to grind/trend more
-    // persistently (less violent mean-reversion) and premium is cheap, so a
-    // wider target captures more of a sustained move for little extra risk.
-    // High-VIX days carry much higher IV-crush and violent-reversal risk —
-    // theta/vega can erase gains fast if the trade isn't booked promptly, so
-    // the target tightens instead of widening. Same VIX brackets as the SL
-    // scale above, for consistency.
-    let slPct = 0.25, rrMultiplier = 2.0;  // defaults
-    {
-        if      (effectiveVix < 12) { slPct = 0.20; rrMultiplier = 2.5; }   // calm, trending — let it run
-        else if (effectiveVix < 16) { slPct = 0.25; rrMultiplier = 2.0; }   // baseline (unchanged)
-        else if (effectiveVix < 20) { slPct = 0.30; rrMultiplier = 1.75; }  // elevated noise — book a bit sooner
-        else                        { slPct = 0.35; rrMultiplier = 1.5; }  // high vol — quick book (also gated out mostly)
-    }
-    let slWidth  = parseFloat((entryPremium * slPct).toFixed(2));
-    let sl       = parseFloat((entryPremium - slWidth).toFixed(2));
-    let target   = parseFloat((entryPremium + slWidth * rrMultiplier).toFixed(2));
-    let slSource = 'vix-pct';
-
-    // ── Structural SL from Physics Law-3 Fibonacci swing (preferred) ─────────
-    // The flat VIX-% SL above has zero connection to actual chart structure —
-    // it doesn't know where the last swing high/low or the 61.8% reaction zone
-    // sits. marketState.fiboCard (same swing data the Physics tab shows) gives
-    // real support/resistance on the SPOT. We translate that spot level into
-    // premium terms using a Black-Scholes RATIO (not absolute BS price —
-    // entryPremium above is still the real market LTP; only the *shape* of the
-    // move SL-spot→entry-spot is taken from BS, anchored to the live premium).
-    // Target is intentionally kept at the disciplined 1:2 R:R off this
-    // structural risk — NOT the swing-high itself (tested: using the raw swing
-    // high as target routinely implied 4–6x R:R, i.e. the premium nearly
-    // doubling — optimistic and ignores theta decay before that level is hit).
-    // Falls back to the VIX-% system above on ANY doubt: missing/misaligned
-    // swing, level on the wrong side of price, or resulting risk outside a
-    // sane 5–45% band.
-    try {
-        const fibo = marketState?.fiboCard;
-        if (fibo && fibo.levels && fibo.swingHigh > fibo.swingLow) {
-            let slSpot = null;
-            if (isBull && fibo.direction === 'UP' && fibo.levels.l618 < nifty) {
-                slSpot = fibo.levels.l618;   // 61.8% retrace below = structural invalidation
-            } else if (!isBull && fibo.direction === 'DOWN' && fibo.levels.l618 > nifty) {
-                slSpot = fibo.levels.l618;   // 61.8% retrace above = structural invalidation
-            }
-
-            if (slSpot !== null) {
-                const bsNow  = bsEstimate(nifty,  strike, T, sigma, type);
-                const bsAtSL = bsEstimate(slSpot, strike, T, sigma, type);
-
-                if (bsNow > 0 && bsAtSL >= 0) {
-                    const structSL = parseFloat((entryPremium * (bsAtSL / bsNow)).toFixed(2));
-                    const risk     = entryPremium - structSL;
-                    const riskPct  = risk / entryPremium;
-
-                    if (risk > 0 && riskPct >= 0.05 && riskPct <= 0.45) {
-                        sl       = structSL;
-                        slWidth  = parseFloat(risk.toFixed(2));
-                        target   = parseFloat((entryPremium + slWidth * rrMultiplier).toFixed(2));  // keep VIX-scaled R:R
-                        slSource = `fibo-swing (61.8% retrace @ ${slSpot.toFixed(0)} spot)`;
-                    }
-                }
-            }
-        }
-    } catch (e) {
-        console.warn('[Strike] Fibo-structural SL failed, using VIX-% fallback:', e.message);
-    }
-
-    // ── Break-Even Point (BEP) ────────────────────────────────────────────────
-    // Per CA Sumeet Mongia video review: buyer's BEP is the spot level Nifty
-    // must reach by expiry for this option to be worth exactly what was paid —
-    // CE: strike + premium, PE: strike - premium. Shown alongside entry/SL/
-    // target so a buyer sees the actual spot move required, not just the
-    // premium P&L, which is easy to lose sight of.
-    const bep = type === 'CE'
-        ? parseFloat((strike + entryPremium).toFixed(2))
-        : parseFloat((strike - entryPremium).toFixed(2));
-
-    return { type, strike, entry: entryPremium, sl, target, slSource, rrMultiplier, bep, premiumAgeSec, strikeOI, strikeVolume, lowLiquidity, positionSizeNote };
-}
+// pickStrikeAndPremium() — moved to src/utils/signalReaders.js (13 Sep
+// refactor, Phase 3), imported above.
 
 // ── AI Trade Coach ───────────────────────────────────────────────────────────
 // Per feedback: "Create an AI Trade Coach instead of just an AI signal."
@@ -8232,7 +7506,7 @@ app.get('/api/trade-suggestion', async (req, res) => {
     try {
         const pcrState   = getPCRState();
         const strikeData = marketState.qualityGate.passed && marketState.signal !== 'WAIT'
-            ? pickStrikeAndPremium(marketState.signal, marketState.nifty, marketState.vix, pcrState)
+            ? pickStrikeAndPremium(marketState.signal, marketState.nifty, marketState.vix, pcrState, marketState)
             : null;
         if (strikeData) strikeData.coach = buildTradeCoach(strikeData);
         const winRate = strikeData ? await getWinRateFromHistory(strikeData.type) : null;
@@ -8799,7 +8073,7 @@ app.post('/api/fiidii', requireToken, (req,res) => {
     const {fiiBuy,fiiSell,diiBuy,diiSell}=req.body;
     if(fiiBuy!=null&&fiiSell!=null) marketState.fii={buy:parseFloat(fiiBuy),sell:parseFloat(fiiSell),net:parseFloat((fiiBuy-fiiSell).toFixed(2)),updatedAt:new Date().toISOString()};
     if(diiBuy!=null&&diiSell!=null) marketState.dii={buy:parseFloat(diiBuy),sell:parseFloat(diiSell),net:parseFloat((diiBuy-diiSell).toFixed(2)),updatedAt:new Date().toISOString()};
-    marketState.smartMoney = computeSmartMoneyBias();
+    marketState.smartMoney = computeSmartMoneyBias(marketState);
     // Broadcast instantly to all SSE clients so FII/DII appears without waiting for next poll
     sseBroadcast('signal', buildSignalPayload());
     console.log(`💰 [FII/DII] Manual push — FII Net: ${marketState.fii?.net} | DII Net: ${marketState.dii?.net}`);
