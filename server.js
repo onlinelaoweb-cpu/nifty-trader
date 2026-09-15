@@ -22,6 +22,7 @@ const { pcrLabel, pcrScore, calculateADX, _linRegSlope, _pcrTimeToMinutes,
         buildTradeCoach, buildScalpPlan, buildEngineChecklist, withTimeout,
         detectCandlePatternForTF, detectLiquiditySweepReversal, computeMurarkaZone,
         computeCrudeMTF, computeCrudeSignal } = require('./src/utils/pureCalc');
+const { updateORB, getORBStatus, trackORBBreakoutFreshness, getORBBreakoutAgeMin } = require('./src/utils/orbTracking');
 const { computeSmartMoneyBias, computeDayType, computeConfidenceBreakdown,
         computeTrapZone, computeDynamicLevelsState, computeContradictionScore,
         checkAgreementSequence, computeTrendConviction, computeMarketRegime,
@@ -425,7 +426,12 @@ const TREND_LOCK_MS   = 10 * 60 * 1000; // 10 min — long enough to filter nois
 // First 15 minutes (9:15–9:30 IST) often sets the tone for the rest of the
 // session. Once that range is locked in, price breaking above/below it is a
 // meaningful intraday filter (per external feedback review).
-let orbHigh = null, orbLow = null, orbDate = null;
+// orbState bundles what were 5 separate `let` variables into one object —
+// needed so updateORB()/getORBStatus()/trackORBBreakoutFreshness()/
+// getORBBreakoutAgeMin() could move to src/utils/orbTracking.js (14 Sep
+// refactor) and still mutate the same shared state by reference, exactly
+// as the loose variables did before. Same 5 fields, same semantics.
+let orbState = { high: null, low: null, date: null, breakUpTime: null, breakDownTime: null };
 // 5 Sep — Breakout regime freshness tracking (audit: weekly Breakout regime
 // showed -0.129R avg over 42 signals). Hypothesis: getORBStatus() is a pure
 // live price-vs-fixed-range check with no time dimension — it tags a fresh
@@ -435,28 +441,8 @@ let orbHigh = null, orbLow = null, orbDate = null;
 // breakout's age at fire time — then decide with data whether stale breakouts
 // are the ones dragging the regime negative, instead of blocking the whole
 // category and possibly discarding genuinely-fresh, well-performing ones.
-let orbBreakUpTime = null, orbBreakDownTime = null;
-function trackORBBreakoutFreshness(status) {
-    // Sets the timestamp on the FIRST tick of a new break, and clears it the
-    // moment price comes back inside the range (or flips to the other side)
-    // — so if it re-breaks later the same day, that's treated as a fresh
-    // breakout with its own age, not still "aged" from the earlier one.
-    // Reset also happens wholesale on day rollover, inside updateORB().
-    if (status === 'BROKEN_UP') {
-        if (orbBreakUpTime === null) orbBreakUpTime = Date.now();
-    } else {
-        orbBreakUpTime = null;
-    }
-    if (status === 'BROKEN_DOWN') {
-        if (orbBreakDownTime === null) orbBreakDownTime = Date.now();
-    } else {
-        orbBreakDownTime = null;
-    }
-}
-function getORBBreakoutAgeMin(status) {
-    const ts = status === 'BROKEN_UP' ? orbBreakUpTime : status === 'BROKEN_DOWN' ? orbBreakDownTime : null;
-    return ts ? Math.round((Date.now() - ts) / 60000) : null;
-}
+// trackORBBreakoutFreshness() and getORBBreakoutAgeMin() — moved to
+// src/utils/orbTracking.js (14 Sep refactor), imported below.
 
 // ── Day-open option premium tracking (for Option Premium Filter) ──────────
 // Freshly-computed once per day from the first valid ATM CE/PE premium seen.
@@ -948,27 +934,8 @@ function detectCandlePattern() {
 // rest of the day. Once locked, price breaking cleanly above/below it is a
 // useful directional filter — reduces false entries while price is still
 // inside the morning's initial balance.
-function updateORB() {
-    const todayStr = getIST().toISOString().slice(0, 10);
-    if (orbDate !== todayStr) { orbHigh = null; orbLow = null; orbDate = todayStr; orbBreakUpTime = null; orbBreakDownTime = null; }
-    if (orbHigh !== null) return; // already locked for today
-
-    const candles = getSessionCandles(); // 9:15 IST onward, 1 candle per minute
-    if (candles.length >= 15) {
-        const first15 = candles.slice(0, 15);
-        orbHigh = Math.max(...first15.map(c => c.high));
-        orbLow  = Math.min(...first15.map(c => c.low));
-    }
-}
-
-function getORBStatus(price) {
-    if (orbHigh === null || orbLow === null) {
-        return { status: 'FORMING', label: '⏳ Opening range forming (need 15 min)', high: null, low: null };
-    }
-    if (price > orbHigh) return { status: 'BROKEN_UP',   label: `🔼 ORB Broken Up (&gt;${orbHigh.toFixed(0)})`,   high: orbHigh, low: orbLow };
-    if (price < orbLow)  return { status: 'BROKEN_DOWN', label: `🔽 ORB Broken Down (&lt;${orbLow.toFixed(0)})`, high: orbHigh, low: orbLow };
-    return { status: 'INSIDE', label: `↔️ Inside Opening Range (${orbLow.toFixed(0)}–${orbHigh.toFixed(0)})`, high: orbHigh, low: orbLow };
-}
+// updateORB() and getORBStatus() — moved to src/utils/orbTracking.js (14 Sep
+// refactor), imported below.
 
 // ── Trend Day vs Range Day Detector ─────────────────────────────────────────
 // Per external feedback: "This is one of the biggest improvements you can
@@ -1556,10 +1523,10 @@ function combineSignals(indicators) {
     // signal — a breakout WITH other votes agreeing is meaningful, a lone ORB
     // break with everything else neutral shouldn't force a trade by itself.
     try {
-        updateORB();
-        const orb = getORBStatus(marketState.nifty);
-        trackORBBreakoutFreshness(orb.status);
-        orb.ageMin = getORBBreakoutAgeMin(orb.status);   // 5 Sep: freshness tracking, see def above
+        updateORB(orbState);
+        const orb = getORBStatus(marketState.nifty, orbState);
+        trackORBBreakoutFreshness(orb.status, orbState);
+        orb.ageMin = getORBBreakoutAgeMin(orb.status, orbState);   // 5 Sep: freshness tracking, see def above
         marketState.orb = orb;
         if (orb.status === 'BROKEN_UP')        { bull += 1; reasons.push(`${orb.label} ✅`); }
         else if (orb.status === 'BROKEN_DOWN') { bear += 1; reasons.push(`${orb.label} ⚠️`); }
@@ -7877,13 +7844,21 @@ app.get('/api/crude-token', async (req,res) => {
 // nothing about Phase 4 is cached or stored beyond candles1m itself.
 app.get('/api/crude-live', (req, res) => {
     const { candles1m, ...rest } = marketState.crudeoil;
+    // 14 Sep fix: computeCrudeSignal() internally aggregates to 3m candles
+    // before computing RSI/EMA/ADX (10 Sep change, to reduce noise) — but
+    // this endpoint was separately recomputing "indicators" on raw 1m
+    // candles, so the dashboard's indicator cards (1m basis) never matched
+    // the numbers in the signal's own "reasons" text (3m basis) — same
+    // ADX shown two different ways at once. Reuse the signal's own
+    // `indicators` field (already 3m-basis) instead of recomputing.
+    const signal = computeCrudeSignal(candles1m, marketState.crudeoil.pcr);
     res.json({
         session: getActiveSession(),
         ...rest,
         candles1mCount: candles1m.length,
         candles1mRecent: candles1m.slice(-5),
-        indicators: computeCrudeIndicators(candles1m),
-        signal: computeCrudeSignal(candles1m, marketState.crudeoil.pcr),
+        indicators: signal.indicators,
+        signal,
     });
 });
 
