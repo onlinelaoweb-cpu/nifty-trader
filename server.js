@@ -52,7 +52,10 @@ const { fetchAdvanceDecline,
 const { injectAngelSession: injectAngelSessionVolScan,
         refreshVolumeBaselines, refreshLiveVolumes,
         getVolumeScannerSnapshot, getVolumeScannerStatus,
-        getVolumeScannerBySector } = require('./src/api/volumeScanner');
+        getVolumeScannerBySector,
+        getStockMomentumSnapshot,
+        getStockReversalSnapshot } = require('./src/api/volumeScanner');
+const { computeTrendRiderSetup } = require('./src/utils/trendRider');
 const { calculateSRLevels }         = require('./src/api/levels');
 const { computeDynamicLevels, classifyDynamicLevels } = require('./src/api/dynamicLevels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo, detectBOSCHOCH } = require('./src/api/physicsOfTrading');
@@ -66,6 +69,7 @@ const {
     dailyTopUp        : histDailyTopUp,
     runBacktest,
     getHistoricalCandles,
+    get52WeekHighLow,
 }                                   = require('./src/api/historicalData');
 const {
     startNSEScheduler,
@@ -3294,6 +3298,237 @@ This reacts fast on purpose and WILL be wrong sometimes. Use your own judgment, 
     }
 }
 
+// ── Stock Momentum Trigger (15 Sep) ───────────────────────────────────────
+// Per-stock counterpart to checkFastMomentumTrigger() above — same exploratory,
+// raw-velocity philosophy, applied across the F&O universe already tracked by
+// volumeScanner.js instead of just NIFTY. Genuinely separate from every other
+// signal — doesn't touch marketState, doesn't require MTF or the main engine.
+// Reads getStockMomentumSnapshot() (volumeScanner.js), which already applies
+// the per-stock threshold — this function's only job is cooldown/dedup +
+// alerting, mirroring checkFastMomentumTrigger()'s own split of "does it
+// qualify" (upstream) vs "should we fire again yet" (here).
+const STOCK_MOMENTUM_COOLDOWN_MS = 20 * 60 * 1000; // same as NIFTY's Fast Momentum
+const _stockMomentumLastAlert = new Map(); // name -> { at, direction }
+
+async function checkStockMomentumTrigger() {
+    if (!isConfigured() || !isMarketOpen()) return;
+    try {
+        const movers = getStockMomentumSnapshot();
+        for (const m of movers) {
+            const last = _stockMomentumLastAlert.get(m.name);
+            const sinceLastMs = last ? Date.now() - last.at : Infinity;
+            // Same dedup rule as NIFTY's: skip a repeat of the SAME direction
+            // within cooldown; a direction flip is a new event, fires immediately.
+            if (last && last.direction === m.direction && sinceLastMs < STOCK_MOMENTUM_COOLDOWN_MS) continue;
+
+            _stockMomentumLastAlert.set(m.name, { at: Date.now(), direction: m.direction });
+
+            const msg = `
+⚡ <b>STOCK MOMENTUM — ${m.direction}</b>
+━━━━━━━━━━━━━━━━━━
+${m.name} moved <b>${m.movePts > 0 ? '+' : ''}${m.movePts}pts (${m.movePct > 0 ? '+' : ''}${m.movePct}%)</b> in last ${m.spanMin}min → ₹${m.ltp}
+Threshold: ${m.thresholdPts}pts (20d-range adjusted)
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>RAW PRICE VELOCITY ONLY — exploratory, single-stock, NOT confirmed by any other engine.</b>
+This reacts fast on purpose and WILL be wrong sometimes. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>VardaanNifty AI — Stock Momentum Trigger (exploratory)</i>
+`.trim();
+            await sendRawMessage(msg);
+            console.log(`⚡ [Stock Momentum] ${m.name} ${m.direction} — ${m.movePts}pts (${m.movePct}%) in ${m.spanMin}min (threshold:${m.thresholdPts})`);
+
+            if (dbPool) {
+                dbPool.query(
+                    `INSERT INTO stock_momentum_log (name, direction, ltp, move_pts, move_pct, window_min, threshold)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+                    [m.name, m.direction, m.ltp, m.movePts, m.movePct, m.spanMin, m.thresholdPts]
+                ).catch(e => console.warn('[Stock Momentum] log error:', e.message));
+            }
+        }
+    } catch (e) {
+        console.warn('[Stock Momentum] error:', e.message);
+    }
+}
+
+// ── 52-Week Reversal Trigger (15 Sep) ─────────────────────────────────────
+// Two halves: per-stock (this function, reads getStockReversalSnapshot()
+// from volumeScanner.js) and index-level (checkNiftyReversalTrigger() below,
+// reads get52WeekHighLow() + getHistoricalCandles() from historicalData.js).
+// Both are genuinely separate from the main engine and from each other's
+// underlying data — same "exploratory, raw pattern, not confirmed" posture
+// as Fast/Stock Momentum above. Slower-moving by nature (a 52-week extreme
+// doesn't reverse in 15 minutes), so cooldown here is measured in DAYS, not
+// minutes — a stock that stays "just bounced off its 52w low" for a week
+// shouldn't re-alert every poll cycle.
+const REVERSAL_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+const _stockReversalLastAlert = new Map(); // name -> { at, direction }
+
+async function checkStockReversalTrigger() {
+    if (!isConfigured() || !isMarketOpen()) return;
+    try {
+        const setups = getStockReversalSnapshot();
+        for (const r of setups) {
+            const last = _stockReversalLastAlert.get(r.name);
+            const sinceLastMs = last ? Date.now() - last.at : Infinity;
+            if (last && last.direction === r.direction && sinceLastMs < REVERSAL_COOLDOWN_MS) continue;
+
+            _stockReversalLastAlert.set(r.name, { at: Date.now(), direction: r.direction });
+
+            const isBull = r.direction === 'BULLISH_REVERSAL';
+            const extremeLabel = r.extreme === '52W_LOW' ? '52-week low' : '52-week high';
+            const msg = `
+🔄 <b>52-WEEK REVERSAL — ${isBull ? 'BULLISH' : 'BEARISH'}</b>
+━━━━━━━━━━━━━━━━━━
+${r.name} was near its ${extremeLabel} (₹${r.extremePrice}, recent: ₹${r.recentExtreme})
+Now ₹${r.ltp} — ${isBull ? '+' : '-'}${r.movePct}% ${isBull ? 'bounce' : 'pullback'}, volume ${r.burstRatio}x baseline pace
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — pattern-based, NOT MTF or Main Engine confirmed.</b>
+52-week extremes are wide, slow levels — this can be early by days. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>VardaanNifty AI — 52-Week Reversal Trigger (exploratory)</i>
+`.trim();
+            await sendRawMessage(msg);
+            console.log(`🔄 [52W Reversal] ${r.name} ${r.direction} — ${r.movePct}% off ${r.extreme}, burst:${r.burstRatio}x`);
+
+            if (dbPool) {
+                dbPool.query(
+                    `INSERT INTO stock_reversal_log (name, direction, extreme, extreme_price, recent_extreme, ltp, move_pct, burst_ratio)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                    [r.name, r.direction, r.extreme, r.extremePrice, r.recentExtreme, r.ltp, r.movePct, r.burstRatio]
+                ).catch(e => console.warn('[52W Reversal] log error:', e.message));
+            }
+        }
+    } catch (e) {
+        console.warn('[52W Reversal] error:', e.message);
+    }
+}
+
+// Index-level counterpart — same NEAR/BOUNCE thresholds as the stock-level
+// version above, applied to NIFTY's own 52-week range. No per-stock volume
+// baseline exists for an index, so momentum/volume confirmation instead uses
+// ADX (marketState.adx — real trend strength, already computed) and Fyers
+// futures volume (marketState.wsVolume — already fetched, sanity-checks the
+// feed is alive) rather than a burst-ratio, which has no index equivalent.
+const REVERSAL_NEAR_PCT_NIFTY   = 0.05; // same 5%/4% thresholds as the stock-level setup
+const REVERSAL_BOUNCE_PCT_NIFTY = 0.04;
+let _niftyReversalLastAlert = null; // { at, direction }
+
+async function checkNiftyReversalTrigger() {
+    if (!isConfigured() || !isMarketOpen()) return;
+    try {
+        const spot = marketState.nifty;
+        if (!spot) return;
+
+        const yearRange = await get52WeekHighLow();
+        if (!yearRange) return;
+        const recent = await getHistoricalCandles(15);
+        if (!recent || recent.length < 5) return;
+
+        const recentLow15d  = Math.min(...recent.map(c => c.low));
+        const recentHigh15d = Math.max(...recent.map(c => c.high));
+
+        const adx = marketState.adx?.adx;
+        const momentumConfirmed = adx != null && adx >= 20 && (marketState.wsVolume ?? 0) > 0;
+        if (!momentumConfirmed) return;
+
+        let result = null;
+
+        const nearLow = (recentLow15d - yearRange.low) / yearRange.low <= REVERSAL_NEAR_PCT_NIFTY;
+        const bouncePct = (spot - recentLow15d) / recentLow15d;
+        if (nearLow && bouncePct >= REVERSAL_BOUNCE_PCT_NIFTY) {
+            result = { direction: 'BULLISH_REVERSAL', extreme: '52W_LOW', extremePrice: yearRange.low, recentExtreme: recentLow15d, movePct: bouncePct * 100 };
+        }
+
+        const nearHigh = (yearRange.high - recentHigh15d) / yearRange.high <= REVERSAL_NEAR_PCT_NIFTY;
+        const pullbackPct = (recentHigh15d - spot) / recentHigh15d;
+        if (!result && nearHigh && pullbackPct >= REVERSAL_BOUNCE_PCT_NIFTY) {
+            result = { direction: 'BEARISH_REVERSAL', extreme: '52W_HIGH', extremePrice: yearRange.high, recentExtreme: recentHigh15d, movePct: pullbackPct * 100 };
+        }
+
+        if (!result) return;
+
+        const last = _niftyReversalLastAlert;
+        const sinceLastMs = last ? Date.now() - last.at : Infinity;
+        if (last && last.direction === result.direction && sinceLastMs < REVERSAL_COOLDOWN_MS) return;
+        _niftyReversalLastAlert = { at: Date.now(), direction: result.direction };
+
+        const isBull = result.direction === 'BULLISH_REVERSAL';
+        const extremeLabel = result.extreme === '52W_LOW' ? '52-week low' : '52-week high';
+        const movePctStr = result.movePct.toFixed(2);
+        const msg = `
+🔄 <b>NIFTY 52-WEEK REVERSAL — ${isBull ? 'BULLISH' : 'BEARISH'}</b>
+━━━━━━━━━━━━━━━━━━
+NIFTY was near its ${extremeLabel} (${result.extremePrice.toFixed(0)}, recent: ${result.recentExtreme.toFixed(0)})
+Now ${spot.toFixed(1)} — ${isBull ? '+' : '-'}${movePctStr}% ${isBull ? 'bounce' : 'pullback'}, ADX ${adx.toFixed(1)}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — pattern-based, NOT MTF or Main Engine confirmed.</b>
+52-week extremes are wide, slow levels — this can be early by days. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>VardaanNifty AI — 52-Week Reversal Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🔄 [NIFTY 52W Reversal] ${result.direction} — ${movePctStr}% off ${result.extreme}, ADX:${adx.toFixed(1)}`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO stock_reversal_log (name, direction, extreme, extreme_price, recent_extreme, ltp, move_pct, burst_ratio)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                ['NIFTY', result.direction, result.extreme, result.extremePrice, result.recentExtreme, spot, result.movePct, null]
+            ).catch(e => console.warn('[NIFTY 52W Reversal] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[NIFTY 52W Reversal] error:', e.message);
+    }
+}
+
+// ── Trend Rider Trigger (15 Sep) ──────────────────────────────────────────
+// See src/utils/trendRider.js for the full design rationale. Cooldown is
+// shorter than 52-Week Reversal (15min vs days) since this is meant to catch
+// re-entries through an ongoing trend day, not a single slow-forming setup —
+// closer in spirit to Fast Momentum's cadence, but gated far more tightly.
+const TREND_RIDER_COOLDOWN_MS = 15 * 60 * 1000;
+let _trendRiderLastAlert = null; // { at, direction }
+
+async function checkTrendRiderTrigger() {
+    if (!isConfigured() || !isMarketOpen()) return;
+    try {
+        const candles = getCandleHistory(true);
+        const setup = computeTrendRiderSetup(candles, marketState.dayType, marketState.mtf, marketState.adx);
+        if (!setup) return;
+
+        const last = _trendRiderLastAlert;
+        const sinceLastMs = last ? Date.now() - last.at : Infinity;
+        if (last && last.direction === setup.direction && sinceLastMs < TREND_RIDER_COOLDOWN_MS) return;
+        _trendRiderLastAlert = { at: Date.now(), direction: setup.direction };
+
+        const isBull = setup.direction === 'BULLISH';
+        const msg = `
+🏄 <b>TREND RIDER — ${setup.direction}</b>
+━━━━━━━━━━━━━━━━━━
+NIFTY ${setup.ltp.toFixed(1)} — sustained ${isBull ? 'overbought' : 'oversold'} RSI ${setup.rsi} (${setup.extremeCount}/6 candles extreme), ADX ${setup.adx}
+Pulled back to EMA9 (${setup.pullbackDistPct}% away, was ${setup.maxExtensionPct}% extended) and resuming ${isBull ? 'up' : 'down'}
+Trend Day: ${setup.trendProbability}% trending
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — different philosophy from the Main Engine's own gates on purpose.</b>
+Treats sustained extreme RSI on a confirmed trend day as continuation, not exhaustion — will be wrong on days that look trending but aren't. NOT Main Engine confirmed. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>VardaanNifty AI — Trend Rider Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🏄 [Trend Rider] ${setup.direction} — RSI:${setup.rsi} ADX:${setup.adx} pullback:${setup.pullbackDistPct}%/${setup.maxExtensionPct}%`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO trend_rider_log (direction, ltp, trend_prob, adx, rsi, extreme_count, pullback_pct, max_ext_pct)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                [setup.direction, setup.ltp, setup.trendProbability, setup.adx, setup.rsi, setup.extremeCount, setup.pullbackDistPct, setup.maxExtensionPct]
+            ).catch(e => console.warn('[Trend Rider] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Trend Rider] error:', e.message);
+    }
+}
+
 // ── S/R Bounce Trigger (11 Sep) ────────────────────────────────────────────
 // Third standalone exploratory trigger (alongside Fast Momentum). Directly
 // addresses data from the 11 Sep weekly review: "Clear of S/R Wall" blocked
@@ -5821,6 +6056,70 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL fast_momentum_log table ready');
 
+        // ── stock_momentum_log table (15 Sep) ────────────────────────────────
+        // Per-stock counterpart to fast_momentum_log — see
+        // checkStockMomentumTrigger() for the detection logic. Same lean
+        // shape (no target/SL/outcome yet), plus a threshold_type column
+        // since the per-stock threshold is a 20-day-range proxy, not a true
+        // ATR like NIFTY's — worth distinguishing in the log until there's
+        // a track record to confirm the proxy holds up.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS stock_momentum_log (
+                id          SERIAL PRIMARY KEY,
+                ts          TIMESTAMPTZ DEFAULT NOW(),
+                name        TEXT,
+                direction   TEXT,
+                ltp         NUMERIC,
+                move_pts    NUMERIC,
+                move_pct    NUMERIC,
+                window_min  INT,
+                threshold   NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL stock_momentum_log table ready');
+
+        // ── stock_reversal_log table (15 Sep) ────────────────────────────────
+        // 52-Week Reversal setup — see checkStockReversalTrigger() (per-stock)
+        // and checkNiftyReversalTrigger() (index-level). Both log here; NIFTY
+        // rows use name='NIFTY' rather than a separate table, since the shape
+        // is identical and the volume this table gets doesn't justify a split.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS stock_reversal_log (
+                id              SERIAL PRIMARY KEY,
+                ts              TIMESTAMPTZ DEFAULT NOW(),
+                name            TEXT,
+                direction       TEXT,
+                extreme         TEXT,
+                extreme_price   NUMERIC,
+                recent_extreme  NUMERIC,
+                ltp             NUMERIC,
+                move_pct        NUMERIC,
+                burst_ratio     NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL stock_reversal_log table ready');
+
+        // ── trend_rider_log table (15 Sep) ───────────────────────────────────
+        // Trend Rider setup — see checkTrendRiderTrigger(). Deliberately
+        // different philosophy from combineSignals' own mean-reversion-style
+        // gates; logged separately so its hit rate can be judged on its own
+        // terms once there's a track record.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS trend_rider_log (
+                id              SERIAL PRIMARY KEY,
+                ts              TIMESTAMPTZ DEFAULT NOW(),
+                direction       TEXT,
+                ltp             NUMERIC,
+                trend_prob      NUMERIC,
+                adx             NUMERIC,
+                rsi             NUMERIC,
+                extreme_count   INT,
+                pullback_pct    NUMERIC,
+                max_ext_pct     NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL trend_rider_log table ready');
+
         // ── sr_bounce_log table (11 Sep) ──────────────────────────────────────
         // Tracks S/R Bounce Trigger fires — see checkSRBounceTrigger() for
         // full rationale (built off the weekly review finding that S/R Wall
@@ -7960,6 +8259,42 @@ app.get('/api/orb-log', async (req, res) => {
     }
 });
 
+// 15 Sep — Trend Rider / Stock Momentum / 52-Week Reversal fire history, same
+// read-only shape as the four endpoints above — feeds the Exploratory
+// Triggers dashboard panel alongside them.
+app.get('/api/trend-rider-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM trend_rider_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+app.get('/api/stock-momentum-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM stock_momentum_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+app.get('/api/stock-reversal-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM stock_reversal_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // 12 Sep — Murarka-rule strike-selection A/B test. Joins with
 // signal_performance via perf_id so the real trade's own tracked outcome
 // (max_gain_pct/max_adverse_pct) sits alongside the Murarka-rule hypothetical
@@ -8723,6 +9058,10 @@ function startPollingIntervals() {
     // S/R Bounce Trigger (11 Sep) — same immediate-then-interval pattern.
     const srBounceTick = () => checkSRBounceTrigger().catch(e => console.warn('[S/R Bounce] tick error:', e.message));
     setTimeout(() => { srBounceTick(); setInterval(srBounceTick, 2 * 60 * 1000); }, 50 * 1000);
+    // Trend Rider (15 Sep) — same immediate-then-interval pattern, 2min cadence
+    // so re-entries through an ongoing trend day get caught reasonably promptly.
+    const trendRiderTick = () => checkTrendRiderTrigger().catch(e => console.warn('[Trend Rider] tick error:', e.message));
+    setTimeout(() => { trendRiderTick(); setInterval(trendRiderTick, 2 * 60 * 1000); }, 55 * 1000);
     // Combined PCR (12 Sep) — 3 min cadence (makes 12 Fyers calls per cycle:
     // BankNifty + Sensex + 10 stocks — well within rate limits, but no need
     // to run as often as the main NIFTY PCR since this is a broader
@@ -8786,6 +9125,17 @@ function startPollingIntervals() {
             const stocks = await getFnOStockList();
             if (stocks.length) await refreshLiveVolumes(stocks);
 
+            // 15 Sep — Stock Momentum Trigger, same cadence as the live-volume
+            // refresh above since it reads the same freshly-updated per-stock
+            // history. Has its own internal try/catch, so a failure here can't
+            // break the volume-scanner alert loop below.
+            checkStockMomentumTrigger();
+            // 15 Sep — 52-Week Reversal Trigger (stock-level). Slower-moving
+            // setup, but checked at the same 90s cadence since it's live-priced
+            // against st.ltp, which does update every cycle — the 52w/recent-15d
+            // fields themselves only change once/day via refreshVolumeBaselines.
+            checkStockReversalTrigger();
+
             // Telegram alert (6 Sep) — fires once per stock per day, only when
             // it FIRST crosses the threshold (3x). Without this dedupe, a
             // stock sitting at 4x for hours would spam an alert every 90s.
@@ -8817,6 +9167,11 @@ function startPollingIntervals() {
         if (isNSEMarketDay()) saveMarketSnapshot().catch(e => console.error('[MarketSnapshot] error:', e.message));
     }, 5*60*1000), 30*1000);
     setTimeout(() => setInterval(flushGateBlockCountsIfDirty, 30*1000), 25*1000);
+    // 15 Sep — NIFTY 52-Week Reversal Trigger. 5min cadence — both
+    // get52WeekHighLow() and getHistoricalCandles() are cache-backed (see
+    // historicalData.js), so this doesn't hit the DB every cycle; 5min is
+    // simply plenty for a slow-moving, multi-day setup like this one.
+    setTimeout(() => setInterval(checkNiftyReversalTrigger, 5*60*1000), 35*1000);
     setTimeout(() => setInterval(async () => {
         try { marketState.signalHistory = await getRecentSignalHistory(); }
         catch (e) { console.warn('[SignalHistory] refresh error:', e.message); }

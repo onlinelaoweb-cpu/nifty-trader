@@ -126,11 +126,14 @@ function chunk(arr, size) {
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // Phase 3 (6 Sep) — shared updater for both Angel/Fyers live-volume paths.
-// Pushes a {ts, cumVolume} snapshot to a rolling per-stock history so
+// Pushes a {ts, cumVolume, ltp} snapshot to a rolling per-stock history so
 // getBurstRatio() can measure "volume in the last N minutes" — cumulative
 // day volume alone can't show a sudden acceleration, only the running total.
+// 15 Sep — also stores ltp in the same snapshot (previously volume-only) so
+// computeStockMomentum() can measure "price move in the last N minutes" off
+// the exact same rolling window, no separate tracking structure needed.
 // Capped to the last 12 samples (~18 min at the 90s poll interval) — more
-// than enough for a 5-10 min burst window, without growing unbounded.
+// than enough for a 5-15 min burst/momentum window, without growing unbounded.
 function updateStockLive(name, { token, symbol, volume, ltp, pctChange, source }) {
     const st = _stockState.get(name) || { token, symbol, name, history: [] };
     st.liveVolume = volume;
@@ -139,15 +142,19 @@ function updateStockLive(name, { token, symbol, volume, ltp, pctChange, source }
     st.lastLiveAt = Date.now();
     st.source     = source;
     if (!st.history) st.history = [];
-    st.history.push({ ts: Date.now(), cumVolume: volume });
+    st.history.push({ ts: Date.now(), cumVolume: volume, ltp });
     if (st.history.length > 12) st.history.shift();
     _stockState.set(name, st);
 }
 
-// ── Baseline: 20-day average volume per stock, via Angel historical candles ──
-async function fetchStockDailyVolumes(token) {
+// ── Baseline: N-day volume/price history per stock, via Angel historical
+// candles. daysBack defaults to 32 (≈20 trading days, the original 20-day
+// baseline use), but refreshVolumeBaselines() below calls this with a much
+// longer range too, to also derive 52-week high/low from the SAME call —
+// no extra API request, just a wider date window on the one already made.
+async function fetchStockDailyVolumes(token, daysBack = 32) {
     const to   = new Date();
-    const from = new Date(to.getTime() - 32 * 24 * 60 * 60 * 1000); // ~32 calendar days back → ~20+ trading days
+    const from = new Date(to.getTime() - daysBack * 24 * 60 * 60 * 1000);
     const fmt  = (d) => {
         const p = (n) => String(n).padStart(2, '0');
         return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} 09:15`;
@@ -163,38 +170,46 @@ async function fetchStockDailyVolumes(token) {
         },
         { headers: angelHeaders(), timeout: 10_000 }
     );
-    if (!res.data?.status || !Array.isArray(res.data?.data)) return { volumes: [], closes: [] };
+    if (!res.data?.status || !Array.isArray(res.data?.data)) return { volumes: [], closes: [], highs: [], lows: [] };
     // Each row: [timestamp, open, high, low, close, volume]
     // 10 Sep — also keep closes (for 20-day high/low price-action context),
     // not just volume.
+    // 15 Sep — also keep highs/lows (daily extremes) for 52-week high/low.
     const volumes = res.data.data.map(row => Number(row[5]) || 0).filter(v => v > 0);
     const closes  = res.data.data.map(row => Number(row[4]) || 0).filter(v => v > 0);
-    return { volumes, closes };
+    const highs   = res.data.data.map(row => Number(row[2]) || 0).filter(v => v > 0);
+    const lows    = res.data.data.map(row => Number(row[3]) || 0).filter(v => v > 0);
+    return { volumes, closes, highs, lows };
 }
 
 // Runs once per day (guarded by _baselineDate) — sequential + throttled to
 // respect Angel's historical-API rate limit (~3 req/sec). ~200 stocks at
 // 400ms apart ≈ 80s total; runs in the background, doesn't block anything.
+// 15 Sep — date window widened from 32 to HISTORY_DAYS_BACK (380 calendar
+// days ≈ 52 weeks + holiday buffer) so the SAME once-daily call also yields
+// 52-week high/low and a recent-15-trading-day extreme, for the 52-Week
+// Reversal setup — no extra API calls, just more days per existing request.
+const HISTORY_DAYS_BACK = 380;
 async function refreshVolumeBaselines(stockList) {
     const today = new Date().toISOString().slice(0, 10);
     if (_baselineDate === today || _baselineRunning) return;
 
     _baselineRunning = true;
     const haveAngel = !!_angelSession?.jwtToken;
-    console.log(`[VolScan] Refreshing 20-day volume baselines for ${stockList.length} stocks... (Angel:${haveAngel ? 'yes' : 'no, using Fyers'})`);
+    console.log(`[VolScan] Refreshing volume + 52w baselines for ${stockList.length} stocks... (Angel:${haveAngel ? 'yes' : 'no, using Fyers'})`);
     let ok = 0, failed = 0, viaFyers = 0;
     for (const stock of stockList) {
         try {
-            let hist = { volumes: [], closes: [] };
+            let hist = { volumes: [], closes: [], highs: [], lows: [] };
             if (haveAngel) {
-                try { hist = await fetchStockDailyVolumes(stock.token); }
+                try { hist = await fetchStockDailyVolumes(stock.token, HISTORY_DAYS_BACK); }
                 catch (e) { /* fall through to Fyers below */ }
             }
             if (!hist.volumes.length) {
-                hist = await fetchFyersStockHistory(`NSE:${stock.name}-EQ`);
+                hist = await fetchFyersStockHistory(`NSE:${stock.name}-EQ`, HISTORY_DAYS_BACK);
                 if (hist.volumes.length) viaFyers++;
             }
-            const vols = hist.volumes, closes = hist.closes;
+            const vols = hist.volumes, closes = hist.closes, highs = hist.highs || [], lows = hist.lows || [];
             // Exclude today's (possibly still-forming) candle if present — use the
             // most recent 20 COMPLETE days.
             const last20 = vols.slice(0, -1).slice(-20);
@@ -209,12 +224,33 @@ async function refreshVolumeBaselines(stockList) {
             const high20d = usableCloses.length ? Math.max(...usableCloses) : null;
             const low20d  = usableCloses.length ? Math.min(...usableCloses) : null;
 
+            // 15 Sep — 52-week high/low from the full daily highs/lows series
+            // (not just closes — a close-only series understates the true
+            // intraday extreme). Requires at least ~60 days of data before
+            // trusting it as a real "52-week" figure, not a partial window.
+            const highs52 = highs.slice(0, -1);
+            const lows52  = lows.slice(0, -1);
+            const high52w = highs52.length >= 60 ? Math.max(...highs52) : null;
+            const low52w  = lows52.length  >= 60 ? Math.min(...lows52)  : null;
+
+            // Recent 15-trading-day extreme — "was this stock near its 52w
+            // extreme RECENTLY" (not months ago). Same highs/lows series,
+            // just the tail end of it.
+            const recentHighs15 = highs.slice(0, -1).slice(-15);
+            const recentLows15  = lows.slice(0, -1).slice(-15);
+            const recentHigh15d = recentHighs15.length ? Math.max(...recentHighs15) : null;
+            const recentLow15d  = recentLows15.length  ? Math.min(...recentLows15)  : null;
+
             if (!_stockState.has(stock.name)) _stockState.set(stock.name, {});
             const st = _stockState.get(stock.name);
             st.token = stock.token; st.symbol = stock.symbol; st.name = stock.name;
             st.baseline20d = avg;
             st.high20d = high20d;
             st.low20d  = low20d;
+            st.high52w = high52w;
+            st.low52w  = low52w;
+            st.recentHigh15d = recentHigh15d;
+            st.recentLow15d  = recentLow15d;
             if (avg) ok++; else failed++;
         } catch (e) {
             failed++;
@@ -326,6 +362,132 @@ function computeBurstRatio(st, windowMin = 10) {
     return parseFloat((volumeInWindow / expectedInWindow).toFixed(2));
 }
 
+// ── 15 Sep — per-stock Fast Momentum (stock-level counterpart to server.js's
+// checkFastMomentumTrigger() for NIFTY) ───────────────────────────────────
+// Same idea as computeBurstRatio() above but measuring PRICE move instead of
+// volume, off the same rolling history — no true intraday ATR per stock is
+// tracked, so the 20-day high/low range already computed in
+// refreshVolumeBaselines() stands in as the volatility proxy: a wide-range
+// stock needs a bigger move to count as "fast", a tight-range one needs less.
+// This is a coarser proxy than NIFTY's real ATR(14) and should be treated as
+// such — tune RANGE_FRACTION from real fired-alert accuracy once there's a
+// track record, exactly like NIFTY's own ATR multiplier was.
+const STOCK_MOMENTUM_WINDOW_MIN = 15;   // same window as NIFTY's Fast Momentum, for a comparable "in the last N min" read
+const STOCK_MOMENTUM_MIN_PCT    = 1.5;  // absolute floor in % — never fire on a few-rupee wiggle in a quiet stock
+const STOCK_MOMENTUM_RANGE_FRACTION = 0.08; // move must also clear 8% of the stock's own 20-day high-low range
+
+function computeStockMomentum(st, windowMin = STOCK_MOMENTUM_WINDOW_MIN) {
+    if (!st.history || st.history.length < 2 || !st.ltp) return null;
+    const now = Date.now();
+    const cutoff = now - windowMin * 60 * 1000;
+    const past = st.history.find(h => h.ts >= cutoff) || st.history[0];
+    const latest = st.history[st.history.length - 1];
+    if (!past || past.ts === latest.ts || past.ltp == null || latest.ltp == null) return null;
+
+    const actualSpanMin = (latest.ts - past.ts) / 60000;
+    if (actualSpanMin < 1) return null; // too little elapsed to mean anything
+
+    const movePts = latest.ltp - past.ltp;
+    const movePct = past.ltp > 0 ? (movePts / past.ltp) * 100 : 0;
+
+    // Threshold: the larger of the flat % floor and a fraction of the stock's
+    // own 20-day range — same max(floor, volatility-scaled) shape as NIFTY's
+    // Math.max(FAST_MOMENTUM_MIN_PTS, FAST_MOMENTUM_ATR_MULT * atr).
+    const rangePts = (st.high20d != null && st.low20d != null) ? (st.high20d - st.low20d) : null;
+    const rangeThresholdPts = rangePts ? rangePts * STOCK_MOMENTUM_RANGE_FRACTION : null;
+    const floorThresholdPts = (STOCK_MOMENTUM_MIN_PCT / 100) * latest.ltp;
+    const thresholdPts = rangeThresholdPts ? Math.max(floorThresholdPts, rangeThresholdPts) : floorThresholdPts;
+
+    return {
+        movePts: parseFloat(movePts.toFixed(2)),
+        movePct: parseFloat(movePct.toFixed(2)),
+        thresholdPts: parseFloat(thresholdPts.toFixed(2)),
+        spanMin: parseFloat(actualSpanMin.toFixed(1)),
+        ltp: latest.ltp,
+    };
+}
+
+// Scans every tracked stock, returns only those whose move currently clears
+// their own threshold — this is what server.js's periodic tick calls, same
+// shape/role as getVolumeScannerSnapshot() above.
+function getStockMomentumSnapshot(windowMin = STOCK_MOMENTUM_WINDOW_MIN) {
+    const rows = [];
+    for (const st of _stockState.values()) {
+        const m = computeStockMomentum(st, windowMin);
+        if (!m || Math.abs(m.movePts) < m.thresholdPts) continue;
+        rows.push({
+            name: st.name, symbol: st.symbol,
+            direction: m.movePts > 0 ? 'BULLISH' : 'BEARISH',
+            ...m,
+        });
+    }
+    rows.sort((a, b) => Math.abs(b.movePts) - Math.abs(a.movePts));
+    return rows;
+}
+
+// ── 15 Sep — 52-Week Reversal setup ───────────────────────────────────────
+// Detects a stock that was recently near its 52-week low (or high), and has
+// since bounced (or pulled back) away from that extreme with above-average
+// volume — a classic "washout reversal" / "blow-off reversal" pattern.
+// Deliberately conservative and slow-moving compared to Fast/Stock Momentum:
+// this is about a multi-day setup forming, not a 15-min price spike, so it's
+// checked against the once-daily-refreshed 52w/recent-15d fields, live-priced
+// against st.ltp on every poll.
+const REVERSAL_NEAR_PCT      = 0.05;  // recent 15d extreme must be within 5% of the 52w extreme to count as "was near it"
+const REVERSAL_BOUNCE_PCT    = 0.04;  // price must have since moved ≥4% away from that recent extreme
+const REVERSAL_VOLUME_BURST_MIN = 1.5; // burst ratio (computeBurstRatio, 10min window) must clear 1.5x baseline pace
+
+function computeStockReversalSetup(st) {
+    if (!st.ltp) return null;
+
+    // Bullish case: was near 52w LOW, has since bounced UP off the recent low.
+    if (st.low52w != null && st.recentLow15d != null) {
+        const nearLow = (st.recentLow15d - st.low52w) / st.low52w <= REVERSAL_NEAR_PCT;
+        const bouncePct = (st.ltp - st.recentLow15d) / st.recentLow15d;
+        if (nearLow && bouncePct >= REVERSAL_BOUNCE_PCT) {
+            const burst = computeBurstRatio(st, 10);
+            if (burst != null && burst >= REVERSAL_VOLUME_BURST_MIN) {
+                return {
+                    direction: 'BULLISH_REVERSAL',
+                    extreme: '52W_LOW', extremePrice: st.low52w, recentExtreme: st.recentLow15d,
+                    movePct: parseFloat((bouncePct * 100).toFixed(2)),
+                    burstRatio: burst, ltp: st.ltp,
+                };
+            }
+        }
+    }
+
+    // Bearish case: was near 52w HIGH, has since pulled back DOWN off the recent high.
+    if (st.high52w != null && st.recentHigh15d != null) {
+        const nearHigh = (st.high52w - st.recentHigh15d) / st.high52w <= REVERSAL_NEAR_PCT;
+        const pullbackPct = (st.recentHigh15d - st.ltp) / st.recentHigh15d;
+        if (nearHigh && pullbackPct >= REVERSAL_BOUNCE_PCT) {
+            const burst = computeBurstRatio(st, 10);
+            if (burst != null && burst >= REVERSAL_VOLUME_BURST_MIN) {
+                return {
+                    direction: 'BEARISH_REVERSAL',
+                    extreme: '52W_HIGH', extremePrice: st.high52w, recentExtreme: st.recentHigh15d,
+                    movePct: parseFloat((pullbackPct * 100).toFixed(2)),
+                    burstRatio: burst, ltp: st.ltp,
+                };
+            }
+        }
+    }
+
+    return null;
+}
+
+function getStockReversalSnapshot() {
+    const rows = [];
+    for (const st of _stockState.values()) {
+        const r = computeStockReversalSetup(st);
+        if (!r) continue;
+        rows.push({ name: st.name, symbol: st.symbol, ...r });
+    }
+    rows.sort((a, b) => b.burstRatio - a.burstRatio);
+    return rows;
+}
+
 // ── Public: scanner snapshot, sorted by volume ratio descending ──────────────
 // minRatio filters out noise (e.g. 1.2x isn't "unusual") — default 2x.
 function getVolumeScannerSnapshot(minRatio = 2, sortBy = 'ratio') {
@@ -394,4 +556,8 @@ module.exports = {
     getVolumeScannerSnapshot,
     getVolumeScannerStatus,
     getVolumeScannerBySector,
+    computeStockMomentum,
+    getStockMomentumSnapshot,
+    computeStockReversalSetup,
+    getStockReversalSnapshot,
 };
