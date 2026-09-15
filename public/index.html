@@ -3832,10 +3832,6 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     <button class="more-item" onclick="switchTabFromMore('insights')"><span>🧠</span>INSIGHTS</button>
     <button class="more-item" onclick="switchTabFromMore('journal')"><span>📔</span>JOURNAL</button>
 
-    <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">CRUDE OIL</div>
-    <button class="more-item" onclick="switchTabFromMore('crude')"><span>🛢️</span>CRUDE LIVE</button>
-    <button class="more-item" onclick="switchTabFromMore('crudeInsights')"><span>🔍</span>CRUDE INSIGHTS</button>
-
     <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">MARKET DATA</div>
     <button class="more-item" onclick="switchTabFromMore('breadth')"><span>📈</span>BREADTH</button>
     <button class="more-item" onclick="switchTabFromMore('global')"><span>🌍</span>GLOBAL</button>
@@ -3846,6 +3842,10 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     <button class="more-item" onclick="switchTabFromMore('tools')"><span>🔧</span>TOOLS</button>
     <button class="more-item" onclick="switchTabFromMore('physics')"><span>⚛️</span>PHYSICS</button>
     <button class="more-item" onclick="switchTabFromMore('guard')"><span>🛡️</span>GUARD</button>
+
+    <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">CRUDE OIL</div>
+    <button class="more-item" onclick="switchTabFromMore('crude')"><span>🛢️</span>CRUDE LIVE</button>
+    <button class="more-item" onclick="switchTabFromMore('crudeInsights')"><span>🔍</span>CRUDE INSIGHTS</button>
   </div>
 </div>
 
@@ -3863,8 +3863,6 @@ function _initDesktopLayout() {
     { id: 'chart',     icon: '🕯️', label: 'CHART' },
     { id: 'insights',  icon: '🧠', label: 'INSIGHTS' },
     { id: 'journal',   icon: '📔', label: 'JOURNAL' },
-    { id: 'crude',     icon: '🛢️', label: 'CRUDE LIVE' },
-    { id: 'crudeInsights', icon: '🔍', label: 'CRUDE INSIGHTS' },
     { id: 'breadth',   icon: '📈', label: 'BREADTH' },
     { id: 'global',    icon: '🌍', label: 'GLOBAL' },
     { id: 'scanner',   icon: '🔥', label: 'SCANNER' },
@@ -3872,6 +3870,8 @@ function _initDesktopLayout() {
     { id: 'tools',     icon: '🔧', label: 'TOOLS' },
     { id: 'physics',   icon: '⚛️', label: 'PHYSICS' },
     { id: 'guard',     icon: '🛡️', label: 'GUARD' },
+    { id: 'crude',     icon: '🛢️', label: 'CRUDE LIVE' },
+    { id: 'crudeInsights', icon: '🔍', label: 'CRUDE INSIGHTS' },
   ];
 
   // Build sidebar

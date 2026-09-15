@@ -333,6 +333,7 @@ async function sendSignalAlert(state, prevSignal, strikeData = null, autoLogged 
     const contextLine = [rsiInfo, vixInfo, pcrInfo, adxInfo].join(' · ');
 
     const msg = `
+✅ <u><b>MAIN ENGINE — CONFIRMED SIGNAL</b></u>
 ${emoji} <b>${state.signal}${gradeLabel}</b>
 ${changedFromLine}📈 Confidence: ${state.confidence}%
 ━━━━━━━━━━━━━━━━━━
@@ -491,6 +492,7 @@ ${lqLine}${state.momentumDecayWarning ? `\n${state.momentumDecayWarning}` : ''}`
         : '';
 
     const msg = `
+📡 <u><b>MTF-TRACKER — LEAD (NOT MAIN ENGINE)</b></u>
 ${verdictLine}${blockedByLine}
 ━━━━━━━━━━━━━━━━━━
 ${alignTitle}

@@ -3273,6 +3273,7 @@ async function checkFastMomentumTrigger() {
         lastFastMomentumDirection = direction;
 
         const msg = `
+🧪 <u><b>EXPLORATORY TRIGGER</b></u>
 ⚡ <b>FAST MOMENTUM — ${direction}</b>
 ━━━━━━━━━━━━━━━━━━
 NIFTY moved <b>${movePts > 0 ? '+' : ''}${movePts.toFixed(1)}pts</b> in last ${FAST_MOMENTUM_WINDOW_MIN}min → ${nowClose.toFixed(1)}
@@ -3324,6 +3325,7 @@ async function checkStockMomentumTrigger() {
             _stockMomentumLastAlert.set(m.name, { at: Date.now(), direction: m.direction });
 
             const msg = `
+🧪 <u><b>EXPLORATORY TRIGGER</b></u>
 ⚡ <b>STOCK MOMENTUM — ${m.direction}</b>
 ━━━━━━━━━━━━━━━━━━
 ${m.name} moved <b>${m.movePts > 0 ? '+' : ''}${m.movePts}pts (${m.movePct > 0 ? '+' : ''}${m.movePct}%)</b> in last ${m.spanMin}min → ₹${m.ltp}
@@ -3377,6 +3379,7 @@ async function checkStockReversalTrigger() {
             const isBull = r.direction === 'BULLISH_REVERSAL';
             const extremeLabel = r.extreme === '52W_LOW' ? '52-week low' : '52-week high';
             const msg = `
+🧪 <u><b>EXPLORATORY TRIGGER</b></u>
 🔄 <b>52-WEEK REVERSAL — ${isBull ? 'BULLISH' : 'BEARISH'}</b>
 ━━━━━━━━━━━━━━━━━━
 ${r.name} was near its ${extremeLabel} (₹${r.extremePrice}, recent: ₹${r.recentExtreme})
@@ -3456,6 +3459,7 @@ async function checkNiftyReversalTrigger() {
         const extremeLabel = result.extreme === '52W_LOW' ? '52-week low' : '52-week high';
         const movePctStr = result.movePct.toFixed(2);
         const msg = `
+🧪 <u><b>EXPLORATORY TRIGGER</b></u>
 🔄 <b>NIFTY 52-WEEK REVERSAL — ${isBull ? 'BULLISH' : 'BEARISH'}</b>
 ━━━━━━━━━━━━━━━━━━
 NIFTY was near its ${extremeLabel} (${result.extremePrice.toFixed(0)}, recent: ${result.recentExtreme.toFixed(0)})
@@ -3503,6 +3507,7 @@ async function checkTrendRiderTrigger() {
 
         const isBull = setup.direction === 'BULLISH';
         const msg = `
+🧪 <u><b>EXPLORATORY TRIGGER</b></u>
 🏄 <b>TREND RIDER — ${setup.direction}</b>
 ━━━━━━━━━━━━━━━━━━
 NIFTY ${setup.ltp.toFixed(1)} — sustained ${isBull ? 'overbought' : 'oversold'} RSI ${setup.rsi} (${setup.extremeCount}/6 candles extreme), ADX ${setup.adx}
@@ -3595,6 +3600,7 @@ async function checkSRBounceTrigger() {
             lastSRBounceLevel = levelKey;
 
             const msg = `
+🧪 <u><b>EXPLORATORY TRIGGER</b></u>
 🎯 <b>S/R BOUNCE — ${direction}</b>
 ━━━━━━━━━━━━━━━━━━
 Level: ${lvl.label || lvl.type} @ ${lvl.price}
@@ -3678,6 +3684,7 @@ async function checkOpeningRangeBreakout() {
 
         const rsi = marketState.rsi;
         const msg = `
+🧪 <u><b>EXPLORATORY TRIGGER</b></u>
 📐 <b>OPENING RANGE BREAKOUT — ${direction}</b>
 ━━━━━━━━━━━━━━━━━━
 Opening Range (9:15-9:30): ${rangeLow.toFixed(1)} – ${rangeHigh.toFixed(1)}
@@ -5180,7 +5187,7 @@ async function refreshPCR() {
                 ).catch(e => console.warn('[Murarka] log error:', e.message));
             }
             if (isConfigured() && isMarketOpen()) {
-                sendRawMessage(`🎯 <b>Murarka Entry — BUY ${murarkaEntry.side}</b>\n━━━━━━━━━━━━━━━━━━\n${murarkaEntry.reason}\n━━━━━━━━━━━━━━━━━━\n⚠️ Exploratory — no historical track record yet, this is the first time it's being logged.\n<i>Vardaan AI — Murarka Strategy</i>`)
+                sendRawMessage(`🧪 <u><b>EXPLORATORY TRIGGER</b></u>\n🎯 <b>Murarka Entry — BUY ${murarkaEntry.side}</b>\n━━━━━━━━━━━━━━━━━━\n${murarkaEntry.reason}\n━━━━━━━━━━━━━━━━━━\n⚠️ Exploratory — no historical track record yet, this is the first time it's being logged.\n<i>Vardaan AI — Murarka Strategy</i>`)
                     .catch(e => console.warn('[Murarka] alert error:', e.message));
             }
         } else if (!murarkaEntry.active) {
