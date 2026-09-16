@@ -90,7 +90,7 @@ const {
 } = require('./src/api/nseData');
 const {
     sendSignalAlert, sendMTFAlert,
-    sendMorningSummary, sendVIXAlert, sendVolumeScannerAlert,
+    sendMorningSummary, sendVIXAlert,
     sendCloseSummary, sendExitAlert, sendMomentumExitWarning,
     sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured,
     sendScalpAlert, sendSignalTimeline, sendPartialProfitAlert,
@@ -3324,19 +3324,11 @@ async function checkStockMomentumTrigger() {
 
             _stockMomentumLastAlert.set(m.name, { at: Date.now(), direction: m.direction });
 
-            const msg = `
-🧪 <u><b>EXPLORATORY TRIGGER</b></u>
-⚡ <b>STOCK MOMENTUM — ${m.direction}</b>
-━━━━━━━━━━━━━━━━━━
-${m.name} moved <b>${m.movePts > 0 ? '+' : ''}${m.movePts}pts (${m.movePct > 0 ? '+' : ''}${m.movePct}%)</b> in last ${m.spanMin}min → ₹${m.ltp}
-Threshold: ${m.thresholdPts}pts (20d-range adjusted)
-━━━━━━━━━━━━━━━━━━
-⚠️ <b>RAW PRICE VELOCITY ONLY — exploratory, single-stock, NOT confirmed by any other engine.</b>
-This reacts fast on purpose and WILL be wrong sometimes. Use your own judgment, size small.
-━━━━━━━━━━━━━━━━━━
-<i>VardaanNifty AI — Stock Momentum Trigger (exploratory)</i>
-`.trim();
-            await sendRawMessage(msg);
+            // 16 Sep — Telegram alert removed per user request (too many
+            // per-stock messages mixed in with NIFTY's own, hard to tell
+            // apart). Detection + DB logging unchanged — this now surfaces
+            // in-app via the Momentum Table (SCANNER tab) instead of
+            // Telegram. Only NIFTY-related triggers still alert via Telegram.
             console.log(`⚡ [Stock Momentum] ${m.name} ${m.direction} — ${m.movePts}pts (${m.movePct}%) in ${m.spanMin}min (threshold:${m.thresholdPts})`);
 
             if (dbPool) {
@@ -3376,21 +3368,9 @@ async function checkStockReversalTrigger() {
 
             _stockReversalLastAlert.set(r.name, { at: Date.now(), direction: r.direction });
 
-            const isBull = r.direction === 'BULLISH_REVERSAL';
-            const extremeLabel = r.extreme === '52W_LOW' ? '52-week low' : '52-week high';
-            const msg = `
-🧪 <u><b>EXPLORATORY TRIGGER</b></u>
-🔄 <b>52-WEEK REVERSAL — ${isBull ? 'BULLISH' : 'BEARISH'}</b>
-━━━━━━━━━━━━━━━━━━
-${r.name} was near its ${extremeLabel} (₹${r.extremePrice}, recent: ₹${r.recentExtreme})
-Now ₹${r.ltp} — ${isBull ? '+' : '-'}${r.movePct}% ${isBull ? 'bounce' : 'pullback'}, volume ${r.burstRatio}x baseline pace
-━━━━━━━━━━━━━━━━━━
-⚠️ <b>EXPLORATORY — pattern-based, NOT MTF or Main Engine confirmed.</b>
-52-week extremes are wide, slow levels — this can be early by days. Use your own judgment, size small.
-━━━━━━━━━━━━━━━━━━
-<i>VardaanNifty AI — 52-Week Reversal Trigger (exploratory)</i>
-`.trim();
-            await sendRawMessage(msg);
+            // 16 Sep — Telegram alert removed per user request (see Stock
+            // Momentum Trigger above for full reasoning). Detection + DB
+            // logging unchanged, now surfaces in-app via the Momentum Table.
             console.log(`🔄 [52W Reversal] ${r.name} ${r.direction} — ${r.movePct}% off ${r.extreme}, burst:${r.burstRatio}x`);
 
             if (dbPool) {
@@ -9152,7 +9132,9 @@ function startPollingIntervals() {
             for (const s of hot) {
                 if (_volAlertedToday.has(s.name)) continue;
                 _volAlertedToday.add(s.name);
-                sendVolumeScannerAlert(s).catch(e => console.warn('[VolScan] Telegram alert error:', e.message));
+                // 16 Sep — Telegram alert removed per user request (same
+                // reasoning as Stock Momentum/52W Reversal above). DB
+                // logging unchanged — surfaces in-app via the Momentum Table.
                 if (dbPool) {
                     dbPool.query(
                         `INSERT INTO volume_scanner_log (name, symbol, ltp, pct_change, ratio, burst_ratio, live_volume, baseline_20d, price_context)

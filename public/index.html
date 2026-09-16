@@ -9831,6 +9831,57 @@ function renderCrudeLiveUI(d) {
       <div style="font-family:'Orbitron',monospace;font-size:14.5px;letter-spacing:1px;color:var(--accent);">🔥 VOLUME SCANNER</div>
       <span id="scanner-status" style="font-size:10.5px;color:var(--dim);font-family:monospace;"></span>
     </div>
+
+    <!-- 16 Sep — Momentum Events Log. Replaces the per-stock Telegram alerts
+         (Volume Scanner / Stock Momentum / 52W Reversal) that were flooding
+         chat alongside NIFTY's own messages — same detection + DB logging,
+         just surfaced here instead of Telegram now. Scrollable, most recent
+         first, with date+time so events are easy to scan without digging
+         through Telegram history. -->
+    <div style="border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <div style="font-size:11px;color:var(--dim);">📜 MOMENTUM EVENTS LOG <span style="opacity:0.6;">(stock-level, exploratory — moved off Telegram)</span></div>
+        <button onclick="fetchMomentumEventsLog()" style="font-size:10px;padding:2px 8px;background:rgba(255,255,255,0.06);border:1px solid var(--border);color:var(--dim);border-radius:4px;cursor:pointer;">⟳</button>
+      </div>
+      <div id="momentum-events-wrap" style="max-height:280px;overflow-y:auto;font-size:11.5px;">Loading...</div>
+    </div>
+
+    <script>
+    async function fetchMomentumEventsLog() {
+      const wrap = document.getElementById('momentum-events-wrap');
+      if (!wrap) return;
+      try {
+        const [vol, mom, rev] = await Promise.all([
+          fetch('/api/volume-scanner-history?days=3').then(r => r.json()),
+          fetch('/api/stock-momentum-log?limit=40').then(r => r.json()),
+          fetch('/api/stock-reversal-log?limit=40').then(r => r.json()),
+        ]);
+        const volRows = (vol.rows || []).map(r => ({ ts: r.ts, name: r.name, kind: '🔥 Volume', direction: null, detail: `${r.ratio}x 20d avg · ${r.pct_change > 0 ? '+' : ''}${r.pct_change}%` }));
+        const momRows = (mom.rows || []).map(r => ({ ts: r.ts, name: r.name, kind: '⚡ Momentum', direction: r.direction, detail: `${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts (${r.move_pct > 0 ? '+' : ''}${r.move_pct}%) / ${r.window_min}min` }));
+        const revRows = (rev.rows || []).map(r => ({ ts: r.ts, name: r.name, kind: '🔄 52W Reversal', direction: r.direction === 'BULLISH_REVERSAL' ? 'BULLISH' : 'BEARISH', detail: `off ${r.extreme.replace('_', ' ')}, ${r.move_pct > 0 ? '+' : ''}${r.move_pct}%` }));
+        const all = [...volRows, ...momRows, ...revRows].sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, 60);
+        if (!all.length) {
+          wrap.innerHTML = '<div style="color:var(--dim);padding:8px 0;">No events yet today.</div>';
+          return;
+        }
+        wrap.innerHTML = `<table style="width:100%;border-collapse:collapse;">` + all.map(r => {
+          const dt = new Date(r.ts);
+          const dateStr = dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' });
+          const timeStr = dt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+          const dirColor = r.direction === 'BULLISH' ? 'var(--green)' : r.direction === 'BEARISH' ? 'var(--red)' : 'var(--dim)';
+          return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+            <td style="padding:4px 4px;color:var(--dim);white-space:nowrap;">${dateStr} ${timeStr}</td>
+            <td style="padding:4px 4px;font-weight:600;">${r.name}</td>
+            <td style="padding:4px 4px;">${r.kind}${r.direction ? ` <span style="color:${dirColor};">${r.direction}</span>` : ''}</td>
+            <td style="padding:4px 4px;color:var(--dim);">${r.detail}</td>
+          </tr>`;
+        }).join('') + `</table>`;
+      } catch (e) { wrap.textContent = 'Failed to load'; }
+    }
+    fetchMomentumEventsLog();
+    setInterval(fetchMomentumEventsLog, 90000);
+    </script>
+
     <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:10px;">
       F&amp;O stocks trading unusual cash-market volume vs their own 20-day average. "Burst" = last ~10 min pace vs normal pace for that window — separate from NIFTY/CRUDEOIL options signals.
     </div>
