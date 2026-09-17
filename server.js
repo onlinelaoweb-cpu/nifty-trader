@@ -8773,6 +8773,49 @@ app.get('/api/best-setup-status', (req, res) => {
     }
 });
 
+// 17 Sep — checks whether either Best-Setup DNA actually fired as a real
+// signal on a given date (default: yesterday, IST). Different question from
+// the live /api/best-setup-status snapshot above — this looks at what
+// actually happened over a whole day, via signal_performance's setup_dna
+// (built from the exact same factor combination), rather than one instant.
+// Also reports how many evaluations that day had 3/3 MTF alignment at all,
+// since that's the single factor both setups require and the most common
+// blocker (per market_snapshot_log's mtf_signal — a genuine 3/3 alignment
+// is comparatively rare intraday).
+app.get('/api/best-setup-history', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const dateParam = req.query.date; // YYYY-MM-DD, IST
+        const targetDate = dateParam || new Date(Date.now() - 24*60*60*1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+        const dnaRows = await dbPool.query(`
+            SELECT id, ts, signal, option_type, strike, setup_dna, target_hit, sl_hit, max_gain_pct
+            FROM signal_performance
+            WHERE (ts AT TIME ZONE 'Asia/Kolkata')::date = $1::date
+              AND setup_dna IN (
+                'Delta Confirm + 3/3 MTF + Trend Conviction + Below Dyn L3',
+                'BOS Bullish + Delta Confirm + 3/3 MTF + Trend Conviction'
+              )
+            ORDER BY ts ASC
+        `, [targetDate]);
+
+        const totalRows = await dbPool.query(`
+            SELECT COUNT(*)::int AS total FROM signal_performance
+            WHERE (ts AT TIME ZONE 'Asia/Kolkata')::date = $1::date
+        `, [targetDate]);
+
+        res.json({
+            success: true,
+            date: targetDate,
+            totalSignalsThatDay: totalRows.rows[0]?.total ?? 0,
+            bestSetupFires: dnaRows.rows,
+            fireCount: dnaRows.rows.length,
+        });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // 10 Sep — daily signal-count history, to check whether the "0 Strong
 // signals sent" pattern (first seen 4 Sep audit) recurs regularly or was a
 // one-off. Pulls straight from daily_signal_counts (see its table comment
