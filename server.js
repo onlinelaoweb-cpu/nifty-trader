@@ -8816,6 +8816,44 @@ app.get('/api/best-setup-history', async (req, res) => {
     }
 });
 
+// 19 Sep — diagnoses WHY the MTF-tracker sent 0 alerts on a day despite
+// thousands of Strong/Moderate classifications. Checks market_snapshot_log
+// (5-min snapshots, has mtf_15m_adx/mtf_1h_adx/rsi) for how often 2 of the
+// 3 exhaustionRisk sub-conditions would have been true: RSI exhaustion
+// (>=75 or <=25) and weak-ADX backing (15m<20 or 1h<15, matching
+// MTF_REVERSAL_MIN_ADX_15M/1H exactly). insideRangePocket (noTradeZone)
+// isn't logged historically so can't be checked this way — this covers the
+// other two, which is usually enough to see which guard dominated.
+app.get('/api/mtf-suppression-diagnostic', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const dateParam = req.query.date;
+        const targetDate = dateParam || new Date(Date.now() - 24*60*60*1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+        const r = await dbPool.query(`
+            SELECT
+                COUNT(*)::int AS total_snapshots,
+                COUNT(*) FILTER (WHERE rsi >= 75 OR rsi <= 25)::int AS rsi_exhausted_count,
+                COUNT(*) FILTER (WHERE mtf_15m_adx IS NULL OR mtf_15m_adx < 20 OR mtf_1h_adx IS NULL OR mtf_1h_adx < 15)::int AS adx_weak_count,
+                COUNT(*) FILTER (
+                    WHERE (rsi >= 75 OR rsi <= 25)
+                       OR (mtf_15m_adx IS NULL OR mtf_15m_adx < 20 OR mtf_1h_adx IS NULL OR mtf_1h_adx < 15)
+                )::int AS either_count,
+                ROUND(AVG(rsi)::numeric, 1) AS avg_rsi,
+                ROUND(MIN(rsi)::numeric, 1) AS min_rsi,
+                ROUND(MAX(rsi)::numeric, 1) AS max_rsi,
+                ROUND(AVG(mtf_15m_adx)::numeric, 1) AS avg_15m_adx,
+                ROUND(AVG(mtf_1h_adx)::numeric, 1) AS avg_1h_adx
+            FROM market_snapshot_log
+            WHERE (ts AT TIME ZONE 'Asia/Kolkata')::date = $1::date
+        `, [targetDate]);
+
+        res.json({ success: true, date: targetDate, diagnostic: r.rows[0] });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // 10 Sep — daily signal-count history, to check whether the "0 Strong
 // signals sent" pattern (first seen 4 Sep audit) recurs regularly or was a
 // one-off. Pulls straight from daily_signal_counts (see its table comment
