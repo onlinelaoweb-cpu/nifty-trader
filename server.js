@@ -3778,6 +3778,80 @@ BankNifty: ${bnBOS.label}
     }
 }
 
+// ── Volume Confirmation Trigger (20 Sep) ─────────────────────────────────────
+// 7th standalone exploratory trigger. Adapted from Dow Theory's
+// volume-confirms-trend principle: a genuine trend continuation should come
+// with above-average volume; a break on thin volume is historically
+// suspect. Reads NIFTY's own BOS/CHOCH from marketState.physicsOfTrading
+// (already computed by the main pipeline every tick — no recomputation
+// here) and marketState.wsVolume (NIFTY futures volume — the standard
+// proxy, since indices have no true volume of their own; see the 20 Sep
+// comment at the fetchFyersQuote call site). Kept deliberately standalone
+// from Index Confirmation, NOT merged as a 3rd check there — wsVolume is
+// occasionally 0/unavailable (already guarded elsewhere in this file), and
+// baking an unproven, sometimes-missing data source into an already-brand-
+// new, unproven trigger would weaken both without ever telling us which
+// part actually adds value. This earns its own track record first.
+const VOL_CONFIRM_BASELINE_SAMPLES = 20; // rolling window for "average" volume
+const VOL_CONFIRM_RATIO_THRESHOLD  = 1.2; // volume must be 1.2x+ baseline to "confirm"
+const VOL_CONFIRM_COOLDOWN_MIN     = 15;
+
+let volumeBaselineSamples = [];
+let lastVolConfirmResult = null, lastVolConfirmAt = 0;
+
+async function checkVolumeConfirmationTrigger() {
+    if (!isConfigured() || !isMarketOpen()) return;
+    try {
+        const volume = marketState.wsVolume;
+        if (volume > 0) {
+            volumeBaselineSamples.push(volume);
+            if (volumeBaselineSamples.length > VOL_CONFIRM_BASELINE_SAMPLES) volumeBaselineSamples.shift();
+        }
+        if (volumeBaselineSamples.length < 5) return; // not enough history for a meaningful baseline yet
+
+        const bosEvent = marketState.physicsOfTrading?.bosChoch?.event;
+        if (bosEvent !== 'BOS_BULLISH' && bosEvent !== 'BOS_BEARISH') return; // only trend-CONTINUATION events are in scope — CHOCH/NONE aren't what Dow's volume principle speaks to
+
+        const avgVolume = volumeBaselineSamples.reduce((s, v) => s + v, 0) / volumeBaselineSamples.length;
+        if (avgVolume <= 0 || volume <= 0) return;
+        const ratio = volume / avgVolume;
+        const result = ratio >= VOL_CONFIRM_RATIO_THRESHOLD ? 'CONFIRMED' : 'WEAK';
+
+        // Cooldown: same (event, result) pair within 15 min doesn't re-alert.
+        const dedupKey = `${bosEvent}_${result}`;
+        if (lastVolConfirmResult === dedupKey && (Date.now() - lastVolConfirmAt) < VOL_CONFIRM_COOLDOWN_MIN * 60 * 1000) return;
+        lastVolConfirmResult = dedupKey;
+        lastVolConfirmAt     = Date.now();
+
+        const nifty = marketState.nifty;
+        const direction = bosEvent === 'BOS_BULLISH' ? 'BULLISH' : 'BEARISH';
+        const isConfirmed = result === 'CONFIRMED';
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+📶 <b>VOLUME ${result} — ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+NIFTY ${nifty?.toFixed(1)} — ${direction.toLowerCase()} structure break, volume ${ratio.toFixed(2)}x recent average
+${isConfirmed ? '✅ Volume backs this move — Dow Theory\'s "genuine trend" pattern.' : '⚠️ Break came on thin volume — historically a weaker, more suspect move.'}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT Main Engine confirmed.</b> Adapted from Dow Theory's volume-confirmation principle, no historical track record yet. NIFTY futures volume used as proxy (indices have no volume of their own). Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Volume Confirmation Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`📶 [Volume Confirmation] ${result} — ${bosEvent}, ratio:${ratio.toFixed(2)}x`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO volume_confirmation_log (result, bos_event, nifty, volume, avg_volume, volume_ratio)
+                 VALUES ($1,$2,$3,$4,$5,$6)`,
+                [result, bosEvent, nifty, volume, avgVolume, ratio]
+            ).catch(e => console.warn('[Volume Confirmation] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Volume Confirmation] error:', e.message);
+    }
+}
+
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return false;
     // ── Race-condition guard: onTick fires synchronously on every websocket tick,
@@ -6326,6 +6400,28 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL index_confirmation_log table ready');
 
+        // ── volume_confirmation_log table (20 Sep) ────────────────────────────
+        // Tracks the new Volume Confirmation trigger — see
+        // checkVolumeConfirmationTrigger() header comment for full rationale
+        // (Dow Theory's volume-confirms-trend principle). Kept standalone
+        // from Index Confirmation on purpose — see the conversation with the
+        // user: baking an unproven, occasionally-unavailable data source
+        // (NIFTY futures volume) into an already-unproven trigger would
+        // weaken both without telling us which part adds value.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS volume_confirmation_log (
+                id            SERIAL PRIMARY KEY,
+                ts            TIMESTAMPTZ DEFAULT NOW(),
+                result        TEXT,
+                bos_event     TEXT,
+                nifty         NUMERIC,
+                volume        NUMERIC,
+                avg_volume    NUMERIC,
+                volume_ratio  NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL volume_confirmation_log table ready');
+
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
         // (fire-and-forget snapshot), this table AUTOMATICALLY tracks what happened
@@ -8364,6 +8460,18 @@ app.get('/api/index-confirmation-log', async (req, res) => {
     }
 });
 
+// 20 Sep — Volume Confirmation fire history
+app.get('/api/volume-confirmation-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM volume_confirmation_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // 15 Sep — Trend Rider / Stock Momentum / 52-Week Reversal fire history, same
 // read-only shape as the four endpoints above — feeds the Exploratory
 // Triggers dashboard panel alongside them.
@@ -9400,6 +9508,10 @@ function startPollingIntervals() {
     // BankNifty each time, so no need to run as often as the faster triggers.
     const idxConfirmTick = () => checkIndexConfirmationTrigger().catch(e => console.warn('[Index Confirmation] tick error:', e.message));
     setTimeout(() => { idxConfirmTick(); setInterval(idxConfirmTick, 5 * 60 * 1000); }, 65 * 1000);
+    // Volume Confirmation (20 Sep) — 3 min cadence, builds its own rolling
+    // volume baseline (needs a few samples before it can say anything).
+    const volConfirmTick = () => checkVolumeConfirmationTrigger().catch(e => console.warn('[Volume Confirmation] tick error:', e.message));
+    setTimeout(() => { volConfirmTick(); setInterval(volConfirmTick, 3 * 60 * 1000); }, 70 * 1000);
     // Phase 5.2 (10 Sep) — CRUDEOIL PCR refresh, session-gated (only fetches
     // when isCrudeSessionOpen() — no point hitting Fyers for crude options
     // outside the evening window). ~90s cadence matches the other crude
