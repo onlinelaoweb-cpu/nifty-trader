@@ -8942,6 +8942,57 @@ app.get('/api/best-setup-history', async (req, res) => {
 // MTF_REVERSAL_MIN_ADX_15M/1H exactly). insideRangePocket (noTradeZone)
 // isn't logged historically so can't be checked this way — this covers the
 // other two, which is usually enough to see which guard dominated.
+// 20 Sep — weekly win-rate per regime, to see whether a regime's
+// performance (e.g. Trending, which showed 43% win in the most recent
+// weekly review vs a stronger number weeks earlier) is a genuine
+// gradual/sudden shift over time or just noise from comparing two
+// disconnected snapshots. Same regime classification as
+// computePerformanceAnalytics (dyn_zone for Trending/Range, setup_dna for
+// Breakout/Reversal) — win-rate instead of the full R-multiple calc (too
+// many entry/exit branches to safely replicate in raw SQL), but still
+// informative for a trajectory view.
+app.get('/api/regime-trajectory', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const windowDays = Math.min(parseInt(req.query.days) || 90, 180);
+        const r = await dbPool.query(`
+            SELECT
+                date_trunc('week', ts AT TIME ZONE 'Asia/Kolkata')::date AS week_start,
+                COUNT(*) FILTER (WHERE dyn_zone IN ('ABOVE_H3','BELOW_L3'))::int AS trending_total,
+                COUNT(*) FILTER (WHERE dyn_zone IN ('ABOVE_H3','BELOW_L3') AND target_hit)::int AS trending_wins,
+                COUNT(*) FILTER (WHERE dyn_zone = 'INSIDE')::int AS range_total,
+                COUNT(*) FILTER (WHERE dyn_zone = 'INSIDE' AND target_hit)::int AS range_wins,
+                COUNT(*) FILTER (WHERE setup_dna LIKE '%ORB Breakout%' OR setup_dna LIKE '%ORB Breakdown%')::int AS breakout_total,
+                COUNT(*) FILTER (WHERE (setup_dna LIKE '%ORB Breakout%' OR setup_dna LIKE '%ORB Breakdown%') AND target_hit)::int AS breakout_wins,
+                COUNT(*) FILTER (WHERE setup_dna LIKE '%Liquidity Sweep%')::int AS reversal_total,
+                COUNT(*) FILTER (WHERE setup_dna LIKE '%Liquidity Sweep%' AND target_hit)::int AS reversal_wins,
+                COUNT(*)::int AS all_total,
+                COUNT(*) FILTER (WHERE target_hit)::int AS all_wins
+            FROM signal_performance
+            WHERE closed = true
+              AND ts >= NOW() - INTERVAL '${windowDays} days'
+            GROUP BY 1
+            ORDER BY 1 ASC
+        `);
+
+        const weeks = r.rows.map(row => {
+            const pct = (wins, total) => total > 0 ? Math.round((wins / total) * 100) : null;
+            return {
+                weekStart: row.week_start,
+                trending: { total: row.trending_total, winRate: pct(row.trending_wins, row.trending_total) },
+                range:    { total: row.range_total,    winRate: pct(row.range_wins, row.range_total) },
+                breakout: { total: row.breakout_total, winRate: pct(row.breakout_wins, row.breakout_total) },
+                reversal: { total: row.reversal_total, winRate: pct(row.reversal_wins, row.reversal_total) },
+                overall:  { total: row.all_total,      winRate: pct(row.all_wins, row.all_total) },
+            };
+        });
+
+        res.json({ success: true, windowDays, weeks });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 app.get('/api/mtf-suppression-diagnostic', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
