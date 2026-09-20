@@ -9039,6 +9039,46 @@ app.get('/api/vix-trajectory', async (req, res) => {
     }
 });
 
+// 20 Sep — weekly avg ADX + % choppy snapshots, to confirm whether the
+// Aug 10-31 win-rate decline (already shown to be a low-VIX period, not a
+// VIX-regime shift) was also genuinely low-ADX/choppy — a "calm but
+// directionless market" explanation — or trending-but-still-losing, which
+// would point elsewhere. signal_performance has no ADX column, so this
+// uses market_snapshot_log (5-min snapshots) instead — same choppy
+// thresholds (15m<20, 1h<15) as mtf-suppression-diagnostic, for consistency.
+app.get('/api/adx-trajectory', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const windowDays = Math.min(parseInt(req.query.days) || 90, 180);
+        const r = await dbPool.query(`
+            SELECT
+                date_trunc('week', ts AT TIME ZONE 'Asia/Kolkata')::date AS week_start,
+                COUNT(*)::int AS total_snapshots,
+                ROUND(AVG(mtf_15m_adx)::numeric, 1) AS avg_15m_adx,
+                ROUND(AVG(mtf_1h_adx)::numeric, 1) AS avg_1h_adx,
+                COUNT(*) FILTER (
+                    WHERE mtf_15m_adx IS NULL OR mtf_15m_adx < 20 OR mtf_1h_adx IS NULL OR mtf_1h_adx < 15
+                )::int AS choppy_count
+            FROM market_snapshot_log
+            WHERE ts >= NOW() - INTERVAL '${windowDays} days'
+            GROUP BY 1
+            ORDER BY 1 ASC
+        `);
+
+        const weeks = r.rows.map(row => ({
+            weekStart: row.week_start,
+            totalSnapshots: row.total_snapshots,
+            avg15mAdx: row.avg_15m_adx,
+            avg1hAdx: row.avg_1h_adx,
+            choppyPct: row.total_snapshots > 0 ? Math.round((row.choppy_count / row.total_snapshots) * 100) : null,
+        }));
+
+        res.json({ success: true, windowDays, weeks });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 app.get('/api/mtf-suppression-diagnostic', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
