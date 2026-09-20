@@ -9847,35 +9847,50 @@ function renderCrudeLiveUI(d) {
     </div>
 
     <script>
+    // 20 Sep — grouped by source (not one merged table) — same principle as
+    // the Exploratory Triggers card: each source's own events stay together.
+    function renderMomentumTable(rows) {
+      return `<table style="width:100%;border-collapse:collapse;">` + rows.map(r => {
+        const dt = new Date(r.ts);
+        const dateStr = dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' });
+        const timeStr = dt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+        const dirColor = r.direction === 'BULLISH' ? 'var(--green)' : r.direction === 'BEARISH' ? 'var(--red)' : 'var(--dim)';
+        return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:4px 4px;color:var(--dim);white-space:nowrap;">${dateStr} ${timeStr}</td>
+          <td style="padding:4px 4px;font-weight:600;">${r.name}</td>
+          <td style="padding:4px 4px;">${r.direction ? `<span style="color:${dirColor};">${r.direction}</span>` : ''}</td>
+          <td style="padding:4px 4px;color:var(--dim);">${r.detail}</td>
+        </tr>`;
+      }).join('') + `</table>`;
+    }
     async function fetchMomentumEventsLog() {
       const wrap = document.getElementById('momentum-events-wrap');
       if (!wrap) return;
       try {
         const [vol, mom, rev] = await Promise.all([
           fetch('/api/volume-scanner-history?days=3').then(r => r.json()),
-          fetch('/api/stock-momentum-log?limit=40').then(r => r.json()),
-          fetch('/api/stock-reversal-log?limit=40').then(r => r.json()),
+          fetch('/api/stock-momentum-log?limit=20').then(r => r.json()),
+          fetch('/api/stock-reversal-log?limit=20').then(r => r.json()),
         ]);
-        const volRows = (vol.rows || []).map(r => ({ ts: r.ts, name: r.name, kind: '🔥 Volume', direction: null, detail: `${r.ratio}x 20d avg · ${r.pct_change > 0 ? '+' : ''}${r.pct_change}%` }));
-        const momRows = (mom.rows || []).map(r => ({ ts: r.ts, name: r.name, kind: '⚡ Momentum', direction: r.direction, detail: `${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts (${r.move_pct > 0 ? '+' : ''}${r.move_pct}%) / ${r.window_min}min` }));
-        const revRows = (rev.rows || []).map(r => ({ ts: r.ts, name: r.name, kind: '🔄 52W Reversal', direction: r.direction === 'BULLISH_REVERSAL' ? 'BULLISH' : 'BEARISH', detail: `off ${r.extreme.replace('_', ' ')}, ${r.move_pct > 0 ? '+' : ''}${r.move_pct}%` }));
-        const all = [...volRows, ...momRows, ...revRows].sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, 60);
-        if (!all.length) {
+        const volRows = (vol.rows || []).map(r => ({ ts: r.ts, name: r.name, direction: null, detail: `${r.ratio}x 20d avg · ${r.pct_change > 0 ? '+' : ''}${r.pct_change}%` })).slice(0, 20);
+        const momRows = (mom.rows || []).map(r => ({ ts: r.ts, name: r.name, direction: r.direction, detail: `${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts (${r.move_pct > 0 ? '+' : ''}${r.move_pct}%) / ${r.window_min}min` }));
+        const revRows = (rev.rows || []).map(r => ({ ts: r.ts, name: r.name, direction: r.direction === 'BULLISH_REVERSAL' ? 'BULLISH' : 'BEARISH', detail: `off ${r.extreme.replace('_', ' ')}, ${r.move_pct > 0 ? '+' : ''}${r.move_pct}%` }));
+
+        const groups = [
+          { kind: '🔥', source: 'Volume Scanner', rows: volRows },
+          { kind: '⚡', source: 'Stock Momentum',  rows: momRows },
+          { kind: '🔄', source: '52W Reversal',    rows: revRows },
+        ].filter(g => g.rows.length > 0);
+
+        if (!groups.length) {
           wrap.innerHTML = '<div style="color:var(--dim);padding:8px 0;">No events yet today.</div>';
           return;
         }
-        wrap.innerHTML = `<table style="width:100%;border-collapse:collapse;">` + all.map(r => {
-          const dt = new Date(r.ts);
-          const dateStr = dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' });
-          const timeStr = dt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
-          const dirColor = r.direction === 'BULLISH' ? 'var(--green)' : r.direction === 'BEARISH' ? 'var(--red)' : 'var(--dim)';
-          return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
-            <td style="padding:4px 4px;color:var(--dim);white-space:nowrap;">${dateStr} ${timeStr}</td>
-            <td style="padding:4px 4px;font-weight:600;">${r.name}</td>
-            <td style="padding:4px 4px;">${r.kind}${r.direction ? ` <span style="color:${dirColor};">${r.direction}</span>` : ''}</td>
-            <td style="padding:4px 4px;color:var(--dim);">${r.detail}</td>
-          </tr>`;
-        }).join('') + `</table>`;
+        wrap.innerHTML = groups.map(g => `
+          <div style="margin-bottom:10px;">
+            <div style="font-size:10.5px;color:var(--dim);margin-bottom:3px;letter-spacing:0.3px;">${g.kind} ${g.source}</div>
+            ${renderMomentumTable(g.rows)}
+          </div>`).join('');
       } catch (e) { wrap.textContent = 'Failed to load'; }
     }
     fetchMomentumEventsLog();
@@ -9965,8 +9980,8 @@ function renderVolumeScannerUI(d) {
 
     <!-- Exploratory Triggers (11 Sep) — Fast Momentum + S/R Bounce -->
     <div style="border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px;margin-bottom:12px;">
-      <div style="font-size:11px;color:var(--dim);margin-bottom:6px;">⚡🎯🪔📐🏄🚀🔄📊 EXPLORATORY TRIGGERS <span style="opacity:0.6;">(not Main Engine confirmed)</span></div>
-      <div id="explore-triggers-body" style="font-size:11.5px;line-height:1.6;">Loading...</div>
+      <div style="font-size:11px;color:var(--dim);margin-bottom:6px;">⚡🎯🪔📐🏄📊 EXPLORATORY TRIGGERS <span style="opacity:0.6;">(NIFTY-only, not Main Engine confirmed)</span></div>
+      <div id="explore-triggers-body" style="font-size:11.5px;line-height:1.6;max-height:320px;overflow-y:auto;">Loading...</div>
     </div>
 
     <!-- Combined PCR (12 Sep) — Nifty+BankNifty+Sensex+Top10-stocks blended -->
@@ -10006,55 +10021,70 @@ function renderVolumeScannerUI(d) {
     </script>
 
     <script>
+    // 20 Sep — this card is NIFTY-only by design. Stock-level triggers
+    // (Stock Momentum, 52W Reversal) have their own dedicated Momentum
+    // Events Log table in the SCANNER tab (fetchMomentumEventsLog above) —
+    // showing them here too would duplicate/mix stock-level and index-level
+    // signals in one place.
+    // 20 Sep — grouped by source (not one flat time-merged list) so each
+    // trigger type's own entries stay together — Fast Momentum's own
+    // timeline doesn't interleave with S/R Bounce's, etc.
+    function renderTriggerRow(r) {
+      const bull = r.direction === 'BULLISH';
+      const isNeutral = r.direction == null;
+      const color = isNeutral ? 'var(--amber)' : (bull ? 'var(--green)' : 'var(--red)');
+      const tint  = isNeutral ? 'rgba(255,180,0,0.07)' : (bull ? 'rgba(0,200,120,0.07)' : 'rgba(255,70,70,0.07)');
+      const time = new Date(r.ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+      return `
+        <div style="display:flex;align-items:center;gap:9px;padding:6px 9px;margin-bottom:4px;background:${tint};border-left:3px solid ${color};border-radius:6px;">
+          <div style="flex:1;min-width:0;">
+            <span style="color:${color};font-weight:700;font-size:12px;letter-spacing:0.3px;">${r.direction || 'DIVERGENCE'}</span>
+            <div style="font-size:11.5px;color:var(--text);margin-top:1px;">${r.label}</div>
+          </div>
+          <div style="font-size:10px;color:var(--dim);white-space:nowrap;align-self:flex-start;">${time}</div>
+        </div>`;
+    }
+    function renderTriggerGroups(groups) {
+      // groups: [{ kind, source, rows }] — only non-empty groups render, in the given order
+      const nonEmpty = groups.filter(g => g.rows.length > 0);
+      if (!nonEmpty.length) return null;
+      return nonEmpty.map(g => `
+        <div style="margin-bottom:10px;">
+          <div style="font-size:10.5px;color:var(--dim);margin-bottom:3px;letter-spacing:0.3px;">${g.kind} ${g.source}</div>
+          ${g.rows.map(renderTriggerRow).join('')}
+        </div>`).join('');
+    }
     async function fetchExploratoryTriggers() {
       const body = document.getElementById('explore-triggers-body');
       if (!body) return;
       try {
-        const [fm, sr, mu, orb, tr, sm, rv, ic] = await Promise.all([
-          fetch('/api/fast-momentum-log?limit=5').then(r => r.json()),
-          fetch('/api/sr-bounce-log?limit=5').then(r => r.json()),
-          fetch('/api/murarka-log?limit=5').then(r => r.json()),
-          fetch('/api/orb-log?limit=5').then(r => r.json()),
-          fetch('/api/trend-rider-log?limit=5').then(r => r.json()),
-          fetch('/api/stock-momentum-log?limit=5').then(r => r.json()),
-          fetch('/api/stock-reversal-log?limit=5').then(r => r.json()),
-          fetch('/api/index-confirmation-log?limit=5').then(r => r.json()),
+        const [fm, sr, mu, orb, tr, ic] = await Promise.all([
+          fetch('/api/fast-momentum-log?limit=3').then(r => r.json()),
+          fetch('/api/sr-bounce-log?limit=3').then(r => r.json()),
+          fetch('/api/murarka-log?limit=3').then(r => r.json()),
+          fetch('/api/orb-log?limit=3').then(r => r.json()),
+          fetch('/api/trend-rider-log?limit=3').then(r => r.json()),
+          fetch('/api/index-confirmation-log?limit=3').then(r => r.json()),
         ]);
-        const fmRows = (fm.rows || []).map(r => ({ ...r, kind: '⚡', source: 'Fast Momentum', label: `NIFTY ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts/${r.window_min}min` }));
-        const srRows = (sr.rows || []).map(r => ({ ...r, kind: '🎯', source: 'S/R Bounce', label: `${r.level_type}@${Number(r.level_price).toFixed(0)}` }));
-        const muRows = (mu.rows || []).map(r => ({ ...r, kind: '🪔', source: 'Murarka', direction: r.side === 'CE' ? 'BULLISH' : 'BEARISH', label: `PCR ${Number(r.pcr).toFixed(2)} + VWAP ${Number(r.vwap_dist_pct).toFixed(2)}%` }));
-        const orbRows = (orb.rows || []).map(r => ({ ...r, kind: '📐', source: 'ORB', label: `broke ${Number(r.breakout_pts).toFixed(1)}pts (range ${Number(r.range_low).toFixed(0)}-${Number(r.range_high).toFixed(0)})` }));
-        // 15 Sep additions — same {ts, direction, kind, source, label} shape as the four above.
-        const trRows = (tr.rows || []).map(r => ({ ...r, kind: '🏄', source: 'Trend Rider', label: `RSI ${Number(r.rsi).toFixed(0)} · ADX ${Number(r.adx).toFixed(0)} · pullback ${Number(r.pullback_pct).toFixed(2)}%` }));
-        const smRows = (sm.rows || []).map(r => ({ ...r, kind: '🚀', source: 'Stock Momentum', label: `${r.name} ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts (${Number(r.move_pct).toFixed(1)}%)` }));
-        const rvRows = (rv.rows || []).map(r => ({ ...r, kind: '🔄', source: '52W Reversal', direction: r.direction === 'BULLISH_REVERSAL' ? 'BULLISH' : 'BEARISH', label: `${r.name} off ${r.extreme === '52W_LOW' ? '52w low' : '52w high'} ${Number(r.move_pct).toFixed(1)}%` }));
+        const fmRows = (fm.rows || []).map(r => ({ ...r, label: `NIFTY ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts/${r.window_min}min` }));
+        const srRows = (sr.rows || []).map(r => ({ ...r, label: `${r.level_type}@${Number(r.level_price).toFixed(0)}` }));
+        const muRows = (mu.rows || []).map(r => ({ ...r, direction: r.side === 'CE' ? 'BULLISH' : 'BEARISH', label: `PCR ${Number(r.pcr).toFixed(2)} + VWAP ${Number(r.vwap_dist_pct).toFixed(2)}%` }));
+        const orbRows = (orb.rows || []).map(r => ({ ...r, label: `broke ${Number(r.breakout_pts).toFixed(1)}pts (range ${Number(r.range_low).toFixed(0)}-${Number(r.range_high).toFixed(0)})` }));
+        // 15 Sep additions — same {ts, direction, label} shape as the four above.
+        const trRows = (tr.rows || []).map(r => ({ ...r, label: `RSI ${Number(r.rsi).toFixed(0)} · ADX ${Number(r.adx).toFixed(0)} · pullback ${Number(r.pullback_pct).toFixed(2)}%` }));
         // 20 Sep — Index Confirmation (NIFTY vs BankNifty, Dow Theory-adapted).
         // DIVERGENCE rows have no single direction — shown neutral (dim, no tint).
-        const icRows = (ic.rows || []).map(r => ({ ...r, kind: '📊', source: 'Index Confirm', direction: r.result.startsWith('CONFIRMED') ? r.result.replace('CONFIRMED_', '') : null, label: r.result.startsWith('CONFIRMED') ? `NIFTY+BankNifty both confirm` : `NIFTY:${r.nifty_event} vs BankNifty:${r.banknifty_event}` }));
-        const all = [...fmRows, ...srRows, ...muRows, ...orbRows, ...trRows, ...smRows, ...rvRows, ...icRows].sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, 8);
-        if (!all.length) {
-          body.innerHTML = '<div style="color:var(--dim);">No fires yet — these are new, still building a track record.</div>';
-          return;
-        }
-        body.innerHTML = all.map(r => {
-          const bull = r.direction === 'BULLISH';
-          const isNeutral = r.direction == null;
-          const color = isNeutral ? 'var(--amber)' : (bull ? 'var(--green)' : 'var(--red)');
-          const tint  = isNeutral ? 'rgba(255,180,0,0.07)' : (bull ? 'rgba(0,200,120,0.07)' : 'rgba(255,70,70,0.07)');
-          const time = new Date(r.ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-          return `
-            <div style="display:flex;align-items:center;gap:9px;padding:7px 9px;margin-bottom:5px;background:${tint};border-left:3px solid ${color};border-radius:6px;">
-              <div style="font-size:16px;line-height:1;">${r.kind}</div>
-              <div style="flex:1;min-width:0;">
-                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                  <span style="color:${color};font-weight:700;font-size:12px;letter-spacing:0.3px;">${r.direction || 'DIVERGENCE'}</span>
-                  <span style="font-size:9.5px;color:var(--dim);background:rgba(255,255,255,0.07);padding:1px 6px;border-radius:8px;white-space:nowrap;">${r.source}</span>
-                </div>
-                <div style="font-size:11.5px;color:var(--text);margin-top:2px;">${r.label}</div>
-              </div>
-              <div style="font-size:10px;color:var(--dim);white-space:nowrap;align-self:flex-start;">${time}</div>
-            </div>`;
-        }).join('');
+        const icRows = (ic.rows || []).map(r => ({ ...r, direction: r.result.startsWith('CONFIRMED') ? r.result.replace('CONFIRMED_', '') : null, label: r.result.startsWith('CONFIRMED') ? `NIFTY+BankNifty both confirm` : `NIFTY:${r.nifty_event} vs BankNifty:${r.banknifty_event}` }));
+
+        const html = renderTriggerGroups([
+          { kind: '⚡', source: 'Fast Momentum', rows: fmRows },
+          { kind: '🎯', source: 'S/R Bounce',    rows: srRows },
+          { kind: '🪔', source: 'Murarka',       rows: muRows },
+          { kind: '📐', source: 'ORB',           rows: orbRows },
+          { kind: '🏄', source: 'Trend Rider',   rows: trRows },
+          { kind: '📊', source: 'Index Confirm', rows: icRows },
+        ]);
+        body.innerHTML = html || '<div style="color:var(--dim);">No fires yet — these are new, still building a track record.</div>';
       } catch (e) { body.textContent = 'Failed to load'; }
     }
     fetchExploratoryTriggers();
