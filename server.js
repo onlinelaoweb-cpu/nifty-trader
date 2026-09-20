@@ -8993,6 +8993,52 @@ app.get('/api/regime-trajectory', async (req, res) => {
     }
 });
 
+// 20 Sep — weekly avg VIX + win-rate per VIX bucket, to check whether the
+// sustained Aug 10-31 overall win-rate decline (seen in regime-trajectory)
+// correlates with a genuine VIX-regime shift (market conditions actually
+// changed) rather than an app-side issue. Same bucket logic as
+// computePerformanceAnalytics: <14 Low, <18 Normal, else High.
+app.get('/api/vix-trajectory', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const windowDays = Math.min(parseInt(req.query.days) || 90, 180);
+        const r = await dbPool.query(`
+            SELECT
+                date_trunc('week', ts AT TIME ZONE 'Asia/Kolkata')::date AS week_start,
+                ROUND(AVG(entry_vix)::numeric, 2) AS avg_vix,
+                ROUND(MIN(entry_vix)::numeric, 2) AS min_vix,
+                ROUND(MAX(entry_vix)::numeric, 2) AS max_vix,
+                COUNT(*) FILTER (WHERE entry_vix < 14)::int AS low_vix_total,
+                COUNT(*) FILTER (WHERE entry_vix < 14 AND target_hit)::int AS low_vix_wins,
+                COUNT(*) FILTER (WHERE entry_vix >= 14 AND entry_vix < 18)::int AS normal_vix_total,
+                COUNT(*) FILTER (WHERE entry_vix >= 14 AND entry_vix < 18 AND target_hit)::int AS normal_vix_wins,
+                COUNT(*) FILTER (WHERE entry_vix >= 18)::int AS high_vix_total,
+                COUNT(*) FILTER (WHERE entry_vix >= 18 AND target_hit)::int AS high_vix_wins
+            FROM signal_performance
+            WHERE closed = true
+              AND ts >= NOW() - INTERVAL '${windowDays} days'
+              AND entry_vix IS NOT NULL
+            GROUP BY 1
+            ORDER BY 1 ASC
+        `);
+
+        const weeks = r.rows.map(row => {
+            const pct = (wins, total) => total > 0 ? Math.round((wins / total) * 100) : null;
+            return {
+                weekStart: row.week_start,
+                avgVix: row.avg_vix, minVix: row.min_vix, maxVix: row.max_vix,
+                lowVix:    { total: row.low_vix_total,    winRate: pct(row.low_vix_wins, row.low_vix_total) },
+                normalVix: { total: row.normal_vix_total, winRate: pct(row.normal_vix_wins, row.normal_vix_total) },
+                highVix:   { total: row.high_vix_total,   winRate: pct(row.high_vix_wins, row.high_vix_total) },
+            };
+        });
+
+        res.json({ success: true, windowDays, weeks });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 app.get('/api/mtf-suppression-diagnostic', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
