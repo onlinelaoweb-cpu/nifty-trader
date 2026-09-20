@@ -87,6 +87,7 @@ const {
     fetchGenericPCR,                               // 12 Sep: Combined PCR feature (BankNifty/Sensex/stocks)
     getFnOStockList,                              // Volume scanner Phase 1: F&O stock universe + EQ tokens
     getCurrentFyersFutSymbol,                     // correct NSE:NIFTY{YY}{MMM}FUT symbol (NIFTY-I is invalid on Fyers)
+    fetchFyersIntradayHistory,                     // 20 Sep: BankNifty candles for Index Confirmation trigger
 } = require('./src/api/nseData');
 const {
     sendSignalAlert, sendMTFAlert,
@@ -3690,6 +3691,93 @@ RSI: ${rsi != null ? rsi.toFixed(1) : '--'}
     }
 }
 
+// ── Index Confirmation Trigger (20 Sep) ──────────────────────────────────────
+// 5th standalone exploratory trigger. Adapted from Dow Theory's core
+// index-confirmation principle (originally: Dow Jones Industrial +
+// Transportation must both confirm a trend for it to be trusted) — here,
+// NIFTY vs BankNifty. Reuses detectBOSCHOCH() (physicsOfTrading.js, already
+// powers NIFTY's own Physics-of-Trading tab) unmodified against BankNifty's
+// own candles, resampled to the same 5-min bars for a fair comparison
+// (NIFTY's sessionCandles are 1-min; BankNifty's come from a fresh Fyers
+// intraday fetch since we don't track its candles anywhere else).
+// This does NOT feed the Main Engine or replace anything — it's a new,
+// independent read, exploratory until it earns a track record like the
+// other 4 triggers.
+const IDX_CONFIRM_LOOKBACK = 30; // candles, matches detectBOSCHOCH's own default
+const IDX_CONFIRM_COOLDOWN_MIN = 15;
+
+let lastIdxConfirmResult = null, lastIdxConfirmAt = 0;
+
+async function checkIndexConfirmationTrigger() {
+    if (!isConfigured() || !isMarketOpen()) return;
+    try {
+        const niftyCandles1m = getSessionCandles();
+        if (!niftyCandles1m || niftyCandles1m.length < 15) return; // not enough bars yet to resample meaningfully
+        const niftyCandles5m = aggregateCandles(niftyCandles1m, 5);
+        if (niftyCandles5m.length < 10) return;
+
+        const bnCandles5m = await fetchFyersIntradayHistory('NSE:NIFTYBANK-INDEX', '5', 5);
+        if (!bnCandles5m || bnCandles5m.length < 10) return;
+
+        const niftyBOS = detectBOSCHOCH(niftyCandles5m, IDX_CONFIRM_LOOKBACK);
+        const bnBOS     = detectBOSCHOCH(bnCandles5m, IDX_CONFIRM_LOOKBACK);
+        if (niftyBOS.event === 'NONE' && bnBOS.event === 'NONE') return; // nothing to say yet
+
+        const niftyDir = niftyBOS.event.includes('BULLISH') ? 'BULLISH' : niftyBOS.event.includes('BEARISH') ? 'BEARISH' : null;
+        const bnDir    = bnBOS.event.includes('BULLISH') ? 'BULLISH' : bnBOS.event.includes('BEARISH') ? 'BEARISH' : null;
+
+        let result;
+        if (niftyDir && bnDir && niftyDir === bnDir) result = `CONFIRMED_${niftyDir}`;
+        else if (niftyDir && bnDir && niftyDir !== bnDir) result = 'DIVERGENCE';
+        else return; // one side has no clear event yet — not informative either way
+
+        // Cooldown: same result within 15 min doesn't re-alert, a changed
+        // result (confirmation flipping, or a divergence appearing/clearing) does.
+        if (lastIdxConfirmResult === result && (Date.now() - lastIdxConfirmAt) < IDX_CONFIRM_COOLDOWN_MIN * 60 * 1000) return;
+        lastIdxConfirmResult = result;
+        lastIdxConfirmAt     = Date.now();
+
+        const nifty = marketState.nifty;
+        const bnPrice = bnCandles5m[bnCandles5m.length - 1]?.close;
+        const isConfirmed = result.startsWith('CONFIRMED');
+        const msg = isConfirmed ? `
+🧪 <b>EXPLORATORY TRIGGER</b>
+📊 <b>INDEX CONFIRMATION — ${niftyDir}</b>
+━━━━━━━━━━━━━━━━━━
+NIFTY and BankNifty both confirm ${niftyDir.toLowerCase()} structure.
+NIFTY: ${niftyBOS.label}
+BankNifty: ${bnBOS.label}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT Main Engine confirmed.</b> Adapted from Dow Theory's index-confirmation principle, no historical track record yet. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Index Confirmation Trigger (exploratory)</i>
+`.trim() : `
+🧪 <b>EXPLORATORY TRIGGER</b>
+📊 <b>INDEX DIVERGENCE — NIFTY vs BankNifty</b>
+━━━━━━━━━━━━━━━━━━
+NIFTY: ${niftyBOS.label}
+BankNifty: ${bnBOS.label}
+⚠️ The two indices disagree — a move confirmed by only one index is historically less reliable (Dow Theory).
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT Main Engine confirmed.</b> No historical track record yet. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Index Confirmation Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`📊 [Index Confirmation] ${result} — NIFTY:${niftyBOS.event} BankNifty:${bnBOS.event}`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO index_confirmation_log (result, nifty_event, banknifty_event, nifty, banknifty)
+                 VALUES ($1,$2,$3,$4,$5)`,
+                [result, niftyBOS.event, bnBOS.event, nifty, bnPrice]
+            ).catch(e => console.warn('[Index Confirmation] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Index Confirmation] error:', e.message);
+    }
+}
+
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return false;
     // ── Race-condition guard: onTick fires synchronously on every websocket tick,
@@ -6220,6 +6308,24 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL orb_trigger_log table ready');
 
+        // ── index_confirmation_log table (20 Sep) ─────────────────────────────
+        // Tracks the new Index Confirmation trigger — see
+        // checkIndexConfirmationTrigger() header comment for full rationale
+        // (Dow Theory's index-confirmation principle, adapted to NIFTY vs
+        // BankNifty trend-structure via the existing detectBOSCHOCH()).
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS index_confirmation_log (
+                id              SERIAL PRIMARY KEY,
+                ts              TIMESTAMPTZ DEFAULT NOW(),
+                result          TEXT,
+                nifty_event     TEXT,
+                banknifty_event TEXT,
+                nifty           NUMERIC,
+                banknifty       NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL index_confirmation_log table ready');
+
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
         // (fire-and-forget snapshot), this table AUTOMATICALLY tracks what happened
@@ -8246,6 +8352,18 @@ app.get('/api/orb-log', async (req, res) => {
     }
 });
 
+// 20 Sep — Index Confirmation (NIFTY vs BankNifty) fire history
+app.get('/api/index-confirmation-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM index_confirmation_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // 15 Sep — Trend Rider / Stock Momentum / 52-Week Reversal fire history, same
 // read-only shape as the four endpoints above — feeds the Exploratory
 // Triggers dashboard panel alongside them.
@@ -9140,6 +9258,11 @@ function startPollingIntervals() {
     // so frequent-enough checking matters more here than for the slower ones.
     const orbTick = () => checkOpeningRangeBreakout().catch(e => console.warn('[ORB] tick error:', e.message));
     setTimeout(() => { orbTick(); setInterval(orbTick, 90 * 1000); }, 60 * 1000);
+    // Index Confirmation (20 Sep) — 5 min cadence: structural/trend check,
+    // not a fast-reacting signal, and involves a Fyers API call for
+    // BankNifty each time, so no need to run as often as the faster triggers.
+    const idxConfirmTick = () => checkIndexConfirmationTrigger().catch(e => console.warn('[Index Confirmation] tick error:', e.message));
+    setTimeout(() => { idxConfirmTick(); setInterval(idxConfirmTick, 5 * 60 * 1000); }, 65 * 1000);
     // Phase 5.2 (10 Sep) — CRUDEOIL PCR refresh, session-gated (only fetches
     // when isCrudeSessionOpen() — no point hitting Fyers for crude options
     // outside the evening window). ~90s cadence matches the other crude

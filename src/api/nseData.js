@@ -1859,6 +1859,47 @@ async function fetchFyersStockHistory(symbol, daysBack = 32) {
     }
 }
 
+// 20 Sep — generic intraday OHLC candle fetch (any resolution Fyers
+// supports: 1/2/3/5/10/15/20/30/45/60/120/180/240 min). Built for the Index
+// Confirmation trigger (NIFTY vs BankNifty trend-structure), which needs
+// full {open,high,low,close} candle objects — same shape as NIFTY's own
+// sessionCandles — so detectBOSCHOCH() (physicsOfTrading.js) can run on
+// BankNifty's candles unmodified. fetchFyersStockHistory above stays
+// daily-only/array-shaped for its own callers (volume scanner, 52w
+// high/low) — this is a separate function rather than changing that one.
+async function fetchFyersIntradayHistory(symbol, resolution = '5', daysBack = 5) {
+    if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return [];
+    try {
+        const to   = new Date();
+        const from = new Date(to.getTime() - daysBack * 24 * 60 * 60 * 1000);
+        const fmt  = (d) => d.toISOString().slice(0, 10);
+        const res  = await axios.get(
+            'https://api-t1.fyers.in/data/history',
+            {
+                params: {
+                    symbol, resolution, date_format: '1',
+                    range_from: fmt(from), range_to: fmt(to), cont_flag: '1',
+                },
+                headers: {
+                    'Authorization': `${FYERS_APP_ID}:${FYERS_ACCESS_TOKEN}`,
+                    'Content-Type' : 'application/json',
+                },
+                timeout: 10_000,
+            }
+        );
+        if (typeof res.data === 'string' && res.data.includes('<html')) return [];
+        const d = res.data;
+        if (!d || d.s !== 'ok' || !Array.isArray(d.candles)) return [];
+        // candle row: [epoch, open, high, low, close, volume]
+        return d.candles.map(row => ({
+            time: row[0], open: row[1], high: row[2], low: row[3], close: row[4], volume: row[5],
+        })).filter(c => c.close > 0);
+    } catch (e) {
+        console.warn(`[Fyers Intraday History] ${symbol} error: ${e.response?.status || e.message}`);
+        return [];
+    }
+}
+
 // ── Fyers API PCR ─────────────────────────────────────────────────────────────
 // Fetches Nifty option chain from Fyers API v3 → computes PCR, ATM PCR, walls.
 // Primary PCR source. Update FYERS_ACCESS_TOKEN daily before 9:15 AM.
@@ -2573,6 +2614,7 @@ module.exports = {
     fetchFyersQuote,
     fetchFyersQuotesBulk,
     fetchFyersStockHistory,
+    fetchFyersIntradayHistory,
     getCurrentFyersFutSymbol,
     getCrudeOilFutureToken,
     fetchCrudePCR,
