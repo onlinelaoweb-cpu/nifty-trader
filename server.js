@@ -3336,7 +3336,7 @@ async function checkStockMomentumTrigger() {
                 dbPool.query(
                     `INSERT INTO stock_momentum_log (name, direction, ltp, move_pts, move_pct, window_min, threshold)
                      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-                    [m.name, m.direction, m.ltp, m.movePts, m.movePct, m.spanMin, m.thresholdPts]
+                    [m.name, m.direction, m.ltp, m.movePts, m.movePct, Math.round(m.spanMin), m.thresholdPts]
                 ).catch(e => console.warn('[Stock Momentum] log error:', e.message));
             }
         }
@@ -3712,15 +3712,25 @@ async function checkIndexConfirmationTrigger() {
     if (!isConfigured() || !isMarketOpen()) return;
     try {
         const niftyCandles1m = getSessionCandles();
-        if (!niftyCandles1m || niftyCandles1m.length < 15) return; // not enough bars yet to resample meaningfully
+        if (!niftyCandles1m || niftyCandles1m.length < 15) {
+            console.log(`[Index Confirmation] skip — only ${niftyCandles1m?.length ?? 0} NIFTY 1m candles (need 15+)`);
+            return;
+        }
         const niftyCandles5m = aggregateCandles(niftyCandles1m, 5);
-        if (niftyCandles5m.length < 10) return;
+        if (niftyCandles5m.length < 10) {
+            console.log(`[Index Confirmation] skip — only ${niftyCandles5m.length} NIFTY 5m candles after resample (need 10+)`);
+            return;
+        }
 
         const bnCandles5m = await fetchFyersIntradayHistory('NSE:NIFTYBANK-INDEX', '5', 5);
-        if (!bnCandles5m || bnCandles5m.length < 10) return;
+        if (!bnCandles5m || bnCandles5m.length < 10) {
+            console.log(`[Index Confirmation] skip — BankNifty fetch returned only ${bnCandles5m?.length ?? 0} candles (need 10+) — check Fyers token/rate-limit`);
+            return;
+        }
 
         const niftyBOS = detectBOSCHOCH(niftyCandles5m, IDX_CONFIRM_LOOKBACK);
         const bnBOS     = detectBOSCHOCH(bnCandles5m, IDX_CONFIRM_LOOKBACK);
+        console.log(`[Index Confirmation] checked — NIFTY:${niftyBOS.event} BankNifty:${bnBOS.event} (${niftyCandles5m.length} vs ${bnCandles5m.length} candles)`);
         if (niftyBOS.event === 'NONE' && bnBOS.event === 'NONE') return; // nothing to say yet
 
         const niftyDir = niftyBOS.event.includes('BULLISH') ? 'BULLISH' : niftyBOS.event.includes('BEARISH') ? 'BEARISH' : null;
@@ -3807,9 +3817,13 @@ async function checkVolumeConfirmationTrigger() {
             volumeBaselineSamples.push(volume);
             if (volumeBaselineSamples.length > VOL_CONFIRM_BASELINE_SAMPLES) volumeBaselineSamples.shift();
         }
-        if (volumeBaselineSamples.length < 5) return; // not enough history for a meaningful baseline yet
+        if (volumeBaselineSamples.length < 5) {
+            console.log(`[Volume Confirmation] skip — only ${volumeBaselineSamples.length} volume samples so far (need 5+), current volume:${volume}`);
+            return;
+        }
 
         const bosEvent = marketState.physicsOfTrading?.bosChoch?.event;
+        console.log(`[Volume Confirmation] checked — bosChoch:${bosEvent ?? 'undefined'}, volume:${volume}, baseline samples:${volumeBaselineSamples.length}`);
         if (bosEvent !== 'BOS_BULLISH' && bosEvent !== 'BOS_BEARISH') return; // only trend-CONTINUATION events are in scope — CHOCH/NONE aren't what Dow's volume principle speaks to
 
         const avgVolume = volumeBaselineSamples.reduce((s, v) => s + v, 0) / volumeBaselineSamples.length;
