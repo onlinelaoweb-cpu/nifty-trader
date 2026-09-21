@@ -251,8 +251,25 @@ async function sendSignalAlert(state, prevSignal, strikeData = null, autoLogged 
     const changedFromLine = (prevSignal && prevSignal !== state.signal)
         ? `<i>(changed from ${prevSignal})</i>\n` : '';
 
+    // 21 Sep — low-historical-winrate warning shown right next to the Grade
+    // letter, not just buried in the Probability line near the bottom. Per
+    // the user's own experience: "Grade A ⭐⭐⭐⭐" reads as high-quality at a
+    // glance, and a 38% historical win-rate on the same setup can get missed
+    // on a small screen before scrolling further. This does NOT touch the
+    // Grade letter or sizeHint themselves — those stay based on real-time
+    // confidence, as reasoned through with the user (a historical win-rate
+    // pulling the Grade itself down would make Grade flip-flop on small-
+    // sample noise, the same instability problem seen elsewhere in this
+    // codebase with N=3 sample sizes). This is purely an additional,
+    // above-the-fold caution flag alongside the existing Probability line.
+    const lowWinRateTag = (() => {
+        const st = state.similarSetupStats;
+        if (!st || !st.enough || st.winRate == null) return '';
+        return st.winRate < 45 ? ` ⚠️LOW-HIST(${st.winRate}%)` : '';
+    })();
+
     const gradeLabel = state.tradeQuality
-        ? ` — Grade ${state.tradeQuality.grade}${state.tradeQuality.stars ? ` ${state.tradeQuality.stars}` : ''} (${state.tradeQuality.sizeHint})`
+        ? ` — Grade ${state.tradeQuality.grade}${state.tradeQuality.stars ? ` ${state.tradeQuality.stars}` : ''}${lowWinRateTag} (${state.tradeQuality.sizeHint})`
         : '';
 
     const checklistLine = (() => {
@@ -380,8 +397,15 @@ async function sendMTFAlert(state, strikeData = null, autoLogged = false) {
     // to parse jargon to know what to do. Tiered off the same mainConfirms /
     // leadQuality data that already existed, just surfaced up front instead
     // of buried after 15 lines of technical fields.
+    // 21 Sep — same low-win-rate warning tag as the main signal message, for
+    // consistency (see that comment for full reasoning).
+    const mtfLowWinRateTag = (() => {
+        const st = state.similarSetupStats;
+        if (!st || !st.enough || st.winRate == null) return '';
+        return st.winRate < 45 ? ` ⚠️LOW-HIST(${st.winRate}%)` : '';
+    })();
     const verdictLine = mainConfirms && state.tradeQuality
-        ? `✅ <b>TAKE — main engine confirms this trade right now</b> (Grade ${state.tradeQuality.grade}${state.tradeQuality.stars ? ` ${state.tradeQuality.stars}` : ''}, ${state.tradeQuality.sizeHint})`
+        ? `✅ <b>TAKE — main engine confirms this trade right now</b> (Grade ${state.tradeQuality.grade}${state.tradeQuality.stars ? ` ${state.tradeQuality.stars}` : ''}${mtfLowWinRateTag}, ${state.tradeQuality.sizeHint})`
         : lq?.label === 'Strong Confluence'
             ? `🟡 <b>WATCH ONLY</b> — strong setup on the MTF tracker, but the main engine still says WAIT. Size down or skip until it confirms.`
             : lq?.label === 'Moderate'
