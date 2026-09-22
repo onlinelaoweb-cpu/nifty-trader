@@ -55,7 +55,7 @@ const { injectAngelSession: injectAngelSessionVolScan,
         getVolumeScannerBySector,
         getStockMomentumSnapshot,
         getStockReversalSnapshot } = require('./src/api/volumeScanner');
-const { computeTrendRiderSetup } = require('./src/utils/trendRider');
+const { computeTrendRiderSetup, computeCrudeTrendRiderSetup } = require('./src/utils/trendRider');
 const { calculateSRLevels }         = require('./src/api/levels');
 const { computeDynamicLevels, classifyDynamicLevels } = require('./src/api/dynamicLevels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo, detectBOSCHOCH } = require('./src/api/physicsOfTrading');
@@ -3866,6 +3866,197 @@ ${isConfirmed ? '✅ Volume backs this move — Dow Theory\'s "genuine trend" pa
     }
 }
 
+// ── CRUDE Fast Momentum Trigger (22 Sep) ─────────────────────────────────────
+// First CRUDE-specific exploratory trigger, adapted directly from NIFTY's own
+// checkFastMomentumTrigger() above — same raw-velocity philosophy, same
+// cooldown/dedup pattern. Uses marketState.crudeoil.candles1m, which builds
+// its own high/low/close from the raw price-tick stream (NOT from the
+// WS-parsed tick.open/high/low fields whose offset bug was just fixed) — so
+// this was never affected by that bug, and stays that way for the same
+// reason: independent of any one upstream field's correctness.
+// No ATR available for crude (computeCrudeIndicators doesn't compute one —
+// NIFTY's version pulls from dynamicLevels.atr, which has no crude
+// equivalent), so this computes a lightweight ATR-proxy inline (average
+// high-low range over the last 14 candles) rather than building a whole new
+// shared utility for one trigger. Threshold floor (10pts) is scaled down
+// from NIFTY's 30pts to roughly match crude's ~1/3 price scale (crude trades
+// ~8000-9500 vs NIFTY's ~23000+).
+const CRUDE_FAST_MOM_WINDOW_MIN  = 15;
+const CRUDE_FAST_MOM_MIN_PTS     = 10;
+const CRUDE_FAST_MOM_ATR_MULT    = 2.5;
+const CRUDE_FAST_MOM_COOLDOWN_MS = 20 * 60 * 1000;
+
+let lastCrudeFastMomentumAlertAt = 0, lastCrudeFastMomentumDirection = null;
+
+async function checkCrudeFastMomentumTrigger() {
+    if (!isConfigured() || !isCrudeSessionOpen()) return;
+    try {
+        const candles = marketState.crudeoil?.candles1m;
+        if (!candles || candles.length < CRUDE_FAST_MOM_WINDOW_MIN + 15) return; // +15 so the ATR-proxy window also has enough bars
+
+        const nowClose = candles[candles.length - 1].close;
+        const pastCandle = candles[candles.length - 1 - CRUDE_FAST_MOM_WINDOW_MIN];
+        if (!pastCandle) return;
+        const movePts = nowClose - pastCandle.close;
+
+        const atrWindow = candles.slice(-14);
+        const atrProxy = atrWindow.reduce((s, c) => s + (c.high - c.low), 0) / atrWindow.length;
+        const threshold = atrProxy > 0 ? Math.max(CRUDE_FAST_MOM_MIN_PTS, CRUDE_FAST_MOM_ATR_MULT * atrProxy) : CRUDE_FAST_MOM_MIN_PTS;
+
+        if (Math.abs(movePts) < threshold) return;
+
+        const direction = movePts > 0 ? 'BULLISH' : 'BEARISH';
+
+        const sinceLastMs = Date.now() - lastCrudeFastMomentumAlertAt;
+        if (direction === lastCrudeFastMomentumDirection && sinceLastMs < CRUDE_FAST_MOM_COOLDOWN_MS) return;
+
+        lastCrudeFastMomentumAlertAt = Date.now();
+        lastCrudeFastMomentumDirection = direction;
+
+        const rsi = computeCrudeIndicators(candles).rsi;
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+🛢️ <b>CRUDE FAST MOMENTUM — ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+CRUDEOIL moved <b>${movePts > 0 ? '+' : ''}${movePts.toFixed(1)}pts</b> in last ${CRUDE_FAST_MOM_WINDOW_MIN}min → ${nowClose.toFixed(1)}
+Threshold: ${threshold.toFixed(1)}pts (ATR-proxy adjusted)
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>RAW PRICE VELOCITY ONLY — NOT the crude Main Engine confirmed.</b>
+First CRUDE-specific exploratory trigger — no historical track record yet. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Crude Fast Momentum Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🛢️ [Crude Fast Momentum] ${direction} — ${movePts.toFixed(1)}pts in ${CRUDE_FAST_MOM_WINDOW_MIN}min (threshold:${threshold.toFixed(1)})`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO crude_fast_momentum_log (direction, crude, move_pts, window_min, atr_proxy, threshold, rsi)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+                [direction, nowClose, movePts, CRUDE_FAST_MOM_WINDOW_MIN, atrProxy, threshold, rsi]
+            ).catch(e => console.warn('[Crude Fast Momentum] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Crude Fast Momentum] error:', e.message);
+    }
+}
+
+// ── CRUDE Trend Rider Trigger (22 Sep) ───────────────────────────────────────
+// Second CRUDE-specific exploratory trigger — adapted from NIFTY's Trend
+// Rider. See computeCrudeTrendRiderSetup() (trendRider.js) for the full
+// adaptation rationale (crude's tf1m/tf5m MTF-agreement + ADX substitute for
+// NIFTY's dayType.trendProbability + rich MTF, since crude has neither).
+// Same cooldown philosophy as NIFTY's version — 15min, meant to catch
+// re-entries through an ongoing crude trend, not just a single setup.
+const CRUDE_TREND_RIDER_COOLDOWN_MS = 15 * 60 * 1000;
+let _crudeTrendRiderLastAlert = null;
+
+async function checkCrudeTrendRiderTrigger() {
+    if (!isConfigured() || !isCrudeSessionOpen()) return;
+    try {
+        const candles = marketState.crudeoil?.candles1m;
+        if (!candles || candles.length < 30) return;
+
+        const mtf = computeCrudeMTF(candles);
+        const adx = computeCrudeIndicators(candles);
+        const setup = computeCrudeTrendRiderSetup(candles, mtf, adx);
+        if (!setup) return;
+
+        const last = _crudeTrendRiderLastAlert;
+        const sinceLastMs = last ? Date.now() - last.at : Infinity;
+        if (last && last.direction === setup.direction && sinceLastMs < CRUDE_TREND_RIDER_COOLDOWN_MS) return;
+        _crudeTrendRiderLastAlert = { at: Date.now(), direction: setup.direction };
+
+        const isBull = setup.direction === 'BULLISH';
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+🛢️🏄 <b>CRUDE TREND RIDER — ${setup.direction}</b>
+━━━━━━━━━━━━━━━━━━
+CRUDEOIL ${setup.ltp.toFixed(1)} — sustained ${isBull ? 'overbought' : 'oversold'} RSI ${setup.rsi} (${setup.extremeCount}/6 candles extreme), ADX ${setup.adx}
+Pulled back to EMA9 (${setup.pullbackDistPct}% away, was ${setup.maxExtensionPct}% extended) and resuming ${isBull ? 'up' : 'down'}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — different philosophy from the crude Main Engine's own gates on purpose.</b>
+Treats sustained extreme RSI as continuation, not exhaustion — will be wrong on days that look trending but aren't. NOT Main Engine confirmed. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Crude Trend Rider Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🛢️🏄 [Crude Trend Rider] ${setup.direction} — RSI:${setup.rsi} ADX:${setup.adx} pullback:${setup.pullbackDistPct}%/${setup.maxExtensionPct}%`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO crude_trend_rider_log (direction, ltp, adx, rsi, extreme_count, pullback_pct, max_ext_pct)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+                [setup.direction, setup.ltp, setup.adx, setup.rsi, setup.extremeCount, setup.pullbackDistPct, setup.maxExtensionPct]
+            ).catch(e => console.warn('[Crude Trend Rider] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Crude Trend Rider] error:', e.message);
+    }
+}
+
+// ── CRUDE Murarka Entry Trigger (22 Sep) ─────────────────────────────────────
+// Third CRUDE-specific exploratory trigger — adapted from NIFTY's Murarka
+// Entry (PCR+VWAP), reusing computeMurarkaZone() completely unchanged (it's
+// a genuinely instrument-agnostic pure function — pcr/spot/vwap/isExpiry in,
+// zone+entry out, no NIFTY-specific assumptions inside it).
+// IMPORTANT CAVEAT: crude's per-tick volume is still unreliable (Vol:0
+// observed on every tick this whole session, a separate issue from the O/H/L
+// offset bug already fixed) — so there's no genuine volume-weighted VWAP
+// available yet. This uses a session-average-close as a VWAP-PROXY instead
+// (simple mean of today's crude candle closes) — a reasonable "fair value"
+// reference for the ±0.2% proximity check, but NOT a true VWAP. Revisit once
+// crude volume is fixed, if that turns out to matter for this trigger's
+// real-world accuracy.
+let lastCrudeMurarkaLoggedSide = null;
+
+async function checkCrudeMurarkaTrigger() {
+    if (!isConfigured() || !isCrudeSessionOpen()) return;
+    try {
+        const candles = marketState.crudeoil?.candles1m;
+        if (!candles || candles.length < 10) return;
+
+        const closes = candles.map(c => c.close).filter(c => c != null);
+        if (closes.length < 10) return;
+        const vwapProxy = closes.reduce((s, c) => s + c, 0) / closes.length;
+
+        const spot = marketState.crudeoil?.price;
+        const pcr  = marketState.crudeoil?.pcr?.pcr ?? null;
+        if (!spot || spot <= 0) return;
+
+        const { murarkaEntry } = computeMurarkaZone(pcr, spot, vwapProxy, false);
+
+        if (murarkaEntry.active && murarkaEntry.side !== lastCrudeMurarkaLoggedSide) {
+            lastCrudeMurarkaLoggedSide = murarkaEntry.side;
+            const vwapDistPct = vwapProxy > 0 ? Math.abs((spot - vwapProxy) / vwapProxy) * 100 : null;
+
+            if (dbPool) {
+                dbPool.query(
+                    `INSERT INTO crude_murarka_log (side, pcr, spot, vwap_proxy, vwap_dist_pct) VALUES ($1,$2,$3,$4,$5)`,
+                    [murarkaEntry.side, pcr, spot, vwapProxy, vwapDistPct]
+                ).catch(e => console.warn('[Crude Murarka] log error:', e.message));
+            }
+
+            const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+🛢️🎯 <b>Crude Murarka Entry — BUY ${murarkaEntry.side}</b>
+━━━━━━━━━━━━━━━━━━
+${murarkaEntry.reason}
+━━━━━━━━━━━━━━━━━━
+⚠️ Exploratory — no historical track record yet. VWAP is a session-average-close PROXY (crude's real volume data is still unreliable), not a true volume-weighted VWAP — treat the "near VWAP" read as approximate.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Crude Murarka Strategy (exploratory)</i>
+`.trim();
+            await sendRawMessage(msg).catch(e => console.warn('[Crude Murarka] alert error:', e.message));
+            console.log(`🛢️🎯 [Crude Murarka] BUY ${murarkaEntry.side} — PCR:${pcr} spot:${spot} vwapProxy:${vwapProxy.toFixed(1)}`);
+        } else if (!murarkaEntry.active) {
+            lastCrudeMurarkaLoggedSide = null;
+        }
+    } catch (e) {
+        console.warn('[Crude Murarka] error:', e.message);
+    }
+}
+
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return false;
     // ── Race-condition guard: onTick fires synchronously on every websocket tick,
@@ -6436,6 +6627,62 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL volume_confirmation_log table ready');
 
+        // ── crude_fast_momentum_log table (22 Sep) ────────────────────────────
+        // First CRUDE-specific exploratory trigger — adapted from NIFTY's own
+        // checkFastMomentumTrigger(). See checkCrudeFastMomentumTrigger() for
+        // full rationale.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS crude_fast_momentum_log (
+                id          SERIAL PRIMARY KEY,
+                ts          TIMESTAMPTZ DEFAULT NOW(),
+                direction   TEXT,
+                crude       NUMERIC,
+                move_pts    NUMERIC,
+                window_min  INT,
+                atr_proxy   NUMERIC,
+                threshold   NUMERIC,
+                rsi         NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL crude_fast_momentum_log table ready');
+
+        // ── crude_trend_rider_log table (22 Sep) ──────────────────────────────
+        // Second CRUDE-specific exploratory trigger — adapted from NIFTY's
+        // Trend Rider. See computeCrudeTrendRiderSetup() (trendRider.js) and
+        // checkCrudeTrendRiderTrigger() for full rationale.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS crude_trend_rider_log (
+                id             SERIAL PRIMARY KEY,
+                ts             TIMESTAMPTZ DEFAULT NOW(),
+                direction      TEXT,
+                ltp            NUMERIC,
+                adx            NUMERIC,
+                rsi            NUMERIC,
+                extreme_count  INT,
+                pullback_pct   NUMERIC,
+                max_ext_pct    NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL crude_trend_rider_log table ready');
+
+        // ── crude_murarka_log table (22 Sep) ──────────────────────────────────
+        // Third CRUDE-specific exploratory trigger — adapted from NIFTY's
+        // Murarka Entry (PCR+VWAP). See checkCrudeMurarkaTrigger() for the
+        // VWAP-proxy caveat (crude volume is currently unreliable, so this
+        // uses a simple session-average-close, not a genuine volume-weighted VWAP).
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS crude_murarka_log (
+                id             SERIAL PRIMARY KEY,
+                ts             TIMESTAMPTZ DEFAULT NOW(),
+                side           TEXT,
+                pcr            NUMERIC,
+                spot           NUMERIC,
+                vwap_proxy     NUMERIC,
+                vwap_dist_pct  NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL crude_murarka_log table ready');
+
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
         // (fire-and-forget snapshot), this table AUTOMATICALLY tracks what happened
@@ -8486,6 +8733,42 @@ app.get('/api/volume-confirmation-log', async (req, res) => {
     }
 });
 
+// 22 Sep — Crude Fast Momentum fire history
+app.get('/api/crude-fast-momentum-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM crude_fast_momentum_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 22 Sep — Crude Trend Rider fire history
+app.get('/api/crude-trend-rider-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM crude_trend_rider_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 22 Sep — Crude Murarka fire history
+app.get('/api/crude-murarka-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM crude_murarka_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // 15 Sep — Trend Rider / Stock Momentum / 52-Week Reversal fire history, same
 // read-only shape as the four endpoints above — feeds the Exploratory
 // Triggers dashboard panel alongside them.
@@ -9526,6 +9809,17 @@ function startPollingIntervals() {
     // volume baseline (needs a few samples before it can say anything).
     const volConfirmTick = () => checkVolumeConfirmationTrigger().catch(e => console.warn('[Volume Confirmation] tick error:', e.message));
     setTimeout(() => { volConfirmTick(); setInterval(volConfirmTick, 3 * 60 * 1000); }, 70 * 1000);
+    // Crude Fast Momentum (22 Sep) — 90s cadence, matches the other
+    // crude-session-gated intervals below.
+    const crudeFastMomTick = () => checkCrudeFastMomentumTrigger().catch(e => console.warn('[Crude Fast Momentum] tick error:', e.message));
+    setTimeout(() => { crudeFastMomTick(); setInterval(crudeFastMomTick, 90 * 1000); }, 75 * 1000);
+    // Crude Trend Rider (22 Sep) — 3 min cadence, matches NIFTY's own Trend
+    // Rider (slower-forming setup than Fast Momentum, no need to check as often).
+    const crudeTrendRiderTick = () => checkCrudeTrendRiderTrigger().catch(e => console.warn('[Crude Trend Rider] tick error:', e.message));
+    setTimeout(() => { crudeTrendRiderTick(); setInterval(crudeTrendRiderTick, 3 * 60 * 1000); }, 80 * 1000);
+    // Crude Murarka (22 Sep) — 90s cadence, matches Crude Fast Momentum.
+    const crudeMurarkaTick = () => checkCrudeMurarkaTrigger().catch(e => console.warn('[Crude Murarka] tick error:', e.message));
+    setTimeout(() => { crudeMurarkaTick(); setInterval(crudeMurarkaTick, 90 * 1000); }, 85 * 1000);
     // Phase 5.2 (10 Sep) — CRUDEOIL PCR refresh, session-gated (only fetches
     // when isCrudeSessionOpen() — no point hitting Fyers for crude options
     // outside the evening window). ~90s cadence matches the other crude

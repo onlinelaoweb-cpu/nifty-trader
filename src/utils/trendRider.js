@@ -119,4 +119,89 @@ function computeTrendRiderSetup(candles, dayType, mtf, adx) {
     };
 }
 
-module.exports = { computeTrendRiderSetup };
+// ── CRUDE Trend Rider setup (22 Sep) ──────────────────────────────────────
+// Crude-adapted version of computeTrendRiderSetup() above — same core
+// innovation (sustained-extreme-RSI + structural HH/LL confirmation +
+// pullback-and-resume entry timing), but crude doesn't have NIFTY's
+// dayType.trendProbability or rich 5m/15m/1h MTF alignment, so the "is this
+// a real trend day" gate is built from what crude DOES have instead:
+// computeCrudeMTF's tf1m/tf5m agreement (both timeframes must agree) + ADX
+// (same strength floor as NIFTY's version, 25).
+const CRUDE_TR_MIN_ADX          = 25;
+const CRUDE_TR_RSI_EXTREME_HIGH = 65;
+const CRUDE_TR_RSI_EXTREME_LOW  = 35;
+const CRUDE_TR_SUSTAIN_WINDOW   = 6;
+const CRUDE_TR_SUSTAIN_MIN      = 4;
+const CRUDE_TR_STRUCTURE_WINDOW = 8;
+const CRUDE_TR_STRUCTURE_MIN    = 4;
+const CRUDE_TR_PULLBACK_RATIO   = 0.6;
+
+function computeCrudeTrendRiderSetup(candles, mtf, adx) {
+    if (!mtf || mtf.tf1m == null || mtf.tf5m == null || mtf.tf1m !== mtf.tf5m) return null;
+    const direction = mtf.tf1m === 'BULL' ? 'BULLISH' : mtf.tf1m === 'BEAR' ? 'BEARISH' : null;
+    if (!direction) return null;
+
+    if (!adx || adx.adx == null || adx.adx < CRUDE_TR_MIN_ADX) return null;
+
+    if (!candles || candles.length < 30) return null;
+    const closes = candles.map(c => c.close).filter(c => c != null);
+    if (closes.length < 30) return null;
+
+    const rsiSeries = RSI.calculate({ values: closes, period: 9 });
+    const ema9Series = EMA.calculate({ values: closes, period: 9 });
+    if (rsiSeries.length < CRUDE_TR_SUSTAIN_WINDOW || ema9Series.length < CRUDE_TR_SUSTAIN_WINDOW) return null;
+
+    const recentRSI = rsiSeries.slice(-CRUDE_TR_SUSTAIN_WINDOW);
+    const extremeCount = direction === 'BULLISH'
+        ? recentRSI.filter(r => r >= CRUDE_TR_RSI_EXTREME_HIGH).length
+        : recentRSI.filter(r => r <= CRUDE_TR_RSI_EXTREME_LOW).length;
+    if (extremeCount < CRUDE_TR_SUSTAIN_MIN) return null;
+
+    const recentCandles = candles.slice(-CRUDE_TR_STRUCTURE_WINDOW);
+    if (recentCandles.length < CRUDE_TR_STRUCTURE_WINDOW) return null;
+    let structureHits = 0;
+    for (let i = 1; i < recentCandles.length; i++) {
+        if (direction === 'BULLISH' && recentCandles[i].high > recentCandles[i-1].high) structureHits++;
+        if (direction === 'BEARISH' && recentCandles[i].low  < recentCandles[i-1].low)  structureHits++;
+    }
+    if (structureHits < CRUDE_TR_STRUCTURE_MIN) return null;
+
+    const emaOffset = closes.length - ema9Series.length;
+    const distanceAt = (closesIdx) => {
+        const emaIdx = closesIdx - emaOffset;
+        if (emaIdx < 0 || emaIdx >= ema9Series.length) return null;
+        const c = closes[closesIdx], e = ema9Series[emaIdx];
+        return e > 0 ? Math.abs((c - e) / e) * 100 : null;
+    };
+
+    const sustainStartIdx = closes.length - CRUDE_TR_SUSTAIN_WINDOW;
+    const sustainDistances = [];
+    for (let i = sustainStartIdx; i < closes.length; i++) {
+        const d = distanceAt(i);
+        if (d != null) sustainDistances.push(d);
+    }
+    const maxExtension = sustainDistances.length ? Math.max(...sustainDistances) : null;
+    const currentDist = distanceAt(closes.length - 1);
+    if (maxExtension == null || currentDist == null || maxExtension <= 0) return null;
+
+    const pulledBackEnough = currentDist <= maxExtension * CRUDE_TR_PULLBACK_RATIO;
+    if (!pulledBackEnough) return null;
+
+    const lastCandle = candles[candles.length - 1];
+    if (lastCandle.open == null || lastCandle.close == null) return null;
+    const resuming = direction === 'BULLISH' ? lastCandle.close > lastCandle.open : lastCandle.close < lastCandle.open;
+    if (!resuming) return null;
+
+    return {
+        direction,
+        adx: parseFloat(adx.adx.toFixed(1)),
+        rsi: parseFloat(recentRSI[recentRSI.length - 1].toFixed(1)),
+        extremeCount,
+        ema9: parseFloat(ema9Series[ema9Series.length - 1].toFixed(1)),
+        ltp: closes[closes.length - 1],
+        pullbackDistPct: parseFloat(currentDist.toFixed(3)),
+        maxExtensionPct: parseFloat(maxExtension.toFixed(3)),
+    };
+}
+
+module.exports = { computeTrendRiderSetup, computeCrudeTrendRiderSetup };

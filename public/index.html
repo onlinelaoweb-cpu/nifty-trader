@@ -9622,6 +9622,44 @@ function _statRow(label, val) {
       Crude's signal engine is newer and simpler than NIFTY's — no PCR-walls, Renko, BOS/CHOCH, or Trend Conviction yet, just RSI/EMA/ADX (3m basis) + 1m/5m context + PCR. This shows what actually exists: fired-signal history, not placeholder sections.
     </div>
 
+    <!-- 22 Sep — Crude Exploratory Triggers. First one: Crude Fast Momentum.
+         Built to grow one-by-one, same pattern as NIFTY's — separate,
+         crude-only card (not mixed into NIFTY's Exploratory Triggers) since
+         these are a different instrument with a different session. Reuses
+         renderTriggerRow/renderTriggerGroups (defined once for NIFTY's own
+         card, generic enough for any source). -->
+    <div style="border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px;margin-bottom:14px;">
+      <div style="font-size:11px;color:var(--dim);margin-bottom:6px;">🛢️ CRUDE EXPLORATORY TRIGGERS <span style="opacity:0.6;">(not crude Main Engine confirmed)</span></div>
+      <div id="crude-explore-triggers-body" style="font-size:11.5px;line-height:1.6;max-height:280px;overflow-y:auto;">Loading...</div>
+    </div>
+    <script>
+    async function fetchCrudeExploratoryTriggers() {
+      const body = document.getElementById('crude-explore-triggers-body');
+      if (!body) return;
+      try {
+        const [cfm, ctr, cmu] = await Promise.all([
+          fetch('/api/crude-fast-momentum-log?limit=5').then(r => r.json()),
+          fetch('/api/crude-trend-rider-log?limit=5').then(r => r.json()),
+          fetch('/api/crude-murarka-log?limit=5').then(r => r.json()),
+        ]);
+        const cfmRows = (cfm.rows || []).map(r => ({ ...r, label: `CRUDE ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts/${r.window_min}min` }));
+        const ctrRows = (ctr.rows || []).map(r => ({ ...r, label: `RSI ${Number(r.rsi).toFixed(0)} · ADX ${Number(r.adx).toFixed(0)} · pullback ${Number(r.pullback_pct).toFixed(2)}%` }));
+        const cmuRows = (cmu.rows || []).map(r => ({ ...r, direction: r.side === 'CE' ? 'BULLISH' : 'BEARISH', label: `PCR ${Number(r.pcr).toFixed(2)} + VWAP-proxy ${Number(r.vwap_dist_pct).toFixed(2)}%` }));
+        const html = renderTriggerGroups([
+          { kind: '⚡', source: 'Crude Fast Momentum', rows: cfmRows },
+          { kind: '🏄', source: 'Crude Trend Rider',   rows: ctrRows },
+          { kind: '🎯', source: 'Crude Murarka',        rows: cmuRows },
+        ]);
+        body.innerHTML = html || '<div style="color:var(--dim);">No fires yet — these are new, still building a track record.</div>';
+      } catch (e) { body.textContent = 'Failed to load'; }
+    }
+    // NOTE: renderTriggerGroups/renderTriggerRow are defined later in this
+    // document (near the NIFTY Exploratory Triggers card) — waiting for
+    // window 'load' avoids calling them before that script block has run.
+    window.addEventListener('load', fetchCrudeExploratoryTriggers);
+    setInterval(fetchCrudeExploratoryTriggers, 120000);
+    </script>
+
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:14px;">
       <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 4px;text-align:center;">
         <div style="font-size:9.5px;color:var(--dim);">Signals Today</div>
