@@ -80,14 +80,25 @@ function parseQuotePacket(buf, priceMin = 15000, priceMax = 35000) {
             return null;
         }
 
-        // v2 offsets (v1 offsets - 12 for all fields after byte 46)
+        // v2 offsets — CORRECTED 22 Sep. The previous offsets (open@59,
+        // high@67, low@75, close@83) were wrong — manually decoded 2
+        // independent raw hex samples from tonight's CRUDEOIL ticks and
+        // found internally-consistent (High >= Open,Close >= Low) OHLC
+        // values sitting 24 bytes later than expected. This recurred
+        // through at least 5 consecutive ticks tonight, not just tick #1 —
+        // updates the 10 Sep diagnostic comment's "snapshot packet" theory,
+        // which assumed a one-off first-tick issue.
+        // volume/buyQty/sellQty (47/51/55) are likely ALSO offset by this
+        // same issue (CRUDEOIL volume has read 0 on every tick observed
+        // this whole session) but couldn't be confidently pinned down from
+        // the same byte-scan — left as-is rather than guess-fixing them.
         const volume  = buf.readUInt32LE(47);
         const buyQty  = buf.readUInt32LE(51);
         const sellQty = buf.readUInt32LE(55);
-        const open    = Number(buf.readBigInt64LE(59)) / 100;
-        const high    = Number(buf.readBigInt64LE(67)) / 100;
-        const low     = Number(buf.readBigInt64LE(75)) / 100;
-        const close   = Number(buf.readBigInt64LE(83)) / 100;
+        const open    = Number(buf.readBigInt64LE(91))  / 100;
+        const high    = Number(buf.readBigInt64LE(99))  / 100;
+        const low     = Number(buf.readBigInt64LE(107)) / 100;
+        const close   = Number(buf.readBigInt64LE(115)) / 100;
         const exchTs  = Number(buf.readBigInt64LE(35)); // unchanged
 
         return { price, volume, buyQty, sellQty, open, high, low, close, exchTs };
