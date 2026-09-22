@@ -75,7 +75,18 @@ function getPrevDayFromMemory(candles) {
         const d = new Date(c.ts + IST_OFFSET_MS).toISOString().slice(0, 10);
         return d < todayStr;
     });
-    const src = yesterday.length >= 10 ? yesterday : candles.slice(0, Math.floor(candles.length / 2));
+    // 22 Sep — FIX: previously fell back to "first half of whatever's in
+    // `candles`" when fewer than 10 genuine yesterday-candles existed. Right
+    // after a restart (candleHistory reset, no prior-day data reaccumulated
+    // yet), that fallback silently used TODAY's own early candles as
+    // "yesterday" — and since that "first half" grows as more of today's
+    // candles arrive, the computed Prev Day High/Low kept CHANGING through
+    // the day (confirmed: 23456 → 23365 on 22 Sep, both were today's own
+    // early-session values, not yesterday's). Now returns null instead,
+    // which correctly falls through to getPrevDayOHLC() — a genuine,
+    // independent NSE fetch, not contaminated by in-memory candle state.
+    if (yesterday.length < 10) return null;
+    const src = yesterday;
     if (src.length === 0) return null;
     return {
         high : Math.max(...src.map(c => c.high)),
