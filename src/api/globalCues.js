@@ -234,7 +234,14 @@ async function fetchGlobalCues() {
 
     const pct = allScores.length > 0 ? (allScores.reduce((a,b)=>a+b,0) / allScores.length) * 100 : 0;
     const globalBias  = pct > 20 ? 'BULLISH' : pct < -20 ? 'BEARISH' : 'NEUTRAL';
-    const globalScore = Math.round(50 + pct * 0.5);
+    // 23 Sep — FIX: was unbounded (pct can range ±300 from the weighted
+    // repeated-push scoring below, when many indices align strongly), so
+    // globalScore could show e.g. 134 or -20. The frontend badge is
+    // hardcoded to a "/10" label (score/10) and the fill-bar uses score
+    // directly as a CSS width % — both need a genuine 0-100 value. Clamping
+    // here fixes both at the source; the bias classification above (pct>20
+    // etc.) is untouched, it doesn't use this clamped value.
+    const globalScore = Math.max(0, Math.min(100, Math.round(50 + pct * 0.5)));
     const reasons     = [pct > 20 ? 'Global cues supportive ✅' : pct < -20 ? 'Global cues negative ⚠️' : 'Mixed global signals'];
 
     if (globalData.currency.usdinr?.changePct > 0.5)  reasons.push(`⚠️ Rupee weakening (₹${globalData.currency.usdinr.price}) — FII outflow risk`);

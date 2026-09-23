@@ -4315,8 +4315,8 @@ let _soundOn = false;
 let _prevSignal = null;   // tracks last rendered signal for sound change detection
 let _prevSignalForSuggest = null; // tracks signal for auto-suggest refresh
 let _lastKnownNifty = 0;   // persists last live price across market-closed cycles
-let _lastKnownChange = 0;
-let _lastKnownChangePct = 0;
+let _lastKnownChange = null;
+let _lastKnownChangePct = null;
 let _audioCtx = null;     // shared AudioContext — created lazily on first user gesture
 
 // Plays a short tone. type: "call" (ascending), "put" (descending), "warn" (flat)
@@ -4652,7 +4652,12 @@ function renderDashboard(s) {
       // correctly computes the real last-session change. Fall back to the
       // API payload's own s.change/s.changePct (now populated by the backend
       // even on closed days) whenever the local cache hasn't been set yet.
-      const chg = _lastKnownChange || s.change || 0, pct = _lastKnownChangePct || s.changePct || 0;
+      // 23 Sep — FIX: was `||`, which treats a genuinely-zero
+      // _lastKnownChange (market closed exactly flat) the same as
+      // never-set, incorrectly falling through to s.change. Now that the
+      // initial value above is null (not 0), ?? correctly distinguishes
+      // "never set this session" from "genuinely zero".
+      const chg = _lastKnownChange ?? s.change ?? 0, pct = _lastKnownChangePct ?? s.changePct ?? 0;
       chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '  (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)  · CLOSED';
       chgEl.className = 'price-change flat';
       const hdrChgEl = document.getElementById('header-nifty-chg');
