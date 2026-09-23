@@ -4117,7 +4117,11 @@ function switchTab(name,btn){
   if(name==='crude'){
     fetchCrudeLive();
     if (_crudeTabTimer) clearInterval(_crudeTabTimer);
-    _crudeTabTimer = setInterval(fetchCrudeLive, 20000);
+    // 23 Sep — FIX: was 20s, which felt static compared to NIFTY's instant
+    // SSE-push updates. /api/crude-live is cheap (in-memory state read, no
+    // external calls — see its own comment in server.js), and this timer
+    // only runs while the crude tab is actively open, so 3s is safe.
+    _crudeTabTimer = setInterval(fetchCrudeLive, 3000);
   } else {
     if (_crudeTabTimer) { clearInterval(_crudeTabTimer); _crudeTabTimer = null; }
   }
