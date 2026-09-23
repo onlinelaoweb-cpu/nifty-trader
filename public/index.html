@@ -9779,6 +9779,7 @@ function renderCrudeInsightsUI(d) {
 
     <div id="crude-price-block" style="text-align:center;padding:14px 0;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:10px;">
       <div id="crude-price" style="font-family:'Orbitron',monospace;font-size:32px;font-weight:700;color:var(--fg);">--</div>
+      <div id="crude-change" style="font-size:13px;font-weight:600;margin-top:2px;">--</div>
       <div id="crude-ohl" style="font-size:11px;color:var(--dim);margin-top:4px;">O:-- H:-- L:--</div>
     </div>
 
@@ -9841,6 +9842,17 @@ function renderCrudeLiveUI(d) {
 
   const priceEl = document.getElementById('crude-price');
   if (priceEl) priceEl.textContent = d.price ? ('₹' + d.price.toFixed(2)) : '--';
+  const changeEl = document.getElementById('crude-change');
+  if (changeEl) {
+    if (d.change != null && d.changePct != null) {
+      const up = d.change >= 0;
+      changeEl.textContent = `${up ? '▲' : '▼'} ${up ? '+' : ''}${d.change.toFixed(2)} (${up ? '+' : ''}${d.changePct.toFixed(2)}%)`;
+      changeEl.style.color = up ? 'var(--green)' : 'var(--red)';
+    } else {
+      changeEl.textContent = '--';
+      changeEl.style.color = 'var(--dim)';
+    }
+  }
   const ohlEl = document.getElementById('crude-ohl');
   if (ohlEl) ohlEl.textContent = `O:${d.open || '--'} H:${d.high || '--'} L:${d.low || '--'}`;
 

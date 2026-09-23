@@ -82,6 +82,7 @@ const {
     injectAngelSession: injectAngelSessionNSE,   // nseData Angel session for PCR
     triggerInitialPCR,                            // fire first PCR after Angel login
     fetchFyersQuote,                              // real volume/OHLC for index (Angel WS sends 0)
+    getCrudeFyersSymbol,                           // 23 Sep: crude's own Fyers futures symbol, for prevClose fetch
     getCrudeOilFutureToken,                       // Phase 2a: MCX CRUDEOIL futures token lookup
     fetchCrudePCR,                                 // Phase 5.2: independent crude PCR confirmation
     fetchGenericPCR,                               // 12 Sep: Combined PCR feature (BankNifty/Sensex/stocks)
@@ -186,7 +187,7 @@ let marketState = {
     // small object, NOT mixed into any of the NIFTY fields below — the WS
     // tick handler (onTick) branches on getActiveSession() and routes crude
     // ticks here exclusively, never touching marketState.nifty/wsVolume/etc.
-    crudeoil: { price: 0, volume: 0, open: null, high: null, low: null, lastUpdate: null, symbol: null, token: null, candles1m: [], pcr: null },
+    crudeoil: { price: 0, volume: 0, open: null, high: null, low: null, prevClose: null, lastUpdate: null, symbol: null, token: null, candles1m: [], pcr: null },
     signal: 'WAIT', confidence: 0,
     rsi: null, ema9: null, ema21: null, vwap: null,
     pcr: null, atmPcr: null, pcrSignal: 'N/A', atmPcrSignal: 'N/A',
@@ -464,6 +465,7 @@ let ceOptionPremiumSeries = [], peOptionPremiumSeries = [];
 // crude PCR interval, ~90s cadence — slower warm-up than NIFTY's 30s, but
 // same RSI(9) mechanism).
 let crudeCEOptionPremiumSeries = [], crudePEOptionPremiumSeries = [];
+let crudePrevCloseDate = null; // 23 Sep — day-cache guard for crude prevClose fetch
 let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-direction MTF alerts
 // FIX (11 Sep) — Fast Momentum Trigger tracking. Separate, exploratory alert
 // type — see checkFastMomentumTrigger() below for full rationale.
@@ -5272,23 +5274,25 @@ async function onTick(tickData) {
         }
         marketState.crudeoil.price      = price;
         if (tickData.volume > 0) marketState.crudeoil.volume = tickData.volume;
-        // FIX (10 Sep) — confirmed live over 15+ consecutive ticks tonight
-        // that O/H/L are ALL structurally unreliable for CRUDEOIL, not just
-        // occasional garbage. High/Low were already correctly rejected by
-        // the sane() range-check below (High ~490-520, Low ~4.65e16 — both
-        // wildly outside 50-150% of price). But Open (~9345-9350) happened
-        // to land WITHIN that range despite drifting tick-to-tick — a real
-        // session Open shouldn't move at all — so it was silently slipping
-        // through as a plausible-looking but still-wrong value. Pattern
+        // 23 Sep — RESTORED. The 10-Sep note below ("O/H/L structurally
+        // unreliable") was accurate AT THE TIME, but the actual root cause
+        // (a byte-offset bug in parseQuotePacket's O/H/L field reads) was
+        // found and fixed this session — confirmed live over multiple
+        // ticks tonight that O/H/L now arrive genuinely correct (e.g.
+        // O:8586 H:8914 L:8496, internally consistent, stable across
+        // ticks). The "don't populate" workaround below was never removed
+        // after that fix, so the frontend kept showing "--" even though
+        // the underlying data has been trustworthy since. See
+        // websocket.js's own parseQuotePacket comment for the fix details.
+        // Original 10-Sep note, kept for history: "confirmed live over 15+
+        // consecutive ticks tonight that O/H/L are ALL structurally
+        // unreliable for CRUDEOIL, not just occasional garbage... Pattern
         // (LTP correct, Open close-but-drifting, High/Low increasingly far
         // off) suggests MCX Mode 2 packets likely have extra bytes between
-        // LTP and Open that this NSE-based parser wasn't built to expect —
-        // needs fresh raw hex to properly root-cause (see the [WS-Crude
-        // Diag] logging in websocket.js). Until then: don't populate O/H/L
-        // for crude at all rather than show numbers that might look
-        // plausible but probably aren't. LTP/volume/candles are unaffected
-        // — confirmed working (a real signal fired tonight: BUY CALL @
-        // ₹9548, 85% confidence).
+        // LTP and Open that this NSE-based parser wasn't built to expect."
+        if (tickData.open  > 0) marketState.crudeoil.open  = tickData.open;
+        if (tickData.high  > 0) marketState.crudeoil.high  = tickData.high;
+        if (tickData.low   > 0) marketState.crudeoil.low   = tickData.low;
         marketState.crudeoil.lastUpdate = Date.now();
         addCrudeTick(price); // Phase 3 — build 1m candles from accepted ticks only
         _lastTickAt = Date.now(); // shared watchdog — a live crude tick counts as "connected" too
@@ -8977,9 +8981,13 @@ app.get('/api/crude-live', (req, res) => {
     // ADX shown two different ways at once. Reuse the signal's own
     // `indicators` field (already 3m-basis) instead of recomputing.
     const signal = computeCrudeSignal(candles1m, marketState.crudeoil.pcr);
+    // 23 Sep — day-change, NIFTY-style, now that prevClose is tracked.
+    const change = (rest.price > 0 && rest.prevClose > 0) ? parseFloat((rest.price - rest.prevClose).toFixed(2)) : null;
+    const changePct = (change !== null && rest.prevClose > 0) ? parseFloat(((change / rest.prevClose) * 100).toFixed(2)) : null;
     res.json({
         session: getActiveSession(),
         ...rest,
+        change, changePct,
         candles1mCount: candles1m.length,
         candles1mRecent: candles1m.slice(-5),
         indicators: signal.indicators,
@@ -10299,6 +10307,23 @@ function startPollingIntervals() {
             // 23 Sep — feed the rolling series for Crude Option RSI Divergence.
             if (result?.atmCEpremium > 0) { crudeCEOptionPremiumSeries.push(result.atmCEpremium); if (crudeCEOptionPremiumSeries.length > 60) crudeCEOptionPremiumSeries.shift(); }
             if (result?.atmPEpremium > 0) { crudePEOptionPremiumSeries.push(result.atmPEpremium); if (crudePEOptionPremiumSeries.length > 60) crudePEOptionPremiumSeries.shift(); }
+            // 23 Sep — crude prevClose, for a NIFTY-style day-change
+            // indicator (crude had no prevClose source at all before —
+            // WS ticks don't include it). Day-cached: fetched once per
+            // session via crudePrevCloseDate, not every 90s (prevClose is
+            // fixed for the whole session, so refetching would just waste
+            // ~260 Fyers calls/session for no benefit).
+            const todayStr = getIST().toISOString().slice(0, 10);
+            if (crudePrevCloseDate !== todayStr) {
+                const fyersSymbol = await getCrudeFyersSymbol();
+                if (fyersSymbol) {
+                    const q = await fetchFyersQuote(fyersSymbol);
+                    if (q?.close > 0) {
+                        marketState.crudeoil.prevClose = q.close;
+                        crudePrevCloseDate = todayStr;
+                    }
+                }
+            }
         } catch (e) { console.warn('[Crude PCR] interval error:', e.message); }
     }, 90*1000), 35*1000);
     // Phase 5.3 (10 Sep) — crude signal tracking. Checks every 60s during the
