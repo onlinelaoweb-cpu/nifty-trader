@@ -46,7 +46,7 @@ const { processIndicators,
         computePOC, computeDelta }                    = require('./src/api/indicators');
 const { fetchMarketData }           = require('./src/api/marketData');
 const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
-const { fetchGlobalCues }           = require('./src/api/globalCues');
+const { fetchGlobalCues, fetchIntradayBars } = require('./src/api/globalCues');
 const { fetchAdvanceDecline,
         injectAngelSession }        = require('./src/api/breadth');
 const { injectAngelSession: injectAngelSessionVolScan,
@@ -453,6 +453,17 @@ let orbState = { high: null, low: null, date: null, breakUpTime: null, breakDown
 // Freshly-computed once per day from the first valid ATM CE/PE premium seen.
 // Used to detect "premium already overextended" before issuing a fresh entry.
 let atmCEpremiumOpen = null, atmPEpremiumOpen = null, premiumOpenDate = null;
+// 23 Sep — rolling continuous premium series for Option RSI Divergence
+// trigger. Separate from marketState.optionFlow.history (sparse,
+// event-based — only records dominance-change moments) since RSI needs a
+// regular-interval series. Capped at 60 points (~consistent with other
+// rolling windows in this file); resets alongside atmCEpremiumOpen/
+// atmPEpremiumOpen on a new trading day.
+let ceOptionPremiumSeries = [], peOptionPremiumSeries = [];
+// 23 Sep — same idea, crude's own ATM CE/PE premium series (fed by the
+// crude PCR interval, ~90s cadence — slower warm-up than NIFTY's 30s, but
+// same RSI(9) mechanism).
+let crudeCEOptionPremiumSeries = [], crudePEOptionPremiumSeries = [];
 let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-direction MTF alerts
 // FIX (11 Sep) — Fast Momentum Trigger tracking. Separate, exploratory alert
 // type — see checkFastMomentumTrigger() below for full rationale.
@@ -786,9 +797,15 @@ function updateOptionFlow(atmCE, atmPE) {
     // Capture the day's FIRST valid ATM premium reading — static reference for
     // the rest of the session, used by the Option Premium Filter below.
     const todayStr = getIST().toISOString().slice(0, 10);
-    if (premiumOpenDate !== todayStr) { atmCEpremiumOpen = null; atmPEpremiumOpen = null; premiumOpenDate = todayStr; }
+    if (premiumOpenDate !== todayStr) {
+        atmCEpremiumOpen = null; atmPEpremiumOpen = null; premiumOpenDate = todayStr;
+        ceOptionPremiumSeries = []; peOptionPremiumSeries = []; // 23 Sep — reset alongside the day-open reference
+    }
     if (atmCEpremiumOpen === null && atmCE > 0) atmCEpremiumOpen = atmCE;
     if (atmPEpremiumOpen === null && atmPE > 0) atmPEpremiumOpen = atmPE;
+    // 23 Sep — feed the rolling series for Option RSI Divergence.
+    if (atmCE > 0) { ceOptionPremiumSeries.push(atmCE); if (ceOptionPremiumSeries.length > 60) ceOptionPremiumSeries.shift(); }
+    if (atmPE > 0) { peOptionPremiumSeries.push(atmPE); if (peOptionPremiumSeries.length > 60) peOptionPremiumSeries.shift(); }
 
     const prev = marketState.optionFlow;
     const ceChange = atmCE && prev.atmCEpremium ? parseFloat((((atmCE-prev.atmCEpremium)/prev.atmCEpremium)*100).toFixed(2)) : 0;
@@ -3249,7 +3266,17 @@ const FAST_MOMENTUM_COOLDOWN_MS  = 20 * 60 * 1000; // shorter than MTF's 60min �
 async function checkFastMomentumTrigger() {
     if (!isConfigured() || !isMarketOpen()) return;
     try {
-        const candles = getCandleHistory(true);
+        // 23 Sep — FIX: was getCandleHistory(true) (full multi-day history,
+        // never resets). Right at market open, today only has 1-2 genuine
+        // candles, so "15 candles back" reached into YESTERDAY's closing
+        // candles — mislabeling an overnight gap as a "15min move" (e.g. a
+        // -70pt overnight gap shown as "-70.5pts in last 15min" within
+        // minutes of open). getSessionCandles() resets at 9:15 IST (see its
+        // own comment in indicators.js, written for this exact overnight-gap
+        // reason, just for ADX rather than this trigger) — using it here
+        // means the trigger now correctly stays quiet until today has
+        // genuinely accumulated 15 minutes of its own candles.
+        const candles = getSessionCandles();
         if (!candles || candles.length < FAST_MOMENTUM_WINDOW_MIN + 1) return;
 
         const nowClose = candles[candles.length - 1].close;
@@ -3477,7 +3504,13 @@ let _trendRiderLastAlert = null; // { at, direction }
 async function checkTrendRiderTrigger() {
     if (!isConfigured() || !isMarketOpen()) return;
     try {
-        const candles = getCandleHistory(true);
+        // 23 Sep — FIX: was getCandleHistory(true) (full multi-day history)
+        // — same overnight-gap issue just fixed in Fast Momentum above. The
+        // sustained-RSI (6-candle) and structure (8-candle) windows could
+        // mix yesterday's closing candles with today's fresh open right
+        // after market start, producing a misleading "sustained trend" read
+        // that isn't genuinely intraday. getSessionCandles() resets at 9:15 IST.
+        const candles = getSessionCandles();
         const setup = computeTrendRiderSetup(candles, marketState.dayType, marketState.mtf, marketState.adx);
         if (!setup) return;
 
@@ -3544,7 +3577,13 @@ async function checkSRBounceTrigger() {
         const nifty = marketState.nifty;
         if (!srLvls?.length || !nifty) return;
 
-        const candles = getCandleHistory(true);
+        // 23 Sep — FIX: was getCandleHistory(true) (full multi-day history)
+        // — same overnight-gap issue just fixed in Fast Momentum/Trend
+        // Rider above. Right after market open, this lookback could reach
+        // into yesterday's closing candles, misleadingly implying a "tested
+        // this level" event happened in today's session when it actually
+        // happened yesterday. getSessionCandles() resets at 9:15 IST.
+        const candles = getSessionCandles();
         if (!candles || candles.length < SR_BOUNCE_LOOKBACK_MIN + 1) return;
         const recent = candles.slice(-SR_BOUNCE_LOOKBACK_MIN);
 
@@ -3707,6 +3746,8 @@ const IDX_CONFIRM_LOOKBACK = 30; // candles, matches detectBOSCHOCH's own defaul
 const IDX_CONFIRM_COOLDOWN_MIN = 15;
 
 let lastIdxConfirmResult = null, lastIdxConfirmAt = 0;
+// 23 Sep — same dedup pattern, Crude vs WTI Confirmation trigger.
+let lastCrudeWTIConfirmResult = null, lastCrudeWTIConfirmAt = 0;
 
 async function checkIndexConfirmationTrigger() {
     if (!isConfigured() || !isMarketOpen()) return;
@@ -4054,6 +4095,232 @@ ${murarkaEntry.reason}
         }
     } catch (e) {
         console.warn('[Crude Murarka] error:', e.message);
+    }
+}
+
+// ── Option RSI Divergence Trigger (23 Sep) ───────────────────────────────────
+// New NIFTY exploratory trigger — idea came directly out of this
+// conversation: manually reading two option-chain screenshots (a 130-level
+// CE and a 90-level PE) side by side and noticing their RSI moving in
+// OPPOSITE directions (CE's RSI recovering off a low while PE's RSI was
+// declining off a high) during an ongoing bearish move — read together as
+// "the bearish move's own options-market momentum is fading, even before
+// price itself confirms a reversal."
+// This computes RSI(9) on the ATM CE and PE premium's OWN rolling price
+// series (ceOptionPremiumSeries/peOptionPremiumSeries, fed every 30s by
+// syncOptionFlowFast() above) — NOT the underlying NIFTY spot RSI, which is
+// a different, already-existing indicator. Fires when the two premium RSIs
+// have moved by a meaningful, opposite amount over the lookback window.
+const OPT_RSI_DIV_LOOKBACK      = 6;  // ~3min at the 30s update cadence
+const OPT_RSI_DIV_MIN_DELTA     = 8;  // RSI points — each side must move at least this much
+const OPT_RSI_DIV_COOLDOWN_MS   = 15 * 60 * 1000;
+
+let lastOptRSIDivAt = 0, lastOptRSIDivDirection = null;
+
+async function checkOptionRSIDivergenceTrigger() {
+    if (!isConfigured() || !isMarketOpen()) return;
+    try {
+        if (ceOptionPremiumSeries.length < 10 + OPT_RSI_DIV_LOOKBACK || peOptionPremiumSeries.length < 10 + OPT_RSI_DIV_LOOKBACK) return;
+
+        const ceRSISeries = RSI.calculate({ values: ceOptionPremiumSeries, period: 9 });
+        const peRSISeries = RSI.calculate({ values: peOptionPremiumSeries, period: 9 });
+        if (ceRSISeries.length < OPT_RSI_DIV_LOOKBACK + 1 || peRSISeries.length < OPT_RSI_DIV_LOOKBACK + 1) return;
+
+        const ceRSINow = ceRSISeries[ceRSISeries.length - 1];
+        const ceRSIPast = ceRSISeries[ceRSISeries.length - 1 - OPT_RSI_DIV_LOOKBACK];
+        const peRSINow = peRSISeries[peRSISeries.length - 1];
+        const peRSIPast = peRSISeries[peRSISeries.length - 1 - OPT_RSI_DIV_LOOKBACK];
+        const ceDelta = ceRSINow - ceRSIPast;
+        const peDelta = peRSINow - peRSIPast;
+
+        // Divergence: one side rising, the other falling, both by a
+        // meaningful amount — not just noise on one side.
+        let direction = null;
+        if (ceDelta >= OPT_RSI_DIV_MIN_DELTA && peDelta <= -OPT_RSI_DIV_MIN_DELTA) direction = 'BEARISH_FADING'; // CE recovering, PE weakening — a bearish move losing steam
+        else if (peDelta >= OPT_RSI_DIV_MIN_DELTA && ceDelta <= -OPT_RSI_DIV_MIN_DELTA) direction = 'BULLISH_FADING'; // PE recovering, CE weakening — a bullish move losing steam
+        if (!direction) return;
+
+        if (lastOptRSIDivDirection === direction && (Date.now() - lastOptRSIDivAt) < OPT_RSI_DIV_COOLDOWN_MS) return;
+        lastOptRSIDivAt = Date.now();
+        lastOptRSIDivDirection = direction;
+
+        const nifty = marketState.nifty;
+        const isBearFading = direction === 'BEARISH_FADING';
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+🔀 <b>OPTION RSI DIVERGENCE — ${isBearFading ? 'BEARISH MOVE FADING' : 'BULLISH MOVE FADING'}</b>
+━━━━━━━━━━━━━━━━━━
+NIFTY ${nifty?.toFixed(1)}
+CE premium RSI: ${ceRSINow.toFixed(0)} (${ceDelta > 0 ? '+' : ''}${ceDelta.toFixed(0)} over ~${OPT_RSI_DIV_LOOKBACK * 0.5}min)
+PE premium RSI: ${peRSINow.toFixed(0)} (${peDelta > 0 ? '+' : ''}${peDelta.toFixed(0)} over ~${OPT_RSI_DIV_LOOKBACK * 0.5}min)
+${isBearFading ? 'CE recovering while PE weakens — the recent bearish move\'s own options-market momentum looks like it\'s fading.' : 'PE recovering while CE weakens — the recent bullish move\'s own options-market momentum looks like it\'s fading.'}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT Main Engine confirmed.</b> RSI here is on the CE/PE premium itself, not NIFTY spot. No historical track record yet — this idea came straight out of a chat conversation, first time it's being logged live. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Option RSI Divergence Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🔀 [Option RSI Divergence] ${direction} — CE RSI:${ceRSINow.toFixed(0)}(${ceDelta.toFixed(0)}) PE RSI:${peRSINow.toFixed(0)}(${peDelta.toFixed(0)})`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO option_rsi_divergence_log (direction, nifty, ce_premium, pe_premium, ce_rsi, pe_rsi, ce_rsi_delta, pe_rsi_delta)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                [direction, nifty, ceOptionPremiumSeries[ceOptionPremiumSeries.length-1], peOptionPremiumSeries[peOptionPremiumSeries.length-1], ceRSINow, peRSINow, ceDelta, peDelta]
+            ).catch(e => console.warn('[Option RSI Divergence] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Option RSI Divergence] error:', e.message);
+    }
+}
+
+// ── CRUDE Option RSI Divergence Trigger (23 Sep) ─────────────────────────────
+// Crude version of Option RSI Divergence above — same mechanism, crude's own
+// ATM CE/PE premium series (crudeCEOptionPremiumSeries/
+// crudePEOptionPremiumSeries, fed by the crude PCR interval's extended
+// fetchCrudePCR call, ~90s cadence). Needs more warm-up time than NIFTY's
+// version (~15min vs ~5min) given the slower update cadence — crude PCR
+// doesn't need NIFTY's faster polling since it's a confirmation gate here too.
+const CRUDE_OPT_RSI_DIV_LOOKBACK    = 6;  // ~9min at the 90s update cadence
+const CRUDE_OPT_RSI_DIV_MIN_DELTA   = 8;
+const CRUDE_OPT_RSI_DIV_COOLDOWN_MS = 15 * 60 * 1000;
+
+let lastCrudeOptRSIDivAt = 0, lastCrudeOptRSIDivDirection = null;
+
+async function checkCrudeOptionRSIDivergenceTrigger() {
+    if (!isConfigured() || !isCrudeSessionOpen()) return;
+    try {
+        if (crudeCEOptionPremiumSeries.length < 10 + CRUDE_OPT_RSI_DIV_LOOKBACK || crudePEOptionPremiumSeries.length < 10 + CRUDE_OPT_RSI_DIV_LOOKBACK) return;
+
+        const ceRSISeries = RSI.calculate({ values: crudeCEOptionPremiumSeries, period: 9 });
+        const peRSISeries = RSI.calculate({ values: crudePEOptionPremiumSeries, period: 9 });
+        if (ceRSISeries.length < CRUDE_OPT_RSI_DIV_LOOKBACK + 1 || peRSISeries.length < CRUDE_OPT_RSI_DIV_LOOKBACK + 1) return;
+
+        const ceRSINow = ceRSISeries[ceRSISeries.length - 1];
+        const ceRSIPast = ceRSISeries[ceRSISeries.length - 1 - CRUDE_OPT_RSI_DIV_LOOKBACK];
+        const peRSINow = peRSISeries[peRSISeries.length - 1];
+        const peRSIPast = peRSISeries[peRSISeries.length - 1 - CRUDE_OPT_RSI_DIV_LOOKBACK];
+        const ceDelta = ceRSINow - ceRSIPast;
+        const peDelta = peRSINow - peRSIPast;
+
+        let direction = null;
+        if (ceDelta >= CRUDE_OPT_RSI_DIV_MIN_DELTA && peDelta <= -CRUDE_OPT_RSI_DIV_MIN_DELTA) direction = 'BEARISH_FADING';
+        else if (peDelta >= CRUDE_OPT_RSI_DIV_MIN_DELTA && ceDelta <= -CRUDE_OPT_RSI_DIV_MIN_DELTA) direction = 'BULLISH_FADING';
+        if (!direction) return;
+
+        if (lastCrudeOptRSIDivDirection === direction && (Date.now() - lastCrudeOptRSIDivAt) < CRUDE_OPT_RSI_DIV_COOLDOWN_MS) return;
+        lastCrudeOptRSIDivAt = Date.now();
+        lastCrudeOptRSIDivDirection = direction;
+
+        const crude = marketState.crudeoil?.price;
+        const isBearFading = direction === 'BEARISH_FADING';
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+🛢️🔀 <b>CRUDE OPTION RSI DIVERGENCE — ${isBearFading ? 'BEARISH MOVE FADING' : 'BULLISH MOVE FADING'}</b>
+━━━━━━━━━━━━━━━━━━
+CRUDEOIL ${crude?.toFixed(1)}
+CE premium RSI: ${ceRSINow.toFixed(0)} (${ceDelta > 0 ? '+' : ''}${ceDelta.toFixed(0)} over ~${CRUDE_OPT_RSI_DIV_LOOKBACK * 1.5}min)
+PE premium RSI: ${peRSINow.toFixed(0)} (${peDelta > 0 ? '+' : ''}${peDelta.toFixed(0)} over ~${CRUDE_OPT_RSI_DIV_LOOKBACK * 1.5}min)
+${isBearFading ? 'CE recovering while PE weakens — the recent bearish move\'s own options-market momentum looks like it\'s fading.' : 'PE recovering while CE weakens — the recent bullish move\'s own options-market momentum looks like it\'s fading.'}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT the crude Main Engine confirmed.</b> RSI here is on the crude ATM CE/PE premium itself, not spot. No historical track record yet. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Crude Option RSI Divergence Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🛢️🔀 [Crude Option RSI Divergence] ${direction} — CE RSI:${ceRSINow.toFixed(0)}(${ceDelta.toFixed(0)}) PE RSI:${peRSINow.toFixed(0)}(${peDelta.toFixed(0)})`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO crude_option_rsi_divergence_log (direction, crude, ce_premium, pe_premium, ce_rsi, pe_rsi, ce_rsi_delta, pe_rsi_delta)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                [direction, crude, crudeCEOptionPremiumSeries[crudeCEOptionPremiumSeries.length-1], crudePEOptionPremiumSeries[crudePEOptionPremiumSeries.length-1], ceRSINow, peRSINow, ceDelta, peDelta]
+            ).catch(e => console.warn('[Crude Option RSI Divergence] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Crude Option RSI Divergence] error:', e.message);
+    }
+}
+
+// ── CRUDE vs WTI Confirmation Trigger (23 Sep) ───────────────────────────────
+// MCX Crude vs International WTI trend-structure confirmation — same Dow
+// Theory index-confirmation pattern as NIFTY vs BankNifty (see that
+// trigger's own comment for the full Dow Theory background), reusing
+// detectBOSCHOCH() unchanged once again. Arguably more directly meaningful
+// here than the NIFTY/BankNifty pairing: MCX Crude literally tracks
+// NYMEX-WTI with a USD-INR conversion layered on top, so when MCX's own
+// trend-structure diverges from WTI's, it can mean the MCX move is being
+// driven by rupee movement or local factors rather than genuine
+// international crude-price action — a distinction a crude options buyer
+// genuinely cares about. WTI's own candles come from fetchIntradayBars
+// (globalCues.js, newly exported for this) using its Yahoo symbol CL=F.
+// MCX crude's own 1m candles get resampled to 5m to match WTI's bars, same
+// as the NIFTY-BankNifty version.
+async function checkCrudeWTIConfirmationTrigger() {
+    if (!isConfigured() || !isCrudeSessionOpen()) return;
+    try {
+        const crudeCandles1m = marketState.crudeoil?.candles1m;
+        if (!crudeCandles1m || crudeCandles1m.length < 15) return;
+        const crudeCandles5m = aggregateCandles(crudeCandles1m, 5);
+        if (crudeCandles5m.length < 10) return;
+
+        const wtiCandles5m = await fetchIntradayBars('CL=F', 5, 150); // 150min lookback — plenty for a 30-candle 5m BOS/CHOCH window
+        if (!wtiCandles5m || wtiCandles5m.length < 10) return;
+
+        const crudeBOS = detectBOSCHOCH(crudeCandles5m, IDX_CONFIRM_LOOKBACK);
+        const wtiBOS   = detectBOSCHOCH(wtiCandles5m, IDX_CONFIRM_LOOKBACK);
+        if (crudeBOS.event === 'NONE' && wtiBOS.event === 'NONE') return;
+
+        const crudeDir = crudeBOS.event.includes('BULLISH') ? 'BULLISH' : crudeBOS.event.includes('BEARISH') ? 'BEARISH' : null;
+        const wtiDir   = wtiBOS.event.includes('BULLISH') ? 'BULLISH' : wtiBOS.event.includes('BEARISH') ? 'BEARISH' : null;
+
+        let result;
+        if (crudeDir && wtiDir && crudeDir === wtiDir) result = `CONFIRMED_${crudeDir}`;
+        else if (crudeDir && wtiDir && crudeDir !== wtiDir) result = 'DIVERGENCE';
+        else return;
+
+        if (lastCrudeWTIConfirmResult === result && (Date.now() - lastCrudeWTIConfirmAt) < IDX_CONFIRM_COOLDOWN_MIN * 60 * 1000) return;
+        lastCrudeWTIConfirmResult = result;
+        lastCrudeWTIConfirmAt     = Date.now();
+
+        const crude = marketState.crudeoil?.price;
+        const wtiPrice = wtiCandles5m[wtiCandles5m.length - 1]?.close;
+        const isConfirmed = result.startsWith('CONFIRMED');
+        const msg = isConfirmed ? `
+🧪 <b>EXPLORATORY TRIGGER</b>
+🛢️📊 <b>CRUDE vs WTI CONFIRMATION — ${crudeDir}</b>
+━━━━━━━━━━━━━━━━━━
+MCX Crude and International WTI both confirm ${crudeDir.toLowerCase()} structure.
+MCX: ${crudeBOS.label}
+WTI: ${wtiBOS.label}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT the crude Main Engine confirmed.</b> Adapted from Dow Theory's index-confirmation principle — MCX Crude tracks WTI directly, so this checks whether the MCX move genuinely reflects the international crude trend. No historical track record yet. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Crude vs WTI Confirmation Trigger (exploratory)</i>
+`.trim() : `
+🧪 <b>EXPLORATORY TRIGGER</b>
+🛢️📊 <b>CRUDE vs WTI DIVERGENCE</b>
+━━━━━━━━━━━━━━━━━━
+MCX: ${crudeBOS.label}
+WTI: ${wtiBOS.label}
+⚠️ MCX and international WTI disagree — the MCX move may be driven by USD-INR or local factors, not genuine crude-price action.
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT the crude Main Engine confirmed.</b> No historical track record yet. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Crude vs WTI Confirmation Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🛢️📊 [Crude vs WTI] ${result} — MCX:${crudeBOS.event} WTI:${wtiBOS.event}`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO crude_wti_confirmation_log (result, crude_event, wti_event, crude, wti)
+                 VALUES ($1,$2,$3,$4,$5)`,
+                [result, crudeBOS.event, wtiBOS.event, crude, wtiPrice]
+            ).catch(e => console.warn('[Crude vs WTI] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Crude vs WTI] error:', e.message);
     }
 }
 
@@ -5327,7 +5594,28 @@ async function refreshMTF() {
     }
 }
 async function refreshGlobal() {
-    try { const g=await fetchGlobalCues(); if(g) marketState.global=g; } catch(e) { console.error('Global:',e.message); }
+    try {
+        const g=await fetchGlobalCues();
+        if(g) {
+            marketState.global=g;
+            // 23 Sep — log a snapshot for global_cues_log history. Fires
+            // every time refreshGlobal runs (2min, unconditional — no
+            // market-hours gate), so this table genuinely covers the full
+            // 24hr global-cues story, not just NIFTY hours.
+            if (dbPool) {
+                dbPool.query(
+                    `INSERT INTO global_cues_log
+                      (global_score, global_bias, usdinr_pct, brent_pct, crude_wti_pct,
+                       dow_pct, nasdaq_pct, sp500_pct, banknifty_pct, nikkei_pct, hangseng_pct, dax_pct)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+                    [g.score, g.bias, g.currency?.usdinr?.changePct ?? null, g.commodities?.brent?.changePct ?? null,
+                     g.commodities?.crude?.changePct ?? null, g.us?.dow?.changePct ?? null, g.us?.nasdaq?.changePct ?? null,
+                     g.us?.sp500?.changePct ?? null, g.sectors?.bankNifty?.changePct ?? null,
+                     g.asia?.nikkei?.changePct ?? null, g.asia?.hangseng?.changePct ?? null, g.europe?.dax?.changePct ?? null]
+                ).catch(e => console.warn('[Global Cues Log] error:', e.message));
+            }
+        }
+    } catch(e) { console.error('Global:',e.message); }
     // Signal recalc — BankNifty lead / global bias just refreshed
     if (marketState.nifty > 0 && isMarketOpen()) {
         try { await updatePrice(marketState.nifty, marketState.change ?? 0, marketState.changePct ?? 0, marketState.source ?? 'yahoo'); }
@@ -6682,6 +6970,94 @@ async function initDB() {
             )
         `);
         console.log('✅ PostgreSQL crude_murarka_log table ready');
+
+        // ── option_rsi_divergence_log table (23 Sep) ──────────────────────────
+        // New NIFTY exploratory trigger — idea came directly out of manually
+        // reading CE/PE RSI divergence off two option-chain screenshots in
+        // this conversation. See checkOptionRSIDivergenceTrigger() for the
+        // full rationale.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS option_rsi_divergence_log (
+                id            SERIAL PRIMARY KEY,
+                ts            TIMESTAMPTZ DEFAULT NOW(),
+                direction     TEXT,
+                nifty         NUMERIC,
+                ce_premium    NUMERIC,
+                pe_premium    NUMERIC,
+                ce_rsi        NUMERIC,
+                pe_rsi        NUMERIC,
+                ce_rsi_delta  NUMERIC,
+                pe_rsi_delta  NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL option_rsi_divergence_log table ready');
+
+        // ── crude_option_rsi_divergence_log table (23 Sep) ────────────────────
+        // Crude version of Option RSI Divergence — same idea, crude's own
+        // ATM CE/PE premium RSI. See checkCrudeOptionRSIDivergenceTrigger().
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS crude_option_rsi_divergence_log (
+                id            SERIAL PRIMARY KEY,
+                ts            TIMESTAMPTZ DEFAULT NOW(),
+                direction     TEXT,
+                crude         NUMERIC,
+                ce_premium    NUMERIC,
+                pe_premium    NUMERIC,
+                ce_rsi        NUMERIC,
+                pe_rsi        NUMERIC,
+                ce_rsi_delta  NUMERIC,
+                pe_rsi_delta  NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL crude_option_rsi_divergence_log table ready');
+
+        // ── crude_wti_confirmation_log table (23 Sep) ─────────────────────────
+        // New crude trigger — MCX Crude vs International WTI trend-structure
+        // confirmation. Same Dow Theory index-confirmation pattern as NIFTY
+        // vs BankNifty, but arguably more directly meaningful here: MCX
+        // Crude literally tracks NYMEX-WTI (with USD-INR conversion), so a
+        // divergence can mean the MCX move is being driven by the rupee or
+        // local factors rather than genuine crude-price movement. See
+        // checkCrudeWTIConfirmationTrigger() for full rationale.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS crude_wti_confirmation_log (
+                id           SERIAL PRIMARY KEY,
+                ts           TIMESTAMPTZ DEFAULT NOW(),
+                result       TEXT,
+                crude_event  TEXT,
+                wti_event    TEXT,
+                crude        NUMERIC,
+                wti          NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL crude_wti_confirmation_log table ready');
+
+        // ── global_cues_log table (23 Sep) ────────────────────────────────────
+        // History tracker for the GLOBAL tab — confirmed refreshGlobal()
+        // already runs unconditionally every 2min (no market-hours gate on
+        // that setInterval), unlike market_snapshot_log which only logs when
+        // isNSEMarketDay(). Global cues genuinely needs its own 24/7 table
+        // since its most interesting moves (US overnight, Asia's morning
+        // open, Europe's afternoon) happen outside NIFTY's own hours.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS global_cues_log (
+                id             SERIAL PRIMARY KEY,
+                ts             TIMESTAMPTZ DEFAULT NOW(),
+                global_score   INT,
+                global_bias    TEXT,
+                usdinr_pct     NUMERIC,
+                brent_pct      NUMERIC,
+                crude_wti_pct  NUMERIC,
+                dow_pct        NUMERIC,
+                nasdaq_pct     NUMERIC,
+                sp500_pct      NUMERIC,
+                banknifty_pct  NUMERIC,
+                nikkei_pct     NUMERIC,
+                hangseng_pct   NUMERIC,
+                dax_pct        NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL global_cues_log table ready');
 
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
@@ -8733,6 +9109,18 @@ app.get('/api/volume-confirmation-log', async (req, res) => {
     }
 });
 
+// 23 Sep — Option RSI Divergence fire history
+app.get('/api/option-rsi-divergence-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM option_rsi_divergence_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // 22 Sep — Crude Fast Momentum fire history
 app.get('/api/crude-fast-momentum-log', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
@@ -8764,6 +9152,72 @@ app.get('/api/crude-murarka-log', async (req, res) => {
         const limit = Math.min(parseInt(req.query.limit) || 30, 200);
         const r = await dbPool.query(`SELECT * FROM crude_murarka_log ORDER BY ts DESC LIMIT ${limit}`);
         res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 23 Sep — Crude Option RSI Divergence fire history
+app.get('/api/crude-option-rsi-divergence-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM crude_option_rsi_divergence_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 23 Sep — Crude vs WTI Confirmation fire history
+app.get('/api/crude-wti-confirmation-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM crude_wti_confirmation_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 23 Sep — raw recent global_cues_log rows
+app.get('/api/global-cues-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM global_cues_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 23 Sep — hourly-bucketed global score trajectory. Default 24h (what the
+// user asked for) — raw 2min-interval rows over a day would be ~720 rows,
+// too granular to read at a glance, so this buckets to one avg-score point
+// per hour, same "trajectory" pattern as regime-trajectory/vix-trajectory/
+// adx-trajectory above.
+app.get('/api/global-cues-trajectory', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const hours = Math.min(parseInt(req.query.hours) || 24, 168);
+        const r = await dbPool.query(`
+            SELECT
+                date_trunc('hour', ts AT TIME ZONE 'Asia/Kolkata') AS hour_start,
+                ROUND(AVG(global_score)::numeric, 1) AS avg_score,
+                MIN(global_score) AS min_score,
+                MAX(global_score) AS max_score,
+                COUNT(*)::int AS samples,
+                ROUND(AVG(usdinr_pct)::numeric, 2) AS avg_usdinr_pct,
+                ROUND(AVG(brent_pct)::numeric, 2) AS avg_brent_pct,
+                ROUND(AVG(nasdaq_pct)::numeric, 2) AS avg_nasdaq_pct
+            FROM global_cues_log
+            WHERE ts >= NOW() - INTERVAL '${hours} hours'
+            GROUP BY 1
+            ORDER BY 1 ASC
+        `);
+        res.json({ success: true, hours, points: r.rows });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
@@ -9809,6 +10263,9 @@ function startPollingIntervals() {
     // volume baseline (needs a few samples before it can say anything).
     const volConfirmTick = () => checkVolumeConfirmationTrigger().catch(e => console.warn('[Volume Confirmation] tick error:', e.message));
     setTimeout(() => { volConfirmTick(); setInterval(volConfirmTick, 3 * 60 * 1000); }, 70 * 1000);
+    // Option RSI Divergence (23 Sep) — 2 min cadence.
+    const optRSIDivTick = () => checkOptionRSIDivergenceTrigger().catch(e => console.warn('[Option RSI Divergence] tick error:', e.message));
+    setTimeout(() => { optRSIDivTick(); setInterval(optRSIDivTick, 2 * 60 * 1000); }, 90 * 1000);
     // Crude Fast Momentum (22 Sep) — 90s cadence, matches the other
     // crude-session-gated intervals below.
     const crudeFastMomTick = () => checkCrudeFastMomentumTrigger().catch(e => console.warn('[Crude Fast Momentum] tick error:', e.message));
@@ -9820,6 +10277,15 @@ function startPollingIntervals() {
     // Crude Murarka (22 Sep) — 90s cadence, matches Crude Fast Momentum.
     const crudeMurarkaTick = () => checkCrudeMurarkaTrigger().catch(e => console.warn('[Crude Murarka] tick error:', e.message));
     setTimeout(() => { crudeMurarkaTick(); setInterval(crudeMurarkaTick, 90 * 1000); }, 85 * 1000);
+    // Crude Option RSI Divergence (23 Sep) — 3 min cadence, matching its
+    // slower ~90s underlying data-update rate.
+    const crudeOptRSIDivTick = () => checkCrudeOptionRSIDivergenceTrigger().catch(e => console.warn('[Crude Option RSI Divergence] tick error:', e.message));
+    setTimeout(() => { crudeOptRSIDivTick(); setInterval(crudeOptRSIDivTick, 3 * 60 * 1000); }, 95 * 1000);
+    // Crude vs WTI Confirmation (23 Sep) — 5 min cadence, matching NIFTY's
+    // own Index Confirmation trigger (structural check, involves an
+    // external Yahoo fetch, no need for faster polling).
+    const crudeWTITick = () => checkCrudeWTIConfirmationTrigger().catch(e => console.warn('[Crude vs WTI] tick error:', e.message));
+    setTimeout(() => { crudeWTITick(); setInterval(crudeWTITick, 5 * 60 * 1000); }, 100 * 1000);
     // Phase 5.2 (10 Sep) — CRUDEOIL PCR refresh, session-gated (only fetches
     // when isCrudeSessionOpen() — no point hitting Fyers for crude options
     // outside the evening window). ~90s cadence matches the other crude
@@ -9828,8 +10294,11 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(async () => {
         if (!isCrudeSessionOpen()) return;
         try {
-            const result = await fetchCrudePCR();
+            const result = await fetchCrudePCR(marketState.crudeoil?.price);
             if (result) marketState.crudeoil.pcr = result;
+            // 23 Sep — feed the rolling series for Crude Option RSI Divergence.
+            if (result?.atmCEpremium > 0) { crudeCEOptionPremiumSeries.push(result.atmCEpremium); if (crudeCEOptionPremiumSeries.length > 60) crudeCEOptionPremiumSeries.shift(); }
+            if (result?.atmPEpremium > 0) { crudePEOptionPremiumSeries.push(result.atmPEpremium); if (crudePEOptionPremiumSeries.length > 60) crudePEOptionPremiumSeries.shift(); }
         } catch (e) { console.warn('[Crude PCR] interval error:', e.message); }
     }, 90*1000), 35*1000);
     // Phase 5.3 (10 Sep) — crude signal tracking. Checks every 60s during the

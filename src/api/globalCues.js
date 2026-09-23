@@ -245,7 +245,18 @@ async function fetchGlobalCues() {
     const reasons     = [pct > 20 ? 'Global cues supportive ✅' : pct < -20 ? 'Global cues negative ⚠️' : 'Mixed global signals'];
 
     if (globalData.currency.usdinr?.changePct > 0.5)  reasons.push(`⚠️ Rupee weakening (₹${globalData.currency.usdinr.price}) — FII outflow risk`);
-    if (globalData.commodities.crude?.changePct > 1.5) reasons.push(`⚠️ Crude rising ${globalData.commodities.crude.changePct}% — inflation risk`);
+    // 23 Sep — FIX: was globalData.commodities.crude (WTI). India's actual
+    // import pricing benchmarks off BRENT, not WTI (confirmed via research —
+    // WTI matters for MCX's own contract, which tracks NYMEX-WTI, but the
+    // India-macro inflation/rupee story runs through Brent). Also now gives
+    // a quantified estimate instead of a generic "inflation risk" — scaled
+    // off the RBI's own stated relationship (a 10% crude rise can add
+    // roughly 20bps to headline inflation, per its Oct 2025 Monetary Policy
+    // Report), rather than just flagging the move happened.
+    if (globalData.commodities.brent?.changePct > 1.5) {
+        const estBps = Math.round((globalData.commodities.brent.changePct / 10) * 20);
+        reasons.push(`⚠️ Brent +${globalData.commodities.brent.changePct}% — est. +${estBps}bps inflation pressure (RBI relationship), rupee headwind`);
+    }
     if (globalData.us.nasdaq?.changePct < -1)          reasons.push(`⚠️ NASDAQ down ${globalData.us.nasdaq.changePct}% — Tech selling`);
     if (globalData.sectors.bankNifty?.changePct > 0.5) reasons.push(`✅ Bank Nifty +${globalData.sectors.bankNifty.changePct}% — Strong support`);
     if (globalData.sectors.bankNifty?.changePct < -0.5)reasons.push(`⚠️ Bank Nifty ${globalData.sectors.bankNifty.changePct}% — Weak banks`);
@@ -262,4 +273,4 @@ async function fetchGlobalCues() {
     return globalData;
 }
 
-module.exports = { fetchGlobalCues, bankNiftyVWAPLead, niftyBNCorrelation };
+module.exports = { fetchGlobalCues, bankNiftyVWAPLead, niftyBNCorrelation, fetchIntradayBars };

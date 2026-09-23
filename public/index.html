@@ -9642,18 +9642,26 @@ function _statRow(label, val) {
       const body = document.getElementById('crude-explore-triggers-body');
       if (!body) return;
       try {
-        const [cfm, ctr, cmu] = await Promise.all([
+        const [cfm, ctr, cmu, crd, cwti] = await Promise.all([
           fetch('/api/crude-fast-momentum-log?limit=5').then(r => r.json()),
           fetch('/api/crude-trend-rider-log?limit=5').then(r => r.json()),
           fetch('/api/crude-murarka-log?limit=5').then(r => r.json()),
+          fetch('/api/crude-option-rsi-divergence-log?limit=5').then(r => r.json()),
+          fetch('/api/crude-wti-confirmation-log?limit=5').then(r => r.json()),
         ]);
         const cfmRows = (cfm.rows || []).map(r => ({ ...r, label: `CRUDE ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts/${r.window_min}min` }));
         const ctrRows = (ctr.rows || []).map(r => ({ ...r, label: `RSI ${Number(r.rsi).toFixed(0)} · ADX ${Number(r.adx).toFixed(0)} · pullback ${Number(r.pullback_pct).toFixed(2)}%` }));
         const cmuRows = (cmu.rows || []).map(r => ({ ...r, direction: r.side === 'CE' ? 'BULLISH' : 'BEARISH', label: `PCR ${Number(r.pcr).toFixed(2)} + VWAP-proxy ${Number(r.vwap_dist_pct).toFixed(2)}%` }));
+        const crdRows = (crd.rows || []).map(r => ({ ...r, direction: r.direction === 'BEARISH_FADING' ? 'BULLISH' : 'BEARISH', label: r.direction === 'BEARISH_FADING' ? `bearish move fading (CE RSI ${Number(r.ce_rsi).toFixed(0)}↑ PE RSI ${Number(r.pe_rsi).toFixed(0)}↓)` : `bullish move fading (PE RSI ${Number(r.pe_rsi).toFixed(0)}↑ CE RSI ${Number(r.ce_rsi).toFixed(0)}↓)` }));
+        // 23 Sep — Crude vs WTI Confirmation. Same pattern as NIFTY's Index
+        // Confirmation — DIVERGENCE rows have no single direction (neutral).
+        const cwtiRows = (cwti.rows || []).map(r => ({ ...r, direction: r.result.startsWith('CONFIRMED') ? r.result.replace('CONFIRMED_', '') : null, label: r.result.startsWith('CONFIRMED') ? `MCX+WTI both confirm` : `MCX:${r.crude_event} vs WTI:${r.wti_event}` }));
         const html = renderTriggerGroups([
           { kind: '⚡', source: 'Crude Fast Momentum', rows: cfmRows },
           { kind: '🏄', source: 'Crude Trend Rider',   rows: ctrRows },
           { kind: '🎯', source: 'Crude Murarka',        rows: cmuRows },
+          { kind: '🔀', source: 'Crude Opt RSI Diverge', rows: crdRows },
+          { kind: '📊', source: 'Crude vs WTI',          rows: cwtiRows },
         ]);
         body.innerHTML = html || '<div style="color:var(--dim);">No fires yet — these are new, still building a track record.</div>';
       } catch (e) { body.textContent = 'Failed to load'; }
@@ -10023,7 +10031,7 @@ function renderVolumeScannerUI(d) {
 
     <!-- Exploratory Triggers (11 Sep) — Fast Momentum + S/R Bounce -->
     <div style="border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px;margin-bottom:12px;">
-      <div style="font-size:11px;color:var(--dim);margin-bottom:6px;">⚡🎯🪔📐🏄📊📶 EXPLORATORY TRIGGERS <span style="opacity:0.6;">(NIFTY-only, not Main Engine confirmed)</span></div>
+      <div style="font-size:11px;color:var(--dim);margin-bottom:6px;">⚡🎯🪔📐🏄📊📶🔀 EXPLORATORY TRIGGERS <span style="opacity:0.6;">(NIFTY-only, not Main Engine confirmed)</span></div>
       <div id="explore-triggers-body" style="font-size:11.5px;line-height:1.6;max-height:320px;overflow-y:auto;">Loading...</div>
     </div>
 
@@ -10101,7 +10109,7 @@ function renderVolumeScannerUI(d) {
       const body = document.getElementById('explore-triggers-body');
       if (!body) return;
       try {
-        const [fm, sr, mu, orb, tr, ic, vc] = await Promise.all([
+        const [fm, sr, mu, orb, tr, ic, vc, rd] = await Promise.all([
           fetch('/api/fast-momentum-log?limit=3').then(r => r.json()),
           fetch('/api/sr-bounce-log?limit=3').then(r => r.json()),
           fetch('/api/murarka-log?limit=3').then(r => r.json()),
@@ -10109,6 +10117,7 @@ function renderVolumeScannerUI(d) {
           fetch('/api/trend-rider-log?limit=3').then(r => r.json()),
           fetch('/api/index-confirmation-log?limit=3').then(r => r.json()),
           fetch('/api/volume-confirmation-log?limit=3').then(r => r.json()),
+          fetch('/api/option-rsi-divergence-log?limit=3').then(r => r.json()),
         ]);
         const fmRows = (fm.rows || []).map(r => ({ ...r, label: `NIFTY ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts/${r.window_min}min` }));
         const srRows = (sr.rows || []).map(r => ({ ...r, label: `${r.level_type}@${Number(r.level_price).toFixed(0)}` }));
@@ -10123,6 +10132,11 @@ function renderVolumeScannerUI(d) {
         // no bullish/bearish slant of their own beyond the BOS direction —
         // still shown with that direction's color, just flagged WEAK in the label.
         const vcRows = (vc.rows || []).map(r => ({ ...r, direction: r.bos_event === 'BOS_BULLISH' ? 'BULLISH' : 'BEARISH', label: `${r.result} · vol ${Number(r.volume_ratio).toFixed(2)}x avg` }));
+        // 23 Sep — Option RSI Divergence. Direction mapping is intentionally
+        // inverted from the raw label: "BEARISH_FADING" means the bearish
+        // move is losing steam (mildly bullish-leaning), so it's colored
+        // BULLISH here — the label text spells out the actual nuance.
+        const rdRows = (rd.rows || []).map(r => ({ ...r, direction: r.direction === 'BEARISH_FADING' ? 'BULLISH' : 'BEARISH', label: r.direction === 'BEARISH_FADING' ? `bearish move fading (CE RSI ${Number(r.ce_rsi).toFixed(0)}↑ PE RSI ${Number(r.pe_rsi).toFixed(0)}↓)` : `bullish move fading (PE RSI ${Number(r.pe_rsi).toFixed(0)}↑ CE RSI ${Number(r.ce_rsi).toFixed(0)}↓)` }));
 
         const html = renderTriggerGroups([
           { kind: '⚡', source: 'Fast Momentum', rows: fmRows },
@@ -10132,6 +10146,7 @@ function renderVolumeScannerUI(d) {
           { kind: '🏄', source: 'Trend Rider',   rows: trRows },
           { kind: '📊', source: 'Index Confirm', rows: icRows },
           { kind: '📶', source: 'Volume Confirm', rows: vcRows },
+          { kind: '🔀', source: 'Opt RSI Diverge', rows: rdRows },
         ]);
         body.innerHTML = html || '<div style="color:var(--dim);">No fires yet — these are new, still building a track record.</div>';
       } catch (e) { body.textContent = 'Failed to load'; }

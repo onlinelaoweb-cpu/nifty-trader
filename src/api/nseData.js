@@ -1344,7 +1344,7 @@ async function getCrudeFyersSymbol() {
 // testing) — no need for NIFTY PCR's per-strike summation loop, ATM
 // premium tracking, or wall detection, none of which crude's signal
 // engine uses yet.
-async function fetchCrudePCR() {
+async function fetchCrudePCR(spotPrice = null) {
     if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return null;
     try {
         const fyersSymbol = await getCrudeFyersSymbol();
@@ -1378,7 +1378,26 @@ async function fetchCrudePCR() {
             return null;
         }
         const pcr = callOi > 0 ? parseFloat((putOi / callOi).toFixed(3)) : null;
-        return { pcr, callOi, putOi, symbol: fyersSymbol };
+
+        // 23 Sep — ATM CE/PE premium extraction, same pattern as NIFTY's
+        // fetchPCRFromFyers above. MCX Crude Oil strike step is 50
+        // (confirmed via web search). Only attempted when spotPrice is
+        // given and the response includes the per-strike optionsChain —
+        // existing callers that don't pass spotPrice keep working exactly
+        // as before (pcr/callOi/putOi/symbol only).
+        let atmCEpremium = null, atmPEpremium = null;
+        if (spotPrice > 0 && Array.isArray(d.data.optionsChain)) {
+            const strikeStep = 50;
+            const atmStrike = Math.round(spotPrice / strikeStep) * strikeStep;
+            for (const row of d.data.optionsChain) {
+                if (Number(row.strike_price) !== atmStrike) continue;
+                const ltp = Number(row.ltp || 0);
+                if (row.option_type === 'CE' && ltp > 0) atmCEpremium = ltp;
+                else if (row.option_type === 'PE' && ltp > 0) atmPEpremium = ltp;
+            }
+        }
+
+        return { pcr, callOi, putOi, symbol: fyersSymbol, atmCEpremium, atmPEpremium };
     } catch (e) {
         console.warn('[Crude PCR] error:', e.response?.status || e.message);
         return null;
