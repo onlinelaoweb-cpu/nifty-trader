@@ -466,6 +466,7 @@ let ceOptionPremiumSeries = [], peOptionPremiumSeries = [];
 // same RSI(9) mechanism).
 let crudeCEOptionPremiumSeries = [], crudePEOptionPremiumSeries = [];
 let crudePrevCloseDate = null; // 23 Sep — day-cache guard for crude prevClose fetch
+let crudeVolumeBaselineSamples = []; // 24 Sep — rolling baseline for Crude Volume Confirmation
 let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-direction MTF alerts
 // FIX (11 Sep) — Fast Momentum Trigger tracking. Separate, exploratory alert
 // type — see checkFastMomentumTrigger() below for full rationale.
@@ -4326,6 +4327,230 @@ WTI: ${wtiBOS.label}
     }
 }
 
+// ── Brahmastra Trigger (24 Sep) — NIFTY & Crude ──────────────────────────────
+// The user's own idea: combine all the standalone exploratory triggers into
+// one higher-conviction meta-signal. Fires when 3+ DISTINCT sources (not
+// repeat-fires of the same one — each source contributes at most one vote,
+// its most recent fire in the window) agree on direction within a 15-min
+// window. 15 min was chosen because it matches most individual triggers'
+// own cooldowns (15-20min) — within that window, each source can genuinely
+// only have fired once anyway, so this doesn't need extra de-duplication
+// logic beyond "did this source fire this direction at all in the window".
+// HONEST CAVEAT (told to the user before building this): combining unproven
+// components doesn't make the combination proven — Brahmastra inherits its
+// components' own lack of track record and needs to earn its own, same as
+// every trigger before it.
+// Quality filter: only "confirmed-strength" reads count — Volume
+// Confirmation's WEAK rows, and Index/WTI Confirmation's DIVERGENCE rows,
+// are excluded (they have no clear single direction or are explicitly
+// flagged lower-reliability), keeping every vote genuinely directional.
+const BRAHMASTRA_WINDOW_MIN  = 15;
+const BRAHMASTRA_THRESHOLD   = 3;   // NIFTY: 3-of-8 sources (~38%)
+const CRUDE_BRAHMASTRA_THRESHOLD = 3; // Crude: 3-of-5 sources (60%) — proportionally
+                                       // stricter, deliberate: crude's own triggers
+                                       // are newer/less-tested than NIFTY's.
+const BRAHMASTRA_COOLDOWN_MS = 30 * 60 * 1000; // longer than individual triggers — meant to be rare
+
+let lastNiftyBrahmastraAt = 0, lastNiftyBrahmastraDirection = null;
+let lastCrudeBrahmastraAt = 0, lastCrudeBrahmastraDirection = null;
+
+async function checkNiftyBrahmastraTrigger() {
+    if (!isConfigured() || !isMarketOpen() || !dbPool) return;
+    try {
+        const w = BRAHMASTRA_WINDOW_MIN;
+        const [fm, sr, mu, orb, tr, ic, vc, rd] = await Promise.all([
+            dbPool.query(`SELECT direction FROM fast_momentum_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT direction FROM sr_bounce_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT side FROM murarka_entry_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT direction FROM orb_trigger_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT direction FROM trend_rider_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT result FROM index_confirmation_log WHERE ts >= NOW() - INTERVAL '${w} minutes' AND result LIKE 'CONFIRMED_%' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT bos_event FROM volume_confirmation_log WHERE ts >= NOW() - INTERVAL '${w} minutes' AND result = 'CONFIRMED' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT direction FROM option_rsi_divergence_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
+        ]);
+
+        const votes = []; // { source, direction }
+        if (fm.rows[0]) votes.push({ source: 'Fast Momentum', direction: fm.rows[0].direction });
+        if (sr.rows[0]) votes.push({ source: 'S/R Bounce', direction: sr.rows[0].direction });
+        if (mu.rows[0]) votes.push({ source: 'Murarka', direction: mu.rows[0].side === 'CE' ? 'BULLISH' : 'BEARISH' });
+        if (orb.rows[0]) votes.push({ source: 'ORB', direction: orb.rows[0].direction });
+        if (tr.rows[0]) votes.push({ source: 'Trend Rider', direction: tr.rows[0].direction });
+        if (ic.rows[0]) votes.push({ source: 'Index Confirm', direction: ic.rows[0].result.replace('CONFIRMED_', '') });
+        if (vc.rows[0]) votes.push({ source: 'Volume Confirm', direction: vc.rows[0].bos_event === 'BOS_BULLISH' ? 'BULLISH' : 'BEARISH' });
+        // Inverted mapping — same as the frontend's own convention (see
+        // fetchExploratoryTriggers in index.html): BEARISH_FADING means the
+        // bearish move is losing steam, a bullish-leaning read, and vice versa.
+        if (rd.rows[0]) votes.push({ source: 'Opt RSI Diverge', direction: rd.rows[0].direction === 'BEARISH_FADING' ? 'BULLISH' : 'BEARISH' });
+
+        const bullSources = votes.filter(v => v.direction === 'BULLISH').map(v => v.source);
+        const bearSources = votes.filter(v => v.direction === 'BEARISH').map(v => v.source);
+
+        let direction, sources;
+        if (bullSources.length >= BRAHMASTRA_THRESHOLD && bullSources.length > bearSources.length) { direction = 'BULLISH'; sources = bullSources; }
+        else if (bearSources.length >= BRAHMASTRA_THRESHOLD && bearSources.length > bullSources.length) { direction = 'BEARISH'; sources = bearSources; }
+        else return;
+
+        if (lastNiftyBrahmastraDirection === direction && (Date.now() - lastNiftyBrahmastraAt) < BRAHMASTRA_COOLDOWN_MS) return;
+        lastNiftyBrahmastraAt = Date.now();
+        lastNiftyBrahmastraDirection = direction;
+
+        const nifty = marketState.nifty;
+        const isBull = direction === 'BULLISH';
+        const msg = `
+🚀 <b>BRAHMASTRA — ${sources.length} TRIGGERS ALIGNED ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+NIFTY ${nifty?.toFixed(1)}
+Agreeing sources (last ${BRAHMASTRA_WINDOW_MIN}min): ${sources.join(', ')}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>Still EXPLORATORY — NOT Main Engine confirmed.</b> This combines other exploratory triggers, each still unproven on its own — combining them doesn't make them proven, this needs its own track record too. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Brahmastra (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🚀 [Brahmastra NIFTY] ${direction} — ${sources.length} sources: ${sources.join(', ')}`);
+
+        dbPool.query(
+            `INSERT INTO nifty_brahmastra_log (direction, nifty, source_count, sources) VALUES ($1,$2,$3,$4)`,
+            [direction, nifty, sources.length, sources.join(', ')]
+        ).catch(e => console.warn('[Brahmastra NIFTY] log error:', e.message));
+    } catch (e) {
+        console.warn('[Brahmastra NIFTY] error:', e.message);
+    }
+}
+
+// ── CRUDE Volume Confirmation Trigger (24 Sep) ───────────────────────────────
+// Crude's own Volume Confirmation — mirrors NIFTY's checkVolumeConfirmationTrigger
+// exactly (same ratio threshold, same baseline size, same cooldown), but
+// sourced fresh from Fyers quotes (fetchFyersQuote on crude's own futures
+// symbol) rather than a shared marketState field, since crude's WS-tick
+// volume is unreliable (Vol:0 always observed) — unlike NIFTY, which
+// already gets genuine Fyers-sourced volume via marketState.wsVolume.
+// Crude's own BOS/CHOCH gets computed fresh here (candles1m resampled to
+// 5m via aggregateCandles, then detectBOSCHOCH) — same approach already
+// used in checkCrudeWTIConfirmationTrigger, kept self-contained per trigger
+// rather than sharing state, matching this file's established pattern.
+const CRUDE_VOL_CONFIRM_BASELINE_SAMPLES = 20;
+const CRUDE_VOL_CONFIRM_RATIO_THRESHOLD  = 1.2;
+const CRUDE_VOL_CONFIRM_COOLDOWN_MIN     = 15;
+
+let lastCrudeVolConfirmResult = null, lastCrudeVolConfirmAt = 0;
+
+async function checkCrudeVolumeConfirmationTrigger() {
+    if (!isConfigured() || !isCrudeSessionOpen()) return;
+    try {
+        const fyersSymbol = await getCrudeFyersSymbol();
+        if (!fyersSymbol) return;
+        const q = await fetchFyersQuote(fyersSymbol);
+        const volume = q?.volume;
+        if (volume > 0) {
+            crudeVolumeBaselineSamples.push(volume);
+            if (crudeVolumeBaselineSamples.length > CRUDE_VOL_CONFIRM_BASELINE_SAMPLES) crudeVolumeBaselineSamples.shift();
+        }
+        if (crudeVolumeBaselineSamples.length < 5) return; // not enough history for a meaningful baseline yet
+
+        const crudeCandles1m = marketState.crudeoil?.candles1m;
+        if (!crudeCandles1m || crudeCandles1m.length < 15) return;
+        const crudeCandles5m = aggregateCandles(crudeCandles1m, 5);
+        if (crudeCandles5m.length < 10) return;
+        const crudeBOS = detectBOSCHOCH(crudeCandles5m, IDX_CONFIRM_LOOKBACK);
+        const bosEvent = crudeBOS.event;
+        if (bosEvent !== 'BOS_BULLISH' && bosEvent !== 'BOS_BEARISH') return;
+
+        const avgVolume = crudeVolumeBaselineSamples.reduce((s, v) => s + v, 0) / crudeVolumeBaselineSamples.length;
+        if (avgVolume <= 0 || volume <= 0) return;
+        const ratio = volume / avgVolume;
+        const result = ratio >= CRUDE_VOL_CONFIRM_RATIO_THRESHOLD ? 'CONFIRMED' : 'WEAK';
+
+        const dedupKey = `${bosEvent}_${result}`;
+        if (lastCrudeVolConfirmResult === dedupKey && (Date.now() - lastCrudeVolConfirmAt) < CRUDE_VOL_CONFIRM_COOLDOWN_MIN * 60 * 1000) return;
+        lastCrudeVolConfirmResult = dedupKey;
+        lastCrudeVolConfirmAt     = Date.now();
+
+        const crude = marketState.crudeoil?.price;
+        const direction = bosEvent === 'BOS_BULLISH' ? 'BULLISH' : 'BEARISH';
+        const isConfirmed = result === 'CONFIRMED';
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+🛢️📶 <b>CRUDE VOLUME ${result} — ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+CRUDEOIL ${crude?.toFixed(1)} — ${direction.toLowerCase()} structure break, volume ${ratio.toFixed(2)}x recent average
+${isConfirmed ? '✅ Volume backs this move — Dow Theory\'s "genuine trend" pattern.' : '⚠️ Break came on thin volume — historically a weaker, more suspect move.'}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT the crude Main Engine confirmed.</b> Volume sourced fresh from Fyers (crude's own WS-tick volume is unreliable). No historical track record yet. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Crude Volume Confirmation Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🛢️📶 [Crude Volume Confirmation] ${result} — ${bosEvent}, ratio:${ratio.toFixed(2)}x`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO crude_volume_confirmation_log (result, bos_event, crude, volume, avg_volume, volume_ratio)
+                 VALUES ($1,$2,$3,$4,$5,$6)`,
+                [result, bosEvent, crude, volume, avgVolume, ratio]
+            ).catch(e => console.warn('[Crude Volume Confirmation] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Crude Volume Confirmation] error:', e.message);
+    }
+}
+
+async function checkCrudeBrahmastraTrigger() {
+    if (!isConfigured() || !isCrudeSessionOpen() || !dbPool) return;
+    try {
+        const w = BRAHMASTRA_WINDOW_MIN;
+        const [fm, tr, mu, rd, wti, vc] = await Promise.all([
+            dbPool.query(`SELECT direction FROM crude_fast_momentum_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT direction FROM crude_trend_rider_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT side FROM crude_murarka_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT direction FROM crude_option_rsi_divergence_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT result FROM crude_wti_confirmation_log WHERE ts >= NOW() - INTERVAL '${w} minutes' AND result LIKE 'CONFIRMED_%' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT bos_event FROM crude_volume_confirmation_log WHERE ts >= NOW() - INTERVAL '${w} minutes' AND result = 'CONFIRMED' ORDER BY ts DESC LIMIT 1`),
+        ]);
+
+        const votes = [];
+        if (fm.rows[0]) votes.push({ source: 'Crude Fast Momentum', direction: fm.rows[0].direction });
+        if (tr.rows[0]) votes.push({ source: 'Crude Trend Rider', direction: tr.rows[0].direction });
+        if (mu.rows[0]) votes.push({ source: 'Crude Murarka', direction: mu.rows[0].side === 'CE' ? 'BULLISH' : 'BEARISH' });
+        if (rd.rows[0]) votes.push({ source: 'Crude Opt RSI Diverge', direction: rd.rows[0].direction === 'BEARISH_FADING' ? 'BULLISH' : 'BEARISH' });
+        if (wti.rows[0]) votes.push({ source: 'Crude vs WTI', direction: wti.rows[0].result.replace('CONFIRMED_', '') });
+        if (vc.rows[0]) votes.push({ source: 'Crude Volume Confirm', direction: vc.rows[0].bos_event === 'BOS_BULLISH' ? 'BULLISH' : 'BEARISH' });
+
+        const bullSources = votes.filter(v => v.direction === 'BULLISH').map(v => v.source);
+        const bearSources = votes.filter(v => v.direction === 'BEARISH').map(v => v.source);
+
+        let direction, sources;
+        if (bullSources.length >= CRUDE_BRAHMASTRA_THRESHOLD && bullSources.length > bearSources.length) { direction = 'BULLISH'; sources = bullSources; }
+        else if (bearSources.length >= CRUDE_BRAHMASTRA_THRESHOLD && bearSources.length > bullSources.length) { direction = 'BEARISH'; sources = bearSources; }
+        else return;
+
+        if (lastCrudeBrahmastraDirection === direction && (Date.now() - lastCrudeBrahmastraAt) < BRAHMASTRA_COOLDOWN_MS) return;
+        lastCrudeBrahmastraAt = Date.now();
+        lastCrudeBrahmastraDirection = direction;
+
+        const crude = marketState.crudeoil?.price;
+        const msg = `
+🚀🛢️ <b>CRUDE BRAHMASTRA — ${sources.length} TRIGGERS ALIGNED ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+CRUDEOIL ${crude?.toFixed(1)}
+Agreeing sources (last ${BRAHMASTRA_WINDOW_MIN}min): ${sources.join(', ')}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>Still EXPLORATORY — NOT the crude Main Engine confirmed.</b> Combines other exploratory triggers, each still unproven on its own. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Crude Brahmastra (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🚀🛢️ [Brahmastra Crude] ${direction} — ${sources.length} sources: ${sources.join(', ')}`);
+
+        dbPool.query(
+            `INSERT INTO crude_brahmastra_log (direction, crude, source_count, sources) VALUES ($1,$2,$3,$4)`,
+            [direction, crude, sources.length, sources.join(', ')]
+        ).catch(e => console.warn('[Brahmastra Crude] log error:', e.message));
+    } catch (e) {
+        console.warn('[Brahmastra Crude] error:', e.message);
+    }
+}
+
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return false;
     // ── Race-condition guard: onTick fires synchronously on every websocket tick,
@@ -7063,6 +7288,57 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL global_cues_log table ready');
 
+        // ── nifty_brahmastra_log / crude_brahmastra_log tables (24 Sep) ───────
+        // Combined-confirmation meta-signal — the user's own idea: when 3+
+        // DISTINCT exploratory triggers (not repeat-fires of the same one)
+        // agree on direction within a 15-min window, fire a single,
+        // higher-conviction "Brahmastra" alert. See
+        // checkNiftyBrahmastraTrigger()/checkCrudeBrahmastraTrigger() for
+        // full rationale, source list, and the honest caveat that this
+        // inherits its components' own lack of track record.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS nifty_brahmastra_log (
+                id            SERIAL PRIMARY KEY,
+                ts            TIMESTAMPTZ DEFAULT NOW(),
+                direction     TEXT,
+                nifty         NUMERIC,
+                source_count  INT,
+                sources       TEXT
+            )
+        `);
+        console.log('✅ PostgreSQL nifty_brahmastra_log table ready');
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS crude_brahmastra_log (
+                id            SERIAL PRIMARY KEY,
+                ts            TIMESTAMPTZ DEFAULT NOW(),
+                direction     TEXT,
+                crude         NUMERIC,
+                source_count  INT,
+                sources       TEXT
+            )
+        `);
+        console.log('✅ PostgreSQL crude_brahmastra_log table ready');
+
+        // ── crude_volume_confirmation_log table (24 Sep) ──────────────────────
+        // Crude's own Volume Confirmation — mirrors NIFTY's existing one
+        // exactly, but sourced fresh from Fyers quotes (fetchFyersQuote)
+        // since crude's WS-tick volume is unreliable (Vol:0 always), unlike
+        // NIFTY's which already gets Fyers-sourced volume via
+        // marketState.wsVolume. See checkCrudeVolumeConfirmationTrigger().
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS crude_volume_confirmation_log (
+                id            SERIAL PRIMARY KEY,
+                ts            TIMESTAMPTZ DEFAULT NOW(),
+                result        TEXT,
+                bos_event     TEXT,
+                crude         NUMERIC,
+                volume        NUMERIC,
+                avg_volume    NUMERIC,
+                volume_ratio  NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL crude_volume_confirmation_log table ready');
+
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
         // (fire-and-forget snapshot), this table AUTOMATICALLY tracks what happened
@@ -9189,6 +9465,40 @@ app.get('/api/crude-wti-confirmation-log', async (req, res) => {
     }
 });
 
+// 24 Sep — Crude Volume Confirmation fire history
+app.get('/api/crude-volume-confirmation-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM crude_volume_confirmation_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 24 Sep — Brahmastra fire history, NIFTY and Crude
+app.get('/api/nifty-brahmastra-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM nifty_brahmastra_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+app.get('/api/crude-brahmastra-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM crude_brahmastra_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // 23 Sep — raw recent global_cues_log rows
 app.get('/api/global-cues-log', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
@@ -10294,6 +10604,17 @@ function startPollingIntervals() {
     // external Yahoo fetch, no need for faster polling).
     const crudeWTITick = () => checkCrudeWTIConfirmationTrigger().catch(e => console.warn('[Crude vs WTI] tick error:', e.message));
     setTimeout(() => { crudeWTITick(); setInterval(crudeWTITick, 5 * 60 * 1000); }, 100 * 1000);
+    // Crude Volume Confirmation (24 Sep) — 3 min cadence, matching NIFTY's
+    // own Volume Confirmation trigger for consistency.
+    const crudeVolConfirmTick = () => checkCrudeVolumeConfirmationTrigger().catch(e => console.warn('[Crude Volume Confirmation] tick error:', e.message));
+    setTimeout(() => { crudeVolConfirmTick(); setInterval(crudeVolConfirmTick, 3 * 60 * 1000); }, 105 * 1000);
+    // Brahmastra (24 Sep) — 2 min cadence, cheap (DB-only, no external
+    // calls). Starts later (110/115s) so the underlying triggers above get
+    // a head-start on their own first cycle.
+    const niftyBrahmastraTick = () => checkNiftyBrahmastraTrigger().catch(e => console.warn('[Brahmastra NIFTY] tick error:', e.message));
+    setTimeout(() => { niftyBrahmastraTick(); setInterval(niftyBrahmastraTick, 2 * 60 * 1000); }, 110 * 1000);
+    const crudeBrahmastraTick = () => checkCrudeBrahmastraTrigger().catch(e => console.warn('[Brahmastra Crude] tick error:', e.message));
+    setTimeout(() => { crudeBrahmastraTick(); setInterval(crudeBrahmastraTick, 2 * 60 * 1000); }, 115 * 1000);
     // Phase 5.2 (10 Sep) — CRUDEOIL PCR refresh, session-gated (only fetches
     // when isCrudeSessionOpen() — no point hitting Fyers for crude options
     // outside the evening window). ~90s cadence matches the other crude

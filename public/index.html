@@ -9623,6 +9623,25 @@ function _statRow(label, val) {
 <!-- PANEL: CRUDE INSIGHTS ───────────────────────────────── -->
 <div class="panel" id="panel-crudeInsights">
   <div style="padding:10px 12px 80px;">
+    <!-- 24 Sep — Crude Brahmastra, same pattern as NIFTY's own. -->
+    <div id="crude-brahmastra-card" style="border:1.5px solid rgba(255,200,50,0.4);border-radius:10px;padding:10px;margin-bottom:14px;background:rgba(255,200,50,0.04);">
+      <div style="font-size:11px;color:var(--amber);margin-bottom:6px;font-weight:700;letter-spacing:0.5px;">🚀🛢️ CRUDE BRAHMASTRA <span style="opacity:0.7;font-weight:400;">(3+ triggers aligned — still exploratory)</span></div>
+      <div id="crude-brahmastra-body" style="font-size:11.5px;line-height:1.6;">Loading...</div>
+    </div>
+    <script>
+    async function fetchCrudeBrahmastra() {
+      const body = document.getElementById('crude-brahmastra-body');
+      if (!body) return;
+      try {
+        const r = await fetch('/api/crude-brahmastra-log?limit=3').then(r => r.json());
+        const rows = (r.rows || []).map(row => ({ ...row, label: `${row.source_count} sources: ${row.sources}` }));
+        if (!rows.length) { body.innerHTML = '<div style="color:var(--dim);">No alignment yet — needs 3+ distinct triggers agreeing within 15min.</div>'; return; }
+        body.innerHTML = rows.map(renderTriggerRow).join('');
+      } catch (e) { body.textContent = 'Failed to load'; }
+    }
+    window.addEventListener('load', fetchCrudeBrahmastra);
+    setInterval(fetchCrudeBrahmastra, 120000);
+    </script>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
       <div style="font-family:'Orbitron',monospace;font-size:14.5px;letter-spacing:1px;color:var(--accent);">🔍 CRUDE INSIGHTS</div>
       <span id="ci-status" style="font-size:10.5px;color:var(--dim);font-family:monospace;"></span>
@@ -9646,12 +9665,13 @@ function _statRow(label, val) {
       const body = document.getElementById('crude-explore-triggers-body');
       if (!body) return;
       try {
-        const [cfm, ctr, cmu, crd, cwti] = await Promise.all([
+        const [cfm, ctr, cmu, crd, cwti, cvc] = await Promise.all([
           fetch('/api/crude-fast-momentum-log?limit=5').then(r => r.json()),
           fetch('/api/crude-trend-rider-log?limit=5').then(r => r.json()),
           fetch('/api/crude-murarka-log?limit=5').then(r => r.json()),
           fetch('/api/crude-option-rsi-divergence-log?limit=5').then(r => r.json()),
           fetch('/api/crude-wti-confirmation-log?limit=5').then(r => r.json()),
+          fetch('/api/crude-volume-confirmation-log?limit=5').then(r => r.json()),
         ]);
         const cfmRows = (cfm.rows || []).map(r => ({ ...r, label: `CRUDE ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts/${r.window_min}min` }));
         const ctrRows = (ctr.rows || []).map(r => ({ ...r, label: `RSI ${Number(r.rsi).toFixed(0)} · ADX ${Number(r.adx).toFixed(0)} · pullback ${Number(r.pullback_pct).toFixed(2)}%` }));
@@ -9660,12 +9680,15 @@ function _statRow(label, val) {
         // 23 Sep — Crude vs WTI Confirmation. Same pattern as NIFTY's Index
         // Confirmation — DIVERGENCE rows have no single direction (neutral).
         const cwtiRows = (cwti.rows || []).map(r => ({ ...r, direction: r.result.startsWith('CONFIRMED') ? r.result.replace('CONFIRMED_', '') : null, label: r.result.startsWith('CONFIRMED') ? `MCX+WTI both confirm` : `MCX:${r.crude_event} vs WTI:${r.wti_event}` }));
+        // 24 Sep — Crude Volume Confirmation (Fyers-sourced).
+        const cvcRows = (cvc.rows || []).map(r => ({ ...r, direction: r.bos_event === 'BOS_BULLISH' ? 'BULLISH' : 'BEARISH', label: `${r.result} · vol ${Number(r.volume_ratio).toFixed(2)}x avg (Fyers)` }));
         const html = renderTriggerGroups([
           { kind: '⚡', source: 'Crude Fast Momentum', rows: cfmRows },
           { kind: '🏄', source: 'Crude Trend Rider',   rows: ctrRows },
           { kind: '🎯', source: 'Crude Murarka',        rows: cmuRows },
           { kind: '🔀', source: 'Crude Opt RSI Diverge', rows: crdRows },
           { kind: '📊', source: 'Crude vs WTI',          rows: cwtiRows },
+          { kind: '📶', source: 'Crude Volume Confirm',  rows: cvcRows },
         ]);
         body.innerHTML = html || '<div style="color:var(--dim);">No fires yet — these are new, still building a track record.</div>';
       } catch (e) { body.textContent = 'Failed to load'; }
@@ -10040,6 +10063,30 @@ function renderVolumeScannerUI(d) {
 
 <div class="panel" id="panel-insights">
   <div style="padding:10px 12px 80px;">
+
+    <!-- 24 Sep — Brahmastra: combined-confirmation meta-signal, the user's
+         own idea. Distinct gold-bordered styling (not the standard card
+         border) so it stands out from the regular exploratory triggers —
+         this is meant to be rare and high-conviction when it does show
+         something, not blend into the rest of the list. -->
+    <div id="nifty-brahmastra-card" style="border:1.5px solid rgba(255,200,50,0.4);border-radius:10px;padding:10px;margin-bottom:14px;background:rgba(255,200,50,0.04);">
+      <div style="font-size:11px;color:var(--amber);margin-bottom:6px;font-weight:700;letter-spacing:0.5px;">🚀 BRAHMASTRA <span style="opacity:0.7;font-weight:400;">(3+ triggers aligned — still exploratory)</span></div>
+      <div id="nifty-brahmastra-body" style="font-size:11.5px;line-height:1.6;">Loading...</div>
+    </div>
+    <script>
+    async function fetchNiftyBrahmastra() {
+      const body = document.getElementById('nifty-brahmastra-body');
+      if (!body) return;
+      try {
+        const r = await fetch('/api/nifty-brahmastra-log?limit=3').then(r => r.json());
+        const rows = (r.rows || []).map(row => ({ ...row, label: `${row.source_count} sources: ${row.sources}` }));
+        if (!rows.length) { body.innerHTML = '<div style="color:var(--dim);">No alignment yet — needs 3+ distinct triggers agreeing within 15min.</div>'; return; }
+        body.innerHTML = rows.map(renderTriggerRow).join('');
+      } catch (e) { body.textContent = 'Failed to load'; }
+    }
+    window.addEventListener('load', fetchNiftyBrahmastra);
+    setInterval(fetchNiftyBrahmastra, 120000);
+    </script>
 
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <div style="font-family:'Orbitron',monospace;font-size:14.5px;letter-spacing:1px;color:var(--accent);">🧠 AI INSIGHTS</div>
