@@ -6116,6 +6116,11 @@ async function refreshBitcoin() {
             const chain = await fetchDeltaOptionChain(expiry, price);
             if (chain) marketState.bitcoin.pcr = chain;
         }
+        // 25 Sep — FIX: this function had no success-log at all, unlike
+        // every other fetch/trigger in this codebase — made it impossible
+        // to confirm via Railway logs whether Delta Exchange was genuinely
+        // responding, versus silently failing with price staying 0.
+        console.log(`₿ [Bitcoin] ₹${price} | O:${marketState.bitcoin.open} H:${marketState.bitcoin.high} L:${marketState.bitcoin.low} | expiry:${expiry || 'none'} | PCR:${marketState.bitcoin.pcr?.pcr ?? 'n/a'}`);
     } catch (e) { console.warn('[Bitcoin] refresh error:', e.message); }
 }
 
