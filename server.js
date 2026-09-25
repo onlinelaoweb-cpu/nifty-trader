@@ -3985,6 +3985,68 @@ First CRUDE-specific exploratory trigger — no historical track record yet. Use
     }
 }
 
+// ── CRUDE Sustained Drift Trigger (25 Sep) ───────────────────────────────────
+// Crude's own Sustained Drift — directly ported from NIFTY's version above
+// (unlike Broad Market Shift, which the user and I agreed not to force-fit
+// for crude given only 2-3 weak equivalents exist there vs NIFTY's clean
+// 4). Same 35min window; threshold floor scaled to crude's ~1/3 price
+// scale, matching the same scaling already used for Crude Fast Momentum
+// (NIFTY 30pts → crude 10pts, so NIFTY's 55pts here → crude ~20pts).
+const CRUDE_SUSTAINED_DRIFT_WINDOW_MIN  = 35;
+const CRUDE_SUSTAINED_DRIFT_MIN_PTS     = 20;
+const CRUDE_SUSTAINED_DRIFT_ATR_MULT    = 3.5;
+const CRUDE_SUSTAINED_DRIFT_COOLDOWN_MS = 30 * 60 * 1000;
+
+let lastCrudeSustainedDriftAt = 0, lastCrudeSustainedDriftDirection = null;
+
+async function checkCrudeSustainedDriftTrigger() {
+    if (!isConfigured() || !isCrudeSessionOpen()) return;
+    try {
+        const candles = marketState.crudeoil?.candles1m;
+        if (!candles || candles.length < CRUDE_SUSTAINED_DRIFT_WINDOW_MIN + 15) return;
+
+        const nowClose = candles[candles.length - 1].close;
+        const pastCandle = candles[candles.length - 1 - CRUDE_SUSTAINED_DRIFT_WINDOW_MIN];
+        if (!pastCandle) return;
+        const movePts = nowClose - pastCandle.close;
+
+        const atrWindow = candles.slice(-14);
+        const atrProxy = atrWindow.reduce((s, c) => s + (c.high - c.low), 0) / atrWindow.length;
+        const threshold = atrProxy > 0 ? Math.max(CRUDE_SUSTAINED_DRIFT_MIN_PTS, CRUDE_SUSTAINED_DRIFT_ATR_MULT * atrProxy) : CRUDE_SUSTAINED_DRIFT_MIN_PTS;
+
+        if (Math.abs(movePts) < threshold) return;
+
+        const direction = movePts > 0 ? 'BULLISH' : 'BEARISH';
+
+        if (direction === lastCrudeSustainedDriftDirection && (Date.now() - lastCrudeSustainedDriftAt) < CRUDE_SUSTAINED_DRIFT_COOLDOWN_MS) return;
+        lastCrudeSustainedDriftAt = Date.now();
+        lastCrudeSustainedDriftDirection = direction;
+
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+🛢️🐢 <b>CRUDE SUSTAINED DRIFT — ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+CRUDEOIL moved <b>${movePts > 0 ? '+' : ''}${movePts.toFixed(1)}pts</b> over ${CRUDE_SUSTAINED_DRIFT_WINDOW_MIN}min → ${nowClose.toFixed(1)}
+Threshold: ${threshold.toFixed(1)}pts (ATR-adjusted)
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>RAW PRICE DRIFT ONLY — NOT the crude Main Engine confirmed.</b> Longer-window sibling of Crude Fast Momentum — catches gradual, grinding moves a 15min window can miss. No historical track record yet. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Crude Sustained Drift Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🛢️🐢 [Crude Sustained Drift] ${direction} — ${movePts.toFixed(1)}pts in ${CRUDE_SUSTAINED_DRIFT_WINDOW_MIN}min (threshold:${threshold.toFixed(1)})`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO crude_sustained_drift_log (direction, crude, move_pts, window_min, threshold) VALUES ($1,$2,$3,$4,$5)`,
+                [direction, nowClose, movePts, CRUDE_SUSTAINED_DRIFT_WINDOW_MIN, threshold]
+            ).catch(e => console.warn('[Crude Sustained Drift] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Crude Sustained Drift] error:', e.message);
+    }
+}
+
 // ── CRUDE Trend Rider Trigger (22 Sep) ───────────────────────────────────────
 // Second CRUDE-specific exploratory trigger — adapted from NIFTY's Trend
 // Rider. See computeCrudeTrendRiderSetup() (trendRider.js) for the full
@@ -4358,7 +4420,7 @@ async function checkNiftyBrahmastraTrigger() {
     if (!isConfigured() || !isMarketOpen() || !dbPool) return;
     try {
         const w = BRAHMASTRA_WINDOW_MIN;
-        const [fm, sr, mu, orb, tr, ic, vc, rd] = await Promise.all([
+        const [fm, sr, mu, orb, tr, ic, vc, rd, bms, sd] = await Promise.all([
             dbPool.query(`SELECT direction FROM fast_momentum_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
             dbPool.query(`SELECT direction FROM sr_bounce_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
             dbPool.query(`SELECT side FROM murarka_entry_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
@@ -4367,6 +4429,8 @@ async function checkNiftyBrahmastraTrigger() {
             dbPool.query(`SELECT result FROM index_confirmation_log WHERE ts >= NOW() - INTERVAL '${w} minutes' AND result LIKE 'CONFIRMED_%' ORDER BY ts DESC LIMIT 1`),
             dbPool.query(`SELECT bos_event FROM volume_confirmation_log WHERE ts >= NOW() - INTERVAL '${w} minutes' AND result = 'CONFIRMED' ORDER BY ts DESC LIMIT 1`),
             dbPool.query(`SELECT direction FROM option_rsi_divergence_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT direction FROM broad_market_shift_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT direction FROM sustained_drift_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
         ]);
 
         const votes = []; // { source, direction }
@@ -4377,6 +4441,9 @@ async function checkNiftyBrahmastraTrigger() {
         if (tr.rows[0]) votes.push({ source: 'Trend Rider', direction: tr.rows[0].direction });
         if (ic.rows[0]) votes.push({ source: 'Index Confirm', direction: ic.rows[0].result.replace('CONFIRMED_', '') });
         if (vc.rows[0]) votes.push({ source: 'Volume Confirm', direction: vc.rows[0].bos_event === 'BOS_BULLISH' ? 'BULLISH' : 'BEARISH' });
+        // 25 Sep — two new sources, built from today's gap investigation.
+        if (bms.rows[0]) votes.push({ source: 'Broad Market Shift', direction: bms.rows[0].direction });
+        if (sd.rows[0]) votes.push({ source: 'Sustained Drift', direction: sd.rows[0].direction });
         // Inverted mapping — same as the frontend's own convention (see
         // fetchExploratoryTriggers in index.html): BEARISH_FADING means the
         // bearish move is losing steam, a bullish-leaning read, and vice versa.
@@ -4495,17 +4562,157 @@ ${isConfirmed ? '✅ Volume backs this move — Dow Theory\'s "genuine trend" pa
     }
 }
 
+// ── Broad Market Shift Trigger (25 Sep) ──────────────────────────────────────
+// New NIFTY exploratory trigger — built directly from today's investigation
+// into why Brahmastra didn't fire during a genuine, large move. That move
+// WAS captured by 4 of the Main Engine's own broad indicators (MTF-lead
+// direction, A/D breadth, global cues bias, ATM PCR) shifting together —
+// but none of those feed Brahmastra, which only combines narrow,
+// pattern-specific triggers (momentum-spike, structure-break, etc.) that
+// simply didn't match this particular smooth, gradual climb.
+// This trigger is a different kind of signal on purpose: a "does the
+// broad picture agree" check, reading already-computed marketState fields
+// (no new computation, no external calls — genuinely cheap) rather than
+// detecting a specific price pattern. Fires when 3+ of the 4 indicators
+// agree on direction.
+const BROAD_SHIFT_THRESHOLD    = 3; // of 4 possible
+const BROAD_SHIFT_COOLDOWN_MIN = 20;
+
+let lastBroadShiftDirection = null, lastBroadShiftAt = 0;
+
+async function checkBroadMarketShiftTrigger() {
+    if (!isConfigured() || !isMarketOpen()) return;
+    try {
+        const votes = [];
+        const mtfSig = marketState.mtf?.signal;
+        if (mtfSig === 'BUY CALL') votes.push({ source: 'MTF-lead', direction: 'BULLISH' });
+        else if (mtfSig === 'BUY PUT') votes.push({ source: 'MTF-lead', direction: 'BEARISH' });
+
+        const breadthSig = marketState.breadth?.breadthSignal;
+        if (breadthSig === 'BULLISH' || breadthSig === 'BEARISH') votes.push({ source: 'Breadth', direction: breadthSig });
+
+        const globalBias = marketState.global?.bias;
+        if (globalBias === 'BULLISH' || globalBias === 'BEARISH') votes.push({ source: 'Global Cues', direction: globalBias });
+
+        const atmPcr = marketState.atmPcr;
+        if (atmPcr > 1.1) votes.push({ source: 'ATM PCR', direction: 'BULLISH' });
+        else if (atmPcr > 0 && atmPcr < 0.9) votes.push({ source: 'ATM PCR', direction: 'BEARISH' });
+
+        const bullSources = votes.filter(v => v.direction === 'BULLISH').map(v => v.source);
+        const bearSources = votes.filter(v => v.direction === 'BEARISH').map(v => v.source);
+
+        let direction, agreeing;
+        if (bullSources.length >= BROAD_SHIFT_THRESHOLD && bullSources.length > bearSources.length) { direction = 'BULLISH'; agreeing = bullSources; }
+        else if (bearSources.length >= BROAD_SHIFT_THRESHOLD && bearSources.length > bullSources.length) { direction = 'BEARISH'; agreeing = bearSources; }
+        else return;
+
+        if (lastBroadShiftDirection === direction && (Date.now() - lastBroadShiftAt) < BROAD_SHIFT_COOLDOWN_MIN * 60 * 1000) return;
+        lastBroadShiftAt = Date.now();
+        lastBroadShiftDirection = direction;
+
+        const nifty = marketState.nifty;
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+🌐 <b>BROAD MARKET SHIFT — ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+NIFTY ${nifty?.toFixed(1)}
+${agreeing.length}/4 broad indicators agree: ${agreeing.join(', ')}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT Main Engine confirmed.</b> Different from other exploratory triggers — this checks if MTF/breadth/global-cues/ATM-PCR broadly agree, not a specific price pattern. No historical track record yet. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Broad Market Shift Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🌐 [Broad Market Shift] ${direction} — ${agreeing.length}/4: ${agreeing.join(', ')}`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO broad_market_shift_log (direction, nifty, agree_count, agreeing) VALUES ($1,$2,$3,$4)`,
+                [direction, nifty, agreeing.length, agreeing.join(', ')]
+            ).catch(e => console.warn('[Broad Market Shift] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Broad Market Shift] error:', e.message);
+    }
+}
+
+// ── Sustained Drift Trigger (25 Sep) ─────────────────────────────────────────
+// New NIFTY exploratory trigger — same raw-velocity philosophy as Fast
+// Momentum above, but a longer 35-min window (vs Fast Momentum's 15-min).
+// Built for the other half of today's gap: a genuinely large move (~70pts)
+// spread gradually over 20-40 minutes can fail to clear Fast Momentum's
+// threshold in any single 15-min slice, even though the cumulative move is
+// substantial. Deliberately kept as a fully separate trigger (own table,
+// own cooldown) rather than a parameter change to Fast Momentum — that
+// trigger's short window is intentional (catches sharp spikes fast), and
+// this covers the slower, grinding case instead of replacing it.
+const SUSTAINED_DRIFT_WINDOW_MIN  = 35;
+const SUSTAINED_DRIFT_MIN_PTS     = 55; // floor — never fire on tiny ATR readings
+const SUSTAINED_DRIFT_ATR_MULT    = 3.5; // longer window needs a proportionally larger ATR multiple
+const SUSTAINED_DRIFT_COOLDOWN_MS = 30 * 60 * 1000;
+
+let lastSustainedDriftAt = 0, lastSustainedDriftDirection = null;
+
+async function checkSustainedDriftTrigger() {
+    if (!isConfigured() || !isMarketOpen()) return;
+    try {
+        const candles = getSessionCandles();
+        if (!candles || candles.length < SUSTAINED_DRIFT_WINDOW_MIN + 15) return; // +15 so the ATR window also has enough bars
+
+        const nowClose = candles[candles.length - 1].close;
+        const pastCandle = candles[candles.length - 1 - SUSTAINED_DRIFT_WINDOW_MIN];
+        if (!pastCandle) return;
+        const movePts = nowClose - pastCandle.close;
+
+        const atrWindow = candles.slice(-14);
+        const atrProxy = atrWindow.reduce((s, c) => s + (c.high - c.low), 0) / atrWindow.length;
+        const threshold = atrProxy > 0 ? Math.max(SUSTAINED_DRIFT_MIN_PTS, SUSTAINED_DRIFT_ATR_MULT * atrProxy) : SUSTAINED_DRIFT_MIN_PTS;
+
+        if (Math.abs(movePts) < threshold) return;
+
+        const direction = movePts > 0 ? 'BULLISH' : 'BEARISH';
+
+        if (direction === lastSustainedDriftDirection && (Date.now() - lastSustainedDriftAt) < SUSTAINED_DRIFT_COOLDOWN_MS) return;
+        lastSustainedDriftAt = Date.now();
+        lastSustainedDriftDirection = direction;
+
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+🐢 <b>SUSTAINED DRIFT — ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+NIFTY moved <b>${movePts > 0 ? '+' : ''}${movePts.toFixed(1)}pts</b> over ${SUSTAINED_DRIFT_WINDOW_MIN}min → ${nowClose.toFixed(1)}
+Threshold: ${threshold.toFixed(1)}pts (ATR-adjusted)
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>RAW PRICE DRIFT ONLY — NOT MTF or Main Engine confirmed.</b> Longer-window sibling of Fast Momentum — catches gradual, grinding moves a 15min window can miss. No historical track record yet. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Sustained Drift Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`🐢 [Sustained Drift] ${direction} — ${movePts.toFixed(1)}pts in ${SUSTAINED_DRIFT_WINDOW_MIN}min (threshold:${threshold.toFixed(1)})`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO sustained_drift_log (direction, nifty, move_pts, window_min, threshold) VALUES ($1,$2,$3,$4,$5)`,
+                [direction, nowClose, movePts, SUSTAINED_DRIFT_WINDOW_MIN, threshold]
+            ).catch(e => console.warn('[Sustained Drift] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Sustained Drift] error:', e.message);
+    }
+}
+
 async function checkCrudeBrahmastraTrigger() {
     if (!isConfigured() || !isCrudeSessionOpen() || !dbPool) return;
     try {
         const w = BRAHMASTRA_WINDOW_MIN;
-        const [fm, tr, mu, rd, wti, vc] = await Promise.all([
+        const [fm, tr, mu, rd, wti, vc, sd] = await Promise.all([
             dbPool.query(`SELECT direction FROM crude_fast_momentum_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
             dbPool.query(`SELECT direction FROM crude_trend_rider_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
             dbPool.query(`SELECT side FROM crude_murarka_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
             dbPool.query(`SELECT direction FROM crude_option_rsi_divergence_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
             dbPool.query(`SELECT result FROM crude_wti_confirmation_log WHERE ts >= NOW() - INTERVAL '${w} minutes' AND result LIKE 'CONFIRMED_%' ORDER BY ts DESC LIMIT 1`),
             dbPool.query(`SELECT bos_event FROM crude_volume_confirmation_log WHERE ts >= NOW() - INTERVAL '${w} minutes' AND result = 'CONFIRMED' ORDER BY ts DESC LIMIT 1`),
+            dbPool.query(`SELECT direction FROM crude_sustained_drift_log WHERE ts >= NOW() - INTERVAL '${w} minutes' ORDER BY ts DESC LIMIT 1`),
         ]);
 
         const votes = [];
@@ -4515,6 +4722,8 @@ async function checkCrudeBrahmastraTrigger() {
         if (rd.rows[0]) votes.push({ source: 'Crude Opt RSI Diverge', direction: rd.rows[0].direction === 'BEARISH_FADING' ? 'BULLISH' : 'BEARISH' });
         if (wti.rows[0]) votes.push({ source: 'Crude vs WTI', direction: wti.rows[0].result.replace('CONFIRMED_', '') });
         if (vc.rows[0]) votes.push({ source: 'Crude Volume Confirm', direction: vc.rows[0].bos_event === 'BOS_BULLISH' ? 'BULLISH' : 'BEARISH' });
+        // 25 Sep — new source, built from today's gap investigation.
+        if (sd.rows[0]) votes.push({ source: 'Crude Sustained Drift', direction: sd.rows[0].direction });
 
         const bullSources = votes.filter(v => v.direction === 'BULLISH').map(v => v.source);
         const bearSources = votes.filter(v => v.direction === 'BEARISH').map(v => v.source);
@@ -7339,6 +7548,54 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL crude_volume_confirmation_log table ready');
 
+        // ── broad_market_shift_log / sustained_drift_log tables (25 Sep) ──────
+        // Two new NIFTY exploratory triggers, built to close a genuine gap
+        // found today: a real, sustained move (MTF-lead + breadth + global +
+        // ATM PCR all shifted bullish together) that neither Brahmastra's
+        // narrow pattern-triggers nor Fast Momentum's 15-min window caught.
+        // See checkBroadMarketShiftTrigger()/checkSustainedDriftTrigger().
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS broad_market_shift_log (
+                id            SERIAL PRIMARY KEY,
+                ts            TIMESTAMPTZ DEFAULT NOW(),
+                direction     TEXT,
+                nifty         NUMERIC,
+                agree_count   INT,
+                agreeing      TEXT
+            )
+        `);
+        console.log('✅ PostgreSQL broad_market_shift_log table ready');
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS sustained_drift_log (
+                id            SERIAL PRIMARY KEY,
+                ts            TIMESTAMPTZ DEFAULT NOW(),
+                direction     TEXT,
+                nifty         NUMERIC,
+                move_pts      NUMERIC,
+                window_min    INT,
+                threshold     NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL sustained_drift_log table ready');
+
+        // ── crude_sustained_drift_log table (25 Sep) ──────────────────────────
+        // Crude's own Sustained Drift — directly portable from NIFTY's
+        // version (unlike Broad Market Shift, which the user and I agreed
+        // not to force-fit for crude given only 2-3 weak equivalents exist
+        // there vs NIFTY's clean 4). See checkCrudeSustainedDriftTrigger().
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS crude_sustained_drift_log (
+                id            SERIAL PRIMARY KEY,
+                ts            TIMESTAMPTZ DEFAULT NOW(),
+                direction     TEXT,
+                crude         NUMERIC,
+                move_pts      NUMERIC,
+                window_min    INT,
+                threshold     NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL crude_sustained_drift_log table ready');
+
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
         // (fire-and-forget snapshot), this table AUTOMATICALLY tracks what happened
@@ -9477,6 +9734,40 @@ app.get('/api/crude-volume-confirmation-log', async (req, res) => {
     }
 });
 
+// 25 Sep — Crude Sustained Drift fire history
+app.get('/api/crude-sustained-drift-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM crude_sustained_drift_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 25 Sep — Broad Market Shift and Sustained Drift fire history
+app.get('/api/broad-market-shift-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM broad_market_shift_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+app.get('/api/sustained-drift-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM sustained_drift_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // 24 Sep — Brahmastra fire history, NIFTY and Crude
 app.get('/api/nifty-brahmastra-log', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
@@ -10584,6 +10875,14 @@ function startPollingIntervals() {
     // Option RSI Divergence (23 Sep) — 2 min cadence.
     const optRSIDivTick = () => checkOptionRSIDivergenceTrigger().catch(e => console.warn('[Option RSI Divergence] tick error:', e.message));
     setTimeout(() => { optRSIDivTick(); setInterval(optRSIDivTick, 2 * 60 * 1000); }, 90 * 1000);
+    // Broad Market Shift (25 Sep) — 3 min cadence, cheap (reads already-
+    // computed marketState fields, no external calls).
+    const broadShiftTick = () => checkBroadMarketShiftTrigger().catch(e => console.warn('[Broad Market Shift] tick error:', e.message));
+    setTimeout(() => { broadShiftTick(); setInterval(broadShiftTick, 3 * 60 * 1000); }, 95 * 1000);
+    // Sustained Drift (25 Sep) — 90s cadence, matching Fast Momentum (same
+    // cost profile — reads getSessionCandles, no external calls).
+    const sustainedDriftTick = () => checkSustainedDriftTrigger().catch(e => console.warn('[Sustained Drift] tick error:', e.message));
+    setTimeout(() => { sustainedDriftTick(); setInterval(sustainedDriftTick, 90 * 1000); }, 100 * 1000);
     // Crude Fast Momentum (22 Sep) — 90s cadence, matches the other
     // crude-session-gated intervals below.
     const crudeFastMomTick = () => checkCrudeFastMomentumTrigger().catch(e => console.warn('[Crude Fast Momentum] tick error:', e.message));
@@ -10608,6 +10907,10 @@ function startPollingIntervals() {
     // own Volume Confirmation trigger for consistency.
     const crudeVolConfirmTick = () => checkCrudeVolumeConfirmationTrigger().catch(e => console.warn('[Crude Volume Confirmation] tick error:', e.message));
     setTimeout(() => { crudeVolConfirmTick(); setInterval(crudeVolConfirmTick, 3 * 60 * 1000); }, 105 * 1000);
+    // Crude Sustained Drift (25 Sep) — 90s cadence, matching Crude Fast
+    // Momentum, starts before crude Brahmastra's own interval.
+    const crudeSustainedDriftTick = () => checkCrudeSustainedDriftTrigger().catch(e => console.warn('[Crude Sustained Drift] tick error:', e.message));
+    setTimeout(() => { crudeSustainedDriftTick(); setInterval(crudeSustainedDriftTick, 90 * 1000); }, 108 * 1000);
     // Brahmastra (24 Sep) — 2 min cadence, cheap (DB-only, no external
     // calls). Starts later (110/115s) so the underlying triggers above get
     // a head-start on their own first cycle.

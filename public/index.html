@@ -9665,13 +9665,14 @@ function _statRow(label, val) {
       const body = document.getElementById('crude-explore-triggers-body');
       if (!body) return;
       try {
-        const [cfm, ctr, cmu, crd, cwti, cvc] = await Promise.all([
+        const [cfm, ctr, cmu, crd, cwti, cvc, csd] = await Promise.all([
           fetch('/api/crude-fast-momentum-log?limit=5').then(r => r.json()),
           fetch('/api/crude-trend-rider-log?limit=5').then(r => r.json()),
           fetch('/api/crude-murarka-log?limit=5').then(r => r.json()),
           fetch('/api/crude-option-rsi-divergence-log?limit=5').then(r => r.json()),
           fetch('/api/crude-wti-confirmation-log?limit=5').then(r => r.json()),
           fetch('/api/crude-volume-confirmation-log?limit=5').then(r => r.json()),
+          fetch('/api/crude-sustained-drift-log?limit=5').then(r => r.json()),
         ]);
         const cfmRows = (cfm.rows || []).map(r => ({ ...r, label: `CRUDE ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts/${r.window_min}min` }));
         const ctrRows = (ctr.rows || []).map(r => ({ ...r, label: `RSI ${Number(r.rsi).toFixed(0)} · ADX ${Number(r.adx).toFixed(0)} · pullback ${Number(r.pullback_pct).toFixed(2)}%` }));
@@ -9682,6 +9683,8 @@ function _statRow(label, val) {
         const cwtiRows = (cwti.rows || []).map(r => ({ ...r, direction: r.result.startsWith('CONFIRMED') ? r.result.replace('CONFIRMED_', '') : null, label: r.result.startsWith('CONFIRMED') ? `MCX+WTI both confirm` : `MCX:${r.crude_event} vs WTI:${r.wti_event}` }));
         // 24 Sep — Crude Volume Confirmation (Fyers-sourced).
         const cvcRows = (cvc.rows || []).map(r => ({ ...r, direction: r.bos_event === 'BOS_BULLISH' ? 'BULLISH' : 'BEARISH', label: `${r.result} · vol ${Number(r.volume_ratio).toFixed(2)}x avg (Fyers)` }));
+        // 25 Sep — Crude Sustained Drift (35min version of Crude Fast Momentum).
+        const csdRows = (csd.rows || []).map(r => ({ ...r, label: `CRUDE ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts/${r.window_min}min` }));
         const html = renderTriggerGroups([
           { kind: '⚡', source: 'Crude Fast Momentum', rows: cfmRows },
           { kind: '🏄', source: 'Crude Trend Rider',   rows: ctrRows },
@@ -9689,6 +9692,7 @@ function _statRow(label, val) {
           { kind: '🔀', source: 'Crude Opt RSI Diverge', rows: crdRows },
           { kind: '📊', source: 'Crude vs WTI',          rows: cwtiRows },
           { kind: '📶', source: 'Crude Volume Confirm',  rows: cvcRows },
+          { kind: '🐢', source: 'Crude Sustained Drift', rows: csdRows },
         ]);
         body.innerHTML = html || '<div style="color:var(--dim);">No fires yet — these are new, still building a track record.</div>';
       } catch (e) { body.textContent = 'Failed to load'; }
@@ -10172,7 +10176,7 @@ function renderVolumeScannerUI(d) {
       const body = document.getElementById('explore-triggers-body');
       if (!body) return;
       try {
-        const [fm, sr, mu, orb, tr, ic, vc, rd] = await Promise.all([
+        const [fm, sr, mu, orb, tr, ic, vc, rd, bms, sd] = await Promise.all([
           fetch('/api/fast-momentum-log?limit=3').then(r => r.json()),
           fetch('/api/sr-bounce-log?limit=3').then(r => r.json()),
           fetch('/api/murarka-log?limit=3').then(r => r.json()),
@@ -10181,6 +10185,8 @@ function renderVolumeScannerUI(d) {
           fetch('/api/index-confirmation-log?limit=3').then(r => r.json()),
           fetch('/api/volume-confirmation-log?limit=3').then(r => r.json()),
           fetch('/api/option-rsi-divergence-log?limit=3').then(r => r.json()),
+          fetch('/api/broad-market-shift-log?limit=3').then(r => r.json()),
+          fetch('/api/sustained-drift-log?limit=3').then(r => r.json()),
         ]);
         const fmRows = (fm.rows || []).map(r => ({ ...r, label: `NIFTY ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts/${r.window_min}min` }));
         const srRows = (sr.rows || []).map(r => ({ ...r, label: `${r.level_type}@${Number(r.level_price).toFixed(0)}` }));
@@ -10200,6 +10206,10 @@ function renderVolumeScannerUI(d) {
         // move is losing steam (mildly bullish-leaning), so it's colored
         // BULLISH here — the label text spells out the actual nuance.
         const rdRows = (rd.rows || []).map(r => ({ ...r, direction: r.direction === 'BEARISH_FADING' ? 'BULLISH' : 'BEARISH', label: r.direction === 'BEARISH_FADING' ? `bearish move fading (CE RSI ${Number(r.ce_rsi).toFixed(0)}↑ PE RSI ${Number(r.pe_rsi).toFixed(0)}↓)` : `bullish move fading (PE RSI ${Number(r.pe_rsi).toFixed(0)}↑ CE RSI ${Number(r.ce_rsi).toFixed(0)}↓)` }));
+        // 25 Sep — Broad Market Shift (MTF+breadth+global+ATM-PCR combo) and
+        // Sustained Drift (35min version of Fast Momentum).
+        const bmsRows = (bms.rows || []).map(r => ({ ...r, label: `${r.agree_count}/4: ${r.agreeing}` }));
+        const sdRows = (sd.rows || []).map(r => ({ ...r, label: `NIFTY ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}pts/${r.window_min}min` }));
 
         const html = renderTriggerGroups([
           { kind: '⚡', source: 'Fast Momentum', rows: fmRows },
@@ -10210,6 +10220,8 @@ function renderVolumeScannerUI(d) {
           { kind: '📊', source: 'Index Confirm', rows: icRows },
           { kind: '📶', source: 'Volume Confirm', rows: vcRows },
           { kind: '🔀', source: 'Opt RSI Diverge', rows: rdRows },
+          { kind: '🌐', source: 'Broad Market Shift', rows: bmsRows },
+          { kind: '🐢', source: 'Sustained Drift', rows: sdRows },
         ]);
         body.innerHTML = html || '<div style="color:var(--dim);">No fires yet — these are new, still building a track record.</div>';
       } catch (e) { body.textContent = 'Failed to load'; }
