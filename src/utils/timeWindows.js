@@ -73,13 +73,43 @@ function isCrudeSessionOpen() {
     return m >= 1050 && m <= 1435;                     // 5:30 PM – 11:55 PM IST
 }
 
+// 25 Sep — Bitcoin window, user's own schedule: Mon-Fri 11:59PM-8:55AM
+// (crosses midnight — active from 23:59 tonight through 08:55 tomorrow),
+// full-time Saturday and Sunday. NOTE (flagged to user): this literal
+// reading leaves Monday 00:00-08:55 uncovered — that slot is the tail of
+// SUNDAY night, and Sunday isn't in the "Monday to Friday" night-window
+// list, so it isn't covered by that rule either (Saturday/Sunday's
+// "full-time" is read as ending at Sunday 23:59:59, not bleeding into
+// Monday). If this gap isn't intended, the fix is a one-line change here.
+function isBitcoinWindowOpen() {
+    const ist = getIST();
+    const day = ist.getDay(); // 0=Sun..6=Sat
+    if (day === 0 || day === 6) return true;           // Full-time Sat & Sun
+    const m = ist.getHours()*60 + ist.getMinutes();
+    if (m >= 1439) return true;                        // 23:59 onwards tonight
+    if (m <= 535) {                                     // up to 08:55 this morning —
+        const yesterday = (day + 6) % 7;                // tail of LAST NIGHT's window,
+        // 25 Sep — FIX: was "yesterday >= 1" (Mon-Fri only), which left
+        // Monday 00:00-08:55 uncovered (tail of Sunday night — Sunday
+        // wasn't in that range). Sunday's own "full-time" already covers
+        // Sunday itself; this just lets that tail bleed into Monday
+        // morning too, per the user's explicit ask. yesterday===6
+        // (Saturday) can't actually reach here since Sunday is already
+        // caught by the day===0 check above — so this is simply
+        // "yesterday was any day except Saturday".
+        return yesterday <= 5;
+    }
+    return false;
+}
+
 function getActiveSession() {
     if (isNSEMarketDay())   return 'NIFTY';
     if (isCrudeSessionOpen()) return 'CRUDEOIL';
+    if (isBitcoinWindowOpen()) return 'BITCOIN';
     return 'CLOSED';
 }
 
 module.exports = {
     getIST, isMarketOpen, isSafeEntryWindow, isNSEMarketDay,
-    daysToNextExpiry, isCrudeSessionOpen, getActiveSession,
+    daysToNextExpiry, isCrudeSessionOpen, isBitcoinWindowOpen, getActiveSession,
 };

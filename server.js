@@ -15,7 +15,7 @@ const { startWebSocket, getCurrentWSLabel, closeCurrentWS } = require('./src/api
 // change. Names/signatures identical so every existing call site below
 // still works unmodified.
 const { getIST, isMarketOpen, isSafeEntryWindow, isNSEMarketDay,
-        daysToNextExpiry, isCrudeSessionOpen, getActiveSession } = require('./src/utils/timeWindows');
+        daysToNextExpiry, isCrudeSessionOpen, isBitcoinWindowOpen, getActiveSession } = require('./src/utils/timeWindows');
 const { pcrLabel, pcrScore, calculateADX, _linRegSlope, _pcrTimeToMinutes,
         calcPCRSlope, aggregateCandles, computeCrudeIndicators, crudeTFDirection,
         computeDecayedConfidence, bsEstimate, computeMurarkaRuleStrike,
@@ -90,6 +90,8 @@ const {
     getCurrentFyersFutSymbol,                     // correct NSE:NIFTY{YY}{MMM}FUT symbol (NIFTY-I is invalid on Fyers)
     fetchFyersIntradayHistory,                     // 20 Sep: BankNifty candles for Index Confirmation trigger
 } = require('./src/api/nseData');
+// 25 Sep — Delta Exchange India client, for the new Bitcoin-options feature.
+const { fetchDeltaTicker, getNearestBTCExpiry, fetchDeltaOptionChain } = require('./src/api/deltaExchange');
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
@@ -188,6 +190,11 @@ let marketState = {
     // tick handler (onTick) branches on getActiveSession() and routes crude
     // ticks here exclusively, never touching marketState.nifty/wsVolume/etc.
     crudeoil: { price: 0, volume: 0, open: null, high: null, low: null, prevClose: null, lastUpdate: null, symbol: null, token: null, candles1m: [], pcr: null },
+    // 25 Sep — Bitcoin (Delta Exchange India). Mirrors crudeoil's own
+    // structure. candles1m built locally from periodic ticker polls (Delta's
+    // ticker gives current price, not a tick stream, so candles are
+    // approximated by bucketing successive polls — see refreshBitcoin()).
+    bitcoin: { price: 0, open: null, high: null, low: null, lastUpdate: null, candles1m: [], pcr: null, nearestExpiry: null },
     signal: 'WAIT', confidence: 0,
     rsi: null, ema9: null, ema21: null, vwap: null,
     pcr: null, atmPcr: null, pcrSignal: 'N/A', atmPcrSignal: 'N/A',
@@ -6060,6 +6067,58 @@ async function refreshGlobal() {
         catch(e) { console.error('[Global signal trigger]', e.message); }
     }
 }
+
+// 25 Sep — Bitcoin (Delta Exchange India), Phase 1: price + PCR tracking
+// only, same bootstrap order Crude followed (price/PCR first, signal-engine
+// and exploratory triggers as later phases once this is proven live).
+let bitcoinCurrentBucket = null; // in-progress 1m candle being built from polls
+async function refreshBitcoin() {
+    if (!isBitcoinWindowOpen()) return;
+    try {
+        const ticker = await fetchDeltaTicker('BTCUSD');
+        if (!ticker?.close) return;
+        const price = ticker.close;
+        marketState.bitcoin.price = price;
+        marketState.bitcoin.lastUpdate = Date.now();
+        if (ticker.open > 0) marketState.bitcoin.open = ticker.open;
+        if (ticker.high > 0) marketState.bitcoin.high = ticker.high;
+        if (ticker.low > 0) marketState.bitcoin.low = ticker.low;
+
+        // Bucket successive polls into 1-min candles — Delta's ticker is a
+        // snapshot (like a quote), not a tick stream, so candles here are
+        // built locally rather than received directly (unlike NIFTY/Crude,
+        // which get real ticks over WebSocket).
+        const now = new Date();
+        const minuteKey = `${now.getUTCFullYear()}-${now.getUTCMonth()}-${now.getUTCDate()}-${now.getUTCHours()}-${now.getUTCMinutes()}`;
+        if (!bitcoinCurrentBucket || bitcoinCurrentBucket.minuteKey !== minuteKey) {
+            if (bitcoinCurrentBucket) {
+                marketState.bitcoin.candles1m.push({
+                    time: bitcoinCurrentBucket.minuteKey, open: bitcoinCurrentBucket.open,
+                    high: bitcoinCurrentBucket.high, low: bitcoinCurrentBucket.low, close: bitcoinCurrentBucket.close,
+                });
+                if (marketState.bitcoin.candles1m.length > 500) marketState.bitcoin.candles1m.shift();
+            }
+            bitcoinCurrentBucket = { minuteKey, open: price, high: price, low: price, close: price };
+        } else {
+            bitcoinCurrentBucket.high = Math.max(bitcoinCurrentBucket.high, price);
+            bitcoinCurrentBucket.low  = Math.min(bitcoinCurrentBucket.low, price);
+            bitcoinCurrentBucket.close = price;
+        }
+
+        // PCR — nearest-expiry BTC option chain. Refetched each cycle
+        // (unlike crude's day-cached prevClose) since Delta lists daily
+        // expiries that can roll over within a session; Products/Tickers
+        // are weight-3 endpoints against a 20000/5min quota, so refetching
+        // every ~60s (≈15 weight/5min) is negligible overhead.
+        const expiry = await getNearestBTCExpiry();
+        if (expiry) {
+            marketState.bitcoin.nearestExpiry = expiry;
+            const chain = await fetchDeltaOptionChain(expiry, price);
+            if (chain) marketState.bitcoin.pcr = chain;
+        }
+    } catch (e) { console.warn('[Bitcoin] refresh error:', e.message); }
+}
+
 let _breadthInFlight = false;
 async function refreshBreadth(force = false) {
     if (!force && !isNSEMarketDay()) return; // skip outside market hours unless forced (e.g. startup)
@@ -9528,6 +9587,19 @@ app.get('/api/crude-live', (req, res) => {
     });
 });
 
+// 25 Sep — Bitcoin (Delta Exchange India), Phase 1: price + PCR only, no
+// signal/indicators yet (same bootstrap order Crude followed).
+app.get('/api/bitcoin-live', (req, res) => {
+    const { candles1m, ...rest } = marketState.bitcoin;
+    res.json({
+        session: getActiveSession(),
+        windowOpen: isBitcoinWindowOpen(),
+        ...rest,
+        candles1mCount: candles1m.length,
+        candles1mRecent: candles1m.slice(-5),
+    });
+});
+
 // Volume scanner Phase 1 debug endpoint — confirms the F&O stock universe
 // resolves correctly (expect ~180-200 stocks) before Phase 2 wires up live
 // WebSocket subscriptions + volume-baseline tracking.
@@ -10763,6 +10835,9 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(pollYahooPrice,    60*1000),   15*1000); // 1-min price fix
     setTimeout(() => setInterval(refreshMTF,            2*60*1000), 30*1000);   // FIX: 5min→2min — RSI meters stay fresh
     setTimeout(() => setInterval(refreshGlobal,         2*60*1000), 60*1000);   // FIX: 5min→2min — BankNifty lead actually leads
+    // Bitcoin (25 Sep) — 60s cadence. isBitcoinWindowOpen() inside
+    // refreshBitcoin() itself gates when this actually does anything.
+    setTimeout(() => setInterval(refreshBitcoin,        60*1000), 65*1000);
     setTimeout(() => setInterval(refreshBreadth,        2*60*1000), 90*1000);   // 2 min — breadth is fast-changing
     setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
