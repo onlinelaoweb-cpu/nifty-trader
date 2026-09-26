@@ -4884,10 +4884,33 @@ async function evaluateSignalOutcomes() {
         `);
         if (!pending.rows.length) return;
 
+        // 26 Sep — SECOND fix, found from the user's follow-up screenshots:
+        // NIFTY and Bitcoin resolved correctly after the ORDER BY fix, but
+        // Crude stayed stuck at all-pending. Root cause: today (Saturday)
+        // Crude's own session never opened, so marketState.crudeoil.price
+        // never received a single live tick — it's been stuck at its 0
+        // default since the last restart. Unlike Bitcoin (which has a
+        // historical-candle backfill), Crude has no fallback, so its price
+        // genuinely stayed 0 all day, failing evalPrice>0 on every row every
+        // cycle. Fetched ONCE per cycle (not per-row) via the same
+        // Fyers-quote mechanism used for Crude's own prevClose — this works
+        // regardless of whether the live session is open, since it's a
+        // quote lookup, not a tick stream.
+        let crudeFallbackPrice = null;
+        if (!(marketState.crudeoil?.price > 0) && pending.rows.some(r => r.instrument === 'CRUDE')) {
+            try {
+                const fyersSymbol = await getCrudeFyersSymbol();
+                if (fyersSymbol) {
+                    const q = await fetchFyersQuote(fyersSymbol);
+                    if (q?.close > 0) crudeFallbackPrice = q.close;
+                }
+            } catch (e) { console.warn('[Signal Outcomes] crude fallback-price fetch error:', e.message); }
+        }
+
         let resolved = 0;
         for (const row of pending.rows) {
             const evalPrice = row.instrument === 'NIFTY' ? marketState.nifty
-                             : row.instrument === 'CRUDE' ? marketState.crudeoil?.price
+                             : row.instrument === 'CRUDE' ? (marketState.crudeoil?.price > 0 ? marketState.crudeoil.price : crudeFallbackPrice)
                              : row.instrument === 'BITCOIN' ? marketState.bitcoin?.price
                              : null;
             if (!(evalPrice > 0) || !(row.entry_price > 0)) continue;
