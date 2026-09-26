@@ -4827,20 +4827,29 @@ const OUTCOME_WIN_THRESHOLD_PCT = 0.15; // ±0.15% — consistent across instrum
 
 async function harvestSignalOutcomes() {
     if (!dbPool) return;
+    // 26 Sep — diagnostic logging added: user reported only NIFTY showing
+    // in the Track Record tab despite Crude/Bitcoin sources having fired
+    // (confirmed via Telegram/logs). Harvest was silent-on-success by
+    // design, making this impossible to debug from logs alone. This makes
+    // every cycle's actual per-table/per-instrument behavior visible.
+    const byInstrument = {};
     for (const s of OUTCOME_SOURCES) {
         try {
             const where = s.whereExtra ? `WHERE ${s.whereExtra}` : '';
-            await dbPool.query(`
+            const result = await dbPool.query(`
                 INSERT INTO signal_outcomes (source, instrument, direction, fire_ts, entry_price, source_table, source_id)
                 SELECT $1, $2, ${s.dirExpr}, ts, ${s.priceExpr}, $3, id
                 FROM ${s.table}
                 ${where}
                 ON CONFLICT (source_table, source_id) DO NOTHING
             `, [s.source, s.instrument, s.table]);
+            byInstrument[s.instrument] = (byInstrument[s.instrument] || 0) + (result.rowCount || 0);
         } catch (e) {
             console.warn(`[Signal Outcomes] harvest error (${s.table}):`, e.message);
         }
     }
+    const summary = Object.entries(byInstrument).map(([k, v]) => `${k}:${v}`).join(' ');
+    console.log(`📊 [Signal Outcomes] Harvest cycle — new rows inserted: ${summary || 'none'}`);
 }
 
 async function evaluateSignalOutcomes() {
