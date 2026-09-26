@@ -4768,6 +4768,111 @@ Agreeing sources (last ${BRAHMASTRA_WINDOW_MIN}min): ${sources.join(', ')}
     }
 }
 
+// ── Signal Outcomes Tracking (26 Sep) ────────────────────────────────────────
+// The user's own request: map every exploratory trigger built so far (NIFTY
+// + Crude) into one trackable system that measures real signal accuracy,
+// not just "did it fire" but "was it right". Two-phase design:
+//   1. HARVEST — periodically pull new fires from all 19 source tables into
+//      one shared signal_outcomes table (entry_price captured, result NULL).
+//   2. EVALUATE — periodically resolve pending rows once 30min has passed
+//      since the fire, using the instrument's CURRENT price as the
+//      evaluation price (simpler than looking up a historical candle for
+//      that exact future timestamp — this naturally works because
+//      evaluation runs continuously, catching each row soon after its own
+//      30min mark passes).
+// WIN/LOSS/FLAT threshold: ±0.15%, a consistent PERCENTAGE (not absolute
+// points) so it applies fairly across NIFTY's ~23000 and Crude's ~8800
+// price scales without needing separate calibration per instrument.
+//
+// Column-mapping note: each source table names its direction/price columns
+// differently (direct 'direction' column vs 'side' CE/PE vs 'result'
+// CONFIRMED_X vs 'bos_event' BOS_X) — dirExpr below is raw SQL translating
+// each into a plain 'BULLISH'/'BEARISH', and whereExtra filters out
+// non-directional rows (e.g. Index Confirmation's DIVERGENCE result, or
+// Volume Confirmation's WEAK result) so only genuinely directional fires
+// get tracked.
+const OUTCOME_SOURCES = [
+    // ── NIFTY (11 sources) ──
+    { table: 'fast_momentum_log',         source: 'Fast Momentum',      instrument: 'NIFTY', priceExpr: 'nifty', dirExpr: 'direction' },
+    { table: 'sr_bounce_log',             source: 'S/R Bounce',         instrument: 'NIFTY', priceExpr: 'nifty', dirExpr: 'direction' },
+    { table: 'murarka_entry_log',         source: 'Murarka',            instrument: 'NIFTY', priceExpr: 'spot',  dirExpr: "CASE WHEN side='CE' THEN 'BULLISH' ELSE 'BEARISH' END" },
+    { table: 'orb_trigger_log',           source: 'ORB',                instrument: 'NIFTY', priceExpr: 'nifty', dirExpr: 'direction' },
+    { table: 'trend_rider_log',           source: 'Trend Rider',        instrument: 'NIFTY', priceExpr: 'ltp',   dirExpr: 'direction' },
+    { table: 'index_confirmation_log',    source: 'Index Confirm',      instrument: 'NIFTY', priceExpr: 'nifty', dirExpr: "REPLACE(result,'CONFIRMED_','')", whereExtra: "result LIKE 'CONFIRMED_%'" },
+    { table: 'volume_confirmation_log',   source: 'Volume Confirm',     instrument: 'NIFTY', priceExpr: 'nifty', dirExpr: "CASE WHEN bos_event='BOS_BULLISH' THEN 'BULLISH' ELSE 'BEARISH' END", whereExtra: "result = 'CONFIRMED'" },
+    { table: 'option_rsi_divergence_log', source: 'Opt RSI Diverge',    instrument: 'NIFTY', priceExpr: 'nifty', dirExpr: "CASE WHEN direction='BEARISH_FADING' THEN 'BULLISH' ELSE 'BEARISH' END" },
+    { table: 'broad_market_shift_log',    source: 'Broad Market Shift', instrument: 'NIFTY', priceExpr: 'nifty', dirExpr: 'direction' },
+    { table: 'sustained_drift_log',       source: 'Sustained Drift',    instrument: 'NIFTY', priceExpr: 'nifty', dirExpr: 'direction' },
+    { table: 'nifty_brahmastra_log',      source: 'Brahmastra',         instrument: 'NIFTY', priceExpr: 'nifty', dirExpr: 'direction' },
+    // ── Crude (8 sources) ──
+    { table: 'crude_fast_momentum_log',         source: 'Fast Momentum',   instrument: 'CRUDE', priceExpr: 'crude', dirExpr: 'direction' },
+    { table: 'crude_trend_rider_log',           source: 'Trend Rider',     instrument: 'CRUDE', priceExpr: 'ltp',   dirExpr: 'direction' },
+    { table: 'crude_murarka_log',               source: 'Murarka',         instrument: 'CRUDE', priceExpr: 'spot',  dirExpr: "CASE WHEN side='CE' THEN 'BULLISH' ELSE 'BEARISH' END" },
+    { table: 'crude_option_rsi_divergence_log', source: 'Opt RSI Diverge', instrument: 'CRUDE', priceExpr: 'crude', dirExpr: "CASE WHEN direction='BEARISH_FADING' THEN 'BULLISH' ELSE 'BEARISH' END" },
+    { table: 'crude_wti_confirmation_log',      source: 'vs WTI',          instrument: 'CRUDE', priceExpr: 'crude', dirExpr: "REPLACE(result,'CONFIRMED_','')", whereExtra: "result LIKE 'CONFIRMED_%'" },
+    { table: 'crude_volume_confirmation_log',   source: 'Volume Confirm',  instrument: 'CRUDE', priceExpr: 'crude', dirExpr: "CASE WHEN bos_event='BOS_BULLISH' THEN 'BULLISH' ELSE 'BEARISH' END", whereExtra: "result = 'CONFIRMED'" },
+    { table: 'crude_sustained_drift_log',       source: 'Sustained Drift', instrument: 'CRUDE', priceExpr: 'crude', dirExpr: 'direction' },
+    { table: 'crude_brahmastra_log',            source: 'Brahmastra',      instrument: 'CRUDE', priceExpr: 'crude', dirExpr: 'direction' },
+];
+
+const OUTCOME_EVAL_DELAY_MIN = 30;   // resolve outcomes 30min after fire
+const OUTCOME_WIN_THRESHOLD_PCT = 0.15; // ±0.15% — consistent across instruments
+
+async function harvestSignalOutcomes() {
+    if (!dbPool) return;
+    for (const s of OUTCOME_SOURCES) {
+        try {
+            const where = s.whereExtra ? `WHERE ${s.whereExtra}` : '';
+            await dbPool.query(`
+                INSERT INTO signal_outcomes (source, instrument, direction, fire_ts, entry_price, source_table, source_id)
+                SELECT $1, $2, ${s.dirExpr}, ts, ${s.priceExpr}, $3, id
+                FROM ${s.table}
+                ${where}
+                ON CONFLICT (source_table, source_id) DO NOTHING
+            `, [s.source, s.instrument, s.table]);
+        } catch (e) {
+            console.warn(`[Signal Outcomes] harvest error (${s.table}):`, e.message);
+        }
+    }
+}
+
+async function evaluateSignalOutcomes() {
+    if (!dbPool) return;
+    try {
+        const pending = await dbPool.query(`
+            SELECT id, instrument, direction, entry_price FROM signal_outcomes
+            WHERE result IS NULL AND fire_ts <= NOW() - INTERVAL '${OUTCOME_EVAL_DELAY_MIN} minutes'
+            LIMIT 100
+        `);
+        if (!pending.rows.length) return;
+
+        let resolved = 0;
+        for (const row of pending.rows) {
+            const evalPrice = row.instrument === 'NIFTY' ? marketState.nifty
+                             : row.instrument === 'CRUDE' ? marketState.crudeoil?.price
+                             : null;
+            if (!(evalPrice > 0) || !(row.entry_price > 0)) continue;
+
+            const pctMove = ((evalPrice - row.entry_price) / row.entry_price) * 100;
+            let result;
+            if (row.direction === 'BULLISH') {
+                result = pctMove >= OUTCOME_WIN_THRESHOLD_PCT ? 'WIN' : pctMove <= -OUTCOME_WIN_THRESHOLD_PCT ? 'LOSS' : 'FLAT';
+            } else {
+                result = pctMove <= -OUTCOME_WIN_THRESHOLD_PCT ? 'WIN' : pctMove >= OUTCOME_WIN_THRESHOLD_PCT ? 'LOSS' : 'FLAT';
+            }
+
+            await dbPool.query(
+                `UPDATE signal_outcomes SET eval_ts = NOW(), eval_price = $1, pct_move = $2, result = $3 WHERE id = $4`,
+                [evalPrice, parseFloat(pctMove.toFixed(3)), result, row.id]
+            );
+            resolved++;
+        }
+        if (resolved > 0) console.log(`📊 [Signal Outcomes] Resolved ${resolved} pending outcome(s)`);
+    } catch (e) {
+        console.warn('[Signal Outcomes] evaluate error:', e.message);
+    }
+}
+
 async function checkTelegramAlerts(newSignal) {
     if (!isConfigured()||!isMarketOpen()) return false;
     // ── Race-condition guard: onTick fires synchronously on every websocket tick,
@@ -7852,6 +7957,38 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL bitcoin_fast_momentum_log table ready');
 
+        // ── signal_outcomes table (26 Sep) ────────────────────────────────────
+        // Unified track-record system — the user's own request: "map
+        // strategy... make it trackable to identify accuracy of signal by
+        // checking track record". Rather than adding outcome-columns to
+        // each of the 19 existing trigger tables (NIFTY: 11, Crude: 8),
+        // this is ONE shared table that HARVESTS new fires from all of
+        // them (see OUTCOME_SOURCES config + harvestSignalOutcomes() below)
+        // and later EVALUATES each one's real outcome (see
+        // evaluateSignalOutcomes()) — did price actually move the
+        // predicted direction by a meaningful amount in the 30min after
+        // the fire. UNIQUE(source_table, source_id) lets the harvest step
+        // use ON CONFLICT DO NOTHING safely — it can re-scan all 19 tables
+        // every cycle without ever double-counting the same fire twice.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS signal_outcomes (
+                id            SERIAL PRIMARY KEY,
+                source        TEXT,        -- 'Fast Momentum', 'Trend Rider', 'Brahmastra', etc.
+                instrument    TEXT,        -- 'NIFTY' | 'CRUDE'
+                direction     TEXT,        -- 'BULLISH' | 'BEARISH'
+                fire_ts       TIMESTAMPTZ,
+                entry_price   NUMERIC,
+                eval_ts       TIMESTAMPTZ, -- NULL until evaluated
+                eval_price    NUMERIC,     -- NULL until evaluated
+                pct_move      NUMERIC,     -- NULL until evaluated
+                result        TEXT,        -- 'WIN' | 'LOSS' | 'FLAT' | NULL (pending)
+                source_table  TEXT,        -- traceability — which raw table this came from
+                source_id     INT,         -- traceability — that table's own row id
+                UNIQUE(source_table, source_id)
+            )
+        `);
+        console.log('✅ PostgreSQL signal_outcomes table ready');
+
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
         // (fire-and-forget snapshot), this table AUTOMATICALLY tracks what happened
@@ -9812,6 +9949,53 @@ app.get('/api/bitcoin-fast-momentum-log', async (req, res) => {
     }
 });
 
+// 26 Sep — Signal Outcomes tracking: raw rows + aggregated accuracy.
+app.get('/api/signal-outcomes', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 50, 300);
+        const params = [];
+        const where = [];
+        if (req.query.source)     { params.push(req.query.source);     where.push(`source = $${params.length}`); }
+        if (req.query.instrument) { params.push(req.query.instrument); where.push(`instrument = $${params.length}`); }
+        const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+        params.push(limit);
+        const r = await dbPool.query(`SELECT * FROM signal_outcomes ${whereClause} ORDER BY fire_ts DESC LIMIT $${params.length}`, params);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// Aggregated win-rate per source+instrument — the user's own "identify the
+// accuracy of signal" ask. Only counts RESOLVED rows (result IS NOT NULL);
+// pending rows are shown separately via pending_count so the win% is never
+// diluted by fires still waiting out their 30min evaluation window.
+app.get('/api/signal-accuracy', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const r = await dbPool.query(`
+            SELECT
+                source, instrument,
+                COUNT(*) FILTER (WHERE result IS NOT NULL) AS resolved_count,
+                COUNT(*) FILTER (WHERE result = 'WIN')  AS win_count,
+                COUNT(*) FILTER (WHERE result = 'LOSS') AS loss_count,
+                COUNT(*) FILTER (WHERE result = 'FLAT') AS flat_count,
+                COUNT(*) FILTER (WHERE result IS NULL)  AS pending_count,
+                ROUND(
+                    100.0 * COUNT(*) FILTER (WHERE result = 'WIN')
+                    / NULLIF(COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')), 0)
+                , 1) AS win_rate_pct
+            FROM signal_outcomes
+            GROUP BY source, instrument
+            ORDER BY instrument, win_rate_pct DESC NULLS LAST
+        `);
+        res.json({ success: true, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // Volume scanner Phase 1 debug endpoint — confirms the F&O stock universe
 // resolves correctly (expect ~180-200 stocks) before Phase 2 wires up live
 // WebSocket subscriptions + volume-baseline tracking.
@@ -11054,6 +11238,13 @@ function startPollingIntervals() {
     // live-ticking feel. Starts almost immediately (5s) since it's cheap
     // and independent of the backfill/PCR cycle above.
     setTimeout(() => setInterval(refreshBitcoinFastTick, 1000), 5*1000);
+    // Signal Outcomes tracking (26 Sep) — 5 min cadence for both phases.
+    // No session-gate needed: harvest/evaluate operate on DB rows, not live
+    // ticks, so they simply find nothing to do during closed hours.
+    const harvestOutcomesTick = () => harvestSignalOutcomes().catch(e => console.warn('[Signal Outcomes] harvest tick error:', e.message));
+    setTimeout(() => { harvestOutcomesTick(); setInterval(harvestOutcomesTick, 5 * 60 * 1000); }, 150 * 1000);
+    const evaluateOutcomesTick = () => evaluateSignalOutcomes().catch(e => console.warn('[Signal Outcomes] evaluate tick error:', e.message));
+    setTimeout(() => { evaluateOutcomesTick(); setInterval(evaluateOutcomesTick, 5 * 60 * 1000); }, 155 * 1000);
     // Bitcoin Fast Momentum (26 Sep) — 90s cadence, matching Crude's own
     // Fast Momentum check interval.
     const bitcoinFastMomTick = () => checkBitcoinFastMomentumTrigger().catch(e => console.warn('[Bitcoin Fast Momentum] tick error:', e.message));
