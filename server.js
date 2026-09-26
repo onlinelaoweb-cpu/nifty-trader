@@ -5738,6 +5738,23 @@ async function onTick(tickData) {
         marketState.crudeoil.lastUpdate = Date.now();
         addCrudeTick(price); // Phase 3 — build 1m candles from accepted ticks only
         _lastTickAt = Date.now(); // shared watchdog — a live crude tick counts as "connected" too
+
+        // 26 Sep — push live crude ticks to SSE clients, same throttled
+        // (max 1/sec) pattern as NIFTY's own broadcast above. Crude's WS
+        // ticks were ALWAYS this real-time at the source (same shared
+        // WebSocket as NIFTY) — they just weren't being pushed to the
+        // browser; the frontend was polling /api/crude-live instead
+        // (3s interval, fixed from 20s on 23 Sep, but still polling, not
+        // push). Own throttle timestamp (not global._lastSsePush) so
+        // crude and NIFTY ticks don't compete for the same 1s slot when
+        // both could theoretically be relevant.
+        const _crudeNow = Date.now();
+        if (!global._lastCrudeSsePush || _crudeNow - global._lastCrudeSsePush > 1000) {
+            global._lastCrudeSsePush = _crudeNow;
+            const crudeChange = marketState.crudeoil.prevClose > 0 ? parseFloat((price - marketState.crudeoil.prevClose).toFixed(2)) : null;
+            const crudeChangePct = crudeChange !== null && marketState.crudeoil.prevClose > 0 ? parseFloat(((crudeChange / marketState.crudeoil.prevClose) * 100).toFixed(2)) : null;
+            sseBroadcast('crude_tick', { crude: price, change: crudeChange, changePct: crudeChangePct, ts: _crudeNow });
+        }
         return;
     }
 
@@ -6073,6 +6090,65 @@ async function refreshGlobal() {
 // only, same bootstrap order Crude followed (price/PCR first, signal-engine
 // and exploratory triggers as later phases once this is proven live).
 let bitcoinCurrentBucket = null; // in-progress 1m candle being built from polls
+let bitcoinFastTickInFlight = false;
+// 26 Sep — lightweight, price-only fast tick (1s cadence) for genuine
+// live-ticking feel, matching NIFTY's own throttled-SSE real-time behavior
+// and Crude's newly-added tick broadcast. Delta's ticker is a snapshot
+// endpoint, not a genuine push-capable tick stream — this is the closest
+// honest equivalent: poll fast and push what changed, rather than true
+// per-tick push. Deliberately SEPARATE from refreshBitcoin() below (which
+// keeps its own 60s cadence for the heavier backfill-check + option-chain/
+// PCR fetch + signal-logging) rather than speeding that whole function up,
+// since PCR/signal don't need per-second freshness and the option-chain
+// fetch is heavier than a bare ticker call. Both paths share
+// bitcoinCurrentBucket/marketState.bitcoin.candles1m, so this also makes
+// candle high/low capture more accurate (more price samples per minute).
+async function refreshBitcoinFastTick() {
+    if (!isBitcoinWindowOpen()) return;
+    if (bitcoinFastTickInFlight) return; // guard against a slow response overlapping the next 1s tick
+    bitcoinFastTickInFlight = true;
+    try {
+        const ticker = await fetchDeltaTicker('BTCUSD');
+        bitcoinFastTickInFlight = false;
+        if (!ticker?.close) return;
+        const price = ticker.close;
+        const prevPrice = marketState.bitcoin.price;
+        marketState.bitcoin.price = price;
+        marketState.bitcoin.lastUpdate = Date.now();
+        if (ticker.open > 0) marketState.bitcoin.open = ticker.open;
+        if (ticker.high > 0) marketState.bitcoin.high = ticker.high;
+        if (ticker.low > 0) marketState.bitcoin.low = ticker.low;
+
+        const now = new Date();
+        const minuteKey = `${now.getUTCFullYear()}-${now.getUTCMonth()}-${now.getUTCDate()}-${now.getUTCHours()}-${now.getUTCMinutes()}`;
+        if (!bitcoinCurrentBucket || bitcoinCurrentBucket.minuteKey !== minuteKey) {
+            if (bitcoinCurrentBucket) {
+                marketState.bitcoin.candles1m.push({
+                    time: bitcoinCurrentBucket.minuteKey, open: bitcoinCurrentBucket.open,
+                    high: bitcoinCurrentBucket.high, low: bitcoinCurrentBucket.low, close: bitcoinCurrentBucket.close,
+                });
+                if (marketState.bitcoin.candles1m.length > 500) marketState.bitcoin.candles1m.shift();
+            }
+            bitcoinCurrentBucket = { minuteKey, open: price, high: price, low: price, close: price };
+        } else {
+            bitcoinCurrentBucket.high = Math.max(bitcoinCurrentBucket.high, price);
+            bitcoinCurrentBucket.low  = Math.min(bitcoinCurrentBucket.low, price);
+            bitcoinCurrentBucket.close = price;
+        }
+
+        // SSE push, throttled to max 1/sec — same pattern as NIFTY/Crude.
+        const _btcNow = Date.now();
+        if (!global._lastBitcoinSsePush || _btcNow - global._lastBitcoinSsePush > 1000) {
+            global._lastBitcoinSsePush = _btcNow;
+            const change = prevPrice > 0 ? parseFloat((price - prevPrice).toFixed(2)) : null;
+            sseBroadcast('bitcoin_tick', { bitcoin: price, change, ts: _btcNow });
+        }
+    } catch (e) {
+        bitcoinFastTickInFlight = false;
+        console.warn('[Bitcoin FastTick] error:', e.message);
+    }
+}
+
 let bitcoinBackfillInFlight = false;
 async function refreshBitcoin() {
     if (!isBitcoinWindowOpen()) return;
@@ -10974,6 +11050,10 @@ function startPollingIntervals() {
     // Bitcoin (25 Sep) — 60s cadence. isBitcoinWindowOpen() inside
     // refreshBitcoin() itself gates when this actually does anything.
     setTimeout(() => setInterval(refreshBitcoin,        60*1000), 65*1000);
+    // Bitcoin fast tick (26 Sep) — 1s cadence, price-only, for genuine
+    // live-ticking feel. Starts almost immediately (5s) since it's cheap
+    // and independent of the backfill/PCR cycle above.
+    setTimeout(() => setInterval(refreshBitcoinFastTick, 1000), 5*1000);
     // Bitcoin Fast Momentum (26 Sep) — 90s cadence, matching Crude's own
     // Fast Momentum check interval.
     const bitcoinFastMomTick = () => checkBitcoinFastMomentumTrigger().catch(e => console.warn('[Bitcoin Fast Momentum] tick error:', e.message));

@@ -4538,6 +4538,51 @@ function startSSE() {
     } catch(_) {}
   });
 
+  // 26 Sep — crude_tick event, same real-time-push idea as NIFTY's own
+  // 'tick' listener above, now that crude's WS ticks are broadcast too
+  // (previously the frontend only polled /api/crude-live every 3s).
+  _sseConn.addEventListener('crude_tick', e => {
+    try {
+      const t = JSON.parse(e.data);
+      if (t.crude > 0) {
+        const priceEl = document.getElementById('crude-price');
+        if (priceEl) {
+          priceEl.textContent = '₹' + t.crude.toFixed(2);
+          priceEl.style.transition = 'color 0.15s';
+          priceEl.style.color = t.change >= 0 ? 'var(--green)' : 'var(--red)';
+          setTimeout(() => { priceEl.style.color = ''; }, 400);
+        }
+        const changeEl = document.getElementById('crude-change');
+        if (changeEl && t.change != null) {
+          const up = t.change >= 0;
+          changeEl.textContent = `${up ? '▲' : '▼'} ${up ? '+' : ''}${t.change.toFixed(2)} (${up ? '+' : ''}${t.changePct.toFixed(2)}%)`;
+          changeEl.style.color = up ? 'var(--green)' : 'var(--red)';
+        }
+      }
+    } catch(_) {}
+  });
+
+  // 26 Sep — bitcoin_tick event, same real-time-push idea, 1s cadence
+  // (Delta's ticker is a snapshot endpoint, not a genuine push stream — see
+  // refreshBitcoinFastTick()'s own comment in server.js for why this is the
+  // honest equivalent: poll fast, push what changed).
+  _sseConn.addEventListener('bitcoin_tick', e => {
+    try {
+      const t = JSON.parse(e.data);
+      if (t.bitcoin > 0) {
+        const priceEl = document.getElementById('bitcoin-price');
+        if (priceEl) {
+          priceEl.textContent = '$' + t.bitcoin.toFixed(2);
+          if (t.change != null) {
+            priceEl.style.transition = 'color 0.15s';
+            priceEl.style.color = t.change >= 0 ? 'var(--green)' : 'var(--red)';
+            setTimeout(() => { priceEl.style.color = ''; }, 400);
+          }
+        }
+      }
+    } catch(_) {}
+  });
+
   // ── new_signal event — a fresh BUY signal was just logged to DB ───────────
   _sseConn.addEventListener('new_signal', e => {
     try {
