@@ -4850,6 +4850,17 @@ async function harvestSignalOutcomes() {
     }
     const summary = Object.entries(byInstrument).map(([k, v]) => `${k}:${v}`).join(' ');
     console.log(`📊 [Signal Outcomes] Harvest cycle — new rows inserted: ${summary || 'none'}`);
+
+    // 26 Sep — TOTAL current state (not just this cycle's delta) — this is
+    // the line that actually answers "does Crude/Bitcoin data exist in
+    // signal_outcomes at all right now", regardless of when it was harvested.
+    try {
+        const totals = await dbPool.query(`SELECT instrument, COUNT(*)::int AS n FROM signal_outcomes GROUP BY instrument ORDER BY instrument`);
+        const totalSummary = totals.rows.map(r => `${r.instrument}:${r.n}`).join(' ');
+        console.log(`📊 [Signal Outcomes] Current totals in signal_outcomes: ${totalSummary || 'EMPTY TABLE'}`);
+    } catch (e) {
+        console.warn('[Signal Outcomes] totals-check error:', e.message);
+    }
 }
 
 async function evaluateSignalOutcomes() {
