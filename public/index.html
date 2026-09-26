@@ -3849,6 +3849,9 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
 
     <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">BITCOIN</div>
     <button class="more-item" onclick="switchTabFromMore('bitcoin')"><span>₿</span>BITCOIN</button>
+
+    <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">TRACKING</div>
+    <button class="more-item" onclick="switchTabFromMore('signalAccuracy')"><span>🎯</span>TRACK RECORD</button>
   </div>
 </div>
 
@@ -3876,6 +3879,7 @@ function _initDesktopLayout() {
     { id: 'crude',     icon: '🛢️', label: 'CRUDE LIVE' },
     { id: 'crudeInsights', icon: '🔍', label: 'CRUDE INSIGHTS' },
     { id: 'bitcoin',   icon: '₿', label: 'BITCOIN' },
+    { id: 'signalAccuracy', icon: '🎯', label: 'TRACK RECORD' },
   ];
 
   // Build sidebar
@@ -4069,6 +4073,7 @@ const TAB_LABELS = {
   crude:     { icon: '🛢️', label: 'CRUDE LIVE' },
   crudeInsights: { icon: '🔍', label: 'CRUDE INSIGHTS' },
   bitcoin:   { icon: '₿', label: 'BITCOIN' },
+  signalAccuracy: { icon: '🎯', label: 'TRACK RECORD' },
 };
 
 function switchTab(name,btn){
@@ -4136,6 +4141,13 @@ function switchTab(name,btn){
     _bitcoinTabTimer = setInterval(fetchBitcoinLive, 5000);
   } else {
     if (_bitcoinTabTimer) { clearInterval(_bitcoinTabTimer); _bitcoinTabTimer = null; }
+  }
+  if(name==='signalAccuracy'){
+    fetchSignalAccuracy();
+    if (_signalAccuracyTabTimer) clearInterval(_signalAccuracyTabTimer);
+    _signalAccuracyTabTimer = setInterval(fetchSignalAccuracy, 30000);
+  } else {
+    if (_signalAccuracyTabTimer) { clearInterval(_signalAccuracyTabTimer); _signalAccuracyTabTimer = null; }
   }
   if(name==='crudeInsights'){
     fetchCrudeInsights();
@@ -5517,6 +5529,7 @@ let _breadthTabTimer = null;
 let _scannerTabTimer = null;
 let _crudeTabTimer = null;
 let _bitcoinTabTimer = null;
+let _signalAccuracyTabTimer = null;
 let _crudeInsightsTabTimer = null;
 let _lastBreadthStocks = null;  // cache stocks[] for SSE merge
 async function fetchBreadthFull() {
@@ -10044,12 +10057,29 @@ async function fetchBitcoinExploratoryTriggers() {
   const body = document.getElementById('bitcoin-explore-triggers-body');
   if (!body) return;
   try {
-    const fm = await fetch('/api/bitcoin-fast-momentum-log?limit=5').then(r => r.json());
+    const [fm, tr, mu, rd, vc, sd] = await Promise.all([
+      fetch('/api/bitcoin-fast-momentum-log?limit=5').then(r => r.json()),
+      fetch('/api/bitcoin-trend-rider-log?limit=5').then(r => r.json()),
+      fetch('/api/bitcoin-murarka-log?limit=5').then(r => r.json()),
+      fetch('/api/bitcoin-option-rsi-divergence-log?limit=5').then(r => r.json()),
+      fetch('/api/bitcoin-volume-confirmation-log?limit=5').then(r => r.json()),
+      fetch('/api/bitcoin-sustained-drift-log?limit=5').then(r => r.json()),
+    ]);
     const fmRows = (fm.rows || []).map(r => ({ ...r, label: `BTC ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}/${r.window_min}min` }));
+    const trRows = (tr.rows || []).map(r => ({ ...r, label: `RSI ${Number(r.rsi).toFixed(0)} · ADX ${Number(r.adx).toFixed(0)} · pullback ${Number(r.pullback_pct).toFixed(2)}%` }));
+    const muRows = (mu.rows || []).map(r => ({ ...r, direction: r.side === 'CE' ? 'BULLISH' : 'BEARISH', label: `PCR ${Number(r.pcr).toFixed(2)} + VWAP-proxy ${Number(r.vwap_dist_pct).toFixed(2)}%` }));
+    const rdRows = (rd.rows || []).map(r => ({ ...r, direction: r.direction === 'BEARISH_FADING' ? 'BULLISH' : 'BEARISH', label: r.direction === 'BEARISH_FADING' ? `bearish move fading (CE RSI ${Number(r.ce_rsi).toFixed(0)}↑ PE RSI ${Number(r.pe_rsi).toFixed(0)}↓)` : `bullish move fading (PE RSI ${Number(r.pe_rsi).toFixed(0)}↑ CE RSI ${Number(r.ce_rsi).toFixed(0)}↓)` }));
+    const vcRows = (vc.rows || []).map(r => ({ ...r, direction: r.bos_event === 'BOS_BULLISH' ? 'BULLISH' : 'BEARISH', label: `${r.result} · vol ${Number(r.volume_ratio).toFixed(2)}x avg` }));
+    const sdRows = (sd.rows || []).map(r => ({ ...r, label: `BTC ${r.move_pts > 0 ? '+' : ''}${Number(r.move_pts).toFixed(1)}/${r.window_min}min` }));
     const html = renderTriggerGroups([
       { kind: '⚡', source: 'Fast Momentum', rows: fmRows },
+      { kind: '🏄', source: 'Trend Rider',   rows: trRows },
+      { kind: '🎯', source: 'Murarka',        rows: muRows },
+      { kind: '🔀', source: 'Opt RSI Diverge', rows: rdRows },
+      { kind: '📶', source: 'Volume Confirm',  rows: vcRows },
+      { kind: '🐢', source: 'Sustained Drift', rows: sdRows },
     ]);
-    body.innerHTML = html || '<div style="color:var(--dim);">No fires yet — this is new, still building a track record.</div>';
+    body.innerHTML = html || '<div style="color:var(--dim);">No fires yet — these are new, still building a track record.</div>';
   } catch (e) { body.textContent = 'Failed to load'; }
 }
 window.addEventListener('load', fetchBitcoinExploratoryTriggers);
@@ -10106,6 +10136,72 @@ function renderBitcoinLiveUI(d) {
     const reasons = sig.reasons || [];
     reasonsEl.innerHTML = reasons.length ? reasons.map(r => `<div>• ${r}</div>`).join('') : '<div style="color:var(--dim);">No reasons yet — waiting for enough candles.</div>';
   }
+}
+</script>
+
+
+<div class="panel" id="panel-signalAccuracy">
+  <div style="padding:10px 12px 80px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div style="font-family:'Orbitron',monospace;font-size:14.5px;letter-spacing:1px;color:var(--accent);">🎯 TRACK RECORD</div>
+      <span id="sa-status" style="font-size:10.5px;color:var(--dim);font-family:monospace;"></span>
+    </div>
+    <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:12px;">
+      Real accuracy of every NIFTY + Crude exploratory trigger — did price actually move the predicted direction by 0.15%+ within 30min of the fire. WIN/LOSS/FLAT, not just "fired". Low sample counts are not statistically reliable yet — treat as early signal, not verdict.
+    </div>
+    <div id="sa-body">Loading...</div>
+  </div>
+</div>
+
+<script>
+async function fetchSignalAccuracy() {
+  const statusEl = document.getElementById('sa-status');
+  const body = document.getElementById('sa-body');
+  if (!body) return;
+  try {
+    const r = await fetch('/api/signal-accuracy').then(r => r.json());
+    if (!r.success) { body.textContent = 'Failed to load: ' + (r.error || 'unknown error'); return; }
+    if (statusEl) statusEl.textContent = new Date().toLocaleTimeString();
+
+    const rows = r.rows || [];
+    if (!rows.length) {
+      body.innerHTML = '<div style="color:var(--dim);font-size:12px;">No fires harvested yet — triggers need to fire first, then wait 30min for evaluation.</div>';
+      return;
+    }
+
+    const byInstrument = {};
+    rows.forEach(row => {
+      if (!byInstrument[row.instrument]) byInstrument[row.instrument] = [];
+      byInstrument[row.instrument].push(row);
+    });
+
+    let html = '';
+    for (const instrument of Object.keys(byInstrument).sort()) {
+      const label = instrument === 'NIFTY' ? '📊 NIFTY' : instrument === 'CRUDE' ? '🛢️ CRUDE' : instrument === 'BITCOIN' ? '₿ BITCOIN' : instrument;
+      html += `<div style="font-size:11px;color:var(--dim);margin:14px 0 6px;letter-spacing:0.5px;">${label}</div>`;
+      html += '<div style="display:flex;flex-direction:column;gap:6px;">';
+      byInstrument[instrument].forEach(row => {
+        const winPct = row.win_rate_pct != null ? Number(row.win_rate_pct) : null;
+        const resolved = Number(row.resolved_count) || 0;
+        const wins = Number(row.win_count) || 0;
+        const losses = Number(row.loss_count) || 0;
+        const flats = Number(row.flat_count) || 0;
+        const pending = Number(row.pending_count) || 0;
+        const color = winPct == null ? 'var(--dim)' : winPct >= 55 ? 'var(--green)' : winPct < 45 ? 'var(--red)' : 'var(--amber)';
+        const lowSample = resolved > 0 && resolved < 10;
+        html += `
+          <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;">
+            <div>
+              <div style="font-size:12.5px;font-weight:600;">${row.source}</div>
+              <div style="font-size:10px;color:var(--dim);margin-top:2px;">${wins}W · ${losses}L · ${flats}F${pending ? ` · ${pending} pending` : ''}${lowSample ? ' · low sample' : ''}</div>
+            </div>
+            <div style="font-family:'Orbitron',monospace;font-size:18px;font-weight:700;color:${color};">${winPct != null ? winPct.toFixed(0) + '%' : '--'}</div>
+          </div>`;
+      });
+      html += '</div>';
+    }
+    body.innerHTML = html;
+  } catch (e) { body.textContent = 'Failed to load'; }
 }
 </script>
 

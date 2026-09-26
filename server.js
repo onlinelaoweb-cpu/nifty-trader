@@ -4813,6 +4813,13 @@ const OUTCOME_SOURCES = [
     { table: 'crude_volume_confirmation_log',   source: 'Volume Confirm',  instrument: 'CRUDE', priceExpr: 'crude', dirExpr: "CASE WHEN bos_event='BOS_BULLISH' THEN 'BULLISH' ELSE 'BEARISH' END", whereExtra: "result = 'CONFIRMED'" },
     { table: 'crude_sustained_drift_log',       source: 'Sustained Drift', instrument: 'CRUDE', priceExpr: 'crude', dirExpr: 'direction' },
     { table: 'crude_brahmastra_log',            source: 'Brahmastra',      instrument: 'CRUDE', priceExpr: 'crude', dirExpr: 'direction' },
+    // ── Bitcoin (1 source so far — grows as more Bitcoin triggers get built) ──
+    { table: 'bitcoin_fast_momentum_log',       source: 'Fast Momentum',   instrument: 'BITCOIN', priceExpr: 'bitcoin', dirExpr: 'direction' },
+    { table: 'bitcoin_trend_rider_log',         source: 'Trend Rider',     instrument: 'BITCOIN', priceExpr: 'ltp',     dirExpr: 'direction' },
+    { table: 'bitcoin_murarka_log',             source: 'Murarka',         instrument: 'BITCOIN', priceExpr: 'spot',    dirExpr: "CASE WHEN side='CE' THEN 'BULLISH' ELSE 'BEARISH' END" },
+    { table: 'bitcoin_option_rsi_divergence_log', source: 'Opt RSI Diverge', instrument: 'BITCOIN', priceExpr: 'bitcoin', dirExpr: "CASE WHEN direction='BEARISH_FADING' THEN 'BULLISH' ELSE 'BEARISH' END" },
+    { table: 'bitcoin_volume_confirmation_log', source: 'Volume Confirm',  instrument: 'BITCOIN', priceExpr: 'bitcoin', dirExpr: "CASE WHEN bos_event='BOS_BULLISH' THEN 'BULLISH' ELSE 'BEARISH' END", whereExtra: "result = 'CONFIRMED'" },
+    { table: 'bitcoin_sustained_drift_log',     source: 'Sustained Drift', instrument: 'BITCOIN', priceExpr: 'bitcoin', dirExpr: 'direction' },
 ];
 
 const OUTCOME_EVAL_DELAY_MIN = 30;   // resolve outcomes 30min after fire
@@ -4850,6 +4857,7 @@ async function evaluateSignalOutcomes() {
         for (const row of pending.rows) {
             const evalPrice = row.instrument === 'NIFTY' ? marketState.nifty
                              : row.instrument === 'CRUDE' ? marketState.crudeoil?.price
+                             : row.instrument === 'BITCOIN' ? marketState.bitcoin?.price
                              : null;
             if (!(evalPrice > 0) || !(row.entry_price > 0)) continue;
 
@@ -6284,6 +6292,8 @@ async function refreshBitcoin() {
         if (ticker.open > 0) marketState.bitcoin.open = ticker.open;
         if (ticker.high > 0) marketState.bitcoin.high = ticker.high;
         if (ticker.low > 0) marketState.bitcoin.low = ticker.low;
+        // 26 Sep — feed volume baseline for Bitcoin Volume Confirmation.
+        if (ticker.volume > 0) { bitcoinVolumeBaselineSamples.push(ticker.volume); if (bitcoinVolumeBaselineSamples.length > 20) bitcoinVolumeBaselineSamples.shift(); }
 
         // Bucket successive polls into 1-min candles — Delta's ticker is a
         // snapshot (like a quote), not a tick stream, so candles here are
@@ -6315,7 +6325,12 @@ async function refreshBitcoin() {
         if (expiry) {
             marketState.bitcoin.nearestExpiry = expiry;
             const chain = await fetchDeltaOptionChain(expiry, price);
-            if (chain) marketState.bitcoin.pcr = chain;
+            if (chain) {
+                marketState.bitcoin.pcr = chain;
+                // 26 Sep — feed the rolling series for Bitcoin Option RSI Divergence.
+                if (chain.atmCEpremium > 0) { bitcoinCEOptionPremiumSeries.push(chain.atmCEpremium); if (bitcoinCEOptionPremiumSeries.length > 60) bitcoinCEOptionPremiumSeries.shift(); }
+                if (chain.atmPEpremium > 0) { bitcoinPEOptionPremiumSeries.push(chain.atmPEpremium); if (bitcoinPEOptionPremiumSeries.length > 60) bitcoinPEOptionPremiumSeries.shift(); }
+            }
         }
         // 25 Sep — FIX: this function had no success-log at all, unlike
         // every other fetch/trigger in this codebase — made it impossible
@@ -6347,6 +6362,14 @@ const BITCOIN_FAST_MOM_ATR_MULT    = 2.5;
 const BITCOIN_FAST_MOM_COOLDOWN_MS = 20 * 60 * 1000;
 
 let lastBitcoinFastMomentumAlertAt = 0, lastBitcoinFastMomentumDirection = null;
+// 26 Sep — state for the 5 remaining Bitcoin exploratory triggers.
+let bitcoinCEOptionPremiumSeries = [], bitcoinPEOptionPremiumSeries = [];
+let bitcoinVolumeBaselineSamples = [];
+let _bitcoinTrendRiderLastAlert = null;
+let lastBitcoinMurarkaLoggedSide = null;
+let lastBitcoinOptRSIDivAt = 0, lastBitcoinOptRSIDivDirection = null;
+let lastBitcoinVolConfirmResult = null, lastBitcoinVolConfirmAt = 0;
+let lastBitcoinSustainedDriftAt = 0, lastBitcoinSustainedDriftDirection = null;
 
 async function checkBitcoinFastMomentumTrigger() {
     if (!isConfigured() || !isBitcoinWindowOpen()) return;
@@ -6398,6 +6421,275 @@ First Bitcoin-specific exploratory trigger — no historical track record yet. U
         }
     } catch (e) {
         console.warn('[Bitcoin Fast Momentum] error:', e.message);
+    }
+}
+
+// ── BITCOIN Trend Rider Trigger (26 Sep) ─────────────────────────────────────
+// Reuses computeCrudeTrendRiderSetup() directly, unchanged — it's genuinely
+// instrument-agnostic (candles/mtf/adx in, setup out, no crude-specific
+// assumptions inside), so no separate Bitcoin version was needed.
+const BITCOIN_TREND_RIDER_COOLDOWN_MS = 15 * 60 * 1000;
+
+async function checkBitcoinTrendRiderTrigger() {
+    if (!isConfigured() || !isBitcoinWindowOpen()) return;
+    try {
+        const candles = marketState.bitcoin?.candles1m;
+        if (!candles || candles.length < 30) return;
+
+        const mtf = computeBitcoinMTF(candles);
+        const adx = computeBitcoinIndicators(candles);
+        const setup = computeCrudeTrendRiderSetup(candles, mtf, adx);
+        if (!setup) return;
+
+        const last = _bitcoinTrendRiderLastAlert;
+        const sinceLastMs = last ? Date.now() - last.at : Infinity;
+        if (last && last.direction === setup.direction && sinceLastMs < BITCOIN_TREND_RIDER_COOLDOWN_MS) return;
+        _bitcoinTrendRiderLastAlert = { at: Date.now(), direction: setup.direction };
+
+        const isBull = setup.direction === 'BULLISH';
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+₿🏄 <b>BITCOIN TREND RIDER — ${setup.direction}</b>
+━━━━━━━━━━━━━━━━━━
+BTC $${setup.ltp.toFixed(1)} — sustained ${isBull ? 'overbought' : 'oversold'} RSI ${setup.rsi} (${setup.extremeCount}/6 candles extreme), ADX ${setup.adx}
+Pulled back to EMA9 (${setup.pullbackDistPct}% away, was ${setup.maxExtensionPct}% extended) and resuming ${isBull ? 'up' : 'down'}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — different philosophy on purpose.</b> Treats sustained extreme RSI as continuation, not exhaustion — will be wrong on days that look trending but aren't. NOT Main Engine confirmed. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Bitcoin Trend Rider Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`₿🏄 [Bitcoin Trend Rider] ${setup.direction} — RSI:${setup.rsi} ADX:${setup.adx} pullback:${setup.pullbackDistPct}%/${setup.maxExtensionPct}%`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO bitcoin_trend_rider_log (direction, ltp, adx, rsi, extreme_count, pullback_pct, max_ext_pct)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+                [setup.direction, setup.ltp, setup.adx, setup.rsi, setup.extremeCount, setup.pullbackDistPct, setup.maxExtensionPct]
+            ).catch(e => console.warn('[Bitcoin Trend Rider] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Bitcoin Trend Rider] error:', e.message);
+    }
+}
+
+// ── BITCOIN Murarka Entry Trigger (26 Sep) ───────────────────────────────────
+// Reuses computeMurarkaZone() unchanged (instrument-agnostic). Same VWAP-
+// PROXY caveat as Crude's own version: Delta's ticker volume exists but a
+// genuine volume-weighted VWAP isn't built yet, so this uses a session-
+// average-close as a "fair value" reference for the ±0.2% proximity check.
+async function checkBitcoinMurarkaTrigger() {
+    if (!isConfigured() || !isBitcoinWindowOpen()) return;
+    try {
+        const candles = marketState.bitcoin?.candles1m;
+        const pcr = marketState.bitcoin?.pcr?.pcr;
+        const spot = marketState.bitcoin?.price;
+        if (!candles || candles.length < 10 || !(pcr > 0) || !(spot > 0)) return;
+
+        const vwapProxy = candles.reduce((s, c) => s + c.close, 0) / candles.length;
+        const zone = computeMurarkaZone(pcr, spot, vwapProxy, false);
+        if (!zone || !zone.side) return;
+
+        if (lastBitcoinMurarkaLoggedSide === zone.side) return;
+        lastBitcoinMurarkaLoggedSide = zone.side;
+
+        const isCE = zone.side === 'CE';
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+₿🎯 <b>Bitcoin Murarka Entry — BUY ${zone.side}</b>
+━━━━━━━━━━━━━━━━━━
+PCR=${pcr.toFixed(2)} | VWAP-proxy=$${vwapProxy.toFixed(1)} | Spot=$${spot.toFixed(1)}
+━━━━━━━━━━━━━━━━━━
+⚠️ Exploratory — VWAP here is a session-average-close proxy, not genuine volume-weighted VWAP. No historical track record yet.
+<i>Vardaan AI — Bitcoin Murarka Strategy (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`₿🎯 [Bitcoin Murarka] BUY ${zone.side} — PCR:${pcr.toFixed(2)} spot:${spot.toFixed(1)} vwapProxy:${vwapProxy.toFixed(1)}`);
+
+        if (dbPool) {
+            const vwapDistPct = parseFloat((((spot - vwapProxy) / vwapProxy) * 100).toFixed(3));
+            dbPool.query(
+                `INSERT INTO bitcoin_murarka_log (side, pcr, spot, vwap_proxy, vwap_dist_pct) VALUES ($1,$2,$3,$4,$5)`,
+                [zone.side, pcr, spot, vwapProxy, vwapDistPct]
+            ).catch(e => console.warn('[Bitcoin Murarka] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Bitcoin Murarka] error:', e.message);
+    }
+}
+
+// ── BITCOIN Option RSI Divergence Trigger (26 Sep) ───────────────────────────
+// Mirrors Crude's own version exactly — RSI(9) on the ATM CE/PE premium's
+// OWN rolling series (fed by refreshBitcoin() above), not spot RSI.
+const BITCOIN_OPT_RSI_DIV_LOOKBACK    = 6;
+const BITCOIN_OPT_RSI_DIV_MIN_DELTA   = 8;
+const BITCOIN_OPT_RSI_DIV_COOLDOWN_MS = 15 * 60 * 1000;
+
+async function checkBitcoinOptionRSIDivergenceTrigger() {
+    if (!isConfigured() || !isBitcoinWindowOpen()) return;
+    try {
+        if (bitcoinCEOptionPremiumSeries.length < 10 + BITCOIN_OPT_RSI_DIV_LOOKBACK || bitcoinPEOptionPremiumSeries.length < 10 + BITCOIN_OPT_RSI_DIV_LOOKBACK) return;
+
+        const ceRSISeries = RSI.calculate({ values: bitcoinCEOptionPremiumSeries, period: 9 });
+        const peRSISeries = RSI.calculate({ values: bitcoinPEOptionPremiumSeries, period: 9 });
+        if (ceRSISeries.length < BITCOIN_OPT_RSI_DIV_LOOKBACK + 1 || peRSISeries.length < BITCOIN_OPT_RSI_DIV_LOOKBACK + 1) return;
+
+        const ceRSINow = ceRSISeries[ceRSISeries.length - 1];
+        const ceRSIPast = ceRSISeries[ceRSISeries.length - 1 - BITCOIN_OPT_RSI_DIV_LOOKBACK];
+        const peRSINow = peRSISeries[peRSISeries.length - 1];
+        const peRSIPast = peRSISeries[peRSISeries.length - 1 - BITCOIN_OPT_RSI_DIV_LOOKBACK];
+        const ceDelta = ceRSINow - ceRSIPast;
+        const peDelta = peRSINow - peRSIPast;
+
+        let direction = null;
+        if (ceDelta >= BITCOIN_OPT_RSI_DIV_MIN_DELTA && peDelta <= -BITCOIN_OPT_RSI_DIV_MIN_DELTA) direction = 'BEARISH_FADING';
+        else if (peDelta >= BITCOIN_OPT_RSI_DIV_MIN_DELTA && ceDelta <= -BITCOIN_OPT_RSI_DIV_MIN_DELTA) direction = 'BULLISH_FADING';
+        if (!direction) return;
+
+        if (lastBitcoinOptRSIDivDirection === direction && (Date.now() - lastBitcoinOptRSIDivAt) < BITCOIN_OPT_RSI_DIV_COOLDOWN_MS) return;
+        lastBitcoinOptRSIDivAt = Date.now();
+        lastBitcoinOptRSIDivDirection = direction;
+
+        const bitcoin = marketState.bitcoin?.price;
+        const isBearFading = direction === 'BEARISH_FADING';
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+₿🔀 <b>BITCOIN OPTION RSI DIVERGENCE — ${isBearFading ? 'BEARISH MOVE FADING' : 'BULLISH MOVE FADING'}</b>
+━━━━━━━━━━━━━━━━━━
+BTC $${bitcoin?.toFixed(1)}
+CE premium RSI: ${ceRSINow.toFixed(0)} (${ceDelta > 0 ? '+' : ''}${ceDelta.toFixed(0)} over ~${BITCOIN_OPT_RSI_DIV_LOOKBACK}min)
+PE premium RSI: ${peRSINow.toFixed(0)} (${peDelta > 0 ? '+' : ''}${peDelta.toFixed(0)} over ~${BITCOIN_OPT_RSI_DIV_LOOKBACK}min)
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT the Bitcoin Main Engine confirmed.</b> RSI here is on the Bitcoin ATM CE/PE premium itself, not spot. No historical track record yet.
+<i>Vardaan AI — Bitcoin Option RSI Divergence Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`₿🔀 [Bitcoin Option RSI Divergence] ${direction} — CE RSI:${ceRSINow.toFixed(0)}(${ceDelta.toFixed(0)}) PE RSI:${peRSINow.toFixed(0)}(${peDelta.toFixed(0)})`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO bitcoin_option_rsi_divergence_log (direction, bitcoin, ce_premium, pe_premium, ce_rsi, pe_rsi, ce_rsi_delta, pe_rsi_delta)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                [direction, bitcoin, bitcoinCEOptionPremiumSeries[bitcoinCEOptionPremiumSeries.length-1], bitcoinPEOptionPremiumSeries[bitcoinPEOptionPremiumSeries.length-1], ceRSINow, peRSINow, ceDelta, peDelta]
+            ).catch(e => console.warn('[Bitcoin Option RSI Divergence] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Bitcoin Option RSI Divergence] error:', e.message);
+    }
+}
+
+// ── BITCOIN Volume Confirmation Trigger (26 Sep) ─────────────────────────────
+// Reuses detectBOSCHOCH on Bitcoin's own 5m-resampled candles + Delta's own
+// ticker volume field (fed into bitcoinVolumeBaselineSamples by
+// refreshBitcoin() above) — genuinely real volume, unlike Crude's own
+// version which needed a Fyers-sourced workaround.
+const BITCOIN_VOL_CONFIRM_RATIO_THRESHOLD = 1.2;
+const BITCOIN_VOL_CONFIRM_COOLDOWN_MIN    = 15;
+
+async function checkBitcoinVolumeConfirmationTrigger() {
+    if (!isConfigured() || !isBitcoinWindowOpen()) return;
+    try {
+        if (bitcoinVolumeBaselineSamples.length < 5) return;
+        const candles = marketState.bitcoin?.candles1m;
+        if (!candles || candles.length < 15) return;
+        const candles5m = aggregateCandles(candles, 5);
+        if (candles5m.length < 10) return;
+        const bos = detectBOSCHOCH(candles5m, 30);
+        const bosEvent = bos.event;
+        if (bosEvent !== 'BOS_BULLISH' && bosEvent !== 'BOS_BEARISH') return;
+
+        const volume = bitcoinVolumeBaselineSamples[bitcoinVolumeBaselineSamples.length - 1];
+        const avgVolume = bitcoinVolumeBaselineSamples.reduce((s, v) => s + v, 0) / bitcoinVolumeBaselineSamples.length;
+        if (avgVolume <= 0 || volume <= 0) return;
+        const ratio = volume / avgVolume;
+        const result = ratio >= BITCOIN_VOL_CONFIRM_RATIO_THRESHOLD ? 'CONFIRMED' : 'WEAK';
+
+        const dedupKey = `${bosEvent}_${result}`;
+        if (lastBitcoinVolConfirmResult === dedupKey && (Date.now() - lastBitcoinVolConfirmAt) < BITCOIN_VOL_CONFIRM_COOLDOWN_MIN * 60 * 1000) return;
+        lastBitcoinVolConfirmResult = dedupKey;
+        lastBitcoinVolConfirmAt     = Date.now();
+
+        const bitcoin = marketState.bitcoin?.price;
+        const direction = bosEvent === 'BOS_BULLISH' ? 'BULLISH' : 'BEARISH';
+        const isConfirmed = result === 'CONFIRMED';
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+₿📶 <b>BITCOIN VOLUME ${result} — ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+BTC $${bitcoin?.toFixed(1)} — ${direction.toLowerCase()} structure break, volume ${ratio.toFixed(2)}x recent average
+${isConfirmed ? '✅ Volume backs this move — Dow Theory\'s "genuine trend" pattern.' : '⚠️ Break came on thin volume — historically a weaker, more suspect move.'}
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>EXPLORATORY — NOT the Bitcoin Main Engine confirmed.</b> Volume from Delta's own ticker. No historical track record yet.
+<i>Vardaan AI — Bitcoin Volume Confirmation Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`₿📶 [Bitcoin Volume Confirmation] ${result} — ${bosEvent}, ratio:${ratio.toFixed(2)}x`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO bitcoin_volume_confirmation_log (result, bos_event, bitcoin, volume, avg_volume, volume_ratio)
+                 VALUES ($1,$2,$3,$4,$5,$6)`,
+                [result, bosEvent, bitcoin, volume, avgVolume, ratio]
+            ).catch(e => console.warn('[Bitcoin Volume Confirmation] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Bitcoin Volume Confirmation] error:', e.message);
+    }
+}
+
+// ── BITCOIN Sustained Drift Trigger (26 Sep) ─────────────────────────────────
+// Direct port of NIFTY/Crude's Sustained Drift — 35min window, threshold
+// scaled to roughly ~2x Bitcoin Fast Momentum's own $50 floor (same ratio
+// NIFTY/Crude used between their own Fast Momentum and Sustained Drift floors).
+const BITCOIN_SUSTAINED_DRIFT_WINDOW_MIN  = 35;
+const BITCOIN_SUSTAINED_DRIFT_MIN_PTS     = 90;
+const BITCOIN_SUSTAINED_DRIFT_ATR_MULT    = 3.5;
+const BITCOIN_SUSTAINED_DRIFT_COOLDOWN_MS = 30 * 60 * 1000;
+
+async function checkBitcoinSustainedDriftTrigger() {
+    if (!isConfigured() || !isBitcoinWindowOpen()) return;
+    try {
+        const candles = marketState.bitcoin?.candles1m;
+        if (!candles || candles.length < BITCOIN_SUSTAINED_DRIFT_WINDOW_MIN + 15) return;
+
+        const nowClose = candles[candles.length - 1].close;
+        const pastCandle = candles[candles.length - 1 - BITCOIN_SUSTAINED_DRIFT_WINDOW_MIN];
+        if (!pastCandle) return;
+        const movePts = nowClose - pastCandle.close;
+
+        const atrWindow = candles.slice(-14);
+        const atrProxy = atrWindow.reduce((s, c) => s + (c.high - c.low), 0) / atrWindow.length;
+        const threshold = atrProxy > 0 ? Math.max(BITCOIN_SUSTAINED_DRIFT_MIN_PTS, BITCOIN_SUSTAINED_DRIFT_ATR_MULT * atrProxy) : BITCOIN_SUSTAINED_DRIFT_MIN_PTS;
+
+        if (Math.abs(movePts) < threshold) return;
+
+        const direction = movePts > 0 ? 'BULLISH' : 'BEARISH';
+
+        if (direction === lastBitcoinSustainedDriftDirection && (Date.now() - lastBitcoinSustainedDriftAt) < BITCOIN_SUSTAINED_DRIFT_COOLDOWN_MS) return;
+        lastBitcoinSustainedDriftAt = Date.now();
+        lastBitcoinSustainedDriftDirection = direction;
+
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+₿🐢 <b>BITCOIN SUSTAINED DRIFT — ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+BTC moved <b>${movePts > 0 ? '+' : ''}${movePts.toFixed(1)}</b> over ${BITCOIN_SUSTAINED_DRIFT_WINDOW_MIN}min → $${nowClose.toFixed(1)}
+Threshold: ${threshold.toFixed(1)} (ATR-adjusted)
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>RAW PRICE DRIFT ONLY — NOT the Bitcoin Main Engine confirmed.</b> Longer-window sibling of Bitcoin Fast Momentum. No historical track record yet.
+<i>Vardaan AI — Bitcoin Sustained Drift Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`₿🐢 [Bitcoin Sustained Drift] ${direction} — ${movePts.toFixed(1)} in ${BITCOIN_SUSTAINED_DRIFT_WINDOW_MIN}min (threshold:${threshold.toFixed(1)})`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO bitcoin_sustained_drift_log (direction, bitcoin, move_pts, window_min, threshold) VALUES ($1,$2,$3,$4,$5)`,
+                [direction, nowClose, movePts, BITCOIN_SUSTAINED_DRIFT_WINDOW_MIN, threshold]
+            ).catch(e => console.warn('[Bitcoin Sustained Drift] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Bitcoin Sustained Drift] error:', e.message);
     }
 }
 
@@ -7956,6 +8248,44 @@ async function initDB() {
             )
         `);
         console.log('✅ PostgreSQL bitcoin_fast_momentum_log table ready');
+
+        // ── Remaining Bitcoin exploratory-trigger tables (26 Sep) ─────────────
+        // Mirrors Crude's own set exactly — same 5 triggers, same column
+        // shapes, just 'bitcoin' in place of 'crude' as the price column.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS bitcoin_trend_rider_log (
+                id SERIAL PRIMARY KEY, ts TIMESTAMPTZ DEFAULT NOW(),
+                direction TEXT, ltp NUMERIC, adx NUMERIC, rsi NUMERIC,
+                extreme_count INT, pullback_pct NUMERIC, max_ext_pct NUMERIC
+            )
+        `);
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS bitcoin_murarka_log (
+                id SERIAL PRIMARY KEY, ts TIMESTAMPTZ DEFAULT NOW(),
+                side TEXT, pcr NUMERIC, spot NUMERIC, vwap_proxy NUMERIC, vwap_dist_pct NUMERIC
+            )
+        `);
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS bitcoin_option_rsi_divergence_log (
+                id SERIAL PRIMARY KEY, ts TIMESTAMPTZ DEFAULT NOW(),
+                direction TEXT, bitcoin NUMERIC, ce_premium NUMERIC, pe_premium NUMERIC,
+                ce_rsi NUMERIC, pe_rsi NUMERIC, ce_rsi_delta NUMERIC, pe_rsi_delta NUMERIC
+            )
+        `);
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS bitcoin_volume_confirmation_log (
+                id SERIAL PRIMARY KEY, ts TIMESTAMPTZ DEFAULT NOW(),
+                result TEXT, bos_event TEXT, bitcoin NUMERIC,
+                volume NUMERIC, avg_volume NUMERIC, volume_ratio NUMERIC
+            )
+        `);
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS bitcoin_sustained_drift_log (
+                id SERIAL PRIMARY KEY, ts TIMESTAMPTZ DEFAULT NOW(),
+                direction TEXT, bitcoin NUMERIC, move_pts NUMERIC, window_min INT, threshold NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL Bitcoin trigger tables (Trend Rider, Murarka, Opt RSI Diverge, Volume Confirm, Sustained Drift) ready');
 
         // ── signal_outcomes table (26 Sep) ────────────────────────────────────
         // Unified track-record system — the user's own request: "map
@@ -9949,6 +10279,21 @@ app.get('/api/bitcoin-fast-momentum-log', async (req, res) => {
     }
 });
 
+// 26 Sep — remaining 5 Bitcoin exploratory-trigger endpoints
+for (const t of ['bitcoin-trend-rider-log', 'bitcoin-murarka-log', 'bitcoin-option-rsi-divergence-log', 'bitcoin-volume-confirmation-log', 'bitcoin-sustained-drift-log']) {
+    const table = t.replace(/-/g, '_');
+    app.get(`/api/${t}`, async (req, res) => {
+        if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+        try {
+            const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+            const r = await dbPool.query(`SELECT * FROM ${table} ORDER BY ts DESC LIMIT ${limit}`);
+            res.json({ success: true, count: r.rows.length, rows: r.rows });
+        } catch (e) {
+            res.json({ success: false, error: e.message });
+        }
+    });
+}
+
 // 26 Sep — Signal Outcomes tracking: raw rows + aggregated accuracy.
 app.get('/api/signal-outcomes', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
@@ -11249,6 +11594,17 @@ function startPollingIntervals() {
     // Fast Momentum check interval.
     const bitcoinFastMomTick = () => checkBitcoinFastMomentumTrigger().catch(e => console.warn('[Bitcoin Fast Momentum] tick error:', e.message));
     setTimeout(() => { bitcoinFastMomTick(); setInterval(bitcoinFastMomTick, 90 * 1000); }, 130 * 1000);
+    // 26 Sep — remaining 5 Bitcoin exploratory triggers, staggered offsets.
+    const bitcoinTrendRiderTick = () => checkBitcoinTrendRiderTrigger().catch(e => console.warn('[Bitcoin Trend Rider] tick error:', e.message));
+    setTimeout(() => { bitcoinTrendRiderTick(); setInterval(bitcoinTrendRiderTick, 3 * 60 * 1000); }, 135 * 1000);
+    const bitcoinMurarkaTick = () => checkBitcoinMurarkaTrigger().catch(e => console.warn('[Bitcoin Murarka] tick error:', e.message));
+    setTimeout(() => { bitcoinMurarkaTick(); setInterval(bitcoinMurarkaTick, 90 * 1000); }, 140 * 1000);
+    const bitcoinOptRSIDivTick = () => checkBitcoinOptionRSIDivergenceTrigger().catch(e => console.warn('[Bitcoin Option RSI Divergence] tick error:', e.message));
+    setTimeout(() => { bitcoinOptRSIDivTick(); setInterval(bitcoinOptRSIDivTick, 2 * 60 * 1000); }, 145 * 1000);
+    const bitcoinVolConfirmTick = () => checkBitcoinVolumeConfirmationTrigger().catch(e => console.warn('[Bitcoin Volume Confirmation] tick error:', e.message));
+    setTimeout(() => { bitcoinVolConfirmTick(); setInterval(bitcoinVolConfirmTick, 3 * 60 * 1000); }, 150 * 1000);
+    const bitcoinSustainedDriftTick = () => checkBitcoinSustainedDriftTrigger().catch(e => console.warn('[Bitcoin Sustained Drift] tick error:', e.message));
+    setTimeout(() => { bitcoinSustainedDriftTick(); setInterval(bitcoinSustainedDriftTick, 90 * 1000); }, 155 * 1000);
     setTimeout(() => setInterval(refreshBreadth,        2*60*1000), 90*1000);   // 2 min — breadth is fast-changing
     setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
