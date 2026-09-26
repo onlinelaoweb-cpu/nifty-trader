@@ -4866,10 +4866,21 @@ async function harvestSignalOutcomes() {
 async function evaluateSignalOutcomes() {
     if (!dbPool) return;
     try {
+        // 26 Sep — FIX: this query had no ORDER BY. User's screenshots showed
+        // Crude/Bitcoin stuck at 0W/0L/0F despite having 109/63 rows in the
+        // table (confirmed via the totals-diagnostic above) — NIFTY's 253
+        // rows were consistently winning every LIMIT 100 slot each cycle
+        // (Postgres's default unordered scan order), so Crude/Bitcoin's
+        // pending rows never got a turn. ORDER BY fire_ts ASC processes the
+        // genuinely-oldest pending fire first, across all instruments
+        // fairly, instead of whichever instrument happens to dominate row
+        // count. LIMIT raised 100→300 too, to clear the existing ~172-row
+        // Crude+Bitcoin backlog in one cycle instead of several.
         const pending = await dbPool.query(`
             SELECT id, instrument, direction, entry_price FROM signal_outcomes
             WHERE result IS NULL AND fire_ts <= NOW() - INTERVAL '${OUTCOME_EVAL_DELAY_MIN} minutes'
-            LIMIT 100
+            ORDER BY fire_ts ASC
+            LIMIT 300
         `);
         if (!pending.rows.length) return;
 
