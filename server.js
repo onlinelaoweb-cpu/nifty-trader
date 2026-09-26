@@ -21,7 +21,8 @@ const { pcrLabel, pcrScore, calculateADX, _linRegSlope, _pcrTimeToMinutes,
         computeDecayedConfidence, bsEstimate, computeMurarkaRuleStrike,
         buildTradeCoach, buildScalpPlan, buildEngineChecklist, withTimeout,
         detectCandlePatternForTF, detectLiquiditySweepReversal, computeMurarkaZone,
-        computeCrudeMTF, computeCrudeSignal, computeBitcoinIndicators } = require('./src/utils/pureCalc');
+        computeCrudeMTF, computeCrudeSignal, computeBitcoinIndicators,
+        computeBitcoinMTF, computeBitcoinSignal } = require('./src/utils/pureCalc');
 const { updateORB, getORBStatus, trackORBBreakoutFreshness, getORBBreakoutAgeMin } = require('./src/utils/orbTracking');
 const { computeSmartMoneyBias, computeDayType, computeConfidenceBreakdown,
         computeTrapZone, computeDynamicLevelsState, computeContradictionScore,
@@ -6140,6 +6141,12 @@ async function refreshBitcoin() {
         // to confirm via Railway logs whether Delta Exchange was genuinely
         // responding, versus silently failing with price staying 0.
         console.log(`₿ [Bitcoin] ₹${price} | O:${marketState.bitcoin.open} H:${marketState.bitcoin.high} L:${marketState.bitcoin.low} | expiry:${expiry || 'none'} | PCR:${marketState.bitcoin.pcr?.pcr ?? 'n/a'}`);
+
+        // 25 Sep — Phase 3: log the computed signal too, same reasoning as
+        // above — this is the only way to verify the signal-engine live
+        // without direct API access to the deployed app.
+        const sig = computeBitcoinSignal(marketState.bitcoin.candles1m, marketState.bitcoin.pcr);
+        console.log(`₿ [Bitcoin Signal] ${sig.signal}(${sig.confidence}%) | RSI:${sig.indicators?.rsi ?? '--'} EMA9:${sig.indicators?.ema9 ?? '--'} EMA21:${sig.indicators?.ema21 ?? '--'} ADX:${sig.indicators?.adx ?? '--'} | ${sig.reasons[0] ?? ''}`);
     } catch (e) { console.warn('[Bitcoin] refresh error:', e.message); }
 }
 
@@ -9615,14 +9622,15 @@ app.get('/api/crude-live', (req, res) => {
 // signal/indicators yet (same bootstrap order Crude followed).
 app.get('/api/bitcoin-live', (req, res) => {
     const { candles1m, ...rest } = marketState.bitcoin;
-    const indicators = computeBitcoinIndicators(candles1m);
+    const signal = computeBitcoinSignal(candles1m, marketState.bitcoin.pcr);
     res.json({
         session: getActiveSession(),
         windowOpen: isBitcoinWindowOpen(),
         ...rest,
         candles1mCount: candles1m.length,
         candles1mRecent: candles1m.slice(-5),
-        indicators,
+        indicators: signal.indicators,
+        signal,
     });
 });
 

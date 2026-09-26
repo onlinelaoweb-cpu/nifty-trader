@@ -247,6 +247,120 @@ function computeBitcoinIndicators(candles1m) {
     };
 }
 
+function bitcoinTFDirection(candles) {
+    const ind = computeBitcoinIndicators(candles);
+    if (ind.ema9 == null || ind.ema21 == null || ind.diPlus == null || ind.diMinus == null) return null;
+    const emaBullish = ind.ema9 > ind.ema21;
+    const diBullish  = ind.diPlus > ind.diMinus;
+    if (emaBullish && diBullish)   return 'BULL';
+    if (!emaBullish && !diBullish) return 'BEAR';
+    return null;
+}
+
+function computeBitcoinMTF(candles1m) {
+    const tf1m = bitcoinTFDirection(candles1m);
+    const tf5m = bitcoinTFDirection(aggregateCandles(candles1m, 5));
+    const available = [tf1m, tf5m].filter(x => x !== null);
+    const bullCount = available.filter(x => x === 'BULL').length;
+    const bearCount = available.filter(x => x === 'BEAR').length;
+    return { tf1m, tf5m, availableCount: available.length, bullCount, bearCount };
+}
+
+// ── Bitcoin Signal Engine (25 Sep) — Phase 3 of the Bitcoin-options feature ───
+// Mirrors computeCrudeSignal() below exactly: same 3m-resample noise
+// reduction, same EMA/DI direction-agreement base signal, same MTF
+// informational cross-check, same PCR override-to-WAIT on disagreement,
+// same RSI overbought/oversold and ADX<20 no-trend guards, same
+// confidence-scoring shape. Starts at the SAME conservative thresholds as
+// Crude's own (65% base gate, 70% high-conviction) — a deliberate,
+// evidence-first choice: no Bitcoin-specific signal-performance data
+// exists yet to justify a different number, so it inherits the
+// already-proven starting point rather than guessing a fresh one. Tune
+// independently once real Bitcoin signal outcomes accumulate, exactly like
+// Crude's own thresholds were meant to be tuned after the fact.
+const BITCOIN_MIN_CONFIDENCE      = 65;
+const BITCOIN_HIGH_CONVICTION_MIN = 70;
+
+function computeBitcoinSignal(candles1m, bitcoinPCR = null) {
+    const candles3m = aggregateCandles(candles1m, 3);
+    const ind = computeBitcoinIndicators(candles3m);
+    const reasons = [];
+
+    if (ind.rsi == null || ind.ema9 == null || ind.ema21 == null || ind.adx == null) {
+        return { signal: 'WAIT', confidence: 0, reasons: ['⏳ Not enough candles yet for a signal (3m basis needs ~90min of data for ADX)'], indicators: ind };
+    }
+
+    const emaBullish = ind.ema9 > ind.ema21;
+    const diBullish   = ind.diPlus > ind.diMinus;
+    let signal = 'WAIT';
+    if (emaBullish && diBullish)   { signal = 'BUY CALL'; reasons.push(`📈 EMA9>EMA21 (${ind.ema9} vs ${ind.ema21}) + DI+ ${ind.diPlus} > DI- ${ind.diMinus}`); }
+    else if (!emaBullish && !diBullish) { signal = 'BUY PUT'; reasons.push(`📉 EMA9<EMA21 (${ind.ema9} vs ${ind.ema21}) + DI- ${ind.diMinus} > DI+ ${ind.diPlus}`); }
+    else { reasons.push('↔️ EMA and DI direction disagree — no clean bias'); return { signal: 'WAIT', confidence: 0, reasons, indicators: ind }; }
+
+    const mtf = computeBitcoinMTF(candles1m);
+    const signalDir = signal === 'BUY CALL' ? 'BULL' : 'BEAR';
+    if (mtf.tf5m === signalDir) {
+        reasons.push(`ℹ️ 1m/5m context: 5m agrees (${signalDir})`);
+    } else if (mtf.tf5m !== null) {
+        reasons.push(`ℹ️ 1m/5m context: 5m shows ${mtf.tf5m} (informational only, not blocking)`);
+    }
+
+    // PCR cross-check — same >1.3/<0.8 thresholds as Crude's own, for the
+    // same evidence-first reason as the confidence gates above: no
+    // Bitcoin-specific PCR-vs-outcome data exists yet to justify different
+    // numbers, so it starts from the already-proven Crude thresholds.
+    const pcrDir = bitcoinPCR?.pcr == null ? null
+                 : bitcoinPCR.pcr > 1.3 ? 'BULL'
+                 : bitcoinPCR.pcr < 0.8 ? 'BEAR'
+                 : 'NEUTRAL';
+    if (pcrDir && pcrDir !== 'NEUTRAL' && pcrDir !== signalDir) {
+        reasons.push(`⛔ PCR ${bitcoinPCR.pcr} disagrees (signal:${signalDir} vs PCR:${pcrDir}) — WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind, mtf, pcr: bitcoinPCR };
+    }
+    if (pcrDir === signalDir) {
+        reasons.push(`✅ PCR ${bitcoinPCR.pcr} confirms ${signalDir}`);
+    } else if (!bitcoinPCR) {
+        reasons.push('⏳ PCR not available yet — proceeding without it');
+    }
+
+    if (signal === 'BUY CALL' && ind.rsi >= 70) {
+        reasons.push(`⛔ RSI ${ind.rsi} overbought (need <70) — WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind };
+    }
+    if (signal === 'BUY PUT' && ind.rsi <= 30) {
+        reasons.push(`⛔ RSI ${ind.rsi} oversold (need >30) — WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind };
+    }
+
+    if (ind.adx < 20) {
+        reasons.push(`⛔ ADX ${ind.adx} < 20 — no real trend, WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind };
+    }
+
+    let confidence = 50;
+    if (ind.adx >= 30) { confidence += 20; reasons.push(`ADX ${ind.adx} strong (+20)`); }
+    else                { confidence += 8;  reasons.push(`ADX ${ind.adx} weak (+8)`); }
+
+    const emaGapPct = Math.abs(ind.ema9 - ind.ema21) / ind.ema21 * 100;
+    if (emaGapPct > 0.1) { confidence += 15; reasons.push(`EMA gap ${emaGapPct.toFixed(2)}% — real separation, not razor-edge (+15)`); }
+
+    const diDominance = Math.abs(ind.diPlus - ind.diMinus);
+    if (diDominance > 10) { confidence += 10; reasons.push(`DI dominance ${diDominance.toFixed(1)} — clear direction (+10)`); }
+
+    confidence = Math.min(95, confidence); // never claim near-certain — same ceiling philosophy as NIFTY/Crude
+
+    if (confidence < BITCOIN_MIN_CONFIDENCE) {
+        reasons.unshift(`⛔ Confidence ${confidence}% < ${BITCOIN_MIN_CONFIDENCE}% minimum — edge too thin for option buyer, WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind };
+    }
+    if (confidence < BITCOIN_HIGH_CONVICTION_MIN) {
+        reasons.unshift(`🚫 High-Conviction Filter: ${confidence}% < ${BITCOIN_HIGH_CONVICTION_MIN}% required — held at WAIT`);
+        return { signal: 'WAIT', confidence: 0, reasons, indicators: ind };
+    }
+
+    return { signal, confidence, reasons, indicators: ind, mtf, pcr: bitcoinPCR };
+}
+
 // ── Phase 2 additions (13 Sep) — extracted verbatim from server.js ───────
 // mirrors NIFTY's confidence bands
 const CRUDE_MIN_CONFIDENCE      = 65; // base gate, mirrors NIFTY's combineSignals()
@@ -645,4 +759,5 @@ module.exports = {
     buildTradeCoach, buildScalpPlan, buildEngineChecklist, withTimeout,
     detectCandlePatternForTF, detectLiquiditySweepReversal, computeMurarkaZone,
     computeCrudeMTF, computeCrudeSignal, computeBitcoinIndicators,
+    computeBitcoinMTF, computeBitcoinSignal,
 };
