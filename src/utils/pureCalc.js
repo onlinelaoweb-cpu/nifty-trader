@@ -209,6 +209,44 @@ function crudeTFDirection(candles) {
     return null; // disagree — no clean read
 }
 
+// ── Bitcoin Indicators (25 Sep) — Phase 2 of the Bitcoin-options feature ──────
+// Same shape as computeCrudeIndicators above (RSI(9), EMA9/21, ADX(14)) —
+// kept as its own function rather than shared, matching this file's
+// established pattern of one function per instrument even where the logic
+// overlaps (computeCrudeIndicators itself doesn't share with NIFTY's own
+// indicator code either). Operates on Bitcoin's 1m candles directly (no 3m
+// resample yet — that's the same noise-reduction step Crude's signal-layer
+// applies on top of this, deferred to when the full signal-engine is built).
+function computeBitcoinIndicators(candles1m) {
+    const closes = candles1m.filter(c => c.close != null).map(c => c.close);
+
+    let rsi = null;
+    if (closes.length >= 10) {
+        const r = RSI.calculate({ values: closes, period: 9 });
+        if (r.length > 0) rsi = parseFloat(r[r.length - 1].toFixed(2));
+    }
+
+    let ema9 = null, ema21 = null;
+    if (closes.length >= 9) {
+        const e = EMA.calculate({ values: closes, period: 9 });
+        if (e.length > 0) ema9 = parseFloat(e[e.length - 1].toFixed(2));
+    }
+    if (closes.length >= 21) {
+        const e = EMA.calculate({ values: closes, period: 21 });
+        if (e.length > 0) ema21 = parseFloat(e[e.length - 1].toFixed(2));
+    }
+
+    const adxResult = calculateADX(candles1m, 14);
+
+    return {
+        rsi, ema9, ema21,
+        adx    : adxResult?.adx     ?? null,
+        diPlus : adxResult?.diPlus  ?? null,
+        diMinus: adxResult?.diMinus ?? null,
+        candleCount: candles1m.length,
+    };
+}
+
 // ── Phase 2 additions (13 Sep) — extracted verbatim from server.js ───────
 // mirrors NIFTY's confidence bands
 const CRUDE_MIN_CONFIDENCE      = 65; // base gate, mirrors NIFTY's combineSignals()
@@ -606,5 +644,5 @@ module.exports = {
     computeDecayedConfidence, bsEstimate, computeMurarkaRuleStrike,
     buildTradeCoach, buildScalpPlan, buildEngineChecklist, withTimeout,
     detectCandlePatternForTF, detectLiquiditySweepReversal, computeMurarkaZone,
-    computeCrudeMTF, computeCrudeSignal,
+    computeCrudeMTF, computeCrudeSignal, computeBitcoinIndicators,
 };

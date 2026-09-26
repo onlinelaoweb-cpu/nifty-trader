@@ -21,7 +21,7 @@ const { pcrLabel, pcrScore, calculateADX, _linRegSlope, _pcrTimeToMinutes,
         computeDecayedConfidence, bsEstimate, computeMurarkaRuleStrike,
         buildTradeCoach, buildScalpPlan, buildEngineChecklist, withTimeout,
         detectCandlePatternForTF, detectLiquiditySweepReversal, computeMurarkaZone,
-        computeCrudeMTF, computeCrudeSignal } = require('./src/utils/pureCalc');
+        computeCrudeMTF, computeCrudeSignal, computeBitcoinIndicators } = require('./src/utils/pureCalc');
 const { updateORB, getORBStatus, trackORBBreakoutFreshness, getORBBreakoutAgeMin } = require('./src/utils/orbTracking');
 const { computeSmartMoneyBias, computeDayType, computeConfidenceBreakdown,
         computeTrapZone, computeDynamicLevelsState, computeContradictionScore,
@@ -91,7 +91,7 @@ const {
     fetchFyersIntradayHistory,                     // 20 Sep: BankNifty candles for Index Confirmation trigger
 } = require('./src/api/nseData');
 // 25 Sep — Delta Exchange India client, for the new Bitcoin-options feature.
-const { fetchDeltaTicker, getNearestBTCExpiry, fetchDeltaOptionChain } = require('./src/api/deltaExchange');
+const { fetchDeltaTicker, getNearestBTCExpiry, fetchDeltaOptionChain, fetchDeltaHistoricalCandles } = require('./src/api/deltaExchange');
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
@@ -6072,9 +6072,28 @@ async function refreshGlobal() {
 // only, same bootstrap order Crude followed (price/PCR first, signal-engine
 // and exploratory triggers as later phases once this is proven live).
 let bitcoinCurrentBucket = null; // in-progress 1m candle being built from polls
+let bitcoinBackfillInFlight = false;
 async function refreshBitcoin() {
     if (!isBitcoinWindowOpen()) return;
     try {
+        // 25 Sep — one-time backfill whenever candles1m is empty (e.g. right
+        // after a restart) — without this, indicators would need 15-60+
+        // minutes of live 60s-polls after every restart before being ready,
+        // unlike NIFTY/Crude which warm-start from Yahoo/DB history at boot.
+        // Guarded by bitcoinBackfillInFlight so overlapping refreshBitcoin()
+        // calls (this runs every 60s) don't fire duplicate backfill requests
+        // while the first one is still in progress.
+        if (marketState.bitcoin.candles1m.length === 0 && !bitcoinBackfillInFlight) {
+            bitcoinBackfillInFlight = true;
+            const nowSec = Math.floor(Date.now() / 1000);
+            const backfill = await fetchDeltaHistoricalCandles('BTCUSD', '1m', nowSec - 200 * 60, nowSec);
+            if (backfill?.length) {
+                marketState.bitcoin.candles1m = backfill.map(c => ({ time: String(c.time), open: c.open, high: c.high, low: c.low, close: c.close }));
+                console.log(`₿ [Bitcoin] Backfilled ${backfill.length} historical 1m candles`);
+            }
+            bitcoinBackfillInFlight = false;
+        }
+
         const ticker = await fetchDeltaTicker('BTCUSD');
         if (!ticker?.close) return;
         const price = ticker.close;
@@ -9596,12 +9615,14 @@ app.get('/api/crude-live', (req, res) => {
 // signal/indicators yet (same bootstrap order Crude followed).
 app.get('/api/bitcoin-live', (req, res) => {
     const { candles1m, ...rest } = marketState.bitcoin;
+    const indicators = computeBitcoinIndicators(candles1m);
     res.json({
         session: getActiveSession(),
         windowOpen: isBitcoinWindowOpen(),
         ...rest,
         candles1mCount: candles1m.length,
         candles1mRecent: candles1m.slice(-5),
+        indicators,
     });
 });
 

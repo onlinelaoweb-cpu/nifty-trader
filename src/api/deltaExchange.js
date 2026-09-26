@@ -123,4 +123,32 @@ async function fetchDeltaOptionChain(expiryDateDDMMYYYY, spotPrice = null) {
     }
 }
 
-module.exports = { fetchDeltaTicker, getNearestBTCExpiry, fetchDeltaOptionChain };
+module.exports = { fetchDeltaTicker, getNearestBTCExpiry, fetchDeltaOptionChain, fetchDeltaHistoricalCandles };
+
+// Fetch historical 1m OHLCV candles for warm-starting candles1m after a
+// restart — without this, RSI/EMA/ADX would need to rebuild purely from
+// live polls (60s cadence), taking 15-60+ minutes after every restart
+// before any indicator is ready, unlike NIFTY/Crude which warm-start from
+// Yahoo/DB history immediately at boot. Endpoint confirmed via Delta's own
+// published API guide (cdn.india.deltaex.org/v2/history/candles); public,
+// no auth needed. start/end are UNIX seconds.
+async function fetchDeltaHistoricalCandles(symbol, resolution, startUnixSec, endUnixSec) {
+    try {
+        const res = await axios.get('https://cdn.india.deltaex.org/v2/history/candles', {
+            params: { resolution, symbol, start: startUnixSec, end: endUnixSec },
+            headers: { 'Accept': 'application/json', 'User-Agent': 'vardaan-ai-node' },
+            timeout: 15_000,
+        });
+        if (!res.data?.success || !Array.isArray(res.data?.result)) return null;
+        return res.data.result
+            .map(c => ({
+                time: c.time, open: parseFloat(c.open), high: parseFloat(c.high),
+                low: parseFloat(c.low), close: parseFloat(c.close), volume: parseFloat(c.volume || 0),
+            }))
+            .filter(c => !isNaN(c.close) && c.close > 0)
+            .sort((a, b) => a.time - b.time); // chronological order
+    } catch (e) {
+        console.warn('[Delta] fetchDeltaHistoricalCandles error:', e.response?.status || e.message);
+        return null;
+    }
+}
