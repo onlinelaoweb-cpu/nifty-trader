@@ -6150,6 +6150,76 @@ async function refreshBitcoin() {
     } catch (e) { console.warn('[Bitcoin] refresh error:', e.message); }
 }
 
+// ── BITCOIN Fast Momentum Trigger (26 Sep) ───────────────────────────────────
+// First Bitcoin-specific exploratory trigger, adapted directly from Crude's
+// own checkCrudeFastMomentumTrigger() — same raw-velocity philosophy, same
+// ATR-proxy threshold approach (average high-low range over the last 14
+// candles), same cooldown/dedup pattern. Threshold floor ($50) is a
+// starting estimate from observed real Bitcoin candle-to-candle noise in
+// this session's own live logs (moves of roughly $75-240 seen over
+// short windows even in a calm period) — tunable once more real data
+// accumulates, same evidence-first philosophy as every other threshold in
+// this file.
+const BITCOIN_FAST_MOM_WINDOW_MIN  = 15;
+const BITCOIN_FAST_MOM_MIN_PTS     = 50;
+const BITCOIN_FAST_MOM_ATR_MULT    = 2.5;
+const BITCOIN_FAST_MOM_COOLDOWN_MS = 20 * 60 * 1000;
+
+let lastBitcoinFastMomentumAlertAt = 0, lastBitcoinFastMomentumDirection = null;
+
+async function checkBitcoinFastMomentumTrigger() {
+    if (!isConfigured() || !isBitcoinWindowOpen()) return;
+    try {
+        const candles = marketState.bitcoin?.candles1m;
+        if (!candles || candles.length < BITCOIN_FAST_MOM_WINDOW_MIN + 15) return;
+
+        const nowClose = candles[candles.length - 1].close;
+        const pastCandle = candles[candles.length - 1 - BITCOIN_FAST_MOM_WINDOW_MIN];
+        if (!pastCandle) return;
+        const movePts = nowClose - pastCandle.close;
+
+        const atrWindow = candles.slice(-14);
+        const atrProxy = atrWindow.reduce((s, c) => s + (c.high - c.low), 0) / atrWindow.length;
+        const threshold = atrProxy > 0 ? Math.max(BITCOIN_FAST_MOM_MIN_PTS, BITCOIN_FAST_MOM_ATR_MULT * atrProxy) : BITCOIN_FAST_MOM_MIN_PTS;
+
+        if (Math.abs(movePts) < threshold) return;
+
+        const direction = movePts > 0 ? 'BULLISH' : 'BEARISH';
+
+        const sinceLastMs = Date.now() - lastBitcoinFastMomentumAlertAt;
+        if (direction === lastBitcoinFastMomentumDirection && sinceLastMs < BITCOIN_FAST_MOM_COOLDOWN_MS) return;
+
+        lastBitcoinFastMomentumAlertAt = Date.now();
+        lastBitcoinFastMomentumDirection = direction;
+
+        const rsi = computeBitcoinIndicators(candles).rsi;
+        const msg = `
+🧪 <b>EXPLORATORY TRIGGER</b>
+₿ <b>BITCOIN FAST MOMENTUM — ${direction}</b>
+━━━━━━━━━━━━━━━━━━
+BTC moved <b>${movePts > 0 ? '+' : ''}${movePts.toFixed(1)}</b> in last ${BITCOIN_FAST_MOM_WINDOW_MIN}min → $${nowClose.toFixed(1)}
+Threshold: ${threshold.toFixed(1)} (ATR-proxy adjusted)
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>RAW PRICE VELOCITY ONLY — NOT the Bitcoin Main Engine confirmed.</b>
+First Bitcoin-specific exploratory trigger — no historical track record yet. Use your own judgment, size small.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Bitcoin Fast Momentum Trigger (exploratory)</i>
+`.trim();
+        await sendRawMessage(msg);
+        console.log(`₿ [Bitcoin Fast Momentum] ${direction} — ${movePts.toFixed(1)} in ${BITCOIN_FAST_MOM_WINDOW_MIN}min (threshold:${threshold.toFixed(1)})`);
+
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO bitcoin_fast_momentum_log (direction, bitcoin, move_pts, window_min, atr_proxy, threshold, rsi)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+                [direction, nowClose, movePts, BITCOIN_FAST_MOM_WINDOW_MIN, atrProxy, threshold, rsi]
+            ).catch(e => console.warn('[Bitcoin Fast Momentum] log error:', e.message));
+        }
+    } catch (e) {
+        console.warn('[Bitcoin Fast Momentum] error:', e.message);
+    }
+}
+
 let _breadthInFlight = false;
 async function refreshBreadth(force = false) {
     if (!force && !isNSEMarketDay()) return; // skip outside market hours unless forced (e.g. startup)
@@ -7685,6 +7755,26 @@ async function initDB() {
             )
         `);
         console.log('✅ PostgreSQL crude_sustained_drift_log table ready');
+
+        // ── bitcoin_fast_momentum_log table (26 Sep) ──────────────────────────
+        // First BITCOIN-specific exploratory trigger, adapted directly from
+        // Crude's own checkCrudeFastMomentumTrigger() — same raw-velocity
+        // philosophy, same ATR-proxy threshold approach. See
+        // checkBitcoinFastMomentumTrigger().
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS bitcoin_fast_momentum_log (
+                id            SERIAL PRIMARY KEY,
+                ts            TIMESTAMPTZ DEFAULT NOW(),
+                direction     TEXT,
+                bitcoin       NUMERIC,
+                move_pts      NUMERIC,
+                window_min    INT,
+                atr_proxy     NUMERIC,
+                threshold     NUMERIC,
+                rsi           NUMERIC
+            )
+        `);
+        console.log('✅ PostgreSQL bitcoin_fast_momentum_log table ready');
 
         // ── signal_performance table — automatic outcome tracking ──────────────
         // Unlike trade_history (manual journal, outcome set by user) and signal_log
@@ -9634,6 +9724,18 @@ app.get('/api/bitcoin-live', (req, res) => {
     });
 });
 
+// 26 Sep — Bitcoin Fast Momentum fire history
+app.get('/api/bitcoin-fast-momentum-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM bitcoin_fast_momentum_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // Volume scanner Phase 1 debug endpoint — confirms the F&O stock universe
 // resolves correctly (expect ~180-200 stocks) before Phase 2 wires up live
 // WebSocket subscriptions + volume-baseline tracking.
@@ -10872,6 +10974,10 @@ function startPollingIntervals() {
     // Bitcoin (25 Sep) — 60s cadence. isBitcoinWindowOpen() inside
     // refreshBitcoin() itself gates when this actually does anything.
     setTimeout(() => setInterval(refreshBitcoin,        60*1000), 65*1000);
+    // Bitcoin Fast Momentum (26 Sep) — 90s cadence, matching Crude's own
+    // Fast Momentum check interval.
+    const bitcoinFastMomTick = () => checkBitcoinFastMomentumTrigger().catch(e => console.warn('[Bitcoin Fast Momentum] tick error:', e.message));
+    setTimeout(() => { bitcoinFastMomTick(); setInterval(bitcoinFastMomTick, 90 * 1000); }, 130 * 1000);
     setTimeout(() => setInterval(refreshBreadth,        2*60*1000), 90*1000);   // 2 min — breadth is fast-changing
     setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
