@@ -4770,10 +4770,13 @@ Agreeing sources (last ${BRAHMASTRA_WINDOW_MIN}min): ${sources.join(', ')}
 
 // ── Signal Outcomes Tracking (26 Sep) ────────────────────────────────────────
 // The user's own request: map every exploratory trigger built so far (NIFTY
-// + Crude) into one trackable system that measures real signal accuracy,
-// not just "did it fire" but "was it right". Two-phase design:
-//   1. HARVEST — periodically pull new fires from all 19 source tables into
-//      one shared signal_outcomes table (entry_price captured, result NULL).
+// + Crude, later joined by Bitcoin) into one trackable system that measures
+// real signal accuracy, not just "did it fire" but "was it right". Two-phase
+// design:
+//   1. HARVEST — periodically pull new fires from all source tables (25 as
+//      of 27 Sep: NIFTY 11 + Crude 8 + Bitcoin 6 — see OUTCOME_SOURCES below,
+//      the single source of truth for the count) into one shared
+//      signal_outcomes table (entry_price captured, result NULL).
 //   2. EVALUATE — periodically resolve pending rows once 30min has passed
 //      since the fire, using the instrument's CURRENT price as the
 //      evaluation price (simpler than looking up a historical candle for
@@ -5114,22 +5117,43 @@ async function sampleOutcomePaths() {
 
 // 27 Sep — finalizes the Trade-Coach simulation once a row's 90min tracking
 // window has closed, using its accumulated path-samples.
+//
+// FIX (audit, 27 Sep): a row that never got a single path sample (e.g. its
+// instrument's session was closed for the whole 90min window) used to be
+// silently skipped with coach_result left NULL forever. Since the query
+// below is ORDER BY fire_ts ASC, that row — being the oldest — would keep
+// winning a LIMIT 300 slot on every future cycle, permanently. Once more
+// than 300 such zero-sample rows accumulated over time, they'd fully
+// occupy the LIMIT and block every newer signal's Trade-Coach result from
+// ever being computed (the same head-of-line starvation class already
+// found and fixed once in evaluateSignalOutcomes on 26 Sep). Fix: mark a
+// zero-sample row with coach_exit_reason='no_samples' (coach_result stays
+// NULL — it's still correctly excluded from win-rate/avg-P&L math) and
+// exclude coach_exit_reason IS NOT NULL rows from the selection query, so
+// an abandoned row is only ever considered once, not every cycle forever.
 async function finalizeCoachOutcomes() {
     if (!dbPool) return;
     try {
         const ready = await dbPool.query(`
             SELECT id, entry_premium FROM signal_outcomes
-            WHERE entry_premium IS NOT NULL AND coach_result IS NULL
+            WHERE entry_premium IS NOT NULL AND coach_result IS NULL AND coach_exit_reason IS NULL
               AND fire_ts <= NOW() - INTERVAL '${COACH_TRACKING_WINDOW_MIN} minutes'
             ORDER BY fire_ts ASC
             LIMIT 300
         `);
         if (!ready.rows.length) return;
 
-        let finalized = 0;
+        let finalized = 0, abandoned = 0;
         for (const row of ready.rows) {
             const path = await dbPool.query(`SELECT premium FROM signal_outcome_path WHERE outcome_id = $1 ORDER BY sample_ts ASC`, [row.id]);
-            if (!path.rows.length) continue; // never got a single sample (e.g. session closed the whole window) — leave pending forever, honest gap
+            if (!path.rows.length) {
+                // Never got a single sample — mark so it stops re-occupying
+                // this ordered query's head on every future cycle. Still
+                // honestly "no coach verdict" (coach_result untouched).
+                await dbPool.query(`UPDATE signal_outcomes SET coach_exit_reason = 'no_samples' WHERE id = $1`, [row.id]);
+                abandoned++;
+                continue;
+            }
             const sim = simulateTradeCoach(row.entry_premium, path.rows.map(r => ({ premium: r.premium })));
             if (!sim) continue;
             await dbPool.query(
@@ -5138,7 +5162,7 @@ async function finalizeCoachOutcomes() {
             );
             finalized++;
         }
-        if (finalized > 0) console.log(`📊 [Signal Outcomes] Finalized Trade-Coach simulation for ${finalized} outcome(s)`);
+        if (finalized > 0 || abandoned > 0) console.log(`📊 [Signal Outcomes] Finalized Trade-Coach simulation for ${finalized} outcome(s)${abandoned ? `, ${abandoned} abandoned (no samples)` : ''}`);
     } catch (e) {
         console.warn('[Signal Outcomes] coach-finalize error:', e.message);
     }
@@ -8554,9 +8578,10 @@ async function initDB() {
         // Unified track-record system — the user's own request: "map
         // strategy... make it trackable to identify accuracy of signal by
         // checking track record". Rather than adding outcome-columns to
-        // each of the 19 existing trigger tables (NIFTY: 11, Crude: 8),
-        // this is ONE shared table that HARVESTS new fires from all of
-        // them (see OUTCOME_SOURCES config + harvestSignalOutcomes() below)
+        // each of the 25 existing trigger tables (NIFTY: 11, Crude: 8,
+        // Bitcoin: 6 — see OUTCOME_SOURCES below), this is ONE shared table
+        // that HARVESTS new fires from all of them (see OUTCOME_SOURCES
+        // config + harvestSignalOutcomes() below)
         // and later EVALUATES each one's real outcome (see
         // evaluateSignalOutcomes()) — did price actually move the
         // predicted direction by a meaningful amount in the 30min after
