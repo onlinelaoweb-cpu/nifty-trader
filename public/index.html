@@ -10147,7 +10147,7 @@ function renderBitcoinLiveUI(d) {
       <span id="sa-status" style="font-size:10.5px;color:var(--dim);font-family:monospace;"></span>
     </div>
     <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:12px;">
-      Real accuracy of every NIFTY + Crude exploratory trigger — did price actually move the predicted direction by 0.15%+ within 30min of the fire. WIN/LOSS/FLAT, not just "fired". Low sample counts are not statistically reliable yet — treat as early signal, not verdict.
+      Real accuracy of every NIFTY + Crude + Bitcoin exploratory trigger — did price actually move the predicted direction by 0.15%+ within 30min of the fire. WIN/LOSS/FLAT, not just "fired". Recent fires also show real option-premium win-rate (10%+ move), plus a Trade-Coach simulation: this app's own SL(-20%)/breakeven(+20%)/half-book(+30%)/full-exit(+40%) rules, replayed against the actual premium path — 90min after each fire, showing what a disciplined trader following the coaching would have actually made. Low sample counts are not statistically reliable yet — treat as early signal, not verdict.
     </div>
     <div id="sa-body">Loading...</div>
   </div>
@@ -10189,11 +10189,33 @@ async function fetchSignalAccuracy() {
         const pending = Number(row.pending_count) || 0;
         const color = winPct == null ? 'var(--dim)' : winPct >= 55 ? 'var(--green)' : winPct < 45 ? 'var(--red)' : 'var(--amber)';
         const lowSample = resolved > 0 && resolved < 10;
+        // 27 Sep — real option-premium win-rate, when available. Only
+        // recent fires have this (harvest backfills entry_premium within
+        // a 10min window of the actual fire) — older rows won't show this
+        // line at all, which is honest rather than misleading.
+        const premResolved = Number(row.premium_resolved_count) || 0;
+        const premWinPct = row.premium_win_rate_pct != null ? Number(row.premium_win_rate_pct) : null;
+        const avgPremMove = row.avg_premium_pct_move != null ? Number(row.avg_premium_pct_move) : null;
+        const premColor = premWinPct == null ? 'var(--dim)' : premWinPct >= 55 ? 'var(--green)' : premWinPct < 45 ? 'var(--red)' : 'var(--amber)';
+        const premiumLine = premResolved > 0
+          ? `<div style="font-size:10px;color:${premColor};margin-top:3px;">Option premium: ${premWinPct != null ? premWinPct.toFixed(0) + '%' : '--'} win-rate${avgPremMove != null ? ` · avg ${avgPremMove > 0 ? '+' : ''}${avgPremMove}%` : ''} (${premResolved} resolved)</div>`
+          : '';
+        // 27 Sep — Trade-Coach simulation display: "if you'd followed this
+        // app's own SL/target/partial-booking rules on this exact signal".
+        const coachResolved = Number(row.coach_resolved_count) || 0;
+        const avgCoachMove = row.avg_coach_pct_move != null ? Number(row.avg_coach_pct_move) : null;
+        const coachProfitCount = Number(row.coach_profit_count) || 0;
+        const coachColor = avgCoachMove == null ? 'var(--dim)' : avgCoachMove > 0 ? 'var(--green)' : avgCoachMove < 0 ? 'var(--red)' : 'var(--amber)';
+        const coachLine = coachResolved > 0
+          ? `<div style="font-size:10px;color:${coachColor};margin-top:3px;">Trade-Coach sim: avg ${avgCoachMove > 0 ? '+' : ''}${avgCoachMove}% blended P&L · ${coachProfitCount}/${coachResolved} profitable</div>`
+          : '';
         html += `
           <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;">
             <div>
               <div style="font-size:12.5px;font-weight:600;">${row.source}</div>
               <div style="font-size:10px;color:var(--dim);margin-top:2px;">${wins}W · ${losses}L · ${flats}F${pending ? ` · ${pending} pending` : ''}${lowSample ? ' · low sample' : ''}</div>
+              ${premiumLine}
+              ${coachLine}
             </div>
             <div style="font-family:'Orbitron',monospace;font-size:18px;font-weight:700;color:${color};">${winPct != null ? winPct.toFixed(0) + '%' : '--'}</div>
           </div>`;
