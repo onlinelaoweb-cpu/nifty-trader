@@ -142,6 +142,22 @@ async function fetchDeltaOptionChain(expiryDateDDMMYYYY, spotPrice = null) {
         // ATM strike + premium extraction, same pattern as fetchCrudePCR's
         // own ATM CE/PE premium logic — strikes are typically in round
         // increments; find the strike closest to spot among live rows.
+        // 27 Sep (track-record fix) — per-strike premium map so the signal
+        // tracker can price the EXACT strike locked at fire time, instead of
+        // whatever strike happens to be ATM later (the ATM strike rolls with
+        // spot, so comparing entry-on-one-strike to exit-on-another made
+        // premium results meaningless). Shape: { "<strike>": { CE, PE } }.
+        const strikes = {};
+        for (const r of rows) {
+            const k = parseFloat(r.strike_price);
+            const ltp = parseFloat(r.close);
+            if (isNaN(k) || !(ltp > 0)) continue;
+            const key = String(k);
+            if (!strikes[key]) strikes[key] = { CE: null, PE: null };
+            if (r.contract_type === 'call_options') strikes[key].CE = ltp;
+            else if (r.contract_type === 'put_options') strikes[key].PE = ltp;
+        }
+
         let atmStrike = null, atmCEpremium = null, atmPEpremium = null;
         if (spotPrice > 0) {
             const strikes = [...new Set(rows.map(r => parseFloat(r.strike_price)).filter(s => !isNaN(s)))];
@@ -157,7 +173,7 @@ async function fetchDeltaOptionChain(expiryDateDDMMYYYY, spotPrice = null) {
         }
 
         deltaRecordSuccess();
-        return { pcr, callOi, putOi, atmStrike, atmCEpremium, atmPEpremium, expiry: expiryDateDDMMYYYY, rowCount: rows.length };
+        return { pcr, callOi, putOi, atmStrike, atmCEpremium, atmPEpremium, expiry: expiryDateDDMMYYYY, rowCount: rows.length, strikes, chainId: expiryDateDDMMYYYY };
     } catch (e) {
         deltaRecordFailure('fetchDeltaOptionChain');
         console.warn('[Delta] fetchDeltaOptionChain error:', e.response?.status || e.message);

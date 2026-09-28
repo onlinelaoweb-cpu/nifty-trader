@@ -10195,19 +10195,22 @@ async function fetchSignalAccuracy() {
         // line at all, which is honest rather than misleading.
         const premResolved = Number(row.premium_resolved_count) || 0;
         const premWinPct = row.premium_win_rate_pct != null ? Number(row.premium_win_rate_pct) : null;
-        const avgPremMove = row.avg_premium_pct_move != null ? Number(row.avg_premium_pct_move) : null;
+        // 27 Sep fix: MEDIAN, not average — one bad/near-zero premium reading
+        // used to blow the average up (seen: +1977%). Median can't be moved
+        // by a single outlier. Only fixed-strike rows are counted (server-side).
+        const avgPremMove = row.median_premium_pct_move != null ? Number(row.median_premium_pct_move) : null;
         const premColor = premWinPct == null ? 'var(--dim)' : premWinPct >= 55 ? 'var(--green)' : premWinPct < 45 ? 'var(--red)' : 'var(--amber)';
         const premiumLine = premResolved > 0
-          ? `<div style="font-size:10px;color:${premColor};margin-top:3px;">Option premium: ${premWinPct != null ? premWinPct.toFixed(0) + '%' : '--'} win-rate${avgPremMove != null ? ` · avg ${avgPremMove > 0 ? '+' : ''}${avgPremMove}%` : ''} (${premResolved} resolved)</div>`
+          ? `<div style="font-size:10px;color:${premColor};margin-top:3px;">Option premium: ${premWinPct != null ? premWinPct.toFixed(0) + '%' : '--'} win-rate${avgPremMove != null ? ` · median ${avgPremMove > 0 ? '+' : ''}${avgPremMove}%` : ''} (${premResolved} resolved)</div>`
           : '';
         // 27 Sep — Trade-Coach simulation display: "if you'd followed this
         // app's own SL/target/partial-booking rules on this exact signal".
         const coachResolved = Number(row.coach_resolved_count) || 0;
-        const avgCoachMove = row.avg_coach_pct_move != null ? Number(row.avg_coach_pct_move) : null;
+        const avgCoachMove = row.median_coach_pct_move != null ? Number(row.median_coach_pct_move) : null; // median, see note above
         const coachProfitCount = Number(row.coach_profit_count) || 0;
         const coachColor = avgCoachMove == null ? 'var(--dim)' : avgCoachMove > 0 ? 'var(--green)' : avgCoachMove < 0 ? 'var(--red)' : 'var(--amber)';
         const coachLine = coachResolved > 0
-          ? `<div style="font-size:10px;color:${coachColor};margin-top:3px;">Trade-Coach sim: avg ${avgCoachMove > 0 ? '+' : ''}${avgCoachMove}% blended P&L · ${coachProfitCount}/${coachResolved} profitable</div>`
+          ? `<div style="font-size:10px;color:${coachColor};margin-top:3px;">Trade-Coach sim: median ${avgCoachMove > 0 ? '+' : ''}${avgCoachMove}% blended P&L · ${coachProfitCount}/${coachResolved} profitable</div>`
           : '';
         html += `
           <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;">

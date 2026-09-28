@@ -4834,6 +4834,12 @@ const OUTCOME_WIN_THRESHOLD_PCT = 0.15; // ±0.15% — consistent across instrum
 // own optionFlow, Crude/Bitcoin's own PCR-fetch results — matching CE for
 // a BULLISH fire, PE for BEARISH (buying calls on a bullish signal, puts on
 // a bearish one, same convention as every Main Engine signal in this app).
+// DEPRECATED (27 Sep track-record fix) — reads the rolling ATM premium, which
+// is the wrong thing for tracking a signal over time: the ATM strike moves
+// with spot, so entry-vs-later comparisons ended up spanning different
+// strikes (biasing results toward flat and producing absurd outliers like
+// +1977%). The tracker now uses lockStrikeAtFire() + getStrikePremium()
+// below, which follow ONE fixed strike. Kept only so nothing else breaks.
 function getCurrentATMPremium(instrument, direction) {
     const wantCE = direction === 'BULLISH';
     if (instrument === 'NIFTY') {
@@ -4846,6 +4852,66 @@ function getCurrentATMPremium(instrument, direction) {
         return wantCE ? marketState.bitcoin?.pcr?.atmCEpremium : marketState.bitcoin?.pcr?.atmPEpremium;
     }
     return null;
+}
+
+// ── Fixed-strike premium tracking (27 Sep) ───────────────────────────────────
+// A real option buyer picks ONE strike at entry and holds that contract. To
+// measure what such a trader would have made, we lock the strike (nearest to
+// the underlying price at fire time) and then follow that exact strike's
+// premium. chainId (BTC expiry / Crude Fyers symbol) guards against the chain
+// rolling to a new contract, where the same strike number would be a
+// different option.
+function getChainForStrikeLookup(instrument) {
+    if (instrument === 'NIFTY') {
+        const recs = getPCRState()?.records;
+        if (!Array.isArray(recs) || !recs.length) return null;
+        const strikes = {};
+        for (const r of recs) {
+            if (!(r.strikePrice > 0)) continue;
+            strikes[String(r.strikePrice)] = {
+                CE: r.CE?.lastPrice > 0 ? r.CE.lastPrice : null,
+                PE: r.PE?.lastPrice > 0 ? r.PE.lastPrice : null,
+            };
+        }
+        return { chainId: null, strikes };
+    }
+    const pcr = instrument === 'CRUDE' ? marketState.crudeoil?.pcr
+              : instrument === 'BITCOIN' ? marketState.bitcoin?.pcr
+              : null;
+    if (!pcr?.strikes || !Object.keys(pcr.strikes).length) return null;
+    return { chainId: pcr.chainId || null, strikes: pcr.strikes };
+}
+
+// Lock the strike nearest to refPrice (the underlying price at fire time) and
+// return its current premium. Returns null when the chain isn't available or
+// the nearest listed strike is implausibly far from refPrice (>5%), which
+// would mean the chain doesn't actually cover that price.
+function lockStrikeAtFire(instrument, direction, refPrice) {
+    if (!(refPrice > 0)) return null;
+    const chain = getChainForStrikeLookup(instrument);
+    if (!chain) return null;
+    const side = direction === 'BULLISH' ? 'CE' : 'PE';
+    let bestStrike = null, bestDist = Infinity;
+    for (const k of Object.keys(chain.strikes)) {
+        if (!(chain.strikes[k][side] > 0)) continue; // only strikes that actually have a quote for this side
+        const dist = Math.abs(Number(k) - refPrice);
+        if (dist < bestDist) { bestDist = dist; bestStrike = Number(k); }
+    }
+    if (bestStrike === null || bestDist / refPrice > 0.05) return null;
+    return { strike: bestStrike, chainId: chain.chainId, premium: chain.strikes[String(bestStrike)][side] };
+}
+
+// Current premium of one specific, previously-locked strike. Null when the
+// chain is unavailable, has rolled to a different contract (chainId
+// mismatch), or that strike has no live quote right now.
+function getStrikePremium(instrument, direction, strike, chainId) {
+    if (!(strike > 0)) return null;
+    const chain = getChainForStrikeLookup(instrument);
+    if (!chain) return null;
+    if ((chainId || null) !== (chain.chainId || null)) return null;
+    const side = direction === 'BULLISH' ? 'CE' : 'PE';
+    const p = chain.strikes[String(strike)]?.[side];
+    return p > 0 ? p : null;
 }
 
 // ── Trade-Coach Simulation (27 Sep) ──────────────────────────────────────────
@@ -4948,22 +5014,27 @@ async function harvestSignalOutcomes() {
     // has nothing to do with the actual premium at their real fire-time.
     // Older rows simply won't have premium data — that's honest, not a bug.
     try {
+        // Per-row now (was batched per instrument+direction): each row locks the
+        // strike nearest ITS OWN entry_price (the underlying price at fire), so
+        // the strike is correct even if this backfill runs a cycle late. The
+        // premium itself is still read from the live chain (fire-time premium
+        // history isn't stored), which is at most ~10min old by the window.
         const needPremium = await dbPool.query(`
-            SELECT DISTINCT instrument, direction FROM signal_outcomes
-            WHERE entry_premium IS NULL AND fire_ts >= NOW() - INTERVAL '10 minutes'
+            SELECT id, instrument, direction, entry_price FROM signal_outcomes
+            WHERE entry_strike IS NULL AND entry_premium IS NULL AND fire_ts >= NOW() - INTERVAL '10 minutes'
         `);
         let premiumBackfilled = 0;
-        for (const pair of needPremium.rows) {
-            const premium = getCurrentATMPremium(pair.instrument, pair.direction);
-            if (!(premium > 0)) continue;
+        for (const row of needPremium.rows) {
+            const lock = lockStrikeAtFire(row.instrument, row.direction, Number(row.entry_price));
+            if (!lock) continue;
             const r = await dbPool.query(
-                `UPDATE signal_outcomes SET entry_premium = $1
-                 WHERE instrument = $2 AND direction = $3 AND entry_premium IS NULL AND fire_ts >= NOW() - INTERVAL '10 minutes'`,
-                [premium, pair.instrument, pair.direction]
+                `UPDATE signal_outcomes SET entry_premium = $1, entry_strike = $2, entry_chain_id = $3
+                 WHERE id = $4 AND entry_strike IS NULL AND entry_premium IS NULL`,
+                [lock.premium, lock.strike, lock.chainId, row.id]
             );
             premiumBackfilled += r.rowCount || 0;
         }
-        if (premiumBackfilled > 0) console.log(`📊 [Signal Outcomes] Backfilled entry_premium for ${premiumBackfilled} row(s)`);
+        if (premiumBackfilled > 0) console.log(`📊 [Signal Outcomes] Locked strike + entry_premium for ${premiumBackfilled} row(s)`);
     } catch (e) {
         console.warn('[Signal Outcomes] entry_premium backfill error:', e.message);
     }
@@ -4994,7 +5065,7 @@ async function evaluateSignalOutcomes() {
         // count. LIMIT raised 100→300 too, to clear the existing ~172-row
         // Crude+Bitcoin backlog in one cycle instead of several.
         const pending = await dbPool.query(`
-            SELECT id, instrument, direction, entry_price, entry_premium FROM signal_outcomes
+            SELECT id, instrument, direction, entry_price, entry_premium, entry_strike, entry_chain_id FROM signal_outcomes
             WHERE result IS NULL AND fire_ts <= NOW() - INTERVAL '${OUTCOME_EVAL_DELAY_MIN} minutes'
             ORDER BY fire_ts ASC
             LIMIT 300
@@ -5051,8 +5122,10 @@ async function evaluateSignalOutcomes() {
             // fires only — see the harvest-side backfill's own 10min
             // window) — older rows simply won't have this, honestly.
             let premiumPctMove = null, premiumResult = null, exitPremium = null;
-            if (row.entry_premium > 0) {
-                exitPremium = getCurrentATMPremium(row.instrument, row.direction);
+            if (row.entry_premium > 0 && row.entry_strike > 0) {
+                // 27 Sep fix: price the SAME strike locked at fire, not the
+                // rolling ATM (see getStrikePremium above).
+                exitPremium = getStrikePremium(row.instrument, row.direction, Number(row.entry_strike), row.entry_chain_id);
                 if (exitPremium > 0) {
                     premiumPctMove = ((exitPremium - row.entry_premium) / row.entry_premium) * 100;
                     const PREMIUM_WIN_THRESHOLD_PCT = 10;
@@ -5077,37 +5150,36 @@ async function evaluateSignalOutcomes() {
 // 27 Sep — Trade-Coach path sampling. Every ~5min, for every signal_outcomes
 // row still inside its 90min tracking window (has entry_premium, not yet
 // coach-finalized), capture the current premium as one point on its price
-// path. Batched by distinct (instrument, direction) — many rows firing in
-// the same window usually share a pair, so this looks up the current
-// premium once per pair, not once per row, same efficiency approach as the
-// entry_premium backfill in harvestSignalOutcomes().
+// path. Each row is sampled on its OWN locked strike (entry_strike), with
+// lookups cached per strike within a cycle so rows sharing a strike still
+// cost one lookup.
 const COACH_TRACKING_WINDOW_MIN = 90;
 
 async function sampleOutcomePaths() {
     if (!dbPool) return;
     try {
+        // 27 Sep fix: only rows with a locked strike are tracked — each is
+        // sampled on ITS OWN strike (not the rolling ATM). Lookups are
+        // cached per (instrument, direction, strike, chain) within a cycle,
+        // so many rows sharing a strike still cost one lookup.
         const active = await dbPool.query(`
-            SELECT id, instrument, direction FROM signal_outcomes
-            WHERE entry_premium IS NOT NULL AND coach_result IS NULL
+            SELECT id, instrument, direction, entry_strike, entry_chain_id FROM signal_outcomes
+            WHERE entry_premium IS NOT NULL AND entry_strike IS NOT NULL AND coach_result IS NULL
               AND fire_ts >= NOW() - INTERVAL '${COACH_TRACKING_WINDOW_MIN} minutes'
         `);
         if (!active.rows.length) return;
 
-        const byPair = {};
-        for (const row of active.rows) {
-            const key = `${row.instrument}|${row.direction}`;
-            if (!byPair[key]) byPair[key] = { instrument: row.instrument, direction: row.direction, ids: [] };
-            byPair[key].ids.push(row.id);
-        }
-
+        const cache = {};
         let sampled = 0;
-        for (const pair of Object.values(byPair)) {
-            const premium = getCurrentATMPremium(pair.instrument, pair.direction);
-            if (!(premium > 0)) continue;
-            for (const id of pair.ids) {
-                await dbPool.query(`INSERT INTO signal_outcome_path (outcome_id, premium) VALUES ($1, $2)`, [id, premium]);
-                sampled++;
+        for (const row of active.rows) {
+            const key = `${row.instrument}|${row.direction}|${row.entry_strike}|${row.entry_chain_id || ''}`;
+            if (!(key in cache)) {
+                cache[key] = getStrikePremium(row.instrument, row.direction, Number(row.entry_strike), row.entry_chain_id);
             }
+            const premium = cache[key];
+            if (!(premium > 0)) continue;
+            await dbPool.query(`INSERT INTO signal_outcome_path (outcome_id, premium) VALUES ($1, $2)`, [row.id, premium]);
+            sampled++;
         }
         if (sampled > 0) console.log(`📊 [Signal Outcomes] Sampled ${sampled} path point(s) across ${active.rows.length} tracked outcome(s)`);
     } catch (e) {
@@ -5136,7 +5208,7 @@ async function finalizeCoachOutcomes() {
     try {
         const ready = await dbPool.query(`
             SELECT id, entry_premium FROM signal_outcomes
-            WHERE entry_premium IS NOT NULL AND coach_result IS NULL AND coach_exit_reason IS NULL
+            WHERE entry_premium IS NOT NULL AND entry_strike IS NOT NULL AND coach_result IS NULL AND coach_exit_reason IS NULL
               AND fire_ts <= NOW() - INTERVAL '${COACH_TRACKING_WINDOW_MIN} minutes'
             ORDER BY fire_ts ASC
             LIMIT 300
@@ -8619,6 +8691,13 @@ async function initDB() {
         await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS exit_premium NUMERIC`);
         await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS premium_pct_move NUMERIC`);
         await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS premium_result TEXT`); // 'WIN'|'LOSS'|'FLAT'|NULL, based on ACTUAL option premium, not underlying
+        // 27 Sep (track-record fix) — the exact strike locked at fire time, plus
+        // the chain identity (BTC expiry / Crude Fyers symbol). Premium results
+        // are only trustworthy for rows that have entry_strike set: older rows
+        // measured the rolling ATM instead, and are excluded from premium /
+        // Trade-Coach stats (their underlying WIN/LOSS/FLAT is unaffected).
+        await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS entry_strike NUMERIC`);
+        await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS entry_chain_id TEXT`);
         // 27 Sep — Trade-Coach simulation, the user's own ask: "kaise pata
         // chalega agar Trend Rider ya Fast Momentum aaya to kaise entry aur
         // exit karna hai — trust kaise banega". Simulates this app's own,
@@ -10663,18 +10742,28 @@ app.get('/api/signal-accuracy', async (req, res) => {
                 -- underlying-% one above. Only present for rows recent
                 -- enough to have entry_premium captured (see harvest's own
                 -- 10min backfill window) — older rows won't have this.
-                COUNT(*) FILTER (WHERE premium_result IS NOT NULL) AS premium_resolved_count,
+                -- 27 Sep fix: premium + Trade-Coach stats only count rows with a
+                -- LOCKED strike (entry_strike). Older rows measured the rolling
+                -- ATM (entry and exit on different strikes) and are excluded.
+                -- Median is reported alongside the average because a single
+                -- bad or near-zero premium reading can blow an average up
+                -- (seen: +1977%); the median can't be moved by one outlier.
+                COUNT(*) FILTER (WHERE premium_result IS NOT NULL AND entry_strike IS NOT NULL) AS premium_resolved_count,
                 ROUND(
-                    100.0 * COUNT(*) FILTER (WHERE premium_result = 'WIN')
-                    / NULLIF(COUNT(*) FILTER (WHERE premium_result IN ('WIN','LOSS')), 0)
+                    100.0 * COUNT(*) FILTER (WHERE premium_result = 'WIN' AND entry_strike IS NOT NULL)
+                    / NULLIF(COUNT(*) FILTER (WHERE premium_result IN ('WIN','LOSS') AND entry_strike IS NOT NULL), 0)
                 , 1) AS premium_win_rate_pct,
-                ROUND(AVG(premium_pct_move) FILTER (WHERE premium_pct_move IS NOT NULL), 1) AS avg_premium_pct_move,
+                ROUND(AVG(premium_pct_move) FILTER (WHERE premium_pct_move IS NOT NULL AND entry_strike IS NOT NULL), 1) AS avg_premium_pct_move,
+                ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY premium_pct_move)
+                    FILTER (WHERE premium_pct_move IS NOT NULL AND entry_strike IS NOT NULL))::numeric, 1) AS median_premium_pct_move,
                 -- 27 Sep — Trade-Coach simulation results: if a disciplined
                 -- trader had followed this app's own SL/target/partial-
                 -- booking rules on this exact signal, avg blended % P&L.
-                COUNT(*) FILTER (WHERE coach_result IS NOT NULL) AS coach_resolved_count,
-                ROUND(AVG(coach_result) FILTER (WHERE coach_result IS NOT NULL), 1) AS avg_coach_pct_move,
-                COUNT(*) FILTER (WHERE coach_result > 0) AS coach_profit_count
+                COUNT(*) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL) AS coach_resolved_count,
+                ROUND(AVG(coach_result) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL), 1) AS avg_coach_pct_move,
+                ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY coach_result)
+                    FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL))::numeric, 1) AS median_coach_pct_move,
+                COUNT(*) FILTER (WHERE coach_result > 0 AND entry_strike IS NOT NULL) AS coach_profit_count
             FROM signal_outcomes
             GROUP BY source, instrument
             ORDER BY instrument, win_rate_pct DESC NULLS LAST

@@ -1385,6 +1385,24 @@ async function fetchCrudePCR(spotPrice = null) {
         // given and the response includes the per-strike optionsChain —
         // existing callers that don't pass spotPrice keep working exactly
         // as before (pcr/callOi/putOi/symbol only).
+        // 27 Sep (track-record fix) — per-strike premium map, so the signal
+        // tracker can price the EXACT strike locked at fire time rather than
+        // the rolling ATM. Shape: { "<strike>": { CE, PE } }. chainId is the
+        // Fyers symbol, so a lookup can tell if the chain rolled to a new
+        // contract month since the strike was locked.
+        const strikes = {};
+        if (Array.isArray(d.data.optionsChain)) {
+            for (const row of d.data.optionsChain) {
+                const k = Number(row.strike_price);
+                const ltp = Number(row.ltp || 0);
+                if (!(k > 0) || !(ltp > 0)) continue;
+                const key = String(k);
+                if (!strikes[key]) strikes[key] = { CE: null, PE: null };
+                if (row.option_type === 'CE') strikes[key].CE = ltp;
+                else if (row.option_type === 'PE') strikes[key].PE = ltp;
+            }
+        }
+
         let atmCEpremium = null, atmPEpremium = null;
         if (spotPrice > 0 && Array.isArray(d.data.optionsChain)) {
             const strikeStep = 50;
@@ -1397,7 +1415,7 @@ async function fetchCrudePCR(spotPrice = null) {
             }
         }
 
-        return { pcr, callOi, putOi, symbol: fyersSymbol, atmCEpremium, atmPEpremium };
+        return { pcr, callOi, putOi, symbol: fyersSymbol, atmCEpremium, atmPEpremium, strikes, chainId: fyersSymbol };
     } catch (e) {
         console.warn('[Crude PCR] error:', e.response?.status || e.message);
         return null;
