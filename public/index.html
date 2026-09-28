@@ -10206,16 +10206,24 @@ async function fetchSignalAccuracy() {
         // 27 Sep — Trade-Coach simulation display: "if you'd followed this
         // app's own SL/target/partial-booking rules on this exact signal".
         const coachResolved = Number(row.coach_resolved_count) || 0;
-        const avgCoachMove = row.median_coach_pct_move != null ? Number(row.median_coach_pct_move) : null; // median, see note above
+        // 28 Sep: for the Trade-Coach line the AVERAGE (expectancy) leads, with the
+        // median in brackets. With a -20% stop / +40% target a strategy winning
+        // only ~40% of the time can still make money while its median trade is a
+        // loss, so median alone misleads here. (Raw option-premium above keeps
+        // median only — that one has the outlier problem.) Auto-mute also uses
+        // the average.
+        const avgCoach = row.avg_coach_pct_move != null ? Number(row.avg_coach_pct_move) : null;
+        const medCoach = row.median_coach_pct_move != null ? Number(row.median_coach_pct_move) : null;
         const coachProfitCount = Number(row.coach_profit_count) || 0;
-        const coachColor = avgCoachMove == null ? 'var(--dim)' : avgCoachMove > 0 ? 'var(--green)' : avgCoachMove < 0 ? 'var(--red)' : 'var(--amber)';
+        const coachColor = avgCoach == null ? 'var(--dim)' : avgCoach > 0 ? 'var(--green)' : avgCoach < 0 ? 'var(--red)' : 'var(--amber)';
         const coachLine = coachResolved > 0
-          ? `<div style="font-size:10px;color:${coachColor};margin-top:3px;">Trade-Coach sim: median ${avgCoachMove > 0 ? '+' : ''}${avgCoachMove}% blended P&L · ${coachProfitCount}/${coachResolved} profitable</div>`
+          ? `<div style="font-size:10px;color:${coachColor};margin-top:3px;">Trade-Coach sim: avg ${avgCoach > 0 ? '+' : ''}${avgCoach}%${medCoach != null ? ` (median ${medCoach > 0 ? '+' : ''}${medCoach}%)` : ''} blended P&L · ${coachProfitCount}/${coachResolved} profitable</div>`
           : '';
+        const mutedTag = row.muted ? ' <span style="font-size:9px;color:var(--red);border:1px solid var(--red);border-radius:4px;padding:0 4px;margin-left:4px;">🔇 MUTED</span>' : '';
         html += `
           <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;">
             <div>
-              <div style="font-size:12.5px;font-weight:600;">${row.source}</div>
+              <div style="font-size:12.5px;font-weight:600;">${row.source}${mutedTag}</div>
               <div style="font-size:10px;color:var(--dim);margin-top:2px;">${wins}W · ${losses}L · ${flats}F${pending ? ` · ${pending} pending` : ''}${lowSample ? ' · low sample' : ''}</div>
               ${premiumLine}
               ${coachLine}

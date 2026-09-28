@@ -3323,7 +3323,7 @@ This reacts fast on purpose and WILL be wrong sometimes. Use your own judgment, 
 ━━━━━━━━━━━━━━━━━━
 <i>VardaanNifty AI — Fast Momentum Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('NIFTY', 'Fast Momentum', direction, msg);
         console.log(`⚡ [Fast Momentum] ${direction} — ${movePts.toFixed(1)}pts in ${FAST_MOMENTUM_WINDOW_MIN}min (threshold:${threshold.toFixed(1)})`);
 
         if (dbPool) {
@@ -3544,7 +3544,7 @@ Treats sustained extreme RSI on a confirmed trend day as continuation, not exhau
 ━━━━━━━━━━━━━━━━━━
 <i>VardaanNifty AI — Trend Rider Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('NIFTY', 'Trend Rider', setup.direction, msg);
         console.log(`🏄 [Trend Rider] ${setup.direction} — RSI:${setup.rsi} ADX:${setup.adx} pullback:${setup.pullbackDistPct}%/${setup.maxExtensionPct}%`);
 
         if (dbPool) {
@@ -3642,7 +3642,7 @@ RSI: ${rsi.toFixed(1)}
 ━━━━━━━━━━━━━━━━━━
 <i>VardaanNifty AI — S/R Bounce Trigger (exploratory)</i>
 `.trim();
-            await sendRawMessage(msg);
+            await sendTriggerAlert('NIFTY', 'S/R Bounce', direction, msg);
             console.log(`🎯 [S/R Bounce] ${direction} — ${lvl.label || lvl.type}@${lvl.price}, pullback:${pulledBack.toFixed(1)}pts, RSI:${rsi.toFixed(1)}`);
 
             if (dbPool) {
@@ -3726,7 +3726,7 @@ RSI: ${rsi != null ? rsi.toFixed(1) : '--'}
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Opening Range Breakout (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('NIFTY', 'ORB', direction, msg);
         console.log(`📐 [ORB] ${direction} — range ${rangeLow.toFixed(1)}-${rangeHigh.toFixed(1)}, broke by ${breakoutPts.toFixed(1)}pts`);
 
         if (dbPool) {
@@ -3825,7 +3825,7 @@ BankNifty: ${bnBOS.label}
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Index Confirmation Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('NIFTY', 'Index Confirm', result, msg);
         console.log(`📊 [Index Confirmation] ${result} — NIFTY:${niftyBOS.event} BankNifty:${bnBOS.event}`);
 
         if (dbPool) {
@@ -3903,7 +3903,7 @@ ${isConfirmed ? '✅ Volume backs this move — Dow Theory\'s "genuine trend" pa
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Volume Confirmation Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('NIFTY', 'Volume Confirm', isConfirmed ? direction : null, msg);
         console.log(`📶 [Volume Confirmation] ${result} — ${bosEvent}, ratio:${ratio.toFixed(2)}x`);
 
         if (dbPool) {
@@ -3978,7 +3978,7 @@ First CRUDE-specific exploratory trigger — no historical track record yet. Use
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Crude Fast Momentum Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('CRUDE', 'Fast Momentum', direction, msg);
         console.log(`🛢️ [Crude Fast Momentum] ${direction} — ${movePts.toFixed(1)}pts in ${CRUDE_FAST_MOM_WINDOW_MIN}min (threshold:${threshold.toFixed(1)})`);
 
         if (dbPool) {
@@ -4041,7 +4041,7 @@ Threshold: ${threshold.toFixed(1)}pts (ATR-adjusted)
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Crude Sustained Drift Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('CRUDE', 'Sustained Drift', direction, msg);
         console.log(`🛢️🐢 [Crude Sustained Drift] ${direction} — ${movePts.toFixed(1)}pts in ${CRUDE_SUSTAINED_DRIFT_WINDOW_MIN}min (threshold:${threshold.toFixed(1)})`);
 
         if (dbPool) {
@@ -4094,7 +4094,7 @@ Treats sustained extreme RSI as continuation, not exhaustion — will be wrong o
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Crude Trend Rider Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('CRUDE', 'Trend Rider', setup.direction, msg);
         console.log(`🛢️🏄 [Crude Trend Rider] ${setup.direction} — RSI:${setup.rsi} ADX:${setup.adx} pullback:${setup.pullbackDistPct}%/${setup.maxExtensionPct}%`);
 
         if (dbPool) {
@@ -4161,7 +4161,7 @@ ${murarkaEntry.reason}
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Crude Murarka Strategy (exploratory)</i>
 `.trim();
-            await sendRawMessage(msg).catch(e => console.warn('[Crude Murarka] alert error:', e.message));
+            await sendTriggerAlert('CRUDE', 'Murarka', murarkaEntry.side, msg).catch(e => console.warn('[Crude Murarka] alert error:', e.message));
             console.log(`🛢️🎯 [Crude Murarka] BUY ${murarkaEntry.side} — PCR:${pcr} spot:${spot} vwapProxy:${vwapProxy.toFixed(1)}`);
         } else if (!murarkaEntry.active) {
             lastCrudeMurarkaLoggedSide = null;
@@ -4232,7 +4232,7 @@ ${isBearFading ? 'CE recovering while PE weakens — the recent bearish move\'s 
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Option RSI Divergence Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('NIFTY', 'Opt RSI Diverge', direction, msg);
         console.log(`🔀 [Option RSI Divergence] ${direction} — CE RSI:${ceRSINow.toFixed(0)}(${ceDelta.toFixed(0)}) PE RSI:${peRSINow.toFixed(0)}(${peDelta.toFixed(0)})`);
 
         if (dbPool) {
@@ -4300,7 +4300,7 @@ ${isBearFading ? 'CE recovering while PE weakens — the recent bearish move\'s 
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Crude Option RSI Divergence Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('CRUDE', 'Opt RSI Diverge', direction, msg);
         console.log(`🛢️🔀 [Crude Option RSI Divergence] ${direction} — CE RSI:${ceRSINow.toFixed(0)}(${ceDelta.toFixed(0)}) PE RSI:${peRSINow.toFixed(0)}(${peDelta.toFixed(0)})`);
 
         if (dbPool) {
@@ -4382,7 +4382,7 @@ WTI: ${wtiBOS.label}
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Crude vs WTI Confirmation Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('CRUDE', 'vs WTI', result, msg);
         console.log(`🛢️📊 [Crude vs WTI] ${result} — MCX:${crudeBOS.event} WTI:${wtiBOS.event}`);
 
         if (dbPool) {
@@ -4481,7 +4481,7 @@ Agreeing sources (last ${BRAHMASTRA_WINDOW_MIN}min): ${sources.join(', ')}
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Brahmastra (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('NIFTY', 'Brahmastra', direction, msg);
         console.log(`🚀 [Brahmastra NIFTY] ${direction} — ${sources.length} sources: ${sources.join(', ')}`);
 
         dbPool.query(
@@ -4555,7 +4555,7 @@ ${isConfirmed ? '✅ Volume backs this move — Dow Theory\'s "genuine trend" pa
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Crude Volume Confirmation Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('CRUDE', 'Volume Confirm', isConfirmed ? direction : null, msg);
         console.log(`🛢️📶 [Crude Volume Confirmation] ${result} — ${bosEvent}, ratio:${ratio.toFixed(2)}x`);
 
         if (dbPool) {
@@ -4630,7 +4630,7 @@ ${agreeing.length}/4 broad indicators agree: ${agreeing.join(', ')}
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Broad Market Shift Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('NIFTY', 'Broad Market Shift', direction, msg);
         console.log(`🌐 [Broad Market Shift] ${direction} — ${agreeing.length}/4: ${agreeing.join(', ')}`);
 
         if (dbPool) {
@@ -4695,7 +4695,7 @@ Threshold: ${threshold.toFixed(1)}pts (ATR-adjusted)
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Sustained Drift Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('NIFTY', 'Sustained Drift', direction, msg);
         console.log(`🐢 [Sustained Drift] ${direction} — ${movePts.toFixed(1)}pts in ${SUSTAINED_DRIFT_WINDOW_MIN}min (threshold:${threshold.toFixed(1)})`);
 
         if (dbPool) {
@@ -4756,7 +4756,7 @@ Agreeing sources (last ${BRAHMASTRA_WINDOW_MIN}min): ${sources.join(', ')}
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Crude Brahmastra (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('CRUDE', 'Brahmastra', direction, msg);
         console.log(`🚀🛢️ [Brahmastra Crude] ${direction} — ${sources.length} sources: ${sources.join(', ')}`);
 
         dbPool.query(
@@ -4766,6 +4766,165 @@ Agreeing sources (last ${BRAHMASTRA_WINDOW_MIN}min): ${sources.join(', ')}
     } catch (e) {
         console.warn('[Brahmastra Crude] error:', e.message);
     }
+}
+
+// ── Live track record + confluence + auto-mute for trigger alerts (28 Sep) ───
+// Every exploratory trigger's Telegram alert now goes through
+// sendTriggerAlert(), which:
+//   1. appends that strategy's LIVE record from signal_outcomes (direction
+//      accuracy, Trade-Coach average + % profitable, sample size),
+//   2. appends CONFLUENCE — how many OTHER triggers on the same instrument
+//      fired the same direction in the last 10 min (and how many disagreed),
+//   3. AUTO-MUTES the alert (Telegram only — the fire is still logged and
+//      tracked, so the strategy can earn its way back) once a strategy has
+//      30+ Trade-Coach results with a negative average.
+// Only Trade-Coach rows with a LOCKED strike (entry_strike) count — the
+// older rolling-ATM rows are excluded, same as the Track Record tab.
+// Why AVERAGE (expectancy) and not median for the mute rule: with this app's
+// -20% stop / +40% target, a strategy that wins only 40% of the time can
+// still make money, yet its MEDIAN trade is a loss — median would wrongly
+// mute it. Each result is clamped to ±100% so one bad premium tick can't
+// swing the average. Muting can be switched off with env STRATEGY_AUTOMUTE=off.
+const AUTOMUTE_ENABLED      = String(process.env.STRATEGY_AUTOMUTE || 'on').toLowerCase() !== 'off';
+const AUTOMUTE_MIN_SAMPLES  = 30;   // Trade-Coach results needed before a verdict counts
+const AUTOMUTE_UNMUTE_AT    = 2;    // once muted, avg must recover to +2% (not just >0) — prevents flapping
+const CONFLUENCE_WINDOW_MS  = 10 * 60 * 1000;
+const SCORECARD_REFRESH_MS  = 5 * 60 * 1000;
+
+let _triggerScorecard = {};          // "INSTRUMENT|Source" -> stats
+let _scorecardLoadedAt = 0;
+let _scorecardInFlight = false;
+const _mutedStrategies = new Set();
+const _recentTriggerFires = [];      // { instrument, source, direction, ts, muted }
+
+// Maps every raw direction token the triggers use onto BULLISH/BEARISH — same
+// semantics as the dirExpr entries in OUTCOME_SOURCES (CE=bullish, PE=bearish,
+// BEARISH_FADING=bullish, CONFIRMED_x / BOS_x). Anything else (e.g.
+// 'DIVERGENCE', null) returns null = not a directional tracked fire.
+function normalizeTriggerDirection(raw) {
+    const t = String(raw == null ? '' : raw).toUpperCase();
+    if (['BULLISH', 'CE', 'BEARISH_FADING', 'CONFIRMED_BULLISH', 'BOS_BULLISH'].includes(t)) return 'BULLISH';
+    if (['BEARISH', 'PE', 'BULLISH_FADING', 'CONFIRMED_BEARISH', 'BOS_BEARISH'].includes(t)) return 'BEARISH';
+    return null;
+}
+
+async function refreshTriggerScorecard() {
+    if (!dbPool || _scorecardInFlight) return;
+    _scorecardInFlight = true;
+    try {
+        const r = await dbPool.query(`
+            SELECT instrument, source,
+                COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')) AS dir_n,
+                COUNT(*) FILTER (WHERE result = 'WIN') AS dir_wins,
+                COUNT(*) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL) AS coach_n,
+                AVG(GREATEST(-100, LEAST(100, coach_result)))
+                    FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL) AS coach_avg,
+                COUNT(*) FILTER (WHERE coach_result > 0 AND entry_strike IS NOT NULL) AS coach_wins
+            FROM signal_outcomes
+            GROUP BY instrument, source
+        `);
+        const firstLoad = _scorecardLoadedAt === 0;
+        const next = {};
+        const transitions = [];
+        for (const row of r.rows) {
+            const key = `${row.instrument}|${row.source}`;
+            const dirN = Number(row.dir_n), coachN = Number(row.coach_n);
+            const coachAvg = row.coach_avg == null ? null : Number(row.coach_avg);
+            let muted = false;
+            if (AUTOMUTE_ENABLED && coachN >= AUTOMUTE_MIN_SAMPLES && coachAvg !== null) {
+                muted = _mutedStrategies.has(key) ? coachAvg < AUTOMUTE_UNMUTE_AT : coachAvg < 0;
+            }
+            next[key] = {
+                instrument: row.instrument, source: row.source,
+                dirN, dirWinPct: dirN > 0 ? Math.round(100 * Number(row.dir_wins) / dirN) : null,
+                coachN, coachAvg, coachProfitPct: coachN > 0 ? Math.round(100 * Number(row.coach_wins) / coachN) : null,
+                muted,
+            };
+            if (muted && !_mutedStrategies.has(key)) { _mutedStrategies.add(key); transitions.push({ key, muted: true, c: next[key] }); }
+            if (!muted && _mutedStrategies.has(key)) { _mutedStrategies.delete(key); transitions.push({ key, muted: false, c: next[key] }); }
+        }
+        _triggerScorecard = next;
+        _scorecardLoadedAt = Date.now();
+        // Announce mute/unmute changes (not on the very first load after a
+        // deploy — that would re-announce every already-muted strategy).
+        if (!firstLoad) {
+            for (const t of transitions) {
+                const label = `${t.c.instrument} ${t.c.source}`;
+                const line = t.muted
+                    ? `🔇 <b>AUTO-MUTED: ${label}</b>\nTrade-Coach average ${t.c.coachAvg.toFixed(1)}% over ${t.c.coachN} trades (${t.c.coachProfitPct}% profitable). Its alerts are paused; it keeps being tracked and will un-mute if it recovers.`
+                    : `🔊 <b>UN-MUTED: ${label}</b>\nTrade-Coach average recovered to ${t.c.coachAvg.toFixed(1)}% over ${t.c.coachN} trades. Alerts resumed.`;
+                console.log(`${t.muted ? '🔇' : '🔊'} [Auto-mute] ${label} ${t.muted ? 'muted' : 'un-muted'} (avg ${t.c.coachAvg?.toFixed(1)}%, n=${t.c.coachN})`);
+                if (isConfigured()) await sendRawMessage(line).catch(() => {});
+            }
+        } else if (_mutedStrategies.size) {
+            console.log(`🔇 [Auto-mute] currently muted: ${[..._mutedStrategies].join(', ')}`);
+        }
+    } catch (e) {
+        console.warn('[Trigger Scorecard] refresh error:', e.message);
+    } finally {
+        _scorecardInFlight = false;
+    }
+}
+
+function buildTrackRecordBlock(card, agree, disagree) {
+    const sign = v => (v > 0 ? '+' : '');
+    const lines = ['━━━━━━━━━━━━━━━━━━'];
+    if (!card || (card.dirN === 0 && card.coachN === 0)) {
+        lines.push('📊 <b>Track record:</b> none yet for this strategy');
+    } else {
+        const dirPart = card.dirN > 0 ? `direction ${card.dirWinPct}% (${card.dirN} decided)` : 'direction —';
+        const coachPart = card.coachN > 0
+            ? `Trade-Coach avg ${sign(card.coachAvg)}${card.coachAvg.toFixed(1)}% · ${card.coachProfitPct}% profitable (${card.coachN} trades)`
+            : 'Trade-Coach: no results yet';
+        lines.push(`📊 <b>Track record:</b> ${dirPart} · ${coachPart}`);
+        if (card.coachN < AUTOMUTE_MIN_SAMPLES) lines.push(`🟡 <b>UNPROVEN</b> — ${card.coachN}/${AUTOMUTE_MIN_SAMPLES} trades needed for a verdict. Paper-trade or very small size.`);
+        else lines.push(`🟢 <b>Positive so far</b> over ${card.coachN} trades — still not a guarantee.`);
+    }
+    const a = [...agree], d = [...disagree];
+    let conf = a.length
+        ? `🤝 <b>Confluence:</b> ${a.length} other trigger${a.length > 1 ? 's agree' : ' agrees'} (${a.join(', ')})`
+        : '🤝 <b>Confluence:</b> none — lone signal so far';
+    if (d.length) conf += ` · ⚠️ ${d.length} disagree (${d.join(', ')})`;
+    lines.push(conf);
+    return lines.join('\n');
+}
+
+// Drop-in replacement for `sendRawMessage(msg)` at every exploratory-trigger
+// alert site. Never loses an alert because of this layer: any error in the
+// decoration/scoring falls back to sending the original message unchanged.
+async function sendTriggerAlert(instrument, source, rawDirection, msg) {
+    const direction = normalizeTriggerDirection(rawDirection);
+    if (!direction) return sendRawMessage(msg);   // undirected / untracked alert — unchanged
+    let finalMsg = msg;
+    try {
+        if (!_scorecardLoadedAt) await refreshTriggerScorecard();
+        const key = `${instrument}|${source}`;
+        const card = _triggerScorecard[key];
+        const muted = !!card?.muted;
+        const now = Date.now();
+        while (_recentTriggerFires.length && now - _recentTriggerFires[0].ts > 30 * 60 * 1000) _recentTriggerFires.shift();
+        const agree = new Set(), disagree = new Set();
+        for (const f of _recentTriggerFires) {
+            if (f.instrument !== instrument || f.source === source || f.muted) continue;
+            if (now - f.ts > CONFLUENCE_WINDOW_MS) continue;
+            (f.direction === direction ? agree : disagree).add(f.source);
+        }
+        _recentTriggerFires.push({ instrument, source, direction, ts: now, muted });
+        if (muted) {
+            console.log(`🔇 [Auto-mute] suppressed ${instrument} ${source} ${direction} alert (Trade-Coach avg ${card.coachAvg?.toFixed(1)}%, n=${card.coachN}) — still tracked`);
+            return;
+        }
+        const block = buildTrackRecordBlock(card, agree, disagree);
+        const parts = msg.split('\n');
+        const footerIdx = parts.map(l => l.trim().startsWith('<i>')).lastIndexOf(true);
+        finalMsg = footerIdx >= 0
+            ? [...parts.slice(0, footerIdx), block, ...parts.slice(footerIdx)].join('\n')
+            : `${msg}\n${block}`;
+    } catch (e) {
+        console.warn('[Trigger Alert] scoring error, sending plain alert:', e.message);
+        finalMsg = msg;
+    }
+    return sendRawMessage(finalMsg);
 }
 
 // ── Signal Outcomes Tracking (26 Sep) ────────────────────────────────────────
@@ -6768,7 +6927,7 @@ First Bitcoin-specific exploratory trigger — no historical track record yet. U
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Bitcoin Fast Momentum Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('BITCOIN', 'Fast Momentum', direction, msg);
         console.log(`₿ [Bitcoin Fast Momentum] ${direction} — ${movePts.toFixed(1)} in ${BITCOIN_FAST_MOM_WINDOW_MIN}min (threshold:${threshold.toFixed(1)})`);
 
         if (dbPool) {
@@ -6817,7 +6976,7 @@ Pulled back to EMA9 (${setup.pullbackDistPct}% away, was ${setup.maxExtensionPct
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Bitcoin Trend Rider Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('BITCOIN', 'Trend Rider', setup.direction, msg);
         console.log(`₿🏄 [Bitcoin Trend Rider] ${setup.direction} — RSI:${setup.rsi} ADX:${setup.adx} pullback:${setup.pullbackDistPct}%/${setup.maxExtensionPct}%`);
 
         if (dbPool) {
@@ -6862,7 +7021,7 @@ PCR=${pcr.toFixed(2)} | VWAP-proxy=$${vwapProxy.toFixed(1)} | Spot=$${spot.toFix
 ⚠️ Exploratory — VWAP here is a session-average-close proxy, not genuine volume-weighted VWAP. No historical track record yet.
 <i>Vardaan AI — Bitcoin Murarka Strategy (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('BITCOIN', 'Murarka', zone.side, msg);
         console.log(`₿🎯 [Bitcoin Murarka] BUY ${zone.side} — PCR:${pcr.toFixed(2)} spot:${spot.toFixed(1)} vwapProxy:${vwapProxy.toFixed(1)}`);
 
         if (dbPool) {
@@ -6922,7 +7081,7 @@ PE premium RSI: ${peRSINow.toFixed(0)} (${peDelta > 0 ? '+' : ''}${peDelta.toFix
 ⚠️ <b>EXPLORATORY — NOT the Bitcoin Main Engine confirmed.</b> RSI here is on the Bitcoin ATM CE/PE premium itself, not spot. No historical track record yet.
 <i>Vardaan AI — Bitcoin Option RSI Divergence Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('BITCOIN', 'Opt RSI Diverge', direction, msg);
         console.log(`₿🔀 [Bitcoin Option RSI Divergence] ${direction} — CE RSI:${ceRSINow.toFixed(0)}(${ceDelta.toFixed(0)}) PE RSI:${peRSINow.toFixed(0)}(${peDelta.toFixed(0)})`);
 
         if (dbPool) {
@@ -6981,7 +7140,7 @@ ${isConfirmed ? '✅ Volume backs this move — Dow Theory\'s "genuine trend" pa
 ⚠️ <b>EXPLORATORY — NOT the Bitcoin Main Engine confirmed.</b> Volume from Delta's own ticker. No historical track record yet.
 <i>Vardaan AI — Bitcoin Volume Confirmation Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('BITCOIN', 'Volume Confirm', isConfirmed ? direction : null, msg);
         console.log(`₿📶 [Bitcoin Volume Confirmation] ${result} — ${bosEvent}, ratio:${ratio.toFixed(2)}x`);
 
         if (dbPool) {
@@ -7038,7 +7197,7 @@ Threshold: ${threshold.toFixed(1)} (ATR-adjusted)
 ⚠️ <b>RAW PRICE DRIFT ONLY — NOT the Bitcoin Main Engine confirmed.</b> Longer-window sibling of Bitcoin Fast Momentum. No historical track record yet.
 <i>Vardaan AI — Bitcoin Sustained Drift Trigger (exploratory)</i>
 `.trim();
-        await sendRawMessage(msg);
+        await sendTriggerAlert('BITCOIN', 'Sustained Drift', direction, msg);
         console.log(`₿🐢 [Bitcoin Sustained Drift] ${direction} — ${movePts.toFixed(1)} in ${BITCOIN_SUSTAINED_DRIFT_WINDOW_MIN}min (threshold:${threshold.toFixed(1)})`);
 
         if (dbPool) {
@@ -7252,7 +7411,7 @@ async function refreshPCR() {
                 ).catch(e => console.warn('[Murarka] log error:', e.message));
             }
             if (isConfigured() && isMarketOpen()) {
-                sendRawMessage(`🧪 <u><b>EXPLORATORY TRIGGER</b></u>\n🎯 <b>Murarka Entry — BUY ${murarkaEntry.side}</b>\n━━━━━━━━━━━━━━━━━━\n${murarkaEntry.reason}\n━━━━━━━━━━━━━━━━━━\n⚠️ Exploratory — no historical track record yet, this is the first time it's being logged.\n<i>Vardaan AI — Murarka Strategy</i>`)
+                sendTriggerAlert('NIFTY', 'Murarka', murarkaEntry.side, `🧪 <u><b>EXPLORATORY TRIGGER</b></u>\n🎯 <b>Murarka Entry — BUY ${murarkaEntry.side}</b>\n━━━━━━━━━━━━━━━━━━\n${murarkaEntry.reason}\n━━━━━━━━━━━━━━━━━━\n⚠️ Exploratory — no historical track record yet, this is the first time it's being logged.\n<i>Vardaan AI — Murarka Strategy</i>`)
                     .catch(e => console.warn('[Murarka] alert error:', e.message));
             }
         } else if (!murarkaEntry.active) {
@@ -10768,7 +10927,10 @@ app.get('/api/signal-accuracy', async (req, res) => {
             GROUP BY source, instrument
             ORDER BY instrument, win_rate_pct DESC NULLS LAST
         `);
-        res.json({ success: true, rows: r.rows });
+        // 28 Sep — flag strategies whose Telegram alerts are currently
+        // auto-muted (30+ Trade-Coach results with a negative average).
+        const rows = r.rows.map(row => ({ ...row, muted: _mutedStrategies.has(`${row.instrument}|${row.source}`) }));
+        res.json({ success: true, rows, automute: { enabled: AUTOMUTE_ENABLED, minSamples: AUTOMUTE_MIN_SAMPLES } });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
@@ -12029,6 +12191,10 @@ function startPollingIntervals() {
     setTimeout(() => { sampleOutcomePathsTick(); setInterval(sampleOutcomePathsTick, 5 * 60 * 1000); }, 160 * 1000);
     const finalizeCoachTick = () => finalizeCoachOutcomes().catch(e => console.warn('[Signal Outcomes] coach-finalize tick error:', e.message));
     setTimeout(() => { finalizeCoachTick(); setInterval(finalizeCoachTick, 5 * 60 * 1000); }, 165 * 1000);
+    // Live scorecard for trigger alerts + auto-mute evaluation (28 Sep) — 5 min
+    // cadence, right after the coach finalize so it sees fresh results.
+    const scorecardTick = () => refreshTriggerScorecard().catch(e => console.warn('[Trigger Scorecard] tick error:', e.message));
+    setTimeout(() => { scorecardTick(); setInterval(scorecardTick, SCORECARD_REFRESH_MS); }, 170 * 1000);
     // Bitcoin Fast Momentum (26 Sep) — 90s cadence, matching Crude's own
     // Fast Momentum check interval.
     const bitcoinFastMomTick = () => checkBitcoinFastMomentumTrigger().catch(e => console.warn('[Bitcoin Fast Momentum] tick error:', e.message));
