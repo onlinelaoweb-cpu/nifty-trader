@@ -4787,6 +4787,12 @@ Agreeing sources (last ${BRAHMASTRA_WINDOW_MIN}min): ${sources.join(', ')}
 // swing the average. Muting can be switched off with env STRATEGY_AUTOMUTE=off.
 const AUTOMUTE_ENABLED      = String(process.env.STRATEGY_AUTOMUTE || 'on').toLowerCase() !== 'off';
 const AUTOMUTE_MIN_SAMPLES  = 30;   // Trade-Coach results needed before a verdict counts
+const AUTOMUTE_MIN_DAYS     = 3;    // 28 Sep fix: also require 3+ distinct trading days — a single
+                                     // trend/chop day can supply 30+ fires for a high-frequency
+                                     // strategy on its own (seen: NIFTY Opt RSI Diverge hit 30 in
+                                     // one session), and a fading strategy having a bad day on a
+                                     // trend day isn't yet evidence it's broken. Days are counted
+                                     // in IST (trading-day terms), not UTC.
 const AUTOMUTE_UNMUTE_AT    = 2;    // once muted, avg must recover to +2% (not just >0) — prevents flapping
 const CONFLUENCE_WINDOW_MS  = 10 * 60 * 1000;
 const SCORECARD_REFRESH_MS  = 5 * 60 * 1000;
@@ -4819,7 +4825,9 @@ async function refreshTriggerScorecard() {
                 COUNT(*) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL) AS coach_n,
                 AVG(GREATEST(-100, LEAST(100, coach_result)))
                     FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL) AS coach_avg,
-                COUNT(*) FILTER (WHERE coach_result > 0 AND entry_strike IS NOT NULL) AS coach_wins
+                COUNT(*) FILTER (WHERE coach_result > 0 AND entry_strike IS NOT NULL) AS coach_wins,
+                COUNT(DISTINCT DATE(fire_ts AT TIME ZONE 'Asia/Kolkata'))
+                    FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL) AS coach_days
             FROM signal_outcomes
             GROUP BY instrument, source
         `);
@@ -4828,16 +4836,16 @@ async function refreshTriggerScorecard() {
         const transitions = [];
         for (const row of r.rows) {
             const key = `${row.instrument}|${row.source}`;
-            const dirN = Number(row.dir_n), coachN = Number(row.coach_n);
+            const dirN = Number(row.dir_n), coachN = Number(row.coach_n), coachDays = Number(row.coach_days) || 0;
             const coachAvg = row.coach_avg == null ? null : Number(row.coach_avg);
             let muted = false;
-            if (AUTOMUTE_ENABLED && coachN >= AUTOMUTE_MIN_SAMPLES && coachAvg !== null) {
+            if (AUTOMUTE_ENABLED && coachN >= AUTOMUTE_MIN_SAMPLES && coachDays >= AUTOMUTE_MIN_DAYS && coachAvg !== null) {
                 muted = _mutedStrategies.has(key) ? coachAvg < AUTOMUTE_UNMUTE_AT : coachAvg < 0;
             }
             next[key] = {
                 instrument: row.instrument, source: row.source,
                 dirN, dirWinPct: dirN > 0 ? Math.round(100 * Number(row.dir_wins) / dirN) : null,
-                coachN, coachAvg, coachProfitPct: coachN > 0 ? Math.round(100 * Number(row.coach_wins) / coachN) : null,
+                coachN, coachDays, coachAvg, coachProfitPct: coachN > 0 ? Math.round(100 * Number(row.coach_wins) / coachN) : null,
                 muted,
             };
             if (muted && !_mutedStrategies.has(key)) { _mutedStrategies.add(key); transitions.push({ key, muted: true, c: next[key] }); }
@@ -4851,8 +4859,8 @@ async function refreshTriggerScorecard() {
             for (const t of transitions) {
                 const label = `${t.c.instrument} ${t.c.source}`;
                 const line = t.muted
-                    ? `🔇 <b>AUTO-MUTED: ${label}</b>\nTrade-Coach average ${t.c.coachAvg.toFixed(1)}% over ${t.c.coachN} trades (${t.c.coachProfitPct}% profitable). Its alerts are paused; it keeps being tracked and will un-mute if it recovers.`
-                    : `🔊 <b>UN-MUTED: ${label}</b>\nTrade-Coach average recovered to ${t.c.coachAvg.toFixed(1)}% over ${t.c.coachN} trades. Alerts resumed.`;
+                    ? `🔇 <b>AUTO-MUTED: ${label}</b>\nTrade-Coach average ${t.c.coachAvg.toFixed(1)}% over ${t.c.coachN} trades across ${t.c.coachDays} trading days (${t.c.coachProfitPct}% profitable). Its alerts are paused; it keeps being tracked and will un-mute if it recovers.`
+                    : `🔊 <b>UN-MUTED: ${label}</b>\nTrade-Coach average recovered to ${t.c.coachAvg.toFixed(1)}% over ${t.c.coachN} trades across ${t.c.coachDays} days. Alerts resumed.`;
                 console.log(`${t.muted ? '🔇' : '🔊'} [Auto-mute] ${label} ${t.muted ? 'muted' : 'un-muted'} (avg ${t.c.coachAvg?.toFixed(1)}%, n=${t.c.coachN})`);
                 if (isConfigured()) await sendRawMessage(line).catch(() => {});
             }
@@ -4877,8 +4885,21 @@ function buildTrackRecordBlock(card, agree, disagree) {
             ? `Trade-Coach avg ${sign(card.coachAvg)}${card.coachAvg.toFixed(1)}% · ${card.coachProfitPct}% profitable (${card.coachN} trades)`
             : 'Trade-Coach: no results yet';
         lines.push(`📊 <b>Track record:</b> ${dirPart} · ${coachPart}`);
-        if (card.coachN < AUTOMUTE_MIN_SAMPLES) lines.push(`🟡 <b>UNPROVEN</b> — ${card.coachN}/${AUTOMUTE_MIN_SAMPLES} trades needed for a verdict. Paper-trade or very small size.`);
-        else lines.push(`🟢 <b>Positive so far</b> over ${card.coachN} trades — still not a guarantee.`);
+        // 28 Sep fix: this used to say "Positive so far" whenever coachN>=30,
+        // even when coachAvg was actually negative (possible once the day-gate
+        // below was added — a strategy can clear the sample count in one day
+        // without clearing 3 days, so it isn't muted yet but also isn't
+        // provably positive). Now explicitly branches on the day gate and on
+        // the sign of coachAvg, so the label always matches the number.
+        if (card.coachN < AUTOMUTE_MIN_SAMPLES) {
+            lines.push(`🟡 <b>UNPROVEN</b> — ${card.coachN}/${AUTOMUTE_MIN_SAMPLES} trades needed for a verdict. Paper-trade or very small size.`);
+        } else if (card.coachDays < AUTOMUTE_MIN_DAYS) {
+            lines.push(`🟡 <b>BUILDING</b> — ${card.coachN} trades but only ${card.coachDays}/${AUTOMUTE_MIN_DAYS} trading days so far (avg ${sign(card.coachAvg)}${card.coachAvg.toFixed(1)}%). One day isn't a verdict yet — treat with caution.`);
+        } else if (card.coachAvg >= 0) {
+            lines.push(`🟢 <b>Positive so far</b> over ${card.coachN} trades across ${card.coachDays} days — still not a guarantee.`);
+        } else {
+            lines.push(`🔴 <b>Negative so far</b> over ${card.coachN} trades across ${card.coachDays} days.`);
+        }
     }
     const a = [...agree], d = [...disagree];
     let conf = a.length
