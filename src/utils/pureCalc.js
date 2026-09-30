@@ -752,6 +752,121 @@ function computeMurarkaZone(pcr, spot, vwap, isExpiry) {
     return { pcrZone: { zone, label, color, pcr }, murarkaEntry };
 }
 
+// ── Exhaustion-Reversal Detector (30 Sep) ────────────────────────────────────
+// User's own ask: short-timeframe exploratory triggers are noisy — wants a
+// LONGER-timeframe (daily) system that watches for an extended up/down run
+// reaching genuine exhaustion, then fires once a REAL reversal confirms —
+// a "U-turn started" signal, not just "RSI touched an extreme".
+//
+// Design (tested against 8+ scenarios before going into production,
+// including 3 precisely-controlled ones verifying it fires on EXACTLY the
+// right day — not the day before, not the day after):
+//   1. Find the PEAK (bullish case) or TROUGH (bearish case) daily-RSI(14)
+//      value within a lookback window — NOT just "any day RSI was extreme",
+//      since RSI can stay >70/<30 for MANY consecutive days in a genuine
+//      trend (an earlier, naive "most recent extreme day" version of this
+//      logic always found TODAY whenever RSI was still elevated, even
+//      after it had already pulled back significantly — this peak/trough
+//      approach fixes that).
+//   2. From that peak/trough, require a MEANINGFUL RSI pullback (default
+//      15 points) AND price confirmation (today's close beyond the
+//      peak/trough day's close, in the reversal direction) — a token
+//      1-2 point RSI wobble doesn't count.
+//   3. Fire ONLY on the first day both conditions are met (checks
+//      yesterday didn't already qualify, so a multi-day-old reversal
+//      doesn't re-fire every subsequent day it stays true).
+//
+// Instrument-agnostic — takes any {close}-shaped daily candle array
+// (chronological, oldest first), works for NIFTY/Crude/Bitcoin alike.
+function detectExhaustionReversal(dailyCandles, opts = {}) {
+    const RSI_HIGH = opts.rsiHigh ?? 70, RSI_LOW = opts.rsiLow ?? 30;
+    const LOOKBACK = opts.lookback ?? 10;
+    const PULLBACK_PTS = opts.pullbackPts ?? 15;
+    if (!dailyCandles || dailyCandles.length < 25) return { state: 'INSUFFICIENT_DATA' };
+
+    const closes = dailyCandles.map(c => c.close);
+    const rsiSeries = RSI.calculate({ values: closes, period: 14 });
+    const rsiOffset = closes.length - rsiSeries.length;
+    const todayIdx = closes.length - 1;
+
+    let peakRSI = -Infinity, peakIdx = -1, troughRSI = Infinity, troughIdx = -1;
+    for (let i = Math.max(0, closes.length - LOOKBACK); i <= todayIdx; i++) {
+        const ri = i - rsiOffset;
+        if (ri < 0) continue;
+        if (rsiSeries[ri] > peakRSI) { peakRSI = rsiSeries[ri]; peakIdx = i; }
+        if (rsiSeries[ri] < troughRSI) { troughRSI = rsiSeries[ri]; troughIdx = i; }
+    }
+
+    let mode = null;
+    if (peakRSI >= RSI_HIGH) mode = 'BULLISH';
+    else if (troughRSI <= RSI_LOW) mode = 'BEARISH';
+    if (!mode) return { state: 'NONE' };
+
+    if (mode === 'BULLISH') {
+        if (todayIdx === peakIdx) return { state: 'BULLISH_EXTENDED_WATCHING', peakRSI };
+        const todayRSI = rsiSeries[todayIdx - rsiOffset];
+        const pulledBack = (peakRSI - todayRSI) >= PULLBACK_PTS;
+        const priceConfirms = closes[todayIdx] < closes[peakIdx];
+        if (pulledBack && priceConfirms) {
+            if (todayIdx - 1 > peakIdx) {
+                const yRSI = rsiSeries[todayIdx - 1 - rsiOffset];
+                if ((peakRSI - yRSI) >= PULLBACK_PTS && closes[todayIdx - 1] < closes[peakIdx]) return { state: 'ALREADY_REVERSED' };
+            }
+            return { state: 'REVERSAL_CONFIRMED', direction: 'BEARISH_REVERSAL', extremeRSI: peakRSI, todayRSI, daysInRun: todayIdx - peakIdx };
+        }
+        return { state: 'BULLISH_EXTENDED_WATCHING', peakRSI, todayRSI };
+    } else {
+        if (todayIdx === troughIdx) return { state: 'BEARISH_EXTENDED_WATCHING', troughRSI };
+        const todayRSI = rsiSeries[todayIdx - rsiOffset];
+        const pulledBack = (todayRSI - troughRSI) >= PULLBACK_PTS;
+        const priceConfirms = closes[todayIdx] > closes[troughIdx];
+        if (pulledBack && priceConfirms) {
+            if (todayIdx - 1 > troughIdx) {
+                const yRSI = rsiSeries[todayIdx - 1 - rsiOffset];
+                if ((yRSI - troughRSI) >= PULLBACK_PTS && closes[todayIdx - 1] > closes[troughIdx]) return { state: 'ALREADY_REVERSED' };
+            }
+            return { state: 'REVERSAL_CONFIRMED', direction: 'BULLISH_REVERSAL', extremeRSI: troughRSI, todayRSI, daysInRun: todayIdx - troughIdx };
+        }
+        return { state: 'BEARISH_EXTENDED_WATCHING', troughRSI, todayRSI };
+    }
+}
+
+// ── Calendar-aware daily→weekly/monthly resampling (30 Sep) ─────────────────
+// Used to build weekly/monthly candles for the Exhaustion-Reversal trigger's
+// longer timeframes, reusing the SAME daily data already fetched per
+// instrument rather than a separate fetch. Tested: 3 weeks of Mon-Fri daily
+// data correctly resampled into 3 weekly buckets closing on each Friday;
+// 70 days spanning Jan-Mar correctly split into 3 monthly buckets on
+// calendar-month boundaries (not just "group every 21 days").
+// Accepts candles with EITHER a 'date' string (YYYY-MM-DD, NIFTY's own
+// shape) or a 'time' epoch-seconds field (Crude/Bitcoin's shape).
+function resampleDailyCandles(dailyCandles, period) {
+    if (!dailyCandles?.length) return [];
+    const getDate = (c) => c.date ? new Date(c.date + 'T00:00:00Z') : new Date(c.time * 1000);
+    const bucketKey = (d) => {
+        if (period === 'month') return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+        // ISO week (Thursday-based numbering, standard convention)
+        const dt = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+        const dayNum = dt.getUTCDay() || 7;
+        dt.setUTCDate(dt.getUTCDate() + 4 - dayNum);
+        const yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
+        const weekNo = Math.ceil((((dt - yearStart) / 86400000) + 1) / 7);
+        return `${dt.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+    };
+
+    const buckets = new Map();
+    for (const c of dailyCandles) {
+        if (!(c.close > 0)) continue;
+        const key = bucketKey(getDate(c));
+        if (!buckets.has(key)) buckets.set(key, { key, open: c.close, high: c.close, low: c.close, close: c.close });
+        const b = buckets.get(key);
+        b.high = Math.max(b.high, c.close);
+        b.low = Math.min(b.low, c.close);
+        b.close = c.close; // last candle seen in the bucket wins — input must be chronological
+    }
+    return [...buckets.values()]; // Map preserves insertion order = chronological, given chronological input
+}
+
 module.exports = {
     pcrLabel, pcrScore, calculateADX, _linRegSlope, _pcrTimeToMinutes,
     calcPCRSlope, aggregateCandles, computeCrudeIndicators, crudeTFDirection,
@@ -759,5 +874,6 @@ module.exports = {
     buildTradeCoach, buildScalpPlan, buildEngineChecklist, withTimeout,
     detectCandlePatternForTF, detectLiquiditySweepReversal, computeMurarkaZone,
     computeCrudeMTF, computeCrudeSignal, computeBitcoinIndicators,
-    computeBitcoinMTF, computeBitcoinSignal,
+    computeBitcoinMTF, computeBitcoinSignal, detectExhaustionReversal,
+    resampleDailyCandles,
 };

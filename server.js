@@ -22,7 +22,7 @@ const { pcrLabel, pcrScore, calculateADX, _linRegSlope, _pcrTimeToMinutes,
         buildTradeCoach, buildScalpPlan, buildEngineChecklist, withTimeout,
         detectCandlePatternForTF, detectLiquiditySweepReversal, computeMurarkaZone,
         computeCrudeMTF, computeCrudeSignal, computeBitcoinIndicators,
-        computeBitcoinMTF, computeBitcoinSignal } = require('./src/utils/pureCalc');
+        computeBitcoinMTF, computeBitcoinSignal, detectExhaustionReversal, resampleDailyCandles } = require('./src/utils/pureCalc');
 const { updateORB, getORBStatus, trackORBBreakoutFreshness, getORBBreakoutAgeMin } = require('./src/utils/orbTracking');
 const { computeSmartMoneyBias, computeDayType, computeConfidenceBreakdown,
         computeTrapZone, computeDynamicLevelsState, computeContradictionScore,
@@ -4231,7 +4231,7 @@ async function checkOptionRSIDivergenceTrigger() {
         else if (peDelta >= OPT_RSI_DIV_MIN_DELTA && ceDelta <= -OPT_RSI_DIV_MIN_DELTA) direction = 'BULLISH_FADING'; // PE recovering, CE weakening — a bullish move losing steam
         if (!direction) return;
 
-        if (lastOptRSIDivDirection === direction && (Date.now() - lastOptRSIDivAt) < OPT_RSI_DIV_COOLDOWN_MS) return;
+        if ((Date.now() - lastOptRSIDivAt) < OPT_RSI_DIV_COOLDOWN_MS) return;
         lastOptRSIDivAt = Date.now();
         lastOptRSIDivDirection = direction;
 
@@ -4299,7 +4299,7 @@ async function checkCrudeOptionRSIDivergenceTrigger() {
         else if (peDelta >= CRUDE_OPT_RSI_DIV_MIN_DELTA && ceDelta <= -CRUDE_OPT_RSI_DIV_MIN_DELTA) direction = 'BULLISH_FADING';
         if (!direction) return;
 
-        if (lastCrudeOptRSIDivDirection === direction && (Date.now() - lastCrudeOptRSIDivAt) < CRUDE_OPT_RSI_DIV_COOLDOWN_MS) return;
+        if ((Date.now() - lastCrudeOptRSIDivAt) < CRUDE_OPT_RSI_DIV_COOLDOWN_MS) return;
         lastCrudeOptRSIDivAt = Date.now();
         lastCrudeOptRSIDivDirection = direction;
 
@@ -4812,6 +4812,15 @@ const AUTOMUTE_MIN_DAYS     = 3;    // 28 Sep fix: also require 3+ distinct trad
                                      // trend day isn't yet evidence it's broken. Days are counted
                                      // in IST (trading-day terms), not UTC.
 const AUTOMUTE_UNMUTE_AT    = 2;    // once muted, avg must recover to +2% (not just >0) — prevents flapping
+// 30 Sep — high-confidence early-mute exception, found from a live Telegram
+// export: Opt RSI Divergence hit 110 samples (3.6x the 30-minimum) while
+// still stuck at only 2/3 days, continuing to fire clearly-losing alerts
+// (-5.6% avg) the whole time the day-gate held it back. The day-gate's
+// original concern — one trend-day skewing a THIN sample — is much less of
+// a risk once sample-size is this large; 90+ fires likely span multiple
+// intraday regimes even within a single calendar day. Bypasses the day-gate
+// only, not the sample-gate itself.
+const AUTOMUTE_HIGH_CONFIDENCE_SAMPLES = AUTOMUTE_MIN_SAMPLES * 3; // 90
 const CONFLUENCE_WINDOW_MS  = 10 * 60 * 1000;
 const SCORECARD_REFRESH_MS  = 5 * 60 * 1000;
 
@@ -4857,7 +4866,8 @@ async function refreshTriggerScorecard() {
             const dirN = Number(row.dir_n), coachN = Number(row.coach_n), coachDays = Number(row.coach_days) || 0;
             const coachAvg = row.coach_avg == null ? null : Number(row.coach_avg);
             let muted = false;
-            if (AUTOMUTE_ENABLED && coachN >= AUTOMUTE_MIN_SAMPLES && coachDays >= AUTOMUTE_MIN_DAYS && coachAvg !== null) {
+            const dayGateSatisfied = coachDays >= AUTOMUTE_MIN_DAYS || coachN >= AUTOMUTE_HIGH_CONFIDENCE_SAMPLES;
+            if (AUTOMUTE_ENABLED && coachN >= AUTOMUTE_MIN_SAMPLES && dayGateSatisfied && coachAvg !== null) {
                 muted = _mutedStrategies.has(key) ? coachAvg < AUTOMUTE_UNMUTE_AT : coachAvg < 0;
             }
             next[key] = {
@@ -4909,9 +4919,10 @@ function buildTrackRecordBlock(card, agree, disagree) {
         // without clearing 3 days, so it isn't muted yet but also isn't
         // provably positive). Now explicitly branches on the day gate and on
         // the sign of coachAvg, so the label always matches the number.
+        const dayGateSatisfied = card.coachDays >= AUTOMUTE_MIN_DAYS || card.coachN >= AUTOMUTE_HIGH_CONFIDENCE_SAMPLES;
         if (card.coachN < AUTOMUTE_MIN_SAMPLES) {
             lines.push(`🟡 <b>UNPROVEN</b> — ${card.coachN}/${AUTOMUTE_MIN_SAMPLES} trades needed for a verdict. Paper-trade or very small size.`);
-        } else if (card.coachDays < AUTOMUTE_MIN_DAYS) {
+        } else if (!dayGateSatisfied) {
             lines.push(`🟡 <b>BUILDING</b> — ${card.coachN} trades but only ${card.coachDays}/${AUTOMUTE_MIN_DAYS} trading days so far (avg ${sign(card.coachAvg)}${card.coachAvg.toFixed(1)}%). One day isn't a verdict yet — treat with caution.`);
         } else if (card.coachAvg >= 0) {
             lines.push(`🟢 <b>Positive so far</b> over ${card.coachN} trades across ${card.coachDays} days — still not a guarantee.`);
@@ -5934,7 +5945,7 @@ async function checkTelegramAlerts(newSignal) {
             adx1hForAlert  == null || adx1hForAlert  < MTF_REVERSAL_MIN_ADX_1H
         );
 
-        const exhaustionRisk = rsiExhausted || insideRangePocket || alignmentADXWeak;
+        const exhaustionRisk = rsiExhausted || alignmentADXWeak;
         // FIX (11 Sep) — lowered from score>=3 (Strong Confluence only) to
         // score>=2 (Strong Confluence + Moderate), per explicit user request:
         // wants Moderate leads for quick 10-20pt scalp trades and to start
@@ -6001,7 +6012,7 @@ async function checkTelegramAlerts(newSignal) {
         } else if (leadQuality.score >= 2 && exhaustionRisk) {
             const _key = `exhaustion:rsi=${rsiExhausted}:range=${insideRangePocket}:adx=${alignmentADXWeak}`;
             if (_key !== lastSuppressLogMsg || Date.now() - lastSuppressLogAt > 60_000) {
-                console.log(`[MTF] Suppressed ${leadQuality.label} alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${insideRangePocket ? 'inside range pocket' : 'clear of range pocket'}, ${alignmentADXWeak ? `weak ADX backing (15m ${adx15mForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_15M}+; 1h ${adx1hForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_1H}+)` : 'ADX ok'})`);
+                console.log(`[MTF] Suppressed ${leadQuality.label} alert — exhaustion risk (RSI ${marketState.rsi}${rsiExhausted ? ' EXTREME' : ' ok'}, ${alignmentADXWeak ? `weak ADX backing (15m ${adx15mForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_15M}+; 1h ${adx1hForAlert?.toFixed?.(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX_1H}+)` : 'ADX ok'}) [range-pocket:${insideRangePocket ? 'yes' : 'no'} — informational only, no longer a blocker]`);
                 lastSuppressLogMsg = _key; lastSuppressLogAt = Date.now();
             }
         } else if (willActuallySend) {
@@ -7225,7 +7236,7 @@ async function checkBitcoinOptionRSIDivergenceTrigger() {
         else if (peDelta >= BITCOIN_OPT_RSI_DIV_MIN_DELTA && ceDelta <= -BITCOIN_OPT_RSI_DIV_MIN_DELTA) direction = 'BULLISH_FADING';
         if (!direction) return;
 
-        if (lastBitcoinOptRSIDivDirection === direction && (Date.now() - lastBitcoinOptRSIDivAt) < BITCOIN_OPT_RSI_DIV_COOLDOWN_MS) return;
+        if ((Date.now() - lastBitcoinOptRSIDivAt) < BITCOIN_OPT_RSI_DIV_COOLDOWN_MS) return;
         lastBitcoinOptRSIDivAt = Date.now();
         lastBitcoinOptRSIDivDirection = direction;
 
@@ -7369,6 +7380,259 @@ Threshold: ${threshold.toFixed(1)} (ATR-adjusted)
         }
     } catch (e) {
         console.warn('[Bitcoin Sustained Drift] error:', e.message);
+    }
+}
+
+// ── Exhaustion-Reversal Trigger (30 Sep) ─────────────────────────────────────
+// User's own ask: the intraday exploratory triggers are noisy — wants a
+// longer-timeframe (daily) system across NIFTY/Crude/Bitcoin that watches
+// for an extended run reaching genuine exhaustion, then fires once a real
+// reversal confirms. Uses detectExhaustionReversal() (src/utils/pureCalc.js —
+// tested against 8+ scenarios, including 3 precisely-controlled ones
+// verifying it fires on exactly the right day).
+//
+// 30 Sep — extended from daily-only to 4 timeframes (HOURLY/DAILY/WEEKLY/
+// MONTHLY) per the user's own ask. Design:
+//   - HOURLY: a NEW, deeper fetch per instrument (the existing MTF hourly
+//     fetch only holds 5 days — nowhere near enough for a genuine RSI(14)
+//     peak/trough scan). Checked every ~10min; dedup by hour-key naturally
+//     limits it to firing once per closed hour regardless of check-frequency.
+//   - DAILY: unchanged from before — checked once/day after market close.
+//   - WEEKLY/MONTHLY: resampled from the SAME daily fetch (via
+//     resampleDailyCandles), with the current, still-forming period's
+//     bucket DROPPED before evaluation — so detectExhaustionReversal only
+//     ever sees fully-closed weeks/months. This avoids needing precise
+//     "is today Friday / month-end" timing logic: checked daily (piggy-
+//     backing on the daily check), and dedup by the completed-bucket's own
+//     key (e.g. "2026-W39" or "2026-09") means it naturally fires at most
+//     once per newly-completed week/month, whenever that dailiy check
+//     happens to run after that period genuinely closed.
+// Extended data-retention (NIFTY 1y→5y; Crude/Bitcoin daily fetch depth
+// matched) was needed for MONTHLY specifically — RSI(14) needs 14+ months.
+let _exhaustionLastKey = {}; // "INSTRUMENT|TIMEFRAME" -> last-fired period-key
+
+const EXHAUSTION_TIMEFRAMES = ['HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY'];
+const EXHAUSTION_TF_LABEL = { HOURLY: '1-Hour', DAILY: 'Daily', WEEKLY: 'Weekly', MONTHLY: 'Monthly' };
+
+// Fetches raw daily candles for an instrument, at the now-extended depth
+// (~5 years) needed for monthly RSI(14). Shared by the DAILY check itself
+// and by WEEKLY/MONTHLY (which resample this same data).
+async function fetchExhaustionDailyCandles(instrument) {
+    if (instrument === 'NIFTY') {
+        return await getHistoricalCandles(1500); // full extended cache depth
+    }
+    if (instrument === 'CRUDE') {
+        const fyersSymbol = await getCrudeFyersSymbol();
+        if (!fyersSymbol) return null;
+        const raw = await fetchFyersIntradayHistory(fyersSymbol, 'D', 1500);
+        return raw?.map(c => ({ time: c.time, close: c.close })).filter(c => c.close > 0) || null;
+    }
+    if (instrument === 'BITCOIN') {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const raw = await fetchDeltaHistoricalCandles('BTCUSD', '1d', nowSec - 1500 * 86400, nowSec);
+        return raw?.map(c => ({ time: c.time, close: c.close })).filter(c => c.close > 0) || null;
+    }
+    return null;
+}
+
+// Fetches deeper hourly candles (60+ days — comfortably covers RSI(14)
+// warmup + the peak/trough lookback window, no need for years of hourly
+// history given the much finer granularity).
+async function fetchExhaustionHourlyCandles(instrument) {
+    if (instrument === 'NIFTY') {
+        const YAHOO_HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'application/json' };
+        const urls = [
+            'https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=60m&range=60d',
+            'https://query2.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=60m&range=60d',
+        ];
+        for (const url of urls) {
+            try {
+                const res = await axios.get(url, { headers: YAHOO_HEADERS, timeout: 15000, validateStatus: s => s < 500 });
+                const result = res.data?.chart?.result?.[0];
+                const timestamps = result?.timestamp, closes = result?.indicators?.quote?.[0]?.close;
+                if (!Array.isArray(timestamps) || !closes) continue;
+                return timestamps.map((t, i) => ({ time: t, close: closes[i] })).filter(c => c.close > 0);
+            } catch (e) { /* try next URL */ }
+        }
+        return null;
+    }
+    if (instrument === 'CRUDE') {
+        const fyersSymbol = await getCrudeFyersSymbol();
+        if (!fyersSymbol) return null;
+        const raw = await fetchFyersIntradayHistory(fyersSymbol, '60', 60);
+        return raw?.map(c => ({ time: c.time, close: c.close })).filter(c => c.close > 0) || null;
+    }
+    if (instrument === 'BITCOIN') {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const raw = await fetchDeltaHistoricalCandles('BTCUSD', '1h', nowSec - 60 * 86400, nowSec);
+        return raw?.map(c => ({ time: c.time, close: c.close })).filter(c => c.close > 0) || null;
+    }
+    return null;
+}
+
+// Returns { candles, periodKey } for the given (instrument, timeframe), or
+// null if data isn't available. periodKey is what gets deduped against.
+async function getExhaustionCandlesAndKey(instrument, timeframe) {
+    if (timeframe === 'HOURLY') {
+        const candles = await fetchExhaustionHourlyCandles(instrument);
+        if (!candles?.length) return null;
+        const lastHourUTC = new Date(candles[candles.length - 1].time * 1000);
+        return { candles, periodKey: lastHourUTC.toISOString().slice(0, 13) }; // YYYY-MM-DDTHH
+    }
+    if (timeframe === 'DAILY') {
+        const candles = await fetchExhaustionDailyCandles(instrument);
+        if (!candles?.length) return null;
+        const last = candles[candles.length - 1];
+        const key = last.date || new Date(last.time * 1000).toISOString().slice(0, 10);
+        return { candles, periodKey: key };
+    }
+    if (timeframe === 'WEEKLY' || timeframe === 'MONTHLY') {
+        const daily = await fetchExhaustionDailyCandles(instrument);
+        if (!daily?.length) return null;
+        const resampled = resampleDailyCandles(daily, timeframe === 'WEEKLY' ? 'week' : 'month');
+        if (resampled.length < 2) return null;
+        resampled.pop(); // drop the still-forming current period — only evaluate COMPLETED buckets
+        if (resampled.length < 25) return null;
+        return { candles: resampled, periodKey: resampled[resampled.length - 1].key };
+    }
+    return null;
+}
+
+async function checkExhaustionReversalCommon(instrument, timeframe, candles, periodKey, price) {
+    const dedupKey = `${instrument}|${timeframe}`;
+    if (_exhaustionLastKey[dedupKey] === periodKey) return; // already fired for this exact period
+    if (!candles || candles.length < 25) return;
+
+    const result = detectExhaustionReversal(candles);
+    if (result.state !== 'REVERSAL_CONFIRMED') return; // WATCHING / NONE / ALREADY_REVERSED / INSUFFICIENT_DATA — nothing to fire
+    _exhaustionLastKey[dedupKey] = periodKey; // mark done for this period only once we've confirmed a fresh fire
+
+    const isBull = result.direction === 'BULLISH_REVERSAL';
+    const label = instrument === 'NIFTY' ? 'NIFTY' : instrument === 'CRUDE' ? 'CRUDE' : 'BITCOIN';
+    const emoji = instrument === 'NIFTY' ? '📊' : instrument === 'CRUDE' ? '🛢️' : '₿';
+    const tfLabel = EXHAUSTION_TF_LABEL[timeframe];
+    const tfUnit = timeframe === 'HOURLY' ? 'hour' : timeframe === 'DAILY' ? 'day' : timeframe === 'WEEKLY' ? 'week' : 'month';
+    const priceStr = instrument === 'BITCOIN' ? `$${price?.toFixed(1)}` : `₹${price?.toFixed(1)}`;
+    const msg = `
+🧭 <b>EXHAUSTION-REVERSAL (${tfLabel.toUpperCase()}) — U-TURN STARTED</b>
+${emoji} <b>${label} — ${result.direction}</b>
+━━━━━━━━━━━━━━━━━━
+${priceStr} — after a ${result.daysInRun}-${tfUnit} run, ${tfLabel.toLowerCase()} RSI ${isBull ? 'bottomed' : 'peaked'} at ${result.extremeRSI.toFixed(1)}, now ${result.todayRSI.toFixed(1)} — genuine pullback confirmed, price ${isBull ? 'closing higher' : 'closing lower'} too.
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>${tfLabel}-timeframe signal — NOT an intraday entry trigger.</b> Marks a POTENTIAL ${tfUnit}s-scale turn, not a scalp. No historical track record yet on this timeframe. Use your own judgment.
+━━━━━━━━━━━━━━━━━━
+<i>Vardaan AI — Exhaustion-Reversal Trigger (exploratory, ${tfLabel.toLowerCase()} timeframe)</i>
+`.trim();
+    await sendRawMessage(msg);
+    console.log(`🧭 [Exhaustion-Reversal ${timeframe}] ${label} ${result.direction} — RSI ${result.extremeRSI.toFixed(1)}→${result.todayRSI.toFixed(1)} over ${result.daysInRun}${tfUnit[0]}`);
+
+    if (dbPool) {
+        dbPool.query(
+            `INSERT INTO exhaustion_reversal_log (instrument, timeframe, direction, price, extreme_rsi, today_rsi, days_in_run)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+            [instrument, timeframe, result.direction, price, result.extremeRSI, result.todayRSI, result.daysInRun]
+        ).catch(e => console.warn('[Exhaustion-Reversal] log error:', e.message));
+    }
+}
+
+// Single, unified entry point — covers all 4 timeframes × 3 instruments.
+// Timing-gated per timeframe: HOURLY has no gate (checked frequently,
+// dedup does the work); DAILY/WEEKLY/MONTHLY all wait for the instrument's
+// own market-close (weekly/monthly ride along on the same daily check,
+// since they evaluate only completed periods regardless of which day
+// within the period they're checked on).
+async function checkExhaustionReversalTrigger(instrument, timeframe) {
+    if (!isConfigured()) return;
+    const needsCloseGate = timeframe !== 'HOURLY';
+    if (needsCloseGate) {
+        const ist = getIST();
+        if (instrument === 'NIFTY' && (ist.getHours() < 15 || (ist.getHours() === 15 && ist.getMinutes() < 35))) return;
+        if (instrument === 'CRUDE' && (ist.getHours() < 23 || (ist.getHours() === 23 && ist.getMinutes() < 58))) return;
+        if (instrument === 'BITCOIN' && (ist.getHours() !== 0 || ist.getMinutes() < 30)) return;
+    }
+    try {
+        const got = await getExhaustionCandlesAndKey(instrument, timeframe);
+        if (!got) return;
+        const price = got.candles[got.candles.length - 1]?.close;
+        await checkExhaustionReversalCommon(instrument, timeframe, got.candles, got.periodKey, price);
+    } catch (e) { console.warn(`[Exhaustion-Reversal ${timeframe} ${instrument}] error:`, e.message); }
+}
+
+// 30 Sep — Exhaustion-Reversal's own outcome-evaluation, now timeframe-aware
+// (extended from the original daily-only 7-day/1.5% version). Each
+// timeframe gets its own delay and WIN-threshold, scaled to how fast that
+// timeframe's signal is expected to play out and how large a genuine move
+// should be at that scale — an hourly signal shouldn't wait days to
+// resolve, and a monthly signal's "meaningful move" is much bigger than an
+// hourly one's. Reuses the same Crude-price-fallback pattern (Fyers quote
+// when the live price is stale/zero) already proven in evaluateSignalOutcomes().
+const EXHAUSTION_EVAL_CONFIG = {
+    HOURLY:  { delayHours: 6,    thresholdPct: 0.5 },
+    DAILY:   { delayHours: 168,  thresholdPct: 1.5 },  // 7 days
+    WEEKLY:  { delayHours: 504,  thresholdPct: 3.0 },  // 21 days
+    MONTHLY: { delayHours: 1440, thresholdPct: 5.0 },  // 60 days
+};
+
+async function evaluateExhaustionReversalOutcomes() {
+    if (!dbPool) return;
+    try {
+        // No per-row dynamic INTERVAL in SQL — fetch all pending rows and
+        // check each one's own timeframe-specific delay in code. Cheap:
+        // this table's fire-rate is inherently low (by design), unlike the
+        // high-frequency intraday triggers.
+        const pending = await dbPool.query(`
+            SELECT id, instrument, timeframe, direction, price, ts FROM exhaustion_reversal_log
+            WHERE result IS NULL
+            ORDER BY ts ASC
+            LIMIT 200
+        `);
+        if (!pending.rows.length) return;
+
+        const nowMs = Date.now();
+        const ready = pending.rows.filter(row => {
+            const cfg = EXHAUSTION_EVAL_CONFIG[row.timeframe] || EXHAUSTION_EVAL_CONFIG.DAILY;
+            return (nowMs - new Date(row.ts).getTime()) >= cfg.delayHours * 3600 * 1000;
+        });
+        if (!ready.length) return;
+
+        let crudeFallbackPrice = null;
+        if (!(marketState.crudeoil?.price > 0) && ready.some(r => r.instrument === 'CRUDE')) {
+            try {
+                const fyersSymbol = await getCrudeFyersSymbol();
+                if (fyersSymbol) {
+                    const q = await fetchFyersQuote(fyersSymbol);
+                    if (q?.close > 0) crudeFallbackPrice = q.close;
+                }
+            } catch (e) { console.warn('[Exhaustion-Reversal] crude fallback-price fetch error:', e.message); }
+        }
+
+        let resolved = 0;
+        for (const row of ready) {
+            const evalPrice = row.instrument === 'NIFTY' ? marketState.nifty
+                             : row.instrument === 'CRUDE' ? (marketState.crudeoil?.price > 0 ? marketState.crudeoil.price : crudeFallbackPrice)
+                             : row.instrument === 'BITCOIN' ? marketState.bitcoin?.price
+                             : null;
+            if (!(evalPrice > 0) || !(row.price > 0)) continue;
+
+            const cfg = EXHAUSTION_EVAL_CONFIG[row.timeframe] || EXHAUSTION_EVAL_CONFIG.DAILY;
+            const pctMove = ((evalPrice - row.price) / row.price) * 100;
+            const isBull = row.direction === 'BULLISH_REVERSAL';
+            let result;
+            if (isBull) {
+                result = pctMove >= cfg.thresholdPct ? 'WIN' : pctMove <= -cfg.thresholdPct ? 'LOSS' : 'FLAT';
+            } else {
+                result = pctMove <= -cfg.thresholdPct ? 'WIN' : pctMove >= cfg.thresholdPct ? 'LOSS' : 'FLAT';
+            }
+
+            await dbPool.query(
+                `UPDATE exhaustion_reversal_log SET eval_ts = NOW(), eval_price = $1, pct_move = $2, result = $3 WHERE id = $4`,
+                [evalPrice, parseFloat(pctMove.toFixed(3)), result, row.id]
+            );
+            resolved++;
+        }
+        if (resolved > 0) console.log(`🧭 [Exhaustion-Reversal] Resolved ${resolved} pending outcome(s)`);
+    } catch (e) {
+        console.warn('[Exhaustion-Reversal] evaluate error:', e.message);
     }
 }
 
@@ -8965,6 +9229,45 @@ async function initDB() {
             )
         `);
         console.log('✅ PostgreSQL Bitcoin trigger tables (Trend Rider, Murarka, Opt RSI Diverge, Volume Confirm, Sustained Drift) ready');
+
+        // ── exhaustion_reversal_log table (30 Sep) ────────────────────────────
+        // User's own ask: short-timeframe exploratory triggers are noisy —
+        // wants a LONGER-timeframe (daily) system that watches NIFTY/Crude/
+        // Bitcoin for an extended up/down run reaching genuine exhaustion
+        // (daily RSI at a peak/trough), then fires once a REAL reversal
+        // confirms (RSI pulling back meaningfully + price confirming) — a
+        // "U-turn started" signal. See detectExhaustionReversal() +
+        // checkNiftyExhaustionReversalTrigger() and its Crude/Bitcoin
+        // siblings. Deliberately its own table, not mixed into the intraday
+        // exploratory-trigger set — this operates on daily candles, a
+        // fundamentally different timeframe (days, not minutes), so it
+        // needs its own, longer outcome-evaluation window too (not the
+        // existing 30min one built for intraday triggers).
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS exhaustion_reversal_log (
+                id            SERIAL PRIMARY KEY,
+                ts            TIMESTAMPTZ DEFAULT NOW(),
+                instrument    TEXT,        -- 'NIFTY' | 'CRUDE' | 'BITCOIN'
+                direction     TEXT,        -- 'BULLISH_REVERSAL' | 'BEARISH_REVERSAL'
+                price         NUMERIC,
+                extreme_rsi   NUMERIC,     -- the peak/trough RSI that marked the exhaustion point
+                today_rsi     NUMERIC,     -- RSI on the day reversal confirmed
+                days_in_run   INT          -- trading days between the exhaustion point and confirmation
+            )
+        `);
+        console.log('✅ PostgreSQL exhaustion_reversal_log table ready');
+        // 30 Sep — this trigger's own outcome-tracking, deliberately SEPARATE
+        // from signal_outcomes (which evaluates 30min after fire — far too
+        // soon for a daily-timeframe, multi-day-swing signal). Evaluated
+        // ~7 calendar days later instead. See evaluateExhaustionReversalOutcomes().
+        await dbPool.query(`ALTER TABLE exhaustion_reversal_log ADD COLUMN IF NOT EXISTS eval_ts TIMESTAMPTZ`);
+        await dbPool.query(`ALTER TABLE exhaustion_reversal_log ADD COLUMN IF NOT EXISTS eval_price NUMERIC`);
+        await dbPool.query(`ALTER TABLE exhaustion_reversal_log ADD COLUMN IF NOT EXISTS pct_move NUMERIC`);
+        await dbPool.query(`ALTER TABLE exhaustion_reversal_log ADD COLUMN IF NOT EXISTS result TEXT`); // 'WIN'|'LOSS'|'FLAT'|NULL (pending)
+        // 30 Sep — multi-timeframe extension (HOURLY/DAILY/WEEKLY/MONTHLY).
+        // Existing rows default to 'DAILY' — every fire before this column
+        // existed genuinely was the daily-timeframe check.
+        await dbPool.query(`ALTER TABLE exhaustion_reversal_log ADD COLUMN IF NOT EXISTS timeframe TEXT DEFAULT 'DAILY'`);
 
         // ── signal_outcomes table (26 Sep) ────────────────────────────────────
         // Unified track-record system — the user's own request: "map
@@ -11031,6 +11334,45 @@ for (const t of ['bitcoin-trend-rider-log', 'bitcoin-murarka-log', 'bitcoin-opti
     });
 }
 
+// 30 Sep — Exhaustion-Reversal fire history (daily-timeframe trigger)
+app.get('/api/exhaustion-reversal-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 30, 200);
+        const r = await dbPool.query(`SELECT * FROM exhaustion_reversal_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 30 Sep — Exhaustion-Reversal accuracy summary, per instrument.
+app.get('/api/exhaustion-reversal-accuracy', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const r = await dbPool.query(`
+            SELECT
+                instrument, timeframe,
+                COUNT(*) FILTER (WHERE result IS NOT NULL) AS resolved_count,
+                COUNT(*) FILTER (WHERE result = 'WIN')  AS win_count,
+                COUNT(*) FILTER (WHERE result = 'LOSS') AS loss_count,
+                COUNT(*) FILTER (WHERE result = 'FLAT') AS flat_count,
+                COUNT(*) FILTER (WHERE result IS NULL)  AS pending_count,
+                ROUND(
+                    100.0 * COUNT(*) FILTER (WHERE result = 'WIN')
+                    / NULLIF(COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')), 0)
+                , 1) AS win_rate_pct
+            FROM exhaustion_reversal_log
+            GROUP BY instrument, timeframe
+            ORDER BY instrument,
+                CASE timeframe WHEN 'HOURLY' THEN 1 WHEN 'DAILY' THEN 2 WHEN 'WEEKLY' THEN 3 WHEN 'MONTHLY' THEN 4 ELSE 5 END
+        `);
+        res.json({ success: true, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // 26 Sep — Signal Outcomes tracking: raw rows + aggregated accuracy.
 app.get('/api/signal-outcomes', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
@@ -12370,6 +12712,28 @@ function startPollingIntervals() {
     setTimeout(() => { sampleOutcomePathsTick(); setInterval(sampleOutcomePathsTick, 5 * 60 * 1000); }, 160 * 1000);
     const finalizeCoachTick = () => finalizeCoachOutcomes().catch(e => console.warn('[Signal Outcomes] coach-finalize tick error:', e.message));
     setTimeout(() => { finalizeCoachTick(); setInterval(finalizeCoachTick, 5 * 60 * 1000); }, 165 * 1000);
+    // Exhaustion-Reversal triggers (30 Sep) — 15 min cadence. Each self-gates
+    // on time-of-day (only proceeds after its own market-close) and a
+    // once-per-day dedup, so most calls are cheap no-ops — the actual daily-
+    // candle fetch only happens once/day per instrument.
+    // 30 Sep — multi-timeframe extension: config-driven loop over all 4
+    // timeframes × 3 instruments (12 combinations), replacing the old
+    // 3 daily-only trigger functions. HOURLY gets its own, faster cadence
+    // (10min, no close-gate — dedup by hour-key does the throttling);
+    // DAILY/WEEKLY/MONTHLY share the close-gated 15min cadence (checking
+    // frequently is cheap since the gate itself blocks almost every call
+    // until the relevant close-time).
+    let _exhaustionTickOffset = 170;
+    for (const instrument of ['NIFTY', 'CRUDE', 'BITCOIN']) {
+        for (const timeframe of EXHAUSTION_TIMEFRAMES) {
+            const cadenceMs = timeframe === 'HOURLY' ? 10 * 60 * 1000 : 15 * 60 * 1000;
+            const tick = () => checkExhaustionReversalTrigger(instrument, timeframe).catch(e => console.warn(`[Exhaustion-Reversal ${timeframe} ${instrument}] tick error:`, e.message));
+            setTimeout(() => { tick(); setInterval(tick, cadenceMs); }, _exhaustionTickOffset * 1000);
+            _exhaustionTickOffset += 3; // stagger each combination's first check by 3s
+        }
+    }
+    const exhaustionEvalTick = () => evaluateExhaustionReversalOutcomes().catch(e => console.warn('[Exhaustion-Reversal] evaluate tick error:', e.message));
+    setTimeout(() => { exhaustionEvalTick(); setInterval(exhaustionEvalTick, 30 * 60 * 1000); }, 225 * 1000);
     // 30 Sep — vol-adjusted Coach experiment (NIFTY Fast Momentum only).
     // Offset 15s after the normal finalize tick so it always finds
     // already-finalized rows to work from (reuses their path data).

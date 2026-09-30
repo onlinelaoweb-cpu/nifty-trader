@@ -71,10 +71,14 @@ async function fetchFromYahoo(days = 365) {
         'Referer'        : 'https://finance.yahoo.com/',
     };
 
-    // Try both Yahoo endpoints — one usually works on Railway
+    // 30 Sep — extended 1y→5y. Needed for the new monthly-timeframe
+    // Exhaustion-Reversal trigger: RSI(14) on monthly candles needs 14+
+    // months of history, more than the old 1y range provided. 5y gives
+    // comfortable headroom (60 monthly candles) for both RSI-warmup and
+    // the peak/trough lookback window on top of it.
     const URLS = [
-        `https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=1y`,
-        `https://query2.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=1y`,
+        `https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=5y`,
+        `https://query2.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=5y`,
     ];
 
     for (const url of URLS) {
@@ -201,10 +205,13 @@ async function initHistoricalData() {
     const count = await getDBRowCount();
     console.log(`[HistData] DB has ${count} daily candles`);
 
-    if (count < 200) {
-        // Need to seed — fetch 1 year from Yahoo
-        console.log('[HistData] Seeding 1 year of data from Yahoo Finance...');
-        const candles = await fetchFromYahoo(365);
+    // 30 Sep — raised 200→1000: an existing DB with ~252 rows (the old
+    // 1-year seed) must be detected as insufficient now and re-seeded with
+    // the fuller 5-year history, not skipped as "already enough".
+    if (count < 1000) {
+        // Need to seed — fetch 5 years from Yahoo
+        console.log('[HistData] Seeding 5 years of data from Yahoo Finance...');
+        const candles = await fetchFromYahoo(1825);
         if (candles.length > 0) {
             await saveCandles(candles);
             console.log(`[HistData] ✅ Seeded ${candles.length} candles (${candles[0].date} → ${candles[candles.length-1].date})`);
@@ -218,7 +225,7 @@ async function initHistoricalData() {
     }
 
     // Load into memory cache
-    _histCache   = await loadFromDB(365);
+    _histCache   = await loadFromDB(1825);
     _histCacheAt = Date.now();
     console.log(`[HistData] Memory cache loaded: ${_histCache.length} candles`);
 }
@@ -258,7 +265,7 @@ async function dailyTopUp() {
     if (candles.length > 0) {
         await saveCandles(candles);
         // Refresh memory cache
-        _histCache   = await loadFromDB(365);
+        _histCache   = await loadFromDB(1825);
         _histCacheAt = Date.now();
         console.log(`[HistData] Daily top-up complete — cache now ${_histCache.length} candles`);
     }
@@ -270,7 +277,7 @@ async function getHistoricalCandles(days = 252) {
         return _histCache.slice(-days);
     }
     // Reload
-    _histCache   = await loadFromDB(365);
+    _histCache   = await loadFromDB(1825);
     _histCacheAt = Date.now();
     return _histCache.slice(-days);
 }
