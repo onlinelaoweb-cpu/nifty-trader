@@ -1403,10 +1403,10 @@ async function fetchCrudePCR(spotPrice = null) {
             }
         }
 
-        let atmCEpremium = null, atmPEpremium = null;
+        let atmCEpremium = null, atmPEpremium = null, atmStrike = null;
         if (spotPrice > 0 && Array.isArray(d.data.optionsChain)) {
             const strikeStep = 50;
-            const atmStrike = Math.round(spotPrice / strikeStep) * strikeStep;
+            atmStrike = Math.round(spotPrice / strikeStep) * strikeStep;
             for (const row of d.data.optionsChain) {
                 if (Number(row.strike_price) !== atmStrike) continue;
                 const ltp = Number(row.ltp || 0);
@@ -1415,7 +1415,7 @@ async function fetchCrudePCR(spotPrice = null) {
             }
         }
 
-        return { pcr, callOi, putOi, symbol: fyersSymbol, atmCEpremium, atmPEpremium, strikes, chainId: fyersSymbol };
+        return { pcr, callOi, putOi, symbol: fyersSymbol, atmCEpremium, atmPEpremium, strikes, chainId: fyersSymbol, atmStrike };
     } catch (e) {
         console.warn('[Crude PCR] error:', e.response?.status || e.message);
         return null;

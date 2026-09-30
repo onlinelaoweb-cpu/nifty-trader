@@ -469,10 +469,13 @@ let atmCEpremiumOpen = null, atmPEpremiumOpen = null, premiumOpenDate = null;
 // rolling windows in this file); resets alongside atmCEpremiumOpen/
 // atmPEpremiumOpen on a new trading day.
 let ceOptionPremiumSeries = [], peOptionPremiumSeries = [];
+// 30 Sep (Opt RSI Divergence structural fix) — see updateOptionFlow() below.
+let lastOptFlowStrike = null;
 // 23 Sep — same idea, crude's own ATM CE/PE premium series (fed by the
 // crude PCR interval, ~90s cadence — slower warm-up than NIFTY's 30s, but
 // same RSI(9) mechanism).
 let crudeCEOptionPremiumSeries = [], crudePEOptionPremiumSeries = [];
+let lastCrudeOptFlowStrike = null; // 30 Sep — see the NIFTY note on updateOptionFlow() for why this exists
 let crudePrevCloseDate = null; // 23 Sep — day-cache guard for crude prevClose fetch
 let crudeVolumeBaselineSamples = []; // 24 Sep — rolling baseline for Crude Volume Confirmation
 let lastMTFAlertAt=0, lastMTFAlertSignal='';  // cooldown: 30 min between same-direction MTF alerts
@@ -804,16 +807,31 @@ function trackPCRHistory(pcr) {
 // _pcrTimeToMinutes(), _linRegSlope(), calcPCRSlope() — moved to
 // src/utils/pureCalc.js (13 Sep refactor, Phase 1), imported above.
 
-function updateOptionFlow(atmCE, atmPE) {
+function updateOptionFlow(atmCE, atmPE, atmStrike = null) {
     // Capture the day's FIRST valid ATM premium reading — static reference for
     // the rest of the session, used by the Option Premium Filter below.
     const todayStr = getIST().toISOString().slice(0, 10);
     if (premiumOpenDate !== todayStr) {
         atmCEpremiumOpen = null; atmPEpremiumOpen = null; premiumOpenDate = todayStr;
-        ceOptionPremiumSeries = []; peOptionPremiumSeries = []; // 23 Sep — reset alongside the day-open reference
+        ceOptionPremiumSeries = []; peOptionPremiumSeries = []; lastOptFlowStrike = null; // 23 Sep — reset alongside the day-open reference
     }
     if (atmCEpremiumOpen === null && atmCE > 0) atmCEpremiumOpen = atmCE;
     if (atmPEpremiumOpen === null && atmPE > 0) atmPEpremiumOpen = atmPE;
+    // 30 Sep (Opt RSI Divergence structural fix) — ATM strike rolls with
+    // spot (50-point steps, easily crossed within a 3min window on a
+    // trending day). Before this fix, the series just kept whatever
+    // premium was "current ATM" each poll, so a roll spliced one strike's
+    // premium onto another's mid-series — a discontinuity that RSI reads
+    // as a big, fake momentum swing, unrelated to real option-flow
+    // momentum. That's a live candidate for why direction accuracy on
+    // this trigger sits at ~coin-flip: reset the series on any roll so
+    // RSI only ever sees one continuous strike's actual price history.
+    if (atmStrike != null) {
+        if (lastOptFlowStrike !== null && atmStrike !== lastOptFlowStrike) {
+            ceOptionPremiumSeries = []; peOptionPremiumSeries = [];
+        }
+        lastOptFlowStrike = atmStrike;
+    }
     // 23 Sep — feed the rolling series for Option RSI Divergence.
     if (atmCE > 0) { ceOptionPremiumSeries.push(atmCE); if (ceOptionPremiumSeries.length > 60) ceOptionPremiumSeries.shift(); }
     if (atmPE > 0) { peOptionPremiumSeries.push(atmPE); if (peOptionPremiumSeries.length > 60) peOptionPremiumSeries.shift(); }
@@ -6867,6 +6885,13 @@ async function refreshBitcoin() {
             if (chain) {
                 marketState.bitcoin.pcr = chain;
                 // 26 Sep — feed the rolling series for Bitcoin Option RSI Divergence.
+                // 30 Sep fix — reset on an ATM strike roll (see NIFTY's
+                // updateOptionFlow note); chain.atmStrike already exposed
+                // by fetchDeltaOptionChain.
+                if (chain.atmStrike != null && lastBitcoinOptFlowStrike !== null && chain.atmStrike !== lastBitcoinOptFlowStrike) {
+                    bitcoinCEOptionPremiumSeries = []; bitcoinPEOptionPremiumSeries = [];
+                }
+                if (chain.atmStrike != null) lastBitcoinOptFlowStrike = chain.atmStrike;
                 if (chain.atmCEpremium > 0) { bitcoinCEOptionPremiumSeries.push(chain.atmCEpremium); if (bitcoinCEOptionPremiumSeries.length > 60) bitcoinCEOptionPremiumSeries.shift(); }
                 if (chain.atmPEpremium > 0) { bitcoinPEOptionPremiumSeries.push(chain.atmPEpremium); if (bitcoinPEOptionPremiumSeries.length > 60) bitcoinPEOptionPremiumSeries.shift(); }
             }
@@ -6903,6 +6928,7 @@ const BITCOIN_FAST_MOM_COOLDOWN_MS = 20 * 60 * 1000;
 let lastBitcoinFastMomentumAlertAt = 0, lastBitcoinFastMomentumDirection = null;
 // 26 Sep — state for the 5 remaining Bitcoin exploratory triggers.
 let bitcoinCEOptionPremiumSeries = [], bitcoinPEOptionPremiumSeries = [];
+let lastBitcoinOptFlowStrike = null; // 30 Sep — see the NIFTY note on updateOptionFlow() for why this exists
 let bitcoinVolumeBaselineSamples = [];
 let _bitcoinTrendRiderLastAlert = null;
 let lastBitcoinMurarkaLoggedSide = null;
@@ -7259,7 +7285,7 @@ async function syncOptionFlowFast() {
     try {
         const pcrState = getPCRState();
         if (pcrState && (pcrState.atmCEpremium || pcrState.atmPEpremium)) {
-            updateOptionFlow(pcrState.atmCEpremium, pcrState.atmPEpremium);
+            updateOptionFlow(pcrState.atmCEpremium, pcrState.atmPEpremium, pcrState.atm);
             await updateOpenTradesMTM();
         }
     } catch (e) {
@@ -12397,6 +12423,13 @@ function startPollingIntervals() {
             const result = await fetchCrudePCR(marketState.crudeoil?.price);
             if (result) marketState.crudeoil.pcr = result;
             // 23 Sep — feed the rolling series for Crude Option RSI Divergence.
+            // 30 Sep fix — reset on an ATM strike roll (see NIFTY's
+            // updateOptionFlow note); result.atmStrike now exposed by
+            // fetchCrudePCR for exactly this.
+            if (result?.atmStrike != null && lastCrudeOptFlowStrike !== null && result.atmStrike !== lastCrudeOptFlowStrike) {
+                crudeCEOptionPremiumSeries = []; crudePEOptionPremiumSeries = [];
+            }
+            if (result?.atmStrike != null) lastCrudeOptFlowStrike = result.atmStrike;
             if (result?.atmCEpremium > 0) { crudeCEOptionPremiumSeries.push(result.atmCEpremium); if (crudeCEOptionPremiumSeries.length > 60) crudeCEOptionPremiumSeries.shift(); }
             if (result?.atmPEpremium > 0) { crudePEOptionPremiumSeries.push(result.atmPEpremium); if (crudePEOptionPremiumSeries.length > 60) crudePEOptionPremiumSeries.shift(); }
             // 23 Sep — crude prevClose, for a NIFTY-style day-change
