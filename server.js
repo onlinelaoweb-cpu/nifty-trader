@@ -5135,10 +5135,16 @@ function getStrikePremium(instrument, direction, strike, chainId) {
 // the trigger level in either direction between samples. This is a
 // reasonable approximation given the sampling granularity, not a bug — it's
 // disclosed here and in the exposed API/UI, not hidden.
-function simulateTradeCoach(entryPremium, pathSamples) {
+// 30 Sep — refactored into a core taking explicit thresholds, so the
+// volatility-adjusted experiment below (simulateTradeCoachVolAdjusted) reuses
+// the exact same tested state machine instead of a risky separate copy.
+// simulateTradeCoach() below calls this with the original hardcoded
+// -20/20/30/40 defaults — behavior for every existing caller is unchanged.
+function simulateTradeCoachCore(entryPremium, pathSamples, thresholds) {
     if (!(entryPremium > 0) || !pathSamples?.length) return null;
+    const { slPct = -20, breakevenAt = 20, halfBookAt = 30, fullExitAt = 40 } = thresholds || {};
     let remaining = 100;   // % of position still held
-    let slLevel = -20;     // current SL, in % from entry
+    let slLevel = slPct;   // current SL, in % from entry
     let realizedPct = 0;   // weighted P&L contribution from exited portions
     let exitReason = null;
 
@@ -5152,17 +5158,17 @@ function simulateTradeCoach(entryPremium, pathSamples) {
             exitReason = slLevel === 0 ? 'breakeven_stop' : 'stop_loss';
             break;
         }
-        if (pct >= 40) {
+        if (pct >= fullExitAt) {
             realizedPct += (remaining / 100) * pct;
             remaining = 0;
             exitReason = 'full_target';
             break;
         }
-        if (remaining === 100 && pct >= 30) {
+        if (remaining === 100 && pct >= halfBookAt) {
             realizedPct += 0.5 * pct; // book 50% at this level
             remaining = 50;
         }
-        if (slLevel === -20 && pct >= 20) {
+        if (slLevel === slPct && pct >= breakevenAt) {
             slLevel = 0; // breakeven-lock
         }
     }
@@ -5177,6 +5183,113 @@ function simulateTradeCoach(entryPremium, pathSamples) {
     }
 
     return { coachResult: parseFloat(realizedPct.toFixed(2)), coachExitReason: exitReason };
+}
+
+function simulateTradeCoach(entryPremium, pathSamples) {
+    return simulateTradeCoachCore(entryPremium, pathSamples);
+}
+
+// ── Volatility-adjusted Trade-Coach experiment (30 Sep) ──────────────────────
+// Scoped to NIFTY Fast Momentum ONLY, and fully separate from the columns
+// above — coach_result/coach_exit_reason (and every other strategy's
+// numbers) are never touched by any of this. Why this one: it's the
+// strategy where the case for volatility-adjusting is strongest AND
+// checkable — 60% direction accuracy (53 decided) but a near-flat -0.3%
+// Trade-Coach average, the exact signature of a fixed exit rule not
+// fitting the instrument's actual volatility on a given day, rather than
+// the entry signal being weak. Idea: scale the -20/20/30/40 grid by how
+// volatile the option's own premium was right at entry, relative to this
+// strategy's own running-average entry volatility — so a calm-day trade
+// gets a tighter grid (less room needed) and a volatile-day trade gets a
+// wider one (less likely to get stopped by ordinary noise), instead of one
+// flat grid pretending every day is equally volatile.
+const VOLADJ_INSTRUMENT = 'NIFTY';
+const VOLADJ_SOURCE     = 'Fast Momentum';
+const VOLADJ_MIN_RATIO  = 0.5;   // clamp — a single noisy vol reading shouldn't produce an absurd grid
+const VOLADJ_MAX_RATIO  = 2.5;
+const VOLADJ_MIN_BASELINE_SAMPLES = 5; // don't scale off a baseline computed from a handful of rows
+
+// Trailing realized volatility of a premium series: stdev of % changes
+// between consecutive samples, over the last `n` samples available. Returns
+// null if there isn't enough history yet (matches this codebase's pattern
+// of returning null rather than a misleading number on insufficient data).
+function trailingPremiumVolPct(series, n = 10) {
+    if (!Array.isArray(series) || series.length < 3) return null;
+    const take = series.slice(-Math.min(n + 1, series.length));
+    const rets = [];
+    for (let i = 1; i < take.length; i++) {
+        if (!(take[i - 1] > 0)) continue;
+        rets.push(((take[i] - take[i - 1]) / take[i - 1]) * 100);
+    }
+    if (rets.length < 2) return null;
+    const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+    const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / rets.length;
+    return Math.sqrt(variance);
+}
+
+// Same instrument/direction → in-memory premium series mapping used by the
+// Opt RSI Divergence trigger (now roll-aware, see updateOptionFlow note) —
+// reused here rather than re-fetched, since it's already the live,
+// continuous-per-strike series for exactly this purpose.
+function getEntryVolSeries(instrument, direction) {
+    const wantCE = direction === 'BULLISH';
+    if (instrument === 'NIFTY') return wantCE ? ceOptionPremiumSeries : peOptionPremiumSeries;
+    if (instrument === 'CRUDE') return wantCE ? crudeCEOptionPremiumSeries : crudePEOptionPremiumSeries;
+    if (instrument === 'BITCOIN') return wantCE ? bitcoinCEOptionPremiumSeries : bitcoinPEOptionPremiumSeries;
+    return null;
+}
+
+function simulateTradeCoachVolAdjusted(entryPremium, pathSamples, volRatio) {
+    const r = Math.max(VOLADJ_MIN_RATIO, Math.min(VOLADJ_MAX_RATIO, volRatio));
+    return simulateTradeCoachCore(entryPremium, pathSamples, {
+        slPct: -20 * r, breakevenAt: 20 * r, halfBookAt: 30 * r, fullExitAt: 40 * r,
+    });
+}
+
+// Runs alongside finalizeCoachOutcomes but touches NOTHING it touches — a
+// disjoint set of columns (coach_result_voladj / coach_exit_reason_voladj),
+// filtered to rows the normal pass has ALREADY finalized (so it reuses the
+// same signal_outcome_path data, no extra sampling needed) for NIFTY Fast
+// Momentum only. If a row has no entry_vol_pct (fired before this feature,
+// or the trailing series was too short at lock time), it's left alone —
+// same "honest gap" philosophy as the rest of this pipeline.
+async function finalizeVolAdjustedCoach() {
+    if (!dbPool) return;
+    try {
+        const baselineRow = await dbPool.query(
+            `SELECT AVG(entry_vol_pct) AS avg_vol, COUNT(*) AS n FROM signal_outcomes
+             WHERE instrument = $1 AND source = $2 AND entry_vol_pct IS NOT NULL`,
+            [VOLADJ_INSTRUMENT, VOLADJ_SOURCE]
+        );
+        const baseline = baselineRow.rows[0];
+        if (!baseline || Number(baseline.n) < VOLADJ_MIN_BASELINE_SAMPLES || !(Number(baseline.avg_vol) > 0)) return; // not enough data yet to have a meaningful baseline
+
+        const ready = await dbPool.query(
+            `SELECT id, entry_premium, entry_vol_pct FROM signal_outcomes
+             WHERE instrument = $1 AND source = $2
+               AND coach_result IS NOT NULL AND coach_result_voladj IS NULL AND entry_vol_pct IS NOT NULL
+             ORDER BY fire_ts ASC LIMIT 300`,
+            [VOLADJ_INSTRUMENT, VOLADJ_SOURCE]
+        );
+        if (!ready.rows.length) return;
+
+        let done = 0;
+        for (const row of ready.rows) {
+            const path = await dbPool.query(`SELECT premium FROM signal_outcome_path WHERE outcome_id = $1 ORDER BY sample_ts ASC`, [row.id]);
+            if (!path.rows.length) continue; // shouldn't happen (coach_result IS NOT NULL implies it had samples), but stay defensive
+            const ratio = Number(row.entry_vol_pct) / Number(baseline.avg_vol);
+            const sim = simulateTradeCoachVolAdjusted(row.entry_premium, path.rows.map(r => ({ premium: r.premium })), ratio);
+            if (!sim) continue;
+            await dbPool.query(
+                `UPDATE signal_outcomes SET coach_result_voladj = $1, coach_exit_reason_voladj = $2 WHERE id = $3`,
+                [sim.coachResult, sim.coachExitReason, row.id]
+            );
+            done++;
+        }
+        if (done > 0) console.log(`📊 [Vol-Adjusted Coach] Finalized ${done} ${VOLADJ_INSTRUMENT} ${VOLADJ_SOURCE} outcome(s) (baseline vol ${Number(baseline.avg_vol).toFixed(2)}%, n=${baseline.n})`);
+    } catch (e) {
+        console.warn('[Vol-Adjusted Coach] error:', e.message);
+    }
 }
 
 async function harvestSignalOutcomes() {
@@ -5225,10 +5338,11 @@ async function harvestSignalOutcomes() {
         for (const row of needPremium.rows) {
             const lock = lockStrikeAtFire(row.instrument, row.direction, Number(row.entry_price));
             if (!lock) continue;
+            const vol = trailingPremiumVolPct(getEntryVolSeries(row.instrument, row.direction)); // 30 Sep — vol-adjusted Coach experiment
             const r = await dbPool.query(
-                `UPDATE signal_outcomes SET entry_premium = $1, entry_strike = $2, entry_chain_id = $3
-                 WHERE id = $4 AND entry_strike IS NULL AND entry_premium IS NULL`,
-                [lock.premium, lock.strike, lock.chainId, row.id]
+                `UPDATE signal_outcomes SET entry_premium = $1, entry_strike = $2, entry_chain_id = $3, entry_vol_pct = $4
+                 WHERE id = $5 AND entry_strike IS NULL AND entry_premium IS NULL`,
+                [lock.premium, lock.strike, lock.chainId, vol, row.id]
             );
             premiumBackfilled += r.rowCount || 0;
         }
@@ -8904,6 +9018,16 @@ async function initDB() {
         // Trade-Coach stats (their underlying WIN/LOSS/FLAT is unaffected).
         await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS entry_strike NUMERIC`);
         await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS entry_chain_id TEXT`);
+        // 30 Sep — captured alongside the strike lock: trailing realized
+        // volatility (%) of that side's premium at lock time, feeding the
+        // volatility-adjusted Trade-Coach experiment (NIFTY Fast Momentum
+        // only — see simulateTradeCoachVolAdjusted / finalizeVolAdjustedCoach
+        // above). Computed for every row regardless of instrument/source
+        // (cheap, and useful if the experiment ever extends), but only acted
+        // on for the one scoped strategy.
+        await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS entry_vol_pct NUMERIC`);
+        await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS coach_result_voladj NUMERIC`);
+        await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS coach_exit_reason_voladj TEXT`);
         // 27 Sep — Trade-Coach simulation, the user's own ask: "kaise pata
         // chalega agar Trend Rider ya Fast Momentum aaya to kaise entry aur
         // exit karna hai — trust kaise banega". Simulates this app's own,
@@ -10969,7 +11093,15 @@ app.get('/api/signal-accuracy', async (req, res) => {
                 ROUND(AVG(coach_result) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL), 1) AS avg_coach_pct_move,
                 ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY coach_result)
                     FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL))::numeric, 1) AS median_coach_pct_move,
-                COUNT(*) FILTER (WHERE coach_result > 0 AND entry_strike IS NOT NULL) AS coach_profit_count
+                COUNT(*) FILTER (WHERE coach_result > 0 AND entry_strike IS NOT NULL) AS coach_profit_count,
+                -- 30 Sep — vol-adjusted Coach experiment (NIFTY Fast Momentum
+                -- only; null for every other row, so this adds nothing to
+                -- any other strategy's card).
+                COUNT(*) FILTER (WHERE coach_result_voladj IS NOT NULL AND entry_strike IS NOT NULL) AS coachvoladj_resolved_count,
+                ROUND(AVG(coach_result_voladj) FILTER (WHERE coach_result_voladj IS NOT NULL AND entry_strike IS NOT NULL), 1) AS avg_coachvoladj_pct_move,
+                ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY coach_result_voladj)
+                    FILTER (WHERE coach_result_voladj IS NOT NULL AND entry_strike IS NOT NULL))::numeric, 1) AS median_coachvoladj_pct_move,
+                COUNT(*) FILTER (WHERE coach_result_voladj > 0 AND entry_strike IS NOT NULL) AS coachvoladj_profit_count
             FROM signal_outcomes
             GROUP BY source, instrument
             ORDER BY instrument, win_rate_pct DESC NULLS LAST
@@ -12238,6 +12370,11 @@ function startPollingIntervals() {
     setTimeout(() => { sampleOutcomePathsTick(); setInterval(sampleOutcomePathsTick, 5 * 60 * 1000); }, 160 * 1000);
     const finalizeCoachTick = () => finalizeCoachOutcomes().catch(e => console.warn('[Signal Outcomes] coach-finalize tick error:', e.message));
     setTimeout(() => { finalizeCoachTick(); setInterval(finalizeCoachTick, 5 * 60 * 1000); }, 165 * 1000);
+    // 30 Sep — vol-adjusted Coach experiment (NIFTY Fast Momentum only).
+    // Offset 15s after the normal finalize tick so it always finds
+    // already-finalized rows to work from (reuses their path data).
+    const finalizeVolAdjTick = () => finalizeVolAdjustedCoach().catch(e => console.warn('[Vol-Adjusted Coach] tick error:', e.message));
+    setTimeout(() => { finalizeVolAdjTick(); setInterval(finalizeVolAdjTick, 5 * 60 * 1000); }, 180 * 1000);
     // Live scorecard for trigger alerts + auto-mute evaluation (28 Sep) — 5 min
     // cadence, right after the coach finalize so it sees fresh results.
     const scorecardTick = () => refreshTriggerScorecard().catch(e => console.warn('[Trigger Scorecard] tick error:', e.message));

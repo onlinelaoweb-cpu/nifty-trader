@@ -10219,6 +10219,17 @@ async function fetchSignalAccuracy() {
         const coachLine = coachResolved > 0
           ? `<div style="font-size:10px;color:${coachColor};margin-top:3px;">Trade-Coach sim: avg ${avgCoach > 0 ? '+' : ''}${avgCoach}%${medCoach != null ? ` (median ${medCoach > 0 ? '+' : ''}${medCoach}%)` : ''} blended P&L · ${coachProfitCount}/${coachResolved} profitable</div>`
           : '';
+        // 30 Sep — vol-adjusted Coach experiment. Only ever non-null for the
+        // one strategy it's scoped to (NIFTY Fast Momentum), so this line
+        // naturally appears nowhere else.
+        const voladjResolved = Number(row.coachvoladj_resolved_count) || 0;
+        const avgVoladj = row.avg_coachvoladj_pct_move != null ? Number(row.avg_coachvoladj_pct_move) : null;
+        const medVoladj = row.median_coachvoladj_pct_move != null ? Number(row.median_coachvoladj_pct_move) : null;
+        const voladjProfitCount = Number(row.coachvoladj_profit_count) || 0;
+        const voladjColor = avgVoladj == null ? 'var(--dim)' : avgVoladj > 0 ? 'var(--green)' : avgVoladj < 0 ? 'var(--red)' : 'var(--amber)';
+        const coachVoladjLine = voladjResolved > 0
+          ? `<div style="font-size:10px;color:${voladjColor};margin-top:3px;">🧪 Trade-Coach (vol-adj SL/target): avg ${avgVoladj > 0 ? '+' : ''}${avgVoladj}%${medVoladj != null ? ` (median ${medVoladj > 0 ? '+' : ''}${medVoladj}%)` : ''} · ${voladjProfitCount}/${voladjResolved} profitable</div>`
+          : '';
         const mutedTag = row.muted ? ' <span style="font-size:9px;color:var(--red);border:1px solid var(--red);border-radius:4px;padding:0 4px;margin-left:4px;">🔇 MUTED</span>' : '';
         html += `
           <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;">
@@ -10227,6 +10238,7 @@ async function fetchSignalAccuracy() {
               <div style="font-size:10px;color:var(--dim);margin-top:2px;">${wins}W · ${losses}L · ${flats}F${pending ? ` · ${pending} pending` : ''}${lowSample ? ' · low sample' : ''}</div>
               ${premiumLine}
               ${coachLine}
+              ${coachVoladjLine}
             </div>
             <div style="font-family:'Orbitron',monospace;font-size:18px;font-weight:700;color:${color};">${winPct != null ? winPct.toFixed(0) + '%' : '--'}</div>
           </div>`;
