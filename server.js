@@ -4805,12 +4805,50 @@ Agreeing sources (last ${BRAHMASTRA_WINDOW_MIN}min): ${sources.join(', ')}
 // swing the average. Muting can be switched off with env STRATEGY_AUTOMUTE=off.
 const AUTOMUTE_ENABLED      = String(process.env.STRATEGY_AUTOMUTE || 'on').toLowerCase() !== 'off';
 const AUTOMUTE_MIN_SAMPLES  = 30;   // Trade-Coach results needed before a verdict counts
-const AUTOMUTE_MIN_DAYS     = 3;    // 28 Sep fix: also require 3+ distinct trading days — a single
-                                     // trend/chop day can supply 30+ fires for a high-frequency
-                                     // strategy on its own (seen: NIFTY Opt RSI Diverge hit 30 in
-                                     // one session), and a fading strategy having a bad day on a
-                                     // trend day isn't yet evidence it's broken. Days are counted
-                                     // in IST (trading-day terms), not UTC.
+const AUTOMUTE_MIN_DAYS     = 5;    // 28 Sep: 3→ 1 Oct: 5 (one full trading
+                                     // week) — the user's own ask. NIFTY's
+                                     // weekly expiry is Tuesday (corrected —
+                                     // an earlier version of this comment
+                                     // said Thursday, which was wrong):
+                                     // expiry-day behaves differently from
+                                     // early-week (theta-decay, pin-risk,
+                                     // vol-crush), and a 3-day window could
+                                     // land entirely within Mon-Wed/Wed-Fri,
+                                     // never seeing expiry-day at all
+                                     // depending on which 3 days it happens
+                                     // to span. 5 days guarantees the sample
+                                     // spans one complete weekly cycle —
+                                     // for NIFTY specifically.
+                                     // HONEST NOTE: this is ONE uniform
+                                     // constant applied to all 3 instruments,
+                                     // even though their expiry-cadences
+                                     // genuinely differ — Crude is MONTHLY
+                                     // (a 5-day window can never span a full
+                                     // cycle anyway; waiting 20+ days for
+                                     // that would be excessive) and Bitcoin
+                                     // is DAILY (even 1 day already spans a
+                                     // full cycle, so this reasoning doesn't
+                                     // apply there either). The expiry-cycle
+                                     // argument above only strictly holds for
+                                     // NIFTY. For Crude/Bitcoin, the original,
+                                     // generic 28 Sep concern below (regime
+                                     // diversity, not expiry-specifically)
+                                     // is what justifies keeping the same
+                                     // 5-day minimum — not this expiry logic.
+                                     // Original 28 Sep concern unchanged: a
+                                     // single trend/chop day can supply 30+
+                                     // fires for a high-frequency strategy on
+                                     // its own (seen: NIFTY Opt RSI Diverge
+                                     // hit 30 in one session), and a fading
+                                     // strategy having a bad day on a trend
+                                     // day isn't yet evidence it's broken.
+                                     // Days counted in IST (trading-day
+                                     // terms), not UTC. The high-confidence-
+                                     // sample exception below (90+) is
+                                     // untouched by this change — a genuinely
+                                     // bad, high-frequency trigger still
+                                     // mutes fast regardless of the
+                                     // day-count, same as before.
 const AUTOMUTE_UNMUTE_AT    = 2;    // once muted, avg must recover to +2% (not just >0) — prevents flapping
 // 30 Sep — high-confidence early-mute exception, found from a live Telegram
 // export: Opt RSI Divergence hit 110 samples (3.6x the 30-minimum) while
@@ -7418,19 +7456,31 @@ const EXHAUSTION_TF_LABEL = { HOURLY: '1-Hour', DAILY: 'Daily', WEEKLY: 'Weekly'
 // (~5 years) needed for monthly RSI(14). Shared by the DAILY check itself
 // and by WEEKLY/MONTHLY (which resample this same data).
 async function fetchExhaustionDailyCandles(instrument) {
+    // 1 Oct — diagnostic logging added: boot-time "[HistData] Seeding 5
+    // years..." logs are no longer visible in the current log window (too
+    // much time has passed since deploy), making it impossible to confirm
+    // the 5-year retention extension is genuinely working. This logs the
+    // actual candle-count every time, so it's directly verifiable going
+    // forward without needing to catch the boot sequence.
     if (instrument === 'NIFTY') {
-        return await getHistoricalCandles(1500); // full extended cache depth
+        const candles = await getHistoricalCandles(1500); // full extended cache depth
+        console.log(`🧭 [Exhaustion-Reversal] NIFTY daily candles available: ${candles?.length ?? 0}${candles?.length ? ` (${candles[0].date} → ${candles[candles.length-1].date})` : ''}`);
+        return candles;
     }
     if (instrument === 'CRUDE') {
         const fyersSymbol = await getCrudeFyersSymbol();
         if (!fyersSymbol) return null;
         const raw = await fetchFyersIntradayHistory(fyersSymbol, 'D', 1500);
-        return raw?.map(c => ({ time: c.time, close: c.close })).filter(c => c.close > 0) || null;
+        const candles = raw?.map(c => ({ time: c.time, close: c.close })).filter(c => c.close > 0) || null;
+        console.log(`🧭 [Exhaustion-Reversal] CRUDE daily candles available: ${candles?.length ?? 0}`);
+        return candles;
     }
     if (instrument === 'BITCOIN') {
         const nowSec = Math.floor(Date.now() / 1000);
         const raw = await fetchDeltaHistoricalCandles('BTCUSD', '1d', nowSec - 1500 * 86400, nowSec);
-        return raw?.map(c => ({ time: c.time, close: c.close })).filter(c => c.close > 0) || null;
+        const candles = raw?.map(c => ({ time: c.time, close: c.close })).filter(c => c.close > 0) || null;
+        console.log(`🧭 [Exhaustion-Reversal] BITCOIN daily candles available: ${candles?.length ?? 0}`);
+        return candles;
     }
     return null;
 }
