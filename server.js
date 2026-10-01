@@ -3292,6 +3292,55 @@ const FAST_MOMENTUM_MIN_PTS      = 30;  // absolute floor — never fire on tiny
 const FAST_MOMENTUM_ATR_MULT     = 2.5; // volatility-adaptive: move must clear this many ATR(14) units too
 const FAST_MOMENTUM_COOLDOWN_MS  = 20 * 60 * 1000; // shorter than MTF's 60min — this is meant to react faster by nature
 
+// ── Acceleration check (1 Oct) ───────────────────────────────────────────────
+// The user's own finding, confirmed live from today's session: Sustained
+// Drift fired "60.7pts in 35min" at a moment when price had ALREADY moved
+// well beyond that figure within the window — by construction, a windowed-
+// magnitude trigger (Fast Momentum, Sustained Drift) can only ever fire
+// AFTER its full lookback has elapsed, meaning it's confirming a move that's
+// often already mostly done, not catching it early.
+//
+// This splits the lookback window into two halves and checks the SECOND
+// (more recent) half is still contributing a meaningful share of the total
+// move, in the SAME direction as the first half — distinguishing a move
+// that's still actively building from one that already did most of its
+// work early in the window and has since flattened out. Shared across all
+// 6 Fast Momentum / Sustained Drift triggers (NIFTY/Crude/Bitcoin × 2)
+// rather than duplicated per-instrument.
+//
+// candles: chronological array of {close}-shaped 1m candles (any extra
+// fields ignored). windowMin: the trigger's own lookback window, in minutes
+// (must match how far back `candles` was already sliced/indexed by the
+// caller). Returns true (don't block) when there isn't enough data to
+// judge either half — never silently disables a trigger over a data gap.
+const ACCEL_MIN_SECOND_HALF_SHARE = 0.35;
+
+function isStillAccelerating(candles, windowMin) {
+    if (!candles || candles.length < windowMin + 1) return true;
+    const lastIdx = candles.length - 1;
+    const midIdx = lastIdx - Math.floor(windowMin / 2);
+    const startIdx = lastIdx - windowMin;
+    if (midIdx < 0 || startIdx < 0) return true;
+
+    const nowClose = candles[lastIdx].close;
+    const midClose = candles[midIdx].close;
+    const startClose = candles[startIdx].close;
+    if (!(nowClose > 0) || !(midClose > 0) || !(startClose > 0)) return true;
+
+    const firstHalfMove = midClose - startClose;
+    const secondHalfMove = nowClose - midClose;
+
+    // Opposite-signed halves means the window captured a reversal-then-
+    // partial-recovery, not a clean continuing move — treat as NOT
+    // accelerating (the "total move" figure is misleading in this case).
+    if ((firstHalfMove >= 0) !== (secondHalfMove >= 0)) return false;
+
+    const totalAbs = Math.abs(firstHalfMove) + Math.abs(secondHalfMove);
+    if (totalAbs < 1e-6) return false; // no genuine movement either half
+    const secondHalfShare = Math.abs(secondHalfMove) / totalAbs;
+    return secondHalfShare >= ACCEL_MIN_SECOND_HALF_SHARE;
+}
+
 async function checkFastMomentumTrigger() {
     if (!isConfigured() || !isMarketOpen()) return;
     try {
@@ -3317,6 +3366,7 @@ async function checkFastMomentumTrigger() {
         const threshold = atr ? Math.max(FAST_MOMENTUM_MIN_PTS, FAST_MOMENTUM_ATR_MULT * atr) : FAST_MOMENTUM_MIN_PTS;
 
         if (Math.abs(movePts) < threshold) return;
+        if (!isStillAccelerating(candles, FAST_MOMENTUM_WINDOW_MIN)) return;
 
         const direction = movePts > 0 ? 'BULLISH' : 'BEARISH';
 
@@ -3974,6 +4024,7 @@ async function checkCrudeFastMomentumTrigger() {
         const threshold = atrProxy > 0 ? Math.max(CRUDE_FAST_MOM_MIN_PTS, CRUDE_FAST_MOM_ATR_MULT * atrProxy) : CRUDE_FAST_MOM_MIN_PTS;
 
         if (Math.abs(movePts) < threshold) return;
+        if (!isStillAccelerating(candles, CRUDE_FAST_MOM_WINDOW_MIN)) return;
 
         const direction = movePts > 0 ? 'BULLISH' : 'BEARISH';
 
@@ -4041,6 +4092,7 @@ async function checkCrudeSustainedDriftTrigger() {
         const threshold = atrProxy > 0 ? Math.max(CRUDE_SUSTAINED_DRIFT_MIN_PTS, CRUDE_SUSTAINED_DRIFT_ATR_MULT * atrProxy) : CRUDE_SUSTAINED_DRIFT_MIN_PTS;
 
         if (Math.abs(movePts) < threshold) return;
+        if (!isStillAccelerating(candles, CRUDE_SUSTAINED_DRIFT_WINDOW_MIN)) return;
 
         const direction = movePts > 0 ? 'BULLISH' : 'BEARISH';
 
@@ -4695,6 +4747,7 @@ async function checkSustainedDriftTrigger() {
         const threshold = atrProxy > 0 ? Math.max(SUSTAINED_DRIFT_MIN_PTS, SUSTAINED_DRIFT_ATR_MULT * atrProxy) : SUSTAINED_DRIFT_MIN_PTS;
 
         if (Math.abs(movePts) < threshold) return;
+        if (!isStillAccelerating(candles, SUSTAINED_DRIFT_WINDOW_MIN)) return;
 
         const direction = movePts > 0 ? 'BULLISH' : 'BEARISH';
 
@@ -4805,50 +4858,30 @@ Agreeing sources (last ${BRAHMASTRA_WINDOW_MIN}min): ${sources.join(', ')}
 // swing the average. Muting can be switched off with env STRATEGY_AUTOMUTE=off.
 const AUTOMUTE_ENABLED      = String(process.env.STRATEGY_AUTOMUTE || 'on').toLowerCase() !== 'off';
 const AUTOMUTE_MIN_SAMPLES  = 30;   // Trade-Coach results needed before a verdict counts
-const AUTOMUTE_MIN_DAYS     = 5;    // 28 Sep: 3→ 1 Oct: 5 (one full trading
-                                     // week) — the user's own ask. NIFTY's
-                                     // weekly expiry is Tuesday (corrected —
-                                     // an earlier version of this comment
-                                     // said Thursday, which was wrong):
-                                     // expiry-day behaves differently from
-                                     // early-week (theta-decay, pin-risk,
-                                     // vol-crush), and a 3-day window could
-                                     // land entirely within Mon-Wed/Wed-Fri,
-                                     // never seeing expiry-day at all
-                                     // depending on which 3 days it happens
-                                     // to span. 5 days guarantees the sample
-                                     // spans one complete weekly cycle —
-                                     // for NIFTY specifically.
-                                     // HONEST NOTE: this is ONE uniform
-                                     // constant applied to all 3 instruments,
-                                     // even though their expiry-cadences
-                                     // genuinely differ — Crude is MONTHLY
-                                     // (a 5-day window can never span a full
-                                     // cycle anyway; waiting 20+ days for
-                                     // that would be excessive) and Bitcoin
-                                     // is DAILY (even 1 day already spans a
-                                     // full cycle, so this reasoning doesn't
-                                     // apply there either). The expiry-cycle
-                                     // argument above only strictly holds for
-                                     // NIFTY. For Crude/Bitcoin, the original,
-                                     // generic 28 Sep concern below (regime
-                                     // diversity, not expiry-specifically)
-                                     // is what justifies keeping the same
-                                     // 5-day minimum — not this expiry logic.
-                                     // Original 28 Sep concern unchanged: a
-                                     // single trend/chop day can supply 30+
-                                     // fires for a high-frequency strategy on
-                                     // its own (seen: NIFTY Opt RSI Diverge
-                                     // hit 30 in one session), and a fading
-                                     // strategy having a bad day on a trend
-                                     // day isn't yet evidence it's broken.
-                                     // Days counted in IST (trading-day
-                                     // terms), not UTC. The high-confidence-
-                                     // sample exception below (90+) is
-                                     // untouched by this change — a genuinely
-                                     // bad, high-frequency trigger still
-                                     // mutes fast regardless of the
-                                     // day-count, same as before.
+// 1 Oct — replaced the single uniform AUTOMUTE_MIN_DAYS with an instrument-
+// specific lookup. History: 28 Sep (3) → 1 Oct (5, one NIFTY weekly-expiry
+// cycle) → user asked for 20 (≈1 month) for more rigorous validation → on
+// reflection together, settled on per-instrument values instead of one
+// blanket number, since a uniform 20-day gate would have let a genuinely
+// bad, LOW-frequency NIFTY/Bitcoin trigger keep firing noisy alerts for up
+// to ~1.5-2 months before muting (the 90-sample exception only helps HIGH-
+// frequency bad triggers, unaffected either way) — directly working against
+// the original noise-reduction goal that started all of this. Matched to
+// each instrument's own actual expiry-cadence instead:
+//   NIFTY:   10 days (~2 of its own weekly, Tuesday-expiry cycles)
+//   CRUDE:   20 days (closest of the three to actually spanning Crude's
+//            own MONTHLY-expiry cycle — this is the one case where "20"
+//            is genuinely well-justified, not just "more data")
+//   BITCOIN: 5 days (daily-expiry means even this is generous; no reason
+//            to make a low-frequency-but-bad Bitcoin trigger wait as long
+//            as Crude needs to)
+// Falls back to 10 for any instrument not in this map (shouldn't happen
+// with the current 3, but keeps this from silently breaking if a 4th
+// instrument is ever added here before this map is updated).
+const AUTOMUTE_MIN_DAYS_BY_INSTRUMENT = { NIFTY: 10, CRUDE: 20, BITCOIN: 5 };
+function automuteMinDaysFor(instrument) {
+    return AUTOMUTE_MIN_DAYS_BY_INSTRUMENT[instrument] ?? 10;
+}
 const AUTOMUTE_UNMUTE_AT    = 2;    // once muted, avg must recover to +2% (not just >0) — prevents flapping
 // 30 Sep — high-confidence early-mute exception, found from a live Telegram
 // export: Opt RSI Divergence hit 110 samples (3.6x the 30-minimum) while
@@ -4904,7 +4937,7 @@ async function refreshTriggerScorecard() {
             const dirN = Number(row.dir_n), coachN = Number(row.coach_n), coachDays = Number(row.coach_days) || 0;
             const coachAvg = row.coach_avg == null ? null : Number(row.coach_avg);
             let muted = false;
-            const dayGateSatisfied = coachDays >= AUTOMUTE_MIN_DAYS || coachN >= AUTOMUTE_HIGH_CONFIDENCE_SAMPLES;
+            const dayGateSatisfied = coachDays >= automuteMinDaysFor(row.instrument) || coachN >= AUTOMUTE_HIGH_CONFIDENCE_SAMPLES;
             if (AUTOMUTE_ENABLED && coachN >= AUTOMUTE_MIN_SAMPLES && dayGateSatisfied && coachAvg !== null) {
                 muted = _mutedStrategies.has(key) ? coachAvg < AUTOMUTE_UNMUTE_AT : coachAvg < 0;
             }
@@ -4957,11 +4990,12 @@ function buildTrackRecordBlock(card, agree, disagree) {
         // without clearing 3 days, so it isn't muted yet but also isn't
         // provably positive). Now explicitly branches on the day gate and on
         // the sign of coachAvg, so the label always matches the number.
-        const dayGateSatisfied = card.coachDays >= AUTOMUTE_MIN_DAYS || card.coachN >= AUTOMUTE_HIGH_CONFIDENCE_SAMPLES;
+        const minDaysForThis = automuteMinDaysFor(card.instrument);
+        const dayGateSatisfied = card.coachDays >= minDaysForThis || card.coachN >= AUTOMUTE_HIGH_CONFIDENCE_SAMPLES;
         if (card.coachN < AUTOMUTE_MIN_SAMPLES) {
             lines.push(`🟡 <b>UNPROVEN</b> — ${card.coachN}/${AUTOMUTE_MIN_SAMPLES} trades needed for a verdict. Paper-trade or very small size.`);
         } else if (!dayGateSatisfied) {
-            lines.push(`🟡 <b>BUILDING</b> — ${card.coachN} trades but only ${card.coachDays}/${AUTOMUTE_MIN_DAYS} trading days so far (avg ${sign(card.coachAvg)}${card.coachAvg.toFixed(1)}%). One day isn't a verdict yet — treat with caution.`);
+            lines.push(`🟡 <b>BUILDING</b> — ${card.coachN} trades but only ${card.coachDays}/${minDaysForThis} trading days so far (avg ${sign(card.coachAvg)}${card.coachAvg.toFixed(1)}%). One day isn't a verdict yet — treat with caution.`);
         } else if (card.coachAvg >= 0) {
             lines.push(`🟢 <b>Positive so far</b> over ${card.coachN} trades across ${card.coachDays} days — still not a guarantee.`);
         } else {
@@ -7115,6 +7149,7 @@ async function checkBitcoinFastMomentumTrigger() {
         const threshold = atrProxy > 0 ? Math.max(BITCOIN_FAST_MOM_MIN_PTS, BITCOIN_FAST_MOM_ATR_MULT * atrProxy) : BITCOIN_FAST_MOM_MIN_PTS;
 
         if (Math.abs(movePts) < threshold) return;
+        if (!isStillAccelerating(candles, BITCOIN_FAST_MOM_WINDOW_MIN)) return;
 
         const direction = movePts > 0 ? 'BULLISH' : 'BEARISH';
 
@@ -7390,6 +7425,7 @@ async function checkBitcoinSustainedDriftTrigger() {
         const threshold = atrProxy > 0 ? Math.max(BITCOIN_SUSTAINED_DRIFT_MIN_PTS, BITCOIN_SUSTAINED_DRIFT_ATR_MULT * atrProxy) : BITCOIN_SUSTAINED_DRIFT_MIN_PTS;
 
         if (Math.abs(movePts) < threshold) return;
+        if (!isStillAccelerating(candles, BITCOIN_SUSTAINED_DRIFT_WINDOW_MIN)) return;
 
         const direction = movePts > 0 ? 'BULLISH' : 'BEARISH';
 
@@ -10079,7 +10115,30 @@ async function updateSignalPerformance() {
             if (curDelta != null && curRSI != null) {
                 const deltaWeaker = rec.signal === 'BUY CALL' ? (curDelta < rec.entryDelta - 15) : (curDelta > rec.entryDelta + 15);
                 const rsiWeaker   = rec.signal === 'BUY CALL' ? (curRSI < rec.entryRSI - 5)       : (curRSI > rec.entryRSI + 5);
-                if (deltaWeaker && rsiWeaker) {
+                // 1 Oct — OI-wall awareness, the user's own finding from a
+                // live session: this warning previously fired purely off
+                // Delta/RSI decay, with ZERO awareness of OI-support/
+                // resistance (CE-Wall/PE-Wall) — and suppressed what turned
+                // out to be a genuinely correct PUT position right before a
+                // 300+ point continuation once OI-support actually broke
+                // later that same day. A Delta/RSI wobble while price is
+                // still comfortably on the correct side of the OPPOSITE
+                // wall (the genuine invalidation level) is normal
+                // retracement noise, not a weakening setup — so now the
+                // warning only fires once price is ALSO testing/crossing
+                // that opposite wall. Falls back to firing on Delta+RSI
+                // alone (old behavior) if the wall data isn't available,
+                // so this never silently disables the warning.
+                let oiInvalidated = true; // default true = old behavior if wall data missing
+                const pcrForWall = getPCRState();
+                if (live > 0) {
+                    if (rec.signal === 'BUY PUT' && pcrForWall?.ceWall > 0) {
+                        oiInvalidated = live >= pcrForWall.ceWall - 20; // within 20pts of reclaiming CE-Wall resistance
+                    } else if (rec.signal === 'BUY CALL' && pcrForWall?.peWall > 0) {
+                        oiInvalidated = live <= pcrForWall.peWall + 20; // within 20pts of breaking PE-Wall support
+                    }
+                }
+                if (deltaWeaker && rsiWeaker && oiInvalidated) {
                     rec.exitWarned = true;
                     const risk = rec.entry - rec.sl;
                     const rrAchieved = (live && risk > 0) ? (live - rec.entry) / risk : 0;
