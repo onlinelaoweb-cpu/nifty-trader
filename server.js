@@ -11610,6 +11610,57 @@ const COACH_GRID_CANDIDATES = {
 };
 const COACH_BACKTEST_MIN_N = 30; // below this, a "best grid" call isn't trustworthy
 
+// 2 Oct — out-of-sample check. Picking the best of 6 grids on the same data
+// it's scored on overstates how good that grid really is (selection bias).
+// This sorts one instrument's outcomes chronologically, picks the best
+// grid on the OLDER half only, then scores it on the NEWER half it never
+// saw. A grid is only worth taking live if it still beats STANDARD there.
+// Pure function (no DB) so it's directly testable.
+function coachGridOutOfSample(list) {
+    const sorted = [...list].sort((a, b) => a.fireTs - b.fireTs);
+    const half = Math.floor(sorted.length / 2);
+    const train = sorted.slice(0, half), test = sorted.slice(half);
+    const evalSet = (set) => {
+        const out = {};
+        for (const [g, grid] of Object.entries(COACH_GRID_CANDIDATES)) {
+            const vals = []; let sl = 0;
+            for (const o of set) {
+                const sim = simulateTradeCoachCore(o.entryPremium, o.path, grid);
+                if (!sim) continue;
+                vals.push(sim.coachResult);
+                if (sim.coachExitReason === 'stop_loss') sl++;
+            }
+            out[g] = summarizeCoachResults(vals, sl);
+        }
+        return out;
+    };
+    const rank = (s) => Object.entries(s).filter(([, x]) => x.n > 0)
+        .sort((a, b) => (b[1].median - a[1].median) || (b[1].avg - a[1].avg)).map(([g]) => g);
+    const day = (ts) => ts ? new Date(ts).toISOString().slice(0, 10) : null;
+
+    const trainS = evalSet(train), testS = evalSet(test);
+    const trainBest = rank(trainS)[0] || null;
+    const testRanking = rank(testS);
+    const onTest = trainBest ? testS[trainBest] : null, stdTest = testS.STANDARD;
+    const enough = train.length >= COACH_BACKTEST_MIN_N && test.length >= COACH_BACKTEST_MIN_N;
+    let verdict;
+    if (!enough) verdict = `INSUFFICIENT — need ${COACH_BACKTEST_MIN_N}+ in each half (have ${train.length}/${test.length})`;
+    else if (trainBest === 'STANDARD') verdict = 'KEEP_STANDARD — STANDARD was already best on the older half';
+    else if (onTest && stdTest && onTest.median > stdTest.median && onTest.avg >= stdTest.avg) verdict = `HOLDS_UP — ${trainBest} beat STANDARD on unseen data (median AND avg)`;
+    else if (onTest && stdTest && onTest.median > stdTest.median) verdict = `PARTIAL — ${trainBest} beat STANDARD on median but not avg`;
+    else verdict = `FAILS — ${trainBest} did not beat STANDARD on unseen data (likely overfit)`;
+
+    return {
+        trainN: train.length, testN: test.length,
+        trainPeriod: { from: day(train[0]?.fireTs), to: day(train[train.length - 1]?.fireTs) },
+        testPeriod:  { from: day(test[0]?.fireTs),  to: day(test[test.length - 1]?.fireTs) },
+        trainBest, trainBestRankOnTest: trainBest ? testRanking.indexOf(trainBest) + 1 : null,
+        testBest: testRanking[0] || null,
+        trainBestOnTest: onTest, standardOnTest: stdTest,
+        verdict,
+    };
+}
+
 function summarizeCoachResults(vals, slCount) {
     const n = vals.length;
     if (!n) return { n: 0, avg: null, median: null, profitablePct: null, slRatePct: null };
@@ -11632,7 +11683,7 @@ app.get('/api/coach-grid-backtest', async (req, res) => {
         if (req.query.instrument) { params.push(String(req.query.instrument).toUpperCase()); where += ` AND o.instrument = $${params.length}`; }
         if (req.query.source)     { params.push(String(req.query.source));                   where += ` AND o.source = $${params.length}`; }
         const r = await dbPool.query(`
-            SELECT o.id, o.instrument, o.source, o.entry_premium, o.coach_result, p.premium
+            SELECT o.id, o.instrument, o.source, o.entry_premium, o.coach_result, o.fire_ts, p.premium
             FROM signal_outcomes o
             JOIN signal_outcome_path p ON p.outcome_id = o.id
             WHERE ${where}
@@ -11644,7 +11695,7 @@ app.get('/api/coach-grid-backtest', async (req, res) => {
         for (const row of r.rows) {
             if (!outcomes.has(row.id)) {
                 outcomes.set(row.id, { instrument: row.instrument, source: row.source,
-                    entryPremium: Number(row.entry_premium), storedCoach: Number(row.coach_result), path: [] });
+                    entryPremium: Number(row.entry_premium), storedCoach: Number(row.coach_result), fireTs: new Date(row.fire_ts).getTime(), path: [] });
             }
             outcomes.get(row.id).path.push({ premium: Number(row.premium) });
         }
@@ -11682,12 +11733,23 @@ app.get('/api/coach-grid-backtest', async (req, res) => {
             };
         }
 
+        // 2 Oct — ?split=true adds the chronological out-of-sample check
+        // (see coachGridOutOfSample) per instrument.
+        let outOfSample;
+        if (req.query.split === 'true') {
+            const perInst = {};
+            for (const o of outcomes.values()) (perInst[o.instrument] || (perInst[o.instrument] = [])).push(o);
+            outOfSample = {};
+            for (const [inst, list] of Object.entries(perInst)) outOfSample[inst] = coachGridOutOfSample(list);
+        }
+
         res.json({
             success: true,
             outcomesReplayed: outcomes.size,
             standardMatchPct: stdChecked ? +(100 * stdMatched / stdChecked).toFixed(1) : null,
             gridDefinitions: COACH_GRID_CANDIDATES,
             byInstrument: result,
+            ...(outOfSample ? { outOfSample } : {}),
         });
     } catch (e) {
         res.json({ success: false, error: e.message });
