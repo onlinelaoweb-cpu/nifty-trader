@@ -73,15 +73,44 @@ function isCrudeSessionOpen() {
     return m >= 1050 && m <= 1435;                     // 5:30 PM – 11:55 PM IST
 }
 
-// 25 Sep — Bitcoin window, user's own schedule: Mon-Fri 11:59PM-8:55AM
-// (crosses midnight — active from 23:59 tonight through 08:55 tomorrow),
-// full-time Saturday and Sunday. NOTE (flagged to user): this literal
-// reading leaves Monday 00:00-08:55 uncovered — that slot is the tail of
-// SUNDAY night, and Sunday isn't in the "Monday to Friday" night-window
-// list, so it isn't covered by that rule either (Saturday/Sunday's
-// "full-time" is read as ending at Sunday 23:59:59, not bleeding into
-// Monday). If this gap isn't intended, the fix is a one-line change here.
+// 2 Oct — refined again, per the user's own follow-up: instead of fully
+// always-on (previous version, kept below as dead code), explicitly keep
+// NIFTY's own hours Bitcoin-free ("nifty independent rehne do") — active
+// Mon-Fri 16:00 (4PM) through 08:50 next morning (crossing midnight,
+// comfortably covering Crude's own evening session AND the 21:30-22:15 IST
+// move that started this whole change), full-time Sat/Sun, OFF during
+// 08:50-16:00 on weekdays — which covers NIFTY's 9:15-15:30 session with a
+// buffer on both sides.
 function isBitcoinWindowOpen() {
+    const ist = getIST();
+    const day = ist.getDay(); // 0=Sun..6=Sat
+    if (day === 0 || day === 6) return true;           // Full-time Sat & Sun
+    const m = ist.getHours()*60 + ist.getMinutes();
+    if (m >= 960) return true;                          // 16:00 (4PM) onwards tonight
+    if (m <= 530) {                                      // up to 08:50 this morning —
+        const yesterday = (day + 6) % 7;                 // tail of LAST NIGHT's window,
+        // same Monday-morning-gap handling as the original 25 Sep fix:
+        // yesterday===6 (Saturday) can't actually reach here since Sunday
+        // is already caught by the day===0 check above — so this is simply
+        // "yesterday was any day except Saturday".
+        return yesterday <= 5;
+    }
+    return false;                                        // 08:50-16:00 weekdays — NIFTY's own hours, left alone
+}
+
+// Previous "always-on" version (2 Oct, same day) — superseded by the above
+// per the user's immediate follow-up ask to keep NIFTY's hours separate.
+// Kept as dead code, not deleted, for the same reason as the version below
+// it: easy revert if ever needed.
+function _isBitcoinWindowOpen_ALWAYS_ON_2Oct() {
+    return true;
+}
+
+// Original Mon-Fri 23:59-08:55 + full-weekend window logic, preserved
+// below (unreachable, dead code) in case this ever needs reverting —
+// deliberately NOT deleted, given how much back-and-forth tuning went into
+// it (including the 25 Sep Monday-morning-gap fix noted in its own comment).
+function _isBitcoinWindowOpen_ORIGINAL_25Sep() {
     const ist = getIST();
     const day = ist.getDay(); // 0=Sun..6=Sat
     if (day === 0 || day === 6) return true;           // Full-time Sat & Sun

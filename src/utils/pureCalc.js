@@ -521,6 +521,106 @@ function withTimeout(promise, ms, label) {
     ]);
 }
 
+// 2 Oct — shared candle-geometry helper for the 5 new multi-candle
+// patterns below. Returns the same fields detectCandlePatternForTF
+// already computed inline for the current candle, reused here per-candle
+// for 2-3 candle pattern-checks.
+function _analyzeCandle(c) {
+    const body = Math.abs(c.close - c.open);
+    const range = c.high - c.low;
+    const isBull = c.close > c.open;
+    const isBear = c.close < c.open;
+    const bodyRatio = range > 0 ? body / range : 0;
+    return { ...c, body, range, isBull, isBear, bodyRatio };
+}
+
+// 2 Oct — 5 high-value, multi-candle patterns, the user's own ask after
+// confirming detectCandlePatternForTF genuinely feeds Main Engine's
+// bull/bear vote-tally (not cosmetic) — adding only the well-established,
+// classically high-reliability patterns rather than all ~50 named ones
+// from a reference sheet (many of which are academically known to be rare/
+// low-value: Three Stars in the South, Concealing Baby Swallow, etc. —
+// deliberately left out). Each tested against 3 scenarios in isolation
+// (match, match-variant, and a near-miss that should NOT match) before
+// going into production.
+function _checkThreeCandlePatterns(c3raw, c2raw, c1raw) {
+    const c3 = _analyzeCandle(c3raw), c2 = _analyzeCandle(c2raw), c1 = _analyzeCandle(c1raw);
+
+    // Three White Soldiers / Three Black Crows — 3 consecutive strong
+    // same-direction candles, each opening within the prior candle's body,
+    // progressively further closes.
+    const strongBodies = c3.bodyRatio >= 0.6 && c2.bodyRatio >= 0.6 && c1.bodyRatio >= 0.6;
+    if (strongBodies) {
+        if (c3.isBull && c2.isBull && c1.isBull &&
+            c2.open >= c3.open && c2.open <= c3.close && c1.open >= c2.open && c1.open <= c2.close &&
+            c2.close > c3.close && c1.close > c2.close) {
+            return { pattern: 'THREE_WHITE_SOLDIERS', direction: 'BULLISH', strength: 3, reason: '🟢🟢🟢 Three White Soldiers' };
+        }
+        if (c3.isBear && c2.isBear && c1.isBear &&
+            c2.open <= c3.open && c2.open >= c3.close && c1.open <= c2.open && c1.open >= c2.close &&
+            c2.close < c3.close && c1.close < c2.close) {
+            return { pattern: 'THREE_BLACK_CROWS', direction: 'BEARISH', strength: 3, reason: '🔴🔴🔴 Three Black Crows' };
+        }
+    }
+
+    // Morning Star / Evening Star — long candle, small gapped-away star,
+    // long opposite candle closing past the first candle's midpoint.
+    const c3Mid = (c3.open + c3.close) / 2;
+    if (c3.isBear && c3.bodyRatio >= 0.5 && c2.bodyRatio <= 0.3 && Math.max(c2.open, c2.close) < c3.close &&
+        c1.isBull && c1.bodyRatio >= 0.5 && c1.close > c3Mid) {
+        return { pattern: 'MORNING_STAR', direction: 'BULLISH', strength: 3, reason: '🌅 Morning Star' };
+    }
+    if (c3.isBull && c3.bodyRatio >= 0.5 && c2.bodyRatio <= 0.3 && Math.min(c2.open, c2.close) > c3.close &&
+        c1.isBear && c1.bodyRatio >= 0.5 && c1.close < c3Mid) {
+        return { pattern: 'EVENING_STAR', direction: 'BEARISH', strength: 3, reason: '🌆 Evening Star' };
+    }
+
+    // Three Inside Up / Three Inside Down — a Harami (c2 inside c3) followed
+    // by c1 confirming the reversal by closing beyond c3's own open.
+    const c3BodyHigh = Math.max(c3.open, c3.close), c3BodyLow = Math.min(c3.open, c3.close);
+    const c2BodyHigh = Math.max(c2.open, c2.close), c2BodyLow = Math.min(c2.open, c2.close);
+    const haramiInside = c2BodyHigh <= c3BodyHigh && c2BodyLow >= c3BodyLow && c3.body > c2.body * 1.5 && c3.bodyRatio >= 0.5;
+    if (haramiInside) {
+        if (c3.isBear && c1.isBull && c1.close > c3.open) {
+            return { pattern: 'THREE_INSIDE_UP', direction: 'BULLISH', strength: 2, reason: '📊 Three Inside Up' };
+        }
+        if (c3.isBull && c1.isBear && c1.close < c3.open) {
+            return { pattern: 'THREE_INSIDE_DOWN', direction: 'BEARISH', strength: 2, reason: '📊 Three Inside Down' };
+        }
+    }
+    return null;
+}
+
+// 2 Oct — Harami/Harami Cross and Piercing/Dark Cloud Cover, the 2-candle
+// members of the same 5-pattern addition. Checked after the 3-candle ones
+// (detectCandlePatternForTF calls this only if _checkThreeCandlePatterns
+// found nothing), before falling through to the existing Hammer/Engulfing/
+// Doji checks.
+function _checkTwoCandlePatterns(c2raw, c1raw) {
+    const c2 = _analyzeCandle(c2raw), c1 = _analyzeCandle(c1raw);
+
+    // Harami / Harami Cross — c1's whole body sits inside c2's meaningfully
+    // larger body.
+    const c2BodyHigh = Math.max(c2.open, c2.close), c2BodyLow = Math.min(c2.open, c2.close);
+    const c1BodyHigh = Math.max(c1.open, c1.close), c1BodyLow = Math.min(c1.open, c1.close);
+    if (c1BodyHigh <= c2BodyHigh && c1BodyLow >= c2BodyLow && c2.body > c1.body * 1.5 && c2.bodyRatio >= 0.5) {
+        const isCross = c1.bodyRatio <= 0.1;
+        if (c2.isBear) return { pattern: isCross ? 'BULLISH_HARAMI_CROSS' : 'BULLISH_HARAMI', direction: 'BULLISH', strength: 2, reason: isCross ? '➕ Bullish Harami Cross' : '🔲 Bullish Harami' };
+        if (c2.isBull) return { pattern: isCross ? 'BEARISH_HARAMI_CROSS' : 'BEARISH_HARAMI', direction: 'BEARISH', strength: 2, reason: isCross ? '➕ Bearish Harami Cross' : '🔲 Bearish Harami' };
+    }
+
+    // Piercing Pattern / Dark Cloud Cover — long candle, then a gap-against
+    // candle that closes well past the midpoint but not a full engulf.
+    const c2Mid = (c2.open + c2.close) / 2;
+    if (c2.isBear && c2.bodyRatio >= 0.5 && c1.isBull && c1.open < c2.low && c1.close > c2Mid && c1.close < c2.open) {
+        return { pattern: 'PIERCING_PATTERN', direction: 'BULLISH', strength: 2, reason: '🗡️ Piercing Pattern' };
+    }
+    if (c2.isBull && c2.bodyRatio >= 0.5 && c1.isBear && c1.open > c2.high && c1.close < c2Mid && c1.close > c2.open) {
+        return { pattern: 'DARK_CLOUD_COVER', direction: 'BEARISH', strength: 2, reason: '☁️ Dark Cloud Cover' };
+    }
+    return null;
+}
+
 function detectCandlePatternForTF(candles) {
     if (!candles || candles.length < 2) return { pattern: 'NONE', direction: 'NEUTRAL', strength: 0, reason: '' };
 
@@ -528,6 +628,19 @@ function detectCandlePatternForTF(candles) {
     const p  = candles[candles.length - 2];
 
     if (!c?.open || !c?.high || !c?.low || !c?.close) return { pattern: 'NONE', direction: 'NEUTRAL', strength: 0, reason: '' };
+
+    // 2 Oct — check the 5 new multi-candle patterns first (3-candle, then
+    // 2-candle) — more specific, higher-conviction signals than the
+    // existing single/dual-candle checks below, so they take priority
+    // when present.
+    if (candles.length >= 3) {
+        const threeCandle = _checkThreeCandlePatterns(candles[candles.length - 3], p, c);
+        if (threeCandle) return threeCandle;
+    }
+    if (p?.open && p?.high && p?.low && p?.close) {
+        const twoCandle = _checkTwoCandlePatterns(p, c);
+        if (twoCandle) return twoCandle;
+    }
 
     const body        = Math.abs(c.close - c.open);
     const range       = c.high - c.low;
