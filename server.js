@@ -5293,8 +5293,37 @@ function simulateTradeCoachCore(entryPremium, pathSamples, thresholds) {
     return { coachResult: parseFloat(realizedPct.toFixed(2)), coachExitReason: exitReason };
 }
 
-function simulateTradeCoach(entryPremium, pathSamples) {
-    return simulateTradeCoachCore(entryPremium, pathSamples);
+// 2 Oct — LIVE grid is now instrument-specific, chosen by the out-of-sample
+// grid backtest (/api/coach-grid-backtest?split=true) over 868 replayed
+// outcomes (faithfulness check: STANDARD replay matched stored results
+// 100%). Picked on the OLDER half, confirmed on the NEWER unseen half:
+//   BITCOIN → WIDE_SL     test median -20.6% → -7.6%, avg -3.8% → -1.3%,
+//                         SL-rate 54% → 32% — rank 1 on BOTH halves; the
+//                         -20% SL was simply too tight for BTC volatility.
+//   NIFTY   → QUICK_SCALP test median -3.9% → -1.3%, avg ~0% → +0.73%,
+//                         profitable 39% → 47%. The gain comes mostly from
+//                         booking EARLIER (NEAR_TARGET, same -20% SL but
+//                         earlier booking, captured most of it too) — NIFTY
+//                         moves tend to fade before reaching +30-40%.
+//   CRUDE   → STANDARD    every grid within noise of each other (identical
+//                         31% profitable on test) — no evidence to change.
+// HONEST LIMITS: only ~5 days of data (28 Sep-2 Oct), likely one market
+// regime; and no grid made any median positive — grids shrink losses,
+// they don't create edge. Fully reversible: paths are stored, so
+// recomputeCoachForLiveGrid() re-scores all history under whatever grid
+// is set here, keeping the track record and auto-mute consistent.
+const COACH_LIVE_GRID = {
+    NIFTY:   { name: 'QUICK_SCALP', slPct: -15, breakevenAt: 10, halfBookAt: 15, fullExitAt: 25 },
+    BITCOIN: { name: 'WIDE_SL',     slPct: -30, breakevenAt: 20, halfBookAt: 30, fullExitAt: 40 },
+    CRUDE:   { name: 'STANDARD',    slPct: -20, breakevenAt: 20, halfBookAt: 30, fullExitAt: 40 },
+};
+const COACH_DEFAULT_GRID = { name: 'STANDARD', slPct: -20, breakevenAt: 20, halfBookAt: 30, fullExitAt: 40 };
+function coachGridFor(instrument) {
+    return COACH_LIVE_GRID[instrument] || COACH_DEFAULT_GRID;
+}
+
+function simulateTradeCoach(entryPremium, pathSamples, instrument) {
+    return simulateTradeCoachCore(entryPremium, pathSamples, coachGridFor(instrument));
 }
 
 // ── Volatility-adjusted Trade-Coach experiment (30 Sep) ──────────────────────
@@ -5627,7 +5656,7 @@ async function finalizeCoachOutcomes() {
     if (!dbPool) return;
     try {
         const ready = await dbPool.query(`
-            SELECT id, entry_premium FROM signal_outcomes
+            SELECT id, instrument, entry_premium FROM signal_outcomes
             WHERE entry_premium IS NOT NULL AND entry_strike IS NOT NULL AND coach_result IS NULL AND coach_exit_reason IS NULL
               AND fire_ts <= NOW() - INTERVAL '${COACH_TRACKING_WINDOW_MIN} minutes'
             ORDER BY fire_ts ASC
@@ -5646,17 +5675,83 @@ async function finalizeCoachOutcomes() {
                 abandoned++;
                 continue;
             }
-            const sim = simulateTradeCoach(row.entry_premium, path.rows.map(r => ({ premium: r.premium })));
+            const sim = simulateTradeCoach(row.entry_premium, path.rows.map(r => ({ premium: r.premium })), row.instrument);
             if (!sim) continue;
             await dbPool.query(
-                `UPDATE signal_outcomes SET coach_result = $1, coach_exit_reason = $2 WHERE id = $3`,
-                [sim.coachResult, sim.coachExitReason, row.id]
+                `UPDATE signal_outcomes SET coach_result = $1, coach_exit_reason = $2, coach_grid = $3 WHERE id = $4`,
+                [sim.coachResult, sim.coachExitReason, coachGridFor(row.instrument).name, row.id]
             );
             finalized++;
         }
         if (finalized > 0 || abandoned > 0) console.log(`📊 [Signal Outcomes] Finalized Trade-Coach simulation for ${finalized} outcome(s)${abandoned ? `, ${abandoned} abandoned (no samples)` : ''}`);
     } catch (e) {
         console.warn('[Signal Outcomes] coach-finalize error:', e.message);
+    }
+}
+
+// 2 Oct — re-scores every already-finalized outcome under its instrument's
+// CURRENT live grid (COACH_LIVE_GRID), using the premium paths already
+// stored in signal_outcome_path. Without this, history scored under the old
+// STANDARD grid would mix with new rows scored under the new grid, and the
+// Track Record / auto-mute would be averaging two different strategies.
+// Idempotent: only touches rows whose coach_grid doesn't match the live
+// grid, so it's a no-op after the first pass — and changing a grid in
+// COACH_LIVE_GRID later simply re-triggers it. Cursor-based (id > lastId)
+// so a row that can't be re-scored can never trap it in a loop.
+let _coachRecomputeInFlight = false;
+async function recomputeCoachForLiveGrid() {
+    if (!dbPool || _coachRecomputeInFlight) return;
+    _coachRecomputeInFlight = true;
+    try {
+        for (const [instrument, grid] of Object.entries(COACH_LIVE_GRID)) {
+            if (grid.name === 'STANDARD') {
+                // NULL coach_grid already means "scored under STANDARD" — just label it.
+                const r = await dbPool.query(
+                    `UPDATE signal_outcomes SET coach_grid = 'STANDARD'
+                     WHERE instrument = $1 AND coach_result IS NOT NULL AND entry_strike IS NOT NULL AND coach_grid IS NULL`,
+                    [instrument]
+                );
+                if (r.rowCount) console.log(`📊 [Coach Grid] ${instrument}: labelled ${r.rowCount} row(s) STANDARD (no re-score needed)`);
+                continue;
+            }
+            let lastId = 0, rescored = 0;
+            while (true) {
+                const batch = await dbPool.query(
+                    `SELECT id, entry_premium FROM signal_outcomes
+                     WHERE instrument = $1 AND coach_result IS NOT NULL AND entry_strike IS NOT NULL
+                       AND entry_premium > 0 AND coach_grid IS DISTINCT FROM $2 AND id > $3
+                     ORDER BY id ASC LIMIT 200`,
+                    [instrument, grid.name, lastId]
+                );
+                if (!batch.rows.length) break;
+                lastId = batch.rows[batch.rows.length - 1].id;
+                const ids = batch.rows.map(r => r.id);
+                const paths = await dbPool.query(
+                    `SELECT outcome_id, premium FROM signal_outcome_path WHERE outcome_id = ANY($1::int[]) ORDER BY outcome_id, sample_ts ASC`,
+                    [ids]
+                );
+                const pathById = new Map();
+                for (const p of paths.rows) {
+                    if (!pathById.has(p.outcome_id)) pathById.set(p.outcome_id, []);
+                    pathById.get(p.outcome_id).push({ premium: Number(p.premium) });
+                }
+                for (const row of batch.rows) {
+                    const sim = simulateTradeCoachCore(Number(row.entry_premium), pathById.get(row.id) || [], grid);
+                    if (!sim) continue; // no stored path — leave as-is; cursor moves past it
+                    await dbPool.query(
+                        `UPDATE signal_outcomes SET coach_result = $1, coach_exit_reason = $2, coach_grid = $3 WHERE id = $4`,
+                        [sim.coachResult, sim.coachExitReason, grid.name, row.id]
+                    );
+                    rescored++;
+                }
+            }
+            if (rescored) console.log(`📊 [Coach Grid] ${instrument}: re-scored ${rescored} historical outcome(s) under ${grid.name}`);
+        }
+        await refreshTriggerScorecard(); // auto-mute re-evaluates on the re-scored history right away
+    } catch (e) {
+        console.warn('[Coach Grid] recompute error:', e.message);
+    } finally {
+        _coachRecomputeInFlight = false;
     }
 }
 
@@ -5769,7 +5864,7 @@ async function checkTelegramAlerts(newSignal) {
         try {
             const pcrState = getPCRState();
             strikeDataForAlert = pickStrikeAndPremium(newSignal, marketState.nifty, marketState.vix, pcrState, marketState);
-            if (strikeDataForAlert) strikeDataForAlert.coach = buildTradeCoach(strikeDataForAlert);
+            if (strikeDataForAlert) strikeDataForAlert.coach = buildTradeCoach(strikeDataForAlert, coachGridFor('NIFTY'));
         } catch(e) { console.warn('[Strike] compute error:', e.message); }
 
         // FIX (3 Aug — Prabhash flagged Telegram showing "WAIT — Grade — (No
@@ -5904,7 +5999,7 @@ async function checkTelegramAlerts(newSignal) {
         try {
             const pcrStateMtf = getPCRState();
             mtfStrikeData = pickStrikeAndPremium(marketState.mtf.signal, marketState.nifty, marketState.vix, pcrStateMtf, marketState);
-            if (mtfStrikeData) mtfStrikeData.coach = buildTradeCoach(mtfStrikeData);
+            if (mtfStrikeData) mtfStrikeData.coach = buildTradeCoach(mtfStrikeData, coachGridFor('NIFTY'));
         } catch(e) { console.warn('[MTF Strike] compute error:', e.message); }
 
         // ── Lead Quality badge — helps distinguish an actionable MTF-tracker
@@ -9496,6 +9591,11 @@ async function initDB() {
         // — not just "did price move", but a REALISTIC, rule-based P&L.
         await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS coach_result NUMERIC`);   // final blended % P&L from the simulation
         await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS coach_exit_reason TEXT`); // 'stop_loss'|'breakeven_stop'|'full_target'|'time_exit'|NULL
+        // 2 Oct — which live grid scored this row (see COACH_LIVE_GRID).
+        // NULL = scored before per-instrument grids existed (i.e. STANDARD).
+        // recomputeCoachForLiveGrid() re-scores any row whose grid doesn't
+        // match its instrument's current live grid.
+        await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS coach_grid TEXT`);
         console.log('✅ PostgreSQL signal_outcomes table ready');
 
         // 27 Sep — periodic premium-samples for the Trade-Coach simulation
@@ -11102,7 +11202,7 @@ app.get('/api/trade-suggestion', async (req, res) => {
         const strikeData = marketState.qualityGate.passed && marketState.signal !== 'WAIT'
             ? pickStrikeAndPremium(marketState.signal, marketState.nifty, marketState.vix, pcrState, marketState)
             : null;
-        if (strikeData) strikeData.coach = buildTradeCoach(strikeData);
+        if (strikeData) strikeData.coach = buildTradeCoach(strikeData, coachGridFor('NIFTY'));
         const winRate = strikeData ? await getWinRateFromHistory(strikeData.type) : null;
 
         // If gate is passed but no AI suggestion cached yet, trigger one now
@@ -11710,10 +11810,14 @@ app.get('/api/coach-grid-backtest', async (req, res) => {
                 const bucket = byInstrument[o.instrument][gridName] || (byInstrument[o.instrument][gridName] = { vals: [], sl: 0 });
                 bucket.vals.push(sim.coachResult);
                 if (sim.coachExitReason === 'stop_loss') bucket.sl++;
-                if (gridName === 'STANDARD') {
-                    stdChecked++;
-                    if (Math.abs(sim.coachResult - o.storedCoach) < 0.05) stdMatched++;
-                }
+            }
+            // Faithfulness: replaying the instrument's LIVE grid should
+            // reproduce the stored coach_result (stored rows are scored
+            // under the live grid since the 2 Oct per-instrument change).
+            const liveSim = simulateTradeCoachCore(o.entryPremium, o.path, coachGridFor(o.instrument));
+            if (liveSim) {
+                stdChecked++;
+                if (Math.abs(liveSim.coachResult - o.storedCoach) < 0.05) stdMatched++;
             }
         }
 
@@ -11746,7 +11850,8 @@ app.get('/api/coach-grid-backtest', async (req, res) => {
         res.json({
             success: true,
             outcomesReplayed: outcomes.size,
-            standardMatchPct: stdChecked ? +(100 * stdMatched / stdChecked).toFixed(1) : null,
+            liveGridMatchPct: stdChecked ? +(100 * stdMatched / stdChecked).toFixed(1) : null,
+            liveGrid: COACH_LIVE_GRID,
             gridDefinitions: COACH_GRID_CANDIDATES,
             byInstrument: result,
             ...(outOfSample ? { outOfSample } : {}),
@@ -13106,6 +13211,10 @@ function startPollingIntervals() {
     setTimeout(() => { sampleOutcomePathsTick(); setInterval(sampleOutcomePathsTick, 5 * 60 * 1000); }, 160 * 1000);
     const finalizeCoachTick = () => finalizeCoachOutcomes().catch(e => console.warn('[Signal Outcomes] coach-finalize tick error:', e.message));
     setTimeout(() => { finalizeCoachTick(); setInterval(finalizeCoachTick, 5 * 60 * 1000); }, 165 * 1000);
+    // 2 Oct — one-shot recompute of history under the per-instrument live
+    // coach grid. Idempotent (no-op once every row matches), so running it
+    // on every boot is safe and also self-heals after any future grid change.
+    setTimeout(() => recomputeCoachForLiveGrid().catch(e => console.warn('[Coach Grid] tick error:', e.message)), 200 * 1000);
     // Exhaustion-Reversal triggers (30 Sep) — 15 min cadence. Each self-gates
     // on time-of-day (only proceeds after its own market-close) and a
     // once-per-day dedup, so most calls are cheap no-ops — the actual daily-

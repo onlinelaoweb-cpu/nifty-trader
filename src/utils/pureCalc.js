@@ -408,9 +408,18 @@ function computeMurarkaRuleStrike(signal, nifty, vix) {
     return atm; // VIX <= 10 → ATM (extrapolated)
 }
 
-function buildTradeCoach(strikeData) {
+// 2 Oct — optional `grid` param: the profit-taking milestones now follow the
+// instrument's live Trade-Coach grid (server.js COACH_LIVE_GRID — NIFTY uses
+// QUICK_SCALP, chosen by an out-of-sample backtest), so the coaching a user
+// sees matches exactly what the Track Record measures. Defaults to the
+// original 20/30/40 if no grid is passed. The alert's own SL (strikeData.sl,
+// structural VIX/Fibonacci-based) is deliberately left as-is — the backtest
+// showed the gain comes from booking earlier, not from a tighter stop.
+function buildTradeCoach(strikeData, grid) {
     if (!strikeData || !strikeData.entry) return null;
     const { entry, sl, target } = strikeData;
+    const g = grid || { name: 'STANDARD', breakevenAt: 20, halfBookAt: 30, fullExitAt: 40 };
+    const at = (pct) => parseFloat((entry * (1 + pct / 100)).toFixed(2));
 
     // Ideal entry zone: tight band around the current live/estimated premium.
     // Chase ceiling: hard cap — paying meaningfully more than current premium
@@ -429,10 +438,11 @@ function buildTradeCoach(strikeData) {
         chaseWarning   : `Do NOT chase above ₹${chaseCeiling}`,
         ifMissed       : 'Missed the zone? Wait for a pullback — don\'t chase.',
         plan: [
-            { atPct: 20, premium: parseFloat((entry * 1.20).toFixed(2)), action: 'Move SL to cost (breakeven)' },
-            { atPct: 30, premium: parseFloat((entry * 1.30).toFixed(2)), action: 'Book 50% of the position' },
-            { atPct: 40, premium: parseFloat((entry * 1.40).toFixed(2)), action: 'Exit remaining — full booking' },
+            { atPct: g.breakevenAt, premium: at(g.breakevenAt), action: 'Move SL to cost (breakeven)' },
+            { atPct: g.halfBookAt,  premium: at(g.halfBookAt),  action: 'Book 50% of the position' },
+            { atPct: g.fullExitAt,  premium: at(g.fullExitAt),  action: 'Exit remaining — full booking' },
         ],
+        gridName: g.name || 'STANDARD',
         riskPerLot: parseFloat(risk.toFixed(2)),
         note: 'Entry-zone guidance for a fresh trade. Once logged in the Journal, the R-multiple trailing-SL system takes over for actual exit alerts.',
     };

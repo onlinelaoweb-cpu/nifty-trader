@@ -5816,9 +5816,9 @@ async function fetchTradeSuggestion() {
         <div style="font-size:13px;color:var(--amber);margin-bottom:3px;">⚠️ ${coach.chaseWarning}</div>
         <div style="font-size:12px;color:var(--dim);margin-bottom:6px;">${coach.ifMissed}</div>
         <div style="display:flex;flex-direction:column;gap:2px;font-size:12.5px;color:var(--dim);">
-          <span>📈 +20% (₹${coach.plan[0].premium}) → ${coach.plan[0].action}</span>
-          <span>📈 +30% (₹${coach.plan[1].premium}) → ${coach.plan[1].action}</span>
-          <span>📈 +40% (₹${coach.plan[2].premium}) → ${coach.plan[2].action}</span>
+          <span>📈 +${coach.plan[0].atPct}% (₹${coach.plan[0].premium}) → ${coach.plan[0].action}</span>
+          <span>📈 +${coach.plan[1].atPct}% (₹${coach.plan[1].premium}) → ${coach.plan[1].action}</span>
+          <span>📈 +${coach.plan[2].atPct}% (₹${coach.plan[2].premium}) → ${coach.plan[2].action}</span>
         </div>
       </div>` : '';
     if (card) card.className = 'suggest-card ' + (ai.action.includes('CALL') ? 'bull' : ai.action.includes('PUT') ? 'bear' : 'wait');
@@ -10148,7 +10148,7 @@ function renderBitcoinLiveUI(d) {
       <span id="sa-status" style="font-size:10.5px;color:var(--dim);font-family:monospace;"></span>
     </div>
     <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:12px;">
-      Real accuracy of every NIFTY + Crude + Bitcoin exploratory trigger — did price actually move the predicted direction by 0.15%+ within 30min of the fire. WIN/LOSS/FLAT, not just "fired". Recent fires also show real option-premium win-rate (10%+ move), plus a Trade-Coach simulation: this app's own SL(-20%)/breakeven(+20%)/half-book(+30%)/full-exit(+40%) rules, replayed against the actual premium path — 90min after each fire, showing what a disciplined trader following the coaching would have actually made. Low sample counts are not statistically reliable yet — treat as early signal, not verdict.
+      Real accuracy of every NIFTY + Crude + Bitcoin exploratory trigger — did price actually move the predicted direction by 0.15%+ within 30min of the fire. WIN/LOSS/FLAT, not just "fired". Recent fires also show real option-premium win-rate (10%+ move), plus a Trade-Coach simulation: this app's own exit rules, replayed against the actual premium path — per-instrument grids chosen by an out-of-sample backtest (NIFTY: SL -15%, breakeven +10%, half-book +15%, exit +25% · Bitcoin: SL -30%, breakeven +20%, half-book +30%, exit +40% · Crude: SL -20%, breakeven +20%, half-book +30%, exit +40%) — 90min after each fire, showing what a disciplined trader following the coaching would have actually made. Low sample counts are not statistically reliable yet — treat as early signal, not verdict.
     </div>
     <div id="sa-body">Loading...</div>
 

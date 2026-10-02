@@ -220,9 +220,9 @@ async function sendSignalAlert(state, prevSignal, strikeData = null, autoLogged 
 ✅ Ideal Entry: ${coach.idealEntryLabel}
 ⚠️ ${coach.chaseWarning}
 💡 ${coach.ifMissed}
-📈 +20% → ${coach.plan[0].action}
-📈 +30% → ${coach.plan[1].action}
-📈 +40% → ${coach.plan[2].action}`;
+📈 +${coach.plan[0].atPct}% → ${coach.plan[0].action}
+📈 +${coach.plan[1].atPct}% → ${coach.plan[1].action}
+📈 +${coach.plan[2].atPct}% → ${coach.plan[2].action}`;
         }
     } else {
         // strikeData is null when: (a) no VIX available yet, or (b) PCR premiums not loaded
