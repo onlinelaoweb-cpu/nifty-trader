@@ -11588,6 +11588,112 @@ app.get('/api/exhaustion-reversal-accuracy', async (req, res) => {
 });
 
 // 26 Sep — Signal Outcomes tracking: raw rows + aggregated accuracy.
+// ── Trade-Coach Grid Backtest (2 Oct) ────────────────────────────────────────
+// Read-only. Replays candidate SL/breakeven/half-book/full-exit grids
+// against the premium paths ALREADY stored in signal_outcome_path, grouped
+// by instrument — so a per-instrument grid can be chosen from evidence,
+// not guessed. The LIVE grid (simulateTradeCoach → -20/20/30/40) is NOT
+// touched: changing it would break comparability with every existing
+// coach_result that auto-mute relies on, and the existing vol-adj
+// experiment already showed a naive grid change can perform worse.
+// Only fixed-strike-era outcomes (entry_strike IS NOT NULL) are used —
+// earlier rolling-strike paths compared different strikes and are invalid.
+// Faithfulness check: the STANDARD grid's replay should match each row's
+// stored coach_result; standardMatchPct reports how often it does.
+const COACH_GRID_CANDIDATES = {
+    STANDARD:      { slPct: -20, breakevenAt: 20, halfBookAt: 30, fullExitAt: 40 },
+    QUICK_SCALP:   { slPct: -15, breakevenAt: 10, halfBookAt: 15, fullExitAt: 25 },
+    NEAR_TARGET:   { slPct: -20, breakevenAt: 15, halfBookAt: 20, fullExitAt: 30 },
+    WIDE_SL:       { slPct: -30, breakevenAt: 20, halfBookAt: 30, fullExitAt: 40 },
+    SWING:         { slPct: -30, breakevenAt: 25, halfBookAt: 40, fullExitAt: 60 },
+    TIGHT_SL:      { slPct: -12, breakevenAt: 15, halfBookAt: 25, fullExitAt: 35 },
+};
+const COACH_BACKTEST_MIN_N = 30; // below this, a "best grid" call isn't trustworthy
+
+function summarizeCoachResults(vals, slCount) {
+    const n = vals.length;
+    if (!n) return { n: 0, avg: null, median: null, profitablePct: null, slRatePct: null };
+    const sorted = [...vals].sort((a, b) => a - b);
+    const mid = Math.floor(n / 2);
+    const median = n % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    const avg = vals.reduce((s, v) => s + v, 0) / n;
+    return {
+        n, avg: +avg.toFixed(2), median: +median.toFixed(2),
+        profitablePct: +(100 * vals.filter(v => v > 0).length / n).toFixed(1),
+        slRatePct: +(100 * slCount / n).toFixed(1),
+    };
+}
+
+app.get('/api/coach-grid-backtest', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const params = [];
+        let where = `o.coach_result IS NOT NULL AND o.entry_premium > 0 AND o.entry_strike IS NOT NULL`;
+        if (req.query.instrument) { params.push(String(req.query.instrument).toUpperCase()); where += ` AND o.instrument = $${params.length}`; }
+        if (req.query.source)     { params.push(String(req.query.source));                   where += ` AND o.source = $${params.length}`; }
+        const r = await dbPool.query(`
+            SELECT o.id, o.instrument, o.source, o.entry_premium, o.coach_result, p.premium
+            FROM signal_outcomes o
+            JOIN signal_outcome_path p ON p.outcome_id = o.id
+            WHERE ${where}
+            ORDER BY o.id, p.sample_ts ASC
+        `, params);
+
+        // Group path samples per outcome
+        const outcomes = new Map();
+        for (const row of r.rows) {
+            if (!outcomes.has(row.id)) {
+                outcomes.set(row.id, { instrument: row.instrument, source: row.source,
+                    entryPremium: Number(row.entry_premium), storedCoach: Number(row.coach_result), path: [] });
+            }
+            outcomes.get(row.id).path.push({ premium: Number(row.premium) });
+        }
+
+        const byInstrument = {};
+        let stdChecked = 0, stdMatched = 0;
+        for (const o of outcomes.values()) {
+            if (!byInstrument[o.instrument]) byInstrument[o.instrument] = {};
+            for (const [gridName, grid] of Object.entries(COACH_GRID_CANDIDATES)) {
+                const sim = simulateTradeCoachCore(o.entryPremium, o.path, grid);
+                if (!sim) continue;
+                const bucket = byInstrument[o.instrument][gridName] || (byInstrument[o.instrument][gridName] = { vals: [], sl: 0 });
+                bucket.vals.push(sim.coachResult);
+                if (sim.coachExitReason === 'stop_loss') bucket.sl++;
+                if (gridName === 'STANDARD') {
+                    stdChecked++;
+                    if (Math.abs(sim.coachResult - o.storedCoach) < 0.05) stdMatched++;
+                }
+            }
+        }
+
+        const result = {};
+        for (const [inst, grids] of Object.entries(byInstrument)) {
+            const summaries = {};
+            for (const [gridName, b] of Object.entries(grids)) summaries[gridName] = summarizeCoachResults(b.vals, b.sl);
+            // "Best" by median (robust to a few jackpot trades), avg as tiebreak.
+            // Only declared when sample is large enough to be meaningful.
+            const ranked = Object.entries(summaries).filter(([, s]) => s.n > 0)
+                .sort((a, b) => (b[1].median - a[1].median) || (b[1].avg - a[1].avg));
+            const n = summaries.STANDARD?.n || 0;
+            result[inst] = {
+                grids: summaries,
+                bestByMedian: n >= COACH_BACKTEST_MIN_N ? ranked[0]?.[0] : null,
+                note: n >= COACH_BACKTEST_MIN_N ? null : `only ${n} outcomes — need ${COACH_BACKTEST_MIN_N}+ before trusting a best-grid call`,
+            };
+        }
+
+        res.json({
+            success: true,
+            outcomesReplayed: outcomes.size,
+            standardMatchPct: stdChecked ? +(100 * stdMatched / stdChecked).toFixed(1) : null,
+            gridDefinitions: COACH_GRID_CANDIDATES,
+            byInstrument: result,
+        });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 app.get('/api/signal-outcomes', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
