@@ -607,6 +607,7 @@ let _sessionOpenDate='';     // IST date-string the above belongs to — reset d
 // can't touch NIFTY's indicators no matter what.
 let _crudeCurrentCandle = null;
 let _crudeLastMinute    = null;
+let _crudeLastTickDate  = null; // 2 Oct — IST calendar-date of the last tick, for the session day-reset fix below
 const CRUDE_CANDLE_CAP  = 400; // 10 Sep: raised from 150 — covers a full ~385min evening session so the 5m-aggregated MTF tier (below) has enough bars for ADX well before close, not just in the final hour
 
 // ── CRUDEOIL indicators (Phase 4, 8 Sep) — pure function, no state of its own.
@@ -661,6 +662,25 @@ const CRUDE_CANDLE_CAP  = 400; // 10 Sep: raised from 150 — covers a full ~385
 function addCrudeTick(price) {
     const ist    = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const istMin = ist.getHours() * 60 + ist.getMinutes();
+
+    // 2 Oct — FIX: explicit day-reset, matching NIFTY's getSessionCandles()
+    // ("resets at 9:15 IST so it never contains multi-day price gaps").
+    // candles1m previously had no day-boundary at all — just a 400-candle
+    // rolling cap sized for "a full session", meaning early in each NEW
+    // Crude session the array could still hold YESTERDAY's tail candles,
+    // contaminating Murarka's VWAP-proxy (a plain average of the whole
+    // array) with a stale, cross-session price-level — especially right
+    // after an overnight gap. Crude's session doesn't cross midnight
+    // (5:30pm-11:55pm, same calendar day throughout), so a simple
+    // date-changed check is sufficient here (unlike Bitcoin's own
+    // midnight-crossing window).
+    const istDateStr = ist.toISOString().slice(0, 10);
+    if (_crudeLastTickDate !== null && istDateStr !== _crudeLastTickDate) {
+        marketState.crudeoil.candles1m.length = 0;
+        _crudeCurrentCandle = null;
+        console.log(`🛢️ [Crude] New session day detected (${_crudeLastTickDate} → ${istDateStr}) — candles1m reset, old session's candles discarded`);
+    }
+    _crudeLastTickDate = istDateStr;
 
     if (!_crudeCurrentCandle || istMin !== _crudeLastMinute) {
         if (_crudeCurrentCandle) {
@@ -5104,6 +5124,11 @@ const OUTCOME_SOURCES = [
     { table: 'bitcoin_option_rsi_divergence_log', source: 'Opt RSI Diverge', instrument: 'BITCOIN', priceExpr: 'bitcoin', dirExpr: "CASE WHEN direction='BEARISH_FADING' THEN 'BULLISH' ELSE 'BEARISH' END" },
     { table: 'bitcoin_volume_confirmation_log', source: 'Volume Confirm',  instrument: 'BITCOIN', priceExpr: 'bitcoin', dirExpr: "CASE WHEN bos_event='BOS_BULLISH' THEN 'BULLISH' ELSE 'BEARISH' END", whereExtra: "result = 'CONFIRMED'" },
     { table: 'bitcoin_sustained_drift_log',     source: 'Sustained Drift', instrument: 'BITCOIN', priceExpr: 'bitcoin', dirExpr: 'direction' },
+    // 2 Oct — Crude/Bitcoin Main-Engine signals, registered into this SAME
+    // pipeline rather than a separate system. Both log-tables share the
+    // same {signal, price} shape (signal: 'BUY CALL'|'BUY PUT').
+    { table: 'crude_signal_log',   source: 'Main Engine', instrument: 'CRUDE',   priceExpr: 'price', dirExpr: "CASE WHEN signal='BUY CALL' THEN 'BULLISH' ELSE 'BEARISH' END" },
+    { table: 'bitcoin_signal_log', source: 'Main Engine', instrument: 'BITCOIN', priceExpr: 'price', dirExpr: "CASE WHEN signal='BUY CALL' THEN 'BULLISH' ELSE 'BEARISH' END" },
 ];
 
 const OUTCOME_EVAL_DELAY_MIN = 30;   // resolve outcomes 30min after fire
@@ -7593,7 +7618,16 @@ async function checkExhaustionReversalCommon(instrument, timeframe, candles, per
     if (_exhaustionLastKey[dedupKey] === periodKey) return; // already fired for this exact period
     if (!candles || candles.length < 25) return;
 
-    const result = detectExhaustionReversal(candles);
+    // 2 Oct — Hourly gets a tighter (higher) pullback-threshold than the
+    // default 15pts — the user's own live finding: Bitcoin's first-ever
+    // Hourly fire showed only a 16.4-point RSI pullback within a genuinely
+    // strong, still-continuing 3-hour bullish run (RSI 80.1→63.7), then
+    // price kept climbing hard right after — a false reversal. Hourly is
+    // volatile enough that 15pts can be noise within a single candle
+    // during a strong move. Daily/Weekly/Monthly keep the default — no
+    // evidence yet that they need the same tightening.
+    const exhaustionOpts = timeframe === 'HOURLY' ? { pullbackPts: 25 } : {};
+    const result = detectExhaustionReversal(candles, exhaustionOpts);
     if (result.state !== 'REVERSAL_CONFIRMED') return; // WATCHING / NONE / ALREADY_REVERSED / INSUFFICIENT_DATA — nothing to fire
     _exhaustionLastKey[dedupKey] = periodKey; // mark done for this period only once we've confirmed a fresh fire
 
@@ -11128,7 +11162,19 @@ app.get('/api/trade-history', async (req, res) => {
 app.get('/api/signal-performance', async (req, res) => {
     try {
         const summary = await getSignalPerformanceSummary();
-        res.json({ open: marketState.signalPerformance.open, summary });
+        const response = { open: marketState.signalPerformance.open, summary };
+        // 2 Oct — ?raw=true returns individual CLOSED trades (entry/sl/
+        // target/high/low/time_taken/lead_quality/exit_warned), for deeper
+        // analysis beyond the aggregated summary — the user's own ask.
+        if (req.query.raw === 'true' && dbPool) {
+            const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+            const r = await dbPool.query(
+                `SELECT * FROM signal_performance WHERE closed = true ORDER BY ts DESC LIMIT $1`,
+                [limit]
+            );
+            response.rawClosed = r.rows;
+        }
+        res.json(response);
     } catch (e) {
         res.json({ open: [], summary: { today: null, weekly: null, monthly: null }, error: e.message });
     }
