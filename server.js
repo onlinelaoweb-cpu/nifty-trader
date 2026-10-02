@@ -7102,8 +7102,12 @@ async function refreshBitcoin() {
         // 25 Sep — Phase 3: log the computed signal too, same reasoning as
         // above — this is the only way to verify the signal-engine live
         // without direct API access to the deployed app.
+        // 2 Oct — ALSO persisted now (saveBitcoinSignalToLog), not just
+        // console.log'd — closes the audit-found gap (no Bitcoin Main-
+        // Engine track-record existed before this).
         const sig = computeBitcoinSignal(marketState.bitcoin.candles1m, marketState.bitcoin.pcr);
         console.log(`₿ [Bitcoin Signal] ${sig.signal}(${sig.confidence}%) | RSI:${sig.indicators?.rsi ?? '--'} EMA9:${sig.indicators?.ema9 ?? '--'} EMA21:${sig.indicators?.ema21 ?? '--'} ADX:${sig.indicators?.adx ?? '--'} | ${sig.reasons[0] ?? ''}`);
+        saveBitcoinSignalToLog(sig, price).catch(e => console.warn('[Bitcoin Signal Log] error:', e.message));
     } catch (e) { console.warn('[Bitcoin] refresh error:', e.message); }
 }
 
@@ -8748,6 +8752,36 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL crude_signal_log table ready');
 
+        // 2 Oct — Bitcoin's own Main-Engine-equivalent signal log, closing a
+        // genuine gap found during a full-app audit: computeBitcoinSignal()'s
+        // result was only ever console.log'd ("this is the ONLY way to
+        // verify the signal-engine live without direct API access" — the 25
+        // Sep comment above its call-site), never persisted — unlike NIFTY
+        // (signal_performance) and Crude (crude_signal_log above), meaning
+        // Bitcoin's Main Engine had no track-record at all. Schema mirrors
+        // crude_signal_log's confirmed-available fields (computeBitcoinSignal
+        // returns the same indicators.{rsi,ema9,ema21,adx,diPlus,diMinus}
+        // shape) — mtf_1m/mtf_5m omitted since Bitcoin's own MTF shape
+        // wasn't verified to match that simple string-form.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS bitcoin_signal_log (
+                id          SERIAL PRIMARY KEY,
+                ts          TIMESTAMPTZ DEFAULT NOW(),
+                signal      TEXT,
+                confidence  INT,
+                price       NUMERIC,
+                rsi         NUMERIC,
+                ema9        NUMERIC,
+                ema21       NUMERIC,
+                adx         NUMERIC,
+                di_plus     NUMERIC,
+                di_minus    NUMERIC,
+                pcr         NUMERIC,
+                reasons     TEXT
+            )
+        `);
+        console.log('✅ PostgreSQL bitcoin_signal_log table ready');
+
         // ── volume_scanner_log table (10 Sep) ────────────────────────────────
         // Historical record of unusual-volume crossings — one row per stock
         // per day, logged at the same moment the Telegram alert fires (first
@@ -9801,6 +9835,31 @@ async function saveCrudeSignalToLog(result, price) {
         console.log(`📝 [Crude] Signal logged: ${result.signal} @ ₹${price} (conf:${result.confidence}%)`);
     } catch (e) {
         console.warn('[Crude Signal Log] save error:', e.message);
+    }
+}
+
+// 2 Oct — Bitcoin equivalent, same fire-only pattern (logs on a fresh
+// non-WAIT signal, not every WAIT tick) — closes the audit-found gap
+// where computeBitcoinSignal()'s result was only ever console.log'd.
+async function saveBitcoinSignalToLog(result, price) {
+    if (!dbPool || !result || result.signal === 'WAIT') return;
+    try {
+        const ind = result.indicators || {};
+        await dbPool.query(
+            `INSERT INTO bitcoin_signal_log
+              (signal, confidence, price, rsi, ema9, ema21, adx, di_plus, di_minus, pcr, reasons)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            [
+                result.signal, result.confidence, price,
+                ind.rsi ?? null, ind.ema9 ?? null, ind.ema21 ?? null,
+                ind.adx ?? null, ind.diPlus ?? null, ind.diMinus ?? null,
+                result.pcr?.pcr ?? null,
+                JSON.stringify((result.reasons || []).slice(0, 12)),
+            ]
+        );
+        console.log(`📝 [Bitcoin] Signal logged: ${result.signal} @ $${price} (conf:${result.confidence}%)`);
+    } catch (e) {
+        console.warn('[Bitcoin Signal Log] save error:', e.message);
     }
 }
 
@@ -12643,6 +12702,18 @@ app.get('/api/crude-signal-log', async (req, res) => {
     try {
         const limit = Math.min(parseInt(req.query.limit) || 50, 200);
         const r = await dbPool.query(`SELECT * FROM crude_signal_log ORDER BY ts DESC LIMIT ${limit}`);
+        res.json({ success: true, count: r.rows.length, rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 2 Oct — Bitcoin equivalent, closing the audit-found gap.
+app.get('/api/bitcoin-signal-log', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+        const r = await dbPool.query(`SELECT * FROM bitcoin_signal_log ORDER BY ts DESC LIMIT ${limit}`);
         res.json({ success: true, count: r.rows.length, rows: r.rows });
     } catch (e) {
         res.json({ success: false, error: e.message });
