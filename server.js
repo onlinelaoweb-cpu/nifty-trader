@@ -5698,6 +5698,43 @@ async function finalizeCoachOutcomes() {
 // grid, so it's a no-op after the first pass — and changing a grid in
 // COACH_LIVE_GRID later simply re-triggers it. Cursor-based (id > lastId)
 // so a row that can't be re-scored can never trap it in a loop.
+// 3 Oct — one-shot cleanup of the duplicate bitcoin_signal_log rows created
+// by the (now fixed) every-60s logging bug. A row is a duplicate if the
+// row immediately before it has the SAME signal and is < 90s older — i.e.
+// the same continuous signal re-logged on the next refresh with no WAIT in
+// between (a genuine fresh fire after a WAIT is always 2+ minutes apart,
+// since WAIT ticks themselves are never logged). Duplicates must be removed
+// from bitcoin_signal_log itself, not just signal_outcomes — otherwise the
+// next harvest would simply re-insert them. Their signal_outcomes rows
+// (and stored paths, via ON DELETE CASCADE) are then removed. Idempotent:
+// a no-op once clean.
+async function dedupeBitcoinSignalLog() {
+    if (!dbPool) return;
+    try {
+        const del = await dbPool.query(`
+            WITH x AS (
+                SELECT id, signal, ts,
+                       LAG(signal) OVER (ORDER BY ts) AS prev_signal,
+                       LAG(ts)     OVER (ORDER BY ts) AS prev_ts
+                FROM bitcoin_signal_log
+            )
+            DELETE FROM bitcoin_signal_log b USING x
+            WHERE b.id = x.id AND x.prev_signal = x.signal AND x.ts - x.prev_ts < INTERVAL '90 seconds'
+        `);
+        const orphan = await dbPool.query(`
+            DELETE FROM signal_outcomes o
+            WHERE o.source_table = 'bitcoin_signal_log'
+              AND NOT EXISTS (SELECT 1 FROM bitcoin_signal_log b WHERE b.id = o.source_id)
+        `);
+        if (del.rowCount || orphan.rowCount) {
+            console.log(`🧹 [Bitcoin Signal Log] Removed ${del.rowCount} duplicate log row(s) and ${orphan.rowCount} matching outcome(s)`);
+            await refreshTriggerScorecard();
+        }
+    } catch (e) {
+        console.warn('[Bitcoin Signal Log] dedupe error:', e.message);
+    }
+}
+
 let _coachRecomputeInFlight = false;
 async function recomputeCoachForLiveGrid() {
     if (!dbPool || _coachRecomputeInFlight) return;
@@ -7137,6 +7174,7 @@ async function refreshBitcoinFastTick() {
 }
 
 let bitcoinBackfillInFlight = false;
+let _lastBitcoinSignalLogged = null; // 3 Oct — fresh-signal dedup for bitcoin_signal_log (see refreshBitcoin)
 async function refreshBitcoin() {
     if (!isBitcoinWindowOpen()) return;
     try {
@@ -7227,7 +7265,18 @@ async function refreshBitcoin() {
         // Engine track-record existed before this).
         const sig = computeBitcoinSignal(marketState.bitcoin.candles1m, marketState.bitcoin.pcr);
         console.log(`₿ [Bitcoin Signal] ${sig.signal}(${sig.confidence}%) | RSI:${sig.indicators?.rsi ?? '--'} EMA9:${sig.indicators?.ema9 ?? '--'} EMA21:${sig.indicators?.ema21 ?? '--'} ADX:${sig.indicators?.adx ?? '--'} | ${sig.reasons[0] ?? ''}`);
-        saveBitcoinSignalToLog(sig, price).catch(e => console.warn('[Bitcoin Signal Log] error:', e.message));
+        // 3 Oct — FIX (my own 2 Oct bug): this logged on EVERY 60s refresh
+        // while a signal persisted, so one 30-min BUY PUT became ~30 separate
+        // "trades" in bitcoin_signal_log → signal_outcomes, massively
+        // over-counting (and correlating) Main Engine results. Now matches
+        // Crude's own dedup exactly: log only a FRESH non-WAIT signal; a WAIT
+        // resets it so the next fire (even same direction) logs again.
+        if (sig.signal !== 'WAIT' && sig.signal !== _lastBitcoinSignalLogged) {
+            saveBitcoinSignalToLog(sig, price).catch(e => console.warn('[Bitcoin Signal Log] error:', e.message));
+            _lastBitcoinSignalLogged = sig.signal;
+        } else if (sig.signal === 'WAIT') {
+            _lastBitcoinSignalLogged = null;
+        }
     } catch (e) { console.warn('[Bitcoin] refresh error:', e.message); }
 }
 
@@ -13215,6 +13264,8 @@ function startPollingIntervals() {
     // coach grid. Idempotent (no-op once every row matches), so running it
     // on every boot is safe and also self-heals after any future grid change.
     setTimeout(() => recomputeCoachForLiveGrid().catch(e => console.warn('[Coach Grid] tick error:', e.message)), 200 * 1000);
+    // 3 Oct — one-shot dedupe of the Bitcoin Main Engine logging bug (idempotent).
+    setTimeout(() => dedupeBitcoinSignalLog().catch(e => console.warn('[Bitcoin Signal Log] dedupe tick error:', e.message)), 190 * 1000);
     // Exhaustion-Reversal triggers (30 Sep) — 15 min cadence. Each self-gates
     // on time-of-day (only proceeds after its own market-close) and a
     // once-per-day dedup, so most calls are cheap no-ops — the actual daily-
