@@ -204,6 +204,11 @@ async function sendSignalAlert(state, prevSignal, strikeData = null, autoLogged 
         const liquidityNote = strikeData.lowLiquidity
             ? `\n⚠️ Low liquidity: OI ${Math.round(strikeData.strikeOI/1000)}K, Vol ${Math.round(strikeData.strikeVolume/1000)}K — check bid-ask spread before entry, slippage risk`
             : '';
+        // Theta hurdle (3 Oct) — what waiting costs per hour + the Nifty move needed just to cover it
+        const th = strikeData.thetaHurdle;
+        const thetaNote = th
+            ? `\n⏳ Theta  : ~₹${th.thetaPerHr}/hr (~₹${Math.round(th.thetaPerHr * LOT)}/lot) — Nifty must move ~${th.ptsPerHr} pts/hr in your favour just to cover decay${th.heavy ? `\n⚠️ Theta-heavy: 2h of decay ≈ ${th.cost2hPctOfTarget}% of target gain — needs a quick move, avoid waiting` : ''}`
+            : '';
         const sizeNote = strikeData.positionSizeNote
             ? `\n📏 Size note: ${strikeData.positionSizeNote}`
             : '';
@@ -211,7 +216,7 @@ async function sendSignalAlert(state, prevSignal, strikeData = null, autoLogged 
 📥 Entry : ₹${strikeData.entry}${stalenessNote}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
-📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep} (Nifty needs ${strikeData.type === 'CE' ? 'to reach' : 'to fall to'} this by expiry to break even)` : ''}${liquidityNote}${sizeNote}`;
+📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep} (Nifty needs ${strikeData.type === 'CE' ? 'to reach' : 'to fall to'} this by expiry to break even)` : ''}${thetaNote}${liquidityNote}${sizeNote}`;
 
         // ── AI Trade Coach block — entry-zone + staged profit plan ───────────
         const coach = strikeData.coach;
@@ -500,7 +505,7 @@ async function sendMTFAlert(state, strikeData = null, autoLogged = false) {
 ${pocLine}
 ${deltaLine}
 ${rvolLine}
-📊 R:R 1:2${strikeData.slSource?.startsWith('fibo') ? ' (SL basis: swing structure)' : ''}${strikeData.bep ? ` | BEP: ${strikeData.bep}` : ''}
+📊 R:R 1:2${strikeData.slSource?.startsWith('fibo') ? ' (SL basis: swing structure)' : ''}${strikeData.bep ? ` | BEP: ${strikeData.bep}` : ''}${strikeData.thetaHurdle ? ` | Θ ~₹${strikeData.thetaHurdle.thetaPerHr}/hr (${strikeData.thetaHurdle.ptsPerHr} pts/hr to cover)${strikeData.thetaHurdle.heavy ? ' ⚠️ theta-heavy' : ''}` : ''}
 ${lqLine}${state.momentumDecayWarning ? `\n${state.momentumDecayWarning}` : ''}`;
     }
 
@@ -919,6 +924,32 @@ Price hasn't hit SL or target — this isn't an auto-exit. Just a heads-up to re
     await sendMessage(msg);
 }
 
+// ── Delta Response warning (3 Oct 2026) ───────────────────────────────────
+// Fires once per trade when Nifty has moved in the trade's favour but the
+// option premium gained far less than delta says it should have — i.e. theta /
+// IV drag is eating the move. Soft nudge, not an exit instruction.
+async function sendDeltaResponseWarning(rec, d, elapsedMin, thetaSoFar) {
+    const dirLabel = rec.signal === 'BUY CALL' ? 'CALL' : 'PUT';
+    const thetaLine = (thetaSoFar != null)
+        ? `\n⏳ Time decay so far: ~₹${Math.abs(thetaSoFar)}/share (estimate)`
+        : '';
+    const msg = `
+🐢 <b>SLOW RESPONSE — Option Not Reacting as per Delta</b>
+━━━━━━━━━━━━━━━━━━
+Your ${dirLabel} (${rec.strike}${rec.type}, entry ₹${rec.entry}) after ${elapsedMin} min:
+
+Nifty moved <b>${d.favourMove} pts</b> in your favour
+Expected gain at Δ ${d.avgDelta}: ~₹${d.expectedGain}
+Actual gain: <b>₹${d.actualGain}</b> (${Math.round(d.ratio * 100)}% of expected)${thetaLine}
+
+Time decay and falling IV are eating the move. Not an auto-exit — reassess: book partial, tighten SL, or exit if the move stalls.
+━━━━━━━━━━━━━━━━━━
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
+<i>Vardaan AI</i>
+`.trim();
+    await sendMessage(msg);
+}
+
 // ── Smart Partial Profit Book ─────────────────────────────────────────────
 // Requested 25 Jul audit: "instead of only a static +30% price threshold,
 // trigger off R:R already banked + Delta weakening + RSI crossing back
@@ -1016,6 +1047,7 @@ module.exports = {
     sendCloseSummary,
     sendExitAlert,
     sendMomentumExitWarning,
+    sendDeltaResponseWarning,
     sendNishanebaazAlert,
     sendSpreadAlert,
     sendRawMessage,

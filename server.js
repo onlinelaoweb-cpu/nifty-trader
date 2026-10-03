@@ -90,6 +90,7 @@ const {
     getFnOStockList,                              // Volume scanner Phase 1: F&O stock universe + EQ tokens
     getCurrentFyersFutSymbol,                     // correct NSE:NIFTY{YY}{MMM}FUT symbol (NIFTY-I is invalid on Fyers)
     fetchFyersIntradayHistory,                     // 20 Sep: BankNifty candles for Index Confirmation trigger
+    probeFyersGreeks, getFyersGreeksProbe,         // 3 Oct: read-only experiment — does Fyers' option chain return Greeks?
 } = require('./src/api/nseData');
 // 25 Sep — Delta Exchange India client, for the new Bitcoin-options feature.
 const { fetchDeltaTicker, getNearestBTCExpiry, fetchDeltaOptionChain, fetchDeltaHistoricalCandles } = require('./src/api/deltaExchange');
@@ -110,7 +111,7 @@ const BTC_LIQUIDITY_GATE_ENABLED = String(process.env.BTC_LIQUIDITY_GATE || 'on'
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
-    sendCloseSummary, sendExitAlert, sendMomentumExitWarning,
+    sendCloseSummary, sendExitAlert, sendMomentumExitWarning, sendDeltaResponseWarning,
     sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured,
     sendScalpAlert, sendSignalTimeline, sendPartialProfitAlert,
     sendWeeklyGateReview,
@@ -354,6 +355,19 @@ let events       = [];
 // ── Signal Performance Tracking (automatic, independent of Journal) ─────────
 let openPerfRecords = [];   // records currently being tracked toward target/SL
 const PERF_AUTOCLOSE_MIN = 90;  // auto-close untouched signals after 90 min (theta eats the edge past this)
+
+// ── Delta Response Check (3 Oct 2026, from options-Greeks webinar review) ──
+// If Nifty has moved N points in the trade's favour, an option with delta d
+// should have gained roughly N × d. If the premium gained far less, the option
+// is "not reacting as per delta" — theta/IV drag is eating the move, which is
+// the classic early warning that a call/put buyer is in trouble. SOFT NUDGE
+// ONLY: one Telegram heads-up per trade + a dashboard ratio, never a hard exit
+// or a gate (same philosophy as the rest of the app's unproven features).
+// Env DELTA_RESPONSE_CHECK=off disables it entirely.
+const DELTA_RESP_ENABLED   = (process.env.DELTA_RESPONSE_CHECK || 'on').toLowerCase() !== 'off';
+const DELTA_RESP_MIN_MOVE  = parseFloat(process.env.DELTA_RESP_MIN_MOVE  || '20');  // Nifty pts in favour before judging
+const DELTA_RESP_MIN_MIN   = parseFloat(process.env.DELTA_RESP_MIN_MIN   || '5');   // minutes in trade before judging
+const DELTA_RESP_WARN_RATIO = parseFloat(process.env.DELTA_RESP_WARN_RATIO || '0.5'); // actual/expected below this => warn
 // ── Shadow-tracking for TIMED OUT signals (7 Aug audit request) ─────────────
 // Live cases surfaced by Prabhash (screenshots) showed a repeating pattern:
 // a signal gets marked "TIMED OUT" at 90 min, then the underlying premium
@@ -10575,6 +10589,8 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
         // ── Setup DNA + entry VIX (8 Aug) — see buildSetupDNA() header ──────
         setupDNA: buildSetupDNA(signal, marketState),
         entryVix: marketState.vix ?? null,
+        // ── Delta Response Check state (see computeDeltaResponse) ──
+        deltaRespWarned: false, respRatio: null,
     };
     openPerfRecords.push(rec);
     if (dbPool) {
@@ -10634,6 +10650,39 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
 // live LTP from the full option chain (same source pickStrikeAndPremium
 // already uses for entry), same ATM-only shortcut retained as a fast path
 // since that's still the common case and avoids an extra array scan.
+// ── Delta Response Check helper ─────────────────────────────────────────────
+// Returns { favourMove, expectedGain, actualGain, ratio, avgDelta } or null when
+// there isn't enough information / movement yet to judge fairly.
+// expectedGain = Nifty points moved IN THE TRADE'S FAVOUR × average |delta| over
+// the move (average of entry-delta and current-delta so gamma is respected).
+// actualGain   = live premium − entry premium (includes theta + vega drag on
+// purpose — that drag IS the "not responding" the check is meant to surface).
+function computeDeltaResponse(rec, live) {
+    try {
+        if (!DELTA_RESP_ENABLED || !live || !rec.entry) return null;
+        const spot0 = rec.entryNiftyForTheta, vix0 = rec.entryVixForTheta, dte0 = rec.entryDTE;
+        const spot1 = marketState.nifty, vix1 = marketState.vix;
+        if (!spot0 || !spot1 || !vix0 || !vix1 || dte0 == null || typeof calcGreeks !== 'function') return null;
+        const favourMove = rec.type === 'CE' ? (spot1 - spot0) : (spot0 - spot1);
+        if (!(favourMove >= DELTA_RESP_MIN_MOVE)) return null;
+        const dte1 = (typeof daysToNextExpiry === 'function') ? daysToNextExpiry() : dte0;
+        const g0 = calcGreeks(spot0, rec.strike, Math.max(dte0, 0.04) / 365, vix0 / 100, rec.type);
+        const g1 = calcGreeks(spot1, rec.strike, Math.max(dte1, 0.04) / 365, vix1 / 100, rec.type);
+        if (!g0 || !g1) return null;
+        const avgDelta = (Math.abs(g0.delta) + Math.abs(g1.delta)) / 2;
+        const expectedGain = favourMove * avgDelta;
+        if (!(expectedGain > 0)) return null;
+        const actualGain = live - rec.entry;
+        return {
+            favourMove: Math.round(favourMove * 10) / 10,
+            avgDelta: Math.round(avgDelta * 100) / 100,
+            expectedGain: Math.round(expectedGain * 10) / 10,
+            actualGain: Math.round(actualGain * 10) / 10,
+            ratio: Math.round((actualGain / expectedGain) * 100) / 100,
+        };
+    } catch (e) { return null; }
+}
+
 async function updateSignalPerformance() {
     if (openPerfRecords.length === 0) return;
     const pcrState = getPCRState();
@@ -10706,6 +10755,21 @@ async function updateSignalPerformance() {
         }
 
         if (live) { rec.high = Math.max(rec.high, live); rec.low = Math.min(rec.low, live); }
+
+        // ── Delta Response Check — fires at most once per trade ─────────────
+        const dResp = computeDeltaResponse(rec, live);
+        rec.respRatio = dResp ? dResp.ratio : null;
+        if (dResp && !rec.deltaRespWarned && elapsedMin >= DELTA_RESP_MIN_MIN && dResp.ratio < DELTA_RESP_WARN_RATIO) {
+            rec.deltaRespWarned = true;
+            // theta estimate so far (same method as the Exit Warning)
+            let thetaSoFar = null;
+            if (rec.entryNiftyForTheta && rec.entryVixForTheta && rec.entryDTE != null) {
+                const gT = calcGreeks(rec.entryNiftyForTheta, rec.strike, Math.max(rec.entryDTE, 0.04) / 365, rec.entryVixForTheta / 100, rec.type);
+                if (gT && gT.theta != null) thetaSoFar = parseFloat((gT.theta * (elapsedMin / (60 * 24))).toFixed(2));
+            }
+            console.log(`⚠️ [DeltaResponse] ${rec.signal} ${rec.strike}${rec.type}: Nifty +${dResp.favourMove}pts in favour, expected ~₹${dResp.expectedGain}, actual ₹${dResp.actualGain} (ratio ${dResp.ratio})`);
+            sendDeltaResponseWarning(rec, dResp, elapsedMin, thetaSoFar).catch(e => console.warn('[DeltaResponse] send error:', e.message));
+        }
 
         // ── Momentum decay while open: Smart Partial Profit Book vs generic
         // Exit Warning. Same proven 15pt-Delta / 5pt-RSI decay thresholds as
@@ -10863,6 +10927,7 @@ async function updateSignalPerformance() {
         entryConfidence: r.entryConfidence,
         currentConfidence: computeDecayedConfidence(r.entryConfidence, r.entryDelta, r.entryRSI, marketState.delta?.deltaPct, marketState.rsi, r.signal),
         elapsedMin: Math.round((Date.now() - r.startTs) / 60000),
+        respRatio: r.respRatio ?? null,   // Delta Response Check: actual ÷ expected premium gain (null until enough Nifty movement)
     }));
 }
 
@@ -11997,6 +12062,26 @@ app.get('/api/crude-token', async (req,res) => {
 // summarized (count + last 5), not dumped in full, to keep this lean.
 // indicators is computed fresh on every request (pure function, cheap) —
 // nothing about Phase 4 is cached or stored beyond candles1m itself.
+// 3 Oct — Fyers option-chain Greeks probe result (read-only experiment).
+// Open /api/fyers-greeks-probe in a browser after the first market-hours probe
+// (~10-30 min after open). status: found | not-available | no-fyers-token | not-run.
+// When found, also shows our own Black-Scholes ATM Greeks next to Fyers' for a sanity comparison.
+app.get('/api/fyers-greeks-probe', (req, res) => {
+    const probe = getFyersGreeksProbe();
+    let bsCompare = null;
+    try {
+        if (probe.status === 'found' && marketState.nifty && marketState.vix && probe.atmCE?.strike) {
+            const T = Math.max(daysToNextExpiry(), 0.04) / 365;
+            bsCompare = {
+                spot: marketState.nifty, vix: marketState.vix, strike: probe.atmCE.strike,
+                bsCE: calcGreeks(marketState.nifty, probe.atmCE.strike, T, marketState.vix / 100, 'CE'),
+                bsPE: calcGreeks(marketState.nifty, probe.atmCE.strike, T, marketState.vix / 100, 'PE'),
+            };
+        }
+    } catch (e) { bsCompare = { error: e.message }; }
+    res.json({ probe, bsCompare, note: 'Read-only experiment. Nothing in the app uses Fyers Greeks yet.' });
+});
+
 app.get('/api/crude-live', (req, res) => {
     const { candles1m, ...rest } = marketState.crudeoil;
     // 14 Sep fix: computeCrudeSignal() internally aggregates to 3m candles
@@ -13830,6 +13915,22 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshBreadth,        2*60*1000), 90*1000);   // 2 min — breadth is fast-changing
     setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
+    // 3 Oct — Fyers Greeks probe: every 15 min during market hours, at most 4 tries a day,
+    // stops as soon as it has a definite answer ('found'). Read-only; see probeFyersGreeks().
+    {
+        let _gpDay = '', _gpDone = false, _gpTries = 0;
+        setTimeout(() => setInterval(async () => {
+            try {
+                if (!isMarketOpen() || !marketState.nifty) return;
+                const day = getIST().toDateString();
+                if (day !== _gpDay) { _gpDay = day; _gpDone = false; _gpTries = 0; }
+                if (_gpDone || _gpTries >= 4) return;
+                _gpTries++;
+                const r = await probeFyersGreeks(marketState.nifty);
+                if (r.status === 'found' || r.status === 'not-available') _gpDone = true;
+            } catch (e) { console.warn('[Fyers-Greeks] probe tick error:', e.message); }
+        }, 15 * 60 * 1000), 8 * 60 * 1000);
+    }
     setTimeout(() => setInterval(syncOptionFlowFast,       30*1000), 5*1000);   // 3 Aug fix — no network call, just stops throwing away fresh nseData cache
     // Phase 1 (4 Sep, MCX CRUDEOIL expansion) — session router heartbeat, log-only.
     // Standalone check to confirm NIFTY/CRUDEOIL/CLOSED switches correctly across a

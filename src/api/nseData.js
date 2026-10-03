@@ -2077,6 +2077,66 @@ async function fetchPCRFromFyers(spotPrice, opts = {}) {
 }
 
 
+// ── Fyers option-chain GREEKS probe (3 Oct 2026) ────────────────────────────
+// Read-only experiment: does Fyers' options-chain-v3 return per-strike Greeks
+// (delta/gamma/theta/vega/iv) when asked? A third-party client lists an optional
+// `greeks` query parameter but Fyers' own docs weren't confirmable, so this asks
+// once or twice per session, records what came back, and changes NOTHING else —
+// fetchPCRFromFyers() and everything that reads it are untouched.
+// Result is exposed via getFyersGreeksProbe() (route: /api/fyers-greeks-probe).
+const fyersGreeksProbe = { status: 'not-run', attempts: 0, lastTs: null, variant: null, atmCE: null, atmPE: null, rowKeys: null, note: null };
+
+function _extractGreeks(row) {
+    if (!row) return null;
+    const g = (row.greeks && typeof row.greeks === 'object') ? row.greeks : row;
+    const pick = k => (g[k] != null ? Number(g[k]) : (row[k] != null ? Number(row[k]) : null));
+    const out = { delta: pick('delta'), gamma: pick('gamma'), theta: pick('theta'), vega: pick('vega'), iv: pick('iv') ?? pick('implied_volatility') };
+    return (out.delta != null || out.iv != null) ? { ...out, ltp: row.ltp ?? null, strike: Number(row.strike_price) } : null;
+}
+
+async function probeFyersGreeks(spotPrice) {
+    if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) { fyersGreeksProbe.status = 'no-fyers-token'; return fyersGreeksProbe; }
+    if (!spotPrice || spotPrice <= 0) return fyersGreeksProbe;
+    fyersGreeksProbe.attempts++;
+    fyersGreeksProbe.lastTs = new Date().toISOString();
+    const atm = Math.round(spotPrice / 50) * 50;
+    for (const variant of ['1', 'true']) {
+        try {
+            const res = await axios.get('https://api-t1.fyers.in/data/options-chain-v3', {
+                params: { symbol: 'NSE:NIFTY50-INDEX', strikecount: 3, timestamp: '', greeks: variant },
+                headers: { 'Authorization': `${FYERS_APP_ID}:${FYERS_ACCESS_TOKEN}`, 'Content-Type': 'application/json', 'version': '3' },
+                timeout: 10_000,
+            });
+            const d = res.data;
+            if (!d || d.s !== 'ok' || !Array.isArray(d.data?.optionsChain)) {
+                fyersGreeksProbe.note = `variant ${variant}: bad response s=${d?.s} msg=${d?.message || ''}`.slice(0, 200);
+                continue;
+            }
+            const rows = d.data.optionsChain.filter(r => r.option_type === 'CE' || r.option_type === 'PE');
+            if (rows.length) fyersGreeksProbe.rowKeys = Object.keys(rows[0]);
+            // nearest-to-ATM CE and PE rows
+            const near = side => rows.filter(r => r.option_type === side)
+                .sort((a, b) => Math.abs(Number(a.strike_price) - atm) - Math.abs(Number(b.strike_price) - atm))[0];
+            const ce = _extractGreeks(near('CE')), pe = _extractGreeks(near('PE'));
+            if (ce || pe) {
+                fyersGreeksProbe.status = 'found';
+                fyersGreeksProbe.variant = variant;
+                fyersGreeksProbe.atmCE = ce; fyersGreeksProbe.atmPE = pe;
+                fyersGreeksProbe.note = 'Fyers returned Greeks fields';
+                console.log(`[Fyers-Greeks] ✅ Greeks returned (greeks=${variant}) | CE ${JSON.stringify(ce)} | PE ${JSON.stringify(pe)}`);
+                return fyersGreeksProbe;
+            }
+            fyersGreeksProbe.note = `variant ${variant}: chain OK but no greeks fields in rows (keys: ${fyersGreeksProbe.rowKeys?.join(',')})`.slice(0, 300);
+        } catch (e) {
+            fyersGreeksProbe.note = `variant ${variant}: ${e.response?.status || e.message}`.slice(0, 200);
+        }
+    }
+    fyersGreeksProbe.status = 'not-available';
+    console.log(`[Fyers-Greeks] ❌ not returned — ${fyersGreeksProbe.note}`);
+    return fyersGreeksProbe;
+}
+function getFyersGreeksProbe() { return fyersGreeksProbe; }
+
 async function _fetchBankNiftyPCRFallback() {
     const bnSpot = _getBankNiftySpot();
     if (!bnSpot || bnSpot <= 0) {
@@ -2658,6 +2718,8 @@ module.exports = {
     fetchGenericPCR,
     getCrudeFyersSymbol,
     getFnOStockList,
+    probeFyersGreeks,
+    getFyersGreeksProbe,
 
     // Snapshots (for /debug routes)
     getPCRState,

@@ -11,6 +11,7 @@ const { getCandleHistory } = require('../api/indicators');
 const { computeDynamicLevels, classifyDynamicLevels } = require('../api/dynamicLevels');
 const { getIST, daysToNextExpiry } = require('./timeWindows');
 const { bsEstimate } = require('./pureCalc');
+const { calcGreeks } = require('../api/optionGreeks');
 
 function computeSmartMoneyBias(marketState) {
     let score = 0;
@@ -619,7 +620,38 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState, marketState) {
         ? parseFloat((strike + entryPremium).toFixed(2))
         : parseFloat((strike - entryPremium).toFixed(2));
 
-    return { type, strike, entry: entryPremium, sl, target, slSource, rrMultiplier, bep, premiumAgeSec, strikeOI, strikeVolume, lowLiquidity, positionSizeNote };
+    const thetaHurdle = computeThetaHurdle(nifty, strike, type, entryPremium, target, effectiveVix, dte);
+
+    return { type, strike, entry: entryPremium, sl, target, slSource, rrMultiplier, bep, premiumAgeSec, strikeOI, strikeVolume, lowLiquidity, positionSizeNote, thetaHurdle };
+}
+
+// ── Theta hurdle (3 Oct 2026, from options-Greeks webinar review) ───────────
+// "An option buyer is buying time": every hour in the trade costs theta, and the
+// Nifty has to move enough just to pay for it before the trade makes a rupee.
+// Uses the app's own Black-Scholes Greeks (VIX as IV proxy). INFORMATIONAL ONLY —
+// shown in alerts, never gates a signal.
+//   thetaPerHr  : BS calendar-day theta spread over ~6.25 trading hours (approximation)
+//   ptsPerHr    : Nifty points needed per hour in your favour just to cover that decay (÷ |delta|)
+//   heavy       : two hours of decay would eat >= 40% of the target's premium gain
+function computeThetaHurdle(nifty, strike, type, entry, target, vixPct, dte) {
+    try {
+        const g = calcGreeks(nifty, strike, Math.max(dte, 0.04) / 365, vixPct / 100, type);
+        if (!g || !g.theta || !g.delta) return null;
+        const absDelta = Math.abs(g.delta);
+        if (absDelta < 0.05) return null;
+        const thetaPerHr = Math.abs(g.theta) / 6.25;
+        const ptsPerHr   = thetaPerHr / absDelta;
+        const targetGain = Math.max(target - entry, 0);
+        const cost2h     = thetaPerHr * 2;
+        const heavy      = targetGain > 0 && (cost2h / targetGain) >= 0.4;
+        return {
+            delta: parseFloat(absDelta.toFixed(2)),
+            thetaPerHr: parseFloat(thetaPerHr.toFixed(1)),
+            ptsPerHr: Math.round(ptsPerHr),
+            cost2hPctOfTarget: targetGain > 0 ? Math.round((cost2h / targetGain) * 100) : null,
+            heavy,
+        };
+    } catch (e) { return null; }
 }
 
 // MIN_STRIKE_OI / MIN_STRIKE_VOLUME used inside pickStrikeAndPremium() above
