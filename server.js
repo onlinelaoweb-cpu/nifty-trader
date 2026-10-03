@@ -100,6 +100,11 @@ const { pickShortStrike, spreadEntryDebit, spreadExitValue, spreadOutcome } = re
 const BTC_SPREAD_WIDTH_STEPS = Math.max(1, parseInt(process.env.BTC_SPREAD_WIDTH_STEPS) || 2); // short leg = N listed strikes further OTM
 // 3 Oct — weekly Bitcoin Telegram report (pure formatter + due-check).
 const { weekKeyIST, isWeeklySummaryDue, formatBtcWeeklySummary } = require('./src/utils/btcWeeklySummary');
+// 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
+const { classicCandidate, blockedByNewGates, createClassicTracker, buildClassicMessage, toDir: classicToDir, roundTo: classicRoundTo, NEW_GATE_LABELS: CLASSIC_GATE_LABELS } = require('./src/utils/niftyClassic');
+const NIFTY_CLASSIC_ENABLED  = String(process.env.NIFTY_CLASSIC || 'on').toLowerCase() !== 'off';           // off → no logging, no alerts
+const NIFTY_CLASSIC_TELEGRAM = String(process.env.NIFTY_CLASSIC_TELEGRAM || 'on').toLowerCase() !== 'off'; // off → log + track only
+const NIFTY_CLASSIC_MAX_ALERTS_PER_DAY = Math.max(0, parseInt(process.env.NIFTY_CLASSIC_MAX_ALERTS_PER_DAY ?? '4', 10) || 0);
 // BTC_LIQUIDITY_GATE=off → still labels alerts with liquidity, but never suppresses them.
 const BTC_LIQUIDITY_GATE_ENABLED = String(process.env.BTC_LIQUIDITY_GATE || 'on').toLowerCase() !== 'off';
 const {
@@ -1855,6 +1860,15 @@ function combineSignals(indicators) {
         }
     }
 
+    // 3 Oct — Classic engine snapshot: the decision AFTER only the 6 original
+    // gates (ADX, MTF, RSI, VIX, safe window, S/R wall), BEFORE any newer gate or
+    // confidence adjustment. Read-only capture — nothing here changes `signal`.
+    const _classicSnap = {
+        gateSignal: signal, confidence, adxVal,
+        mtfAligned: !!marketState.mtf?.aligned, mtfSoft: !!marketState.mtf?.softAligned,
+        cautionZone: ew?.status === 'caution',
+    };
+
     // ── Price Action Level Analysis ──────────────────────────────────────────
     // After S/R gate: analyze WHAT the price is doing relative to levels.
     // This ADDS votes (unlike the gate above which BLOCKS).
@@ -2894,7 +2908,7 @@ function combineSignals(indicators) {
         console.warn('[Physics tab] compute error:', e.message);
     }
 
-    return { signal, confidence, reasons };
+    return { signal, confidence, reasons, classic: _classicSnap };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -5210,6 +5224,9 @@ const OUTCOME_SOURCES = [
     // same {signal, price} shape (signal: 'BUY CALL'|'BUY PUT').
     { table: 'crude_signal_log',   source: 'Main Engine', instrument: 'CRUDE',   priceExpr: 'price', dirExpr: "CASE WHEN signal='BUY CALL' THEN 'BULLISH' ELSE 'BEARISH' END" },
     { table: 'bitcoin_signal_log', source: 'Main Engine', instrument: 'BITCOIN', priceExpr: 'price', dirExpr: "CASE WHEN signal='BUY CALL' THEN 'BULLISH' ELSE 'BEARISH' END" },
+    // 3 Oct — NIFTY Classic engine (original 6-filter rule, tracked in parallel). One source;
+    // the live-fired vs blocked-by-gate split is done in /api/nifty-classic-accuracy via a join.
+    { table: 'nifty_classic_log', source: 'Classic', instrument: 'NIFTY', priceExpr: 'nifty', dirExpr: 'direction' },
 ];
 
 const OUTCOME_EVAL_DELAY_MIN = 30;   // resolve outcomes 30min after fire
@@ -6551,6 +6568,89 @@ async function checkTelegramAlerts(newSignal) {
     return true;
 }
 
+// ── NIFTY Classic engine — shadow tracker (3 Oct) ────────────────────────────
+// Re-creates the ORIGINAL June decision rule in parallel with the live engine
+// (see src/utils/niftyClassic.js for exactly what "Classic" means) and tracks
+// EVERY Classic signal — whether the live engine fired it or a newer gate held
+// it back — through the same signal_outcomes pipeline as the Bitcoin triggers.
+// It never changes the live signal, the live alerts, or any gate. Telegram goes
+// out ONLY for Classic signals the live engine did not fire itself (when it did,
+// its own alert already exists). Capped per day, auto-muted by the existing
+// scorecard if its track record turns negative.
+const _niftyClassicTracker = createClassicTracker({ cooldownMs: 20 * 60 * 1000, needCycles: 2 });
+let _classicTableReady = false;
+let _classicAlerts = { date: '', n: 0 };
+
+async function ensureNiftyClassicTable() {
+    if (!dbPool || _classicTableReady) return;
+    await dbPool.query(`
+        CREATE TABLE IF NOT EXISTS nifty_classic_log (
+            id             SERIAL PRIMARY KEY,
+            ts             TIMESTAMPTZ DEFAULT NOW(),
+            nifty          NUMERIC,
+            direction      TEXT,       -- 'BULLISH' | 'BEARISH'
+            raw_confidence INT,
+            live_fired     BOOLEAN,    -- did the live engine ALSO fire this direction (within ~30s)?
+            blocked_by     TEXT,       -- comma-separated gate keys when live_fired = false ('other' = floor/confirmation/Trend Lock)
+            vix            NUMERIC
+        )`);
+    _classicTableReady = true;
+}
+
+async function niftyClassicTick(snap, finalSignal, price, liveReasons) {
+    if (!NIFTY_CLASSIC_ENABLED) return;
+    const cand = classicCandidate(snap);
+    const step = _niftyClassicTracker.step(cand.direction, Date.now());
+    if (!step.fire) return;
+
+    // Capture everything at the moment of firing; the live-engine comparison is
+    // re-checked ~30s later so a live signal that merely lags one confirmation
+    // cycle behind isn't mislabelled as "blocked" (and doesn't double-alert).
+    const fireTs = new Date();
+    const dir = cand.direction;
+    const qg = { ...(marketState.qualityGate || {}) };
+    const blockedAtFire = blockedByNewGates(qg, finalSignal, dir, {
+        dynLevelsHardBlocked: DYNAMIC_LEVELS_HARD_GATE && qg.dynLevelsClear === false,
+    });
+    const vix = marketState.vix > 0 ? marketState.vix : null;
+    const atmStrike = classicRoundTo(price, 50);
+    // The live engine's own '⛔ ...' lines explain, in its words, why it held back.
+    const reasonsNow = Array.isArray(liveReasons) ? liveReasons.filter(r => String(r).startsWith('⛔')).slice(0, 2).map(r => String(r).replace(/^⛔\s*/, '')) : [];
+
+    setTimeout(async () => {
+        try {
+            const liveFired = marketState.signal === dir;
+            const blockedBy = liveFired ? [] : (blockedAtFire.length ? blockedAtFire : ['other']);
+            if (dbPool) {
+                await ensureNiftyClassicTable();
+                await dbPool.query(
+                    `INSERT INTO nifty_classic_log (ts, nifty, direction, raw_confidence, live_fired, blocked_by, vix)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                    [fireTs, price, classicToDir(dir), cand.confidence, liveFired, blockedBy.join(','), vix]);
+            }
+            console.log(`🏛️ [Classic] ${dir} @ ${Math.round(price)} (conf ${cand.confidence}%) — ${liveFired ? 'live engine also fired' : 'live engine held back: ' + blockedBy.join(',')}`);
+
+            if (liveFired || !NIFTY_CLASSIC_TELEGRAM || !isConfigured()) return;
+            const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+            if (_classicAlerts.date !== today) _classicAlerts = { date: today, n: 0 };
+            if (_classicAlerts.n >= NIFTY_CLASSIC_MAX_ALERTS_PER_DAY) {
+                console.log(`🏛️ [Classic] daily alert cap (${NIFTY_CLASSIC_MAX_ALERTS_PER_DAY}) reached — logged, not sent`);
+                return;
+            }
+            _classicAlerts.n++;
+            const flow = marketState.optionFlow;
+            const msg = buildClassicMessage({
+                direction: dir, nifty: price, confidence: cand.confidence, blockedBy, vix,
+                atmStrike, atmPremium: dir === 'BUY CALL' ? flow?.atmCEpremium : flow?.atmPEpremium,
+                reasons: reasonsNow,
+            });
+            await sendTriggerAlert('NIFTY', 'Classic', classicToDir(dir), msg); // adds track record + confluence, honours auto-mute
+        } catch (e) {
+            console.warn('[Classic] log/alert error:', e.message);
+        }
+    }, 30 * 1000);
+}
+
 async function updatePrice(price, change, changePct, source) {
     // ── Track today's session-open price (independent of WS OHLC, which is
     // always 0 for the Nifty index). Reset once per IST calendar day so the
@@ -6591,7 +6691,8 @@ async function updatePrice(price, change, changePct, source) {
         try { marketState.delta = computeDelta(); } catch(e) { console.warn('[Delta] error:', e.message); }
     }
 
-    let { signal, confidence, reasons }=combineSignals(indicators);
+    const _combined = combineSignals(indicators);
+    let { signal, confidence, reasons } = _combined;
 
     // ── High-Conviction Filter (added 3 Sep, per user request) ───────────────
     // Root cause found in signal_log review: weekly real (P&L) accuracy was
@@ -6696,6 +6797,8 @@ async function updatePrice(price, change, changePct, source) {
         sseBroadcast('tick', { nifty: price, change, changePct, ts: _now });
     }
     marketState.signal=signal; marketState.confidence=confidence;
+    // 3 Oct — Classic engine shadow tracker (fire-and-forget; never blocks or alters the tick).
+    niftyClassicTick(_combined.classic, signal, price, reasons).catch(e => console.warn('[Classic] tick error:', e.message));
     // Derive strength from confidence so the frontend badge is meaningful
     marketState.strength = signal === 'WAIT' ? 'WEAK'
                          : confidence >= 75   ? 'STRONG'
@@ -9211,6 +9314,8 @@ async function initDB() {
             )
         `);
         console.log('✅ PostgreSQL bitcoin_signal_log table ready');
+        await ensureNiftyClassicTable(); // 3 Oct — NIFTY Classic engine log
+        console.log('✅ PostgreSQL nifty_classic_log table ready');
 
         // ── volume_scanner_log table (10 Sep) ────────────────────────────────
         // Historical record of unusual-volume crossings — one row per stock
@@ -12351,6 +12456,48 @@ app.get('/api/bitcoin-weekly-summary', async (req, res) => {
         const text = req.query.send === '1' ? await sendBtcWeeklySummary(ist)
                    : formatBtcWeeklySummary(await collectBtcWeeklyData(), weekKeyIST(ist));
         res.json({ success: true, sentToTelegram: req.query.send === '1' && isConfigured(), nextAutoSend: 'Sunday 21:00 IST', text });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 3 Oct — NIFTY Classic engine scorecard. Answers: "do the signals the NEWER gates
+// block actually win or lose?" Splits every tracked Classic signal into
+// (a) live engine ALSO fired it, (b) held back by a newer gate, and (c) per gate.
+// Gate rows overlap (one signal can be blocked by several gates at once), so
+// don't add them up. Results: direction after 30 min; "coach" = the Trade-Coach
+// premium simulation (needs ~90 min). Need ~30+ rows per bucket to trust a verdict.
+app.get('/api/nifty-classic-accuracy', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        await ensureNiftyClassicTable();
+        const M = `COUNT(*) AS n,
+            COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')) AS dir_n,
+            ROUND(100.0 * COUNT(*) FILTER (WHERE result = 'WIN') / NULLIF(COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')), 0), 1) AS dir_win_pct,
+            COUNT(*) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL) AS coach_n,
+            ROUND(AVG(GREATEST(-100, LEAST(100, coach_result))) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL), 1) AS avg_coach_pct,
+            ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY coach_result) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL))::numeric, 1) AS median_coach_pct`;
+        const r = await dbPool.query(`
+            WITH c AS (
+                SELECT l.id, l.live_fired, l.blocked_by, o.result, o.coach_result, o.entry_strike
+                FROM nifty_classic_log l
+                JOIN signal_outcomes o ON o.source_table = 'nifty_classic_log' AND o.source_id = l.id
+            )
+            SELECT 'ALL Classic signals' AS bucket, ${M} FROM c
+            UNION ALL SELECT 'Live engine ALSO fired', ${M} FROM c WHERE live_fired
+            UNION ALL SELECT 'Held back by a newer gate', ${M} FROM c WHERE NOT live_fired
+            UNION ALL SELECT 'blocked by: ' || g, ${M} FROM c, LATERAL unnest(string_to_array(blocked_by, ',')) AS g
+                      WHERE NOT live_fired AND g <> '' GROUP BY g
+        `);
+        const rows = r.rows.map(x => ({ ...x, bucket: x.bucket.startsWith('blocked by: ')
+            ? 'blocked by: ' + (CLASSIC_GATE_LABELS[x.bucket.slice(12)] || x.bucket.slice(12)) : x.bucket }));
+        const logged = await dbPool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE live_fired)::int AS live_fired, COUNT(*) FILTER (WHERE NOT live_fired)::int AS held_back FROM nifty_classic_log`);
+        res.json({
+            success: true, enabled: NIFTY_CLASSIC_ENABLED, telegram: NIFTY_CLASSIC_TELEGRAM, maxAlertsPerDay: NIFTY_CLASSIC_MAX_ALERTS_PER_DAY,
+            logged: logged.rows[0],
+            note: 'Gate rows overlap. Trust a bucket only with 30+ resolved rows. Classic = original 6-filter rule re-created in parallel, not June\'s literal code.',
+            rows,
+        });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
