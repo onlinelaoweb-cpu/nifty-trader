@@ -158,6 +158,22 @@ async function fetchDeltaOptionChain(expiryDateDDMMYYYY, spotPrice = null) {
             else if (r.contract_type === 'put_options') strikes[key].PE = ltp;
         }
 
+        // 3 Oct — per-strike best bid/ask (Delta's own quotes), for the weekend-
+        // liquidity gate and spread-strategy tracking. Purely additive: the
+        // existing `strikes` (LTP) map above is untouched. Shape:
+        // { "<strike>": { CE: {bid, ask}|null, PE: {bid, ask}|null } }.
+        const quotes = {};
+        for (const r of rows) {
+            const k = parseFloat(r.strike_price);
+            if (isNaN(k)) continue;
+            const bid = r.quotes?.best_bid ? parseFloat(r.quotes.best_bid) : null;
+            const ask = r.quotes?.best_ask ? parseFloat(r.quotes.best_ask) : null;
+            const key = String(k);
+            if (!quotes[key]) quotes[key] = { CE: null, PE: null };
+            const side = r.contract_type === 'call_options' ? 'CE' : r.contract_type === 'put_options' ? 'PE' : null;
+            if (side) quotes[key][side] = { bid: bid > 0 ? bid : null, ask: ask > 0 ? ask : null };
+        }
+
         let atmStrike = null, atmCEpremium = null, atmPEpremium = null;
         if (spotPrice > 0) {
             const strikes = [...new Set(rows.map(r => parseFloat(r.strike_price)).filter(s => !isNaN(s)))];
@@ -173,7 +189,9 @@ async function fetchDeltaOptionChain(expiryDateDDMMYYYY, spotPrice = null) {
         }
 
         deltaRecordSuccess();
-        return { pcr, callOi, putOi, atmStrike, atmCEpremium, atmPEpremium, expiry: expiryDateDDMMYYYY, rowCount: rows.length, strikes, chainId: expiryDateDDMMYYYY };
+        const atmCEquote = atmStrike != null ? (quotes[String(atmStrike)]?.CE || null) : null;
+        const atmPEquote = atmStrike != null ? (quotes[String(atmStrike)]?.PE || null) : null;
+        return { pcr, callOi, putOi, atmStrike, atmCEpremium, atmPEpremium, atmCEquote, atmPEquote, quotes, expiry: expiryDateDDMMYYYY, rowCount: rows.length, strikes, chainId: expiryDateDDMMYYYY };
     } catch (e) {
         deltaRecordFailure('fetchDeltaOptionChain');
         console.warn('[Delta] fetchDeltaOptionChain error:', e.response?.status || e.message);

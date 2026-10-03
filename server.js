@@ -93,6 +93,13 @@ const {
 } = require('./src/api/nseData');
 // 25 Sep — Delta Exchange India client, for the new Bitcoin-options feature.
 const { fetchDeltaTicker, getNearestBTCExpiry, fetchDeltaOptionChain, fetchDeltaHistoricalCandles } = require('./src/api/deltaExchange');
+// 3 Oct — weekend / thin-liquidity gate for Bitcoin option alerts (pure helpers).
+const { assessBitcoinLiquidity, liquidityLine, isBitcoinWeekendThin, thresholds: btcLiquidityThresholds } = require('./src/utils/btcLiquidity');
+// 3 Oct — defined-risk spread tracking for Bitcoin signals (pure helpers).
+const { pickShortStrike, spreadEntryDebit, spreadExitValue, spreadOutcome } = require('./src/utils/btcSpread');
+const BTC_SPREAD_WIDTH_STEPS = Math.max(1, parseInt(process.env.BTC_SPREAD_WIDTH_STEPS) || 2); // short leg = N listed strikes further OTM
+// BTC_LIQUIDITY_GATE=off → still labels alerts with liquidity, but never suppresses them.
+const BTC_LIQUIDITY_GATE_ENABLED = String(process.env.BTC_LIQUIDITY_GATE || 'on').toLowerCase() !== 'off';
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
@@ -4912,6 +4919,26 @@ const AUTOMUTE_UNMUTE_AT    = 2;    // once muted, avg must recover to +2% (not 
 // intraday regimes even within a single calendar day. Bypasses the day-gate
 // only, not the sample-gate itself.
 const AUTOMUTE_HIGH_CONFIDENCE_SAMPLES = AUTOMUTE_MIN_SAMPLES * 3; // 90
+// 3 Oct — FAST-KILL rule. Found from the live /api/signal-accuracy export:
+// Bitcoin Main Engine sat at n=18, avg -21.1%, median -31.4% (only 2 of 18
+// profitable) and was NOT muted, because the normal rule needs 30 samples.
+// A strategy this deep in the red doesn't need 30 trades to be judged: at
+// 15+ Trade-Coach results with avg <= -15% it is muted immediately, bypassing
+// the day-gate. Because it is re-derived from the data on every scorecard
+// refresh (not remembered), it also survives a Railway restart — the
+// in-memory _mutedStrategies set is empty after a deploy, so the older
+// "once muted, stay muted" hysteresis alone could not protect a muted
+// strategy whose sample is below 30. Un-mute still needs avg >= +2%.
+const AUTOMUTE_FAST_MIN_SAMPLES = 15;
+const AUTOMUTE_FAST_AVG         = -15;
+// Pure decision function (no I/O) so it can be unit-tested in isolation.
+function decideAutomute({ wasMuted, coachN, coachAvg, dayGateSatisfied }) {
+    if (!AUTOMUTE_ENABLED || coachAvg === null || coachAvg === undefined) return false;
+    if (coachN >= AUTOMUTE_FAST_MIN_SAMPLES && coachAvg <= AUTOMUTE_FAST_AVG) return true;
+    if (wasMuted) return coachAvg < AUTOMUTE_UNMUTE_AT;
+    if (coachN >= AUTOMUTE_MIN_SAMPLES && dayGateSatisfied) return coachAvg < 0;
+    return false;
+}
 const CONFLUENCE_WINDOW_MS  = 10 * 60 * 1000;
 const SCORECARD_REFRESH_MS  = 5 * 60 * 1000;
 
@@ -4950,6 +4977,23 @@ async function refreshTriggerScorecard() {
             GROUP BY instrument, source
         `);
         const firstLoad = _scorecardLoadedAt === 0;
+        // 3 Oct — persist mute state in Postgres so it survives a Railway
+        // restart/deploy (the in-memory set used to start empty, which let a
+        // strategy muted at avg -5% with <30 samples silently un-mute).
+        // Loaded ONCE on first scorecard run, before any verdict is computed.
+        // Any DB error here is non-fatal: we simply fall back to the old
+        // in-memory behaviour.
+        if (firstLoad) {
+            try {
+                await dbPool.query(`CREATE TABLE IF NOT EXISTS strategy_mute_state (
+                    key TEXT PRIMARY KEY, muted BOOLEAN NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW())`);
+                const saved = await dbPool.query(`SELECT key FROM strategy_mute_state WHERE muted = TRUE`);
+                for (const row of saved.rows) _mutedStrategies.add(row.key);
+                if (saved.rows.length) console.log(`🔇 [Auto-mute] restored ${saved.rows.length} muted strateg${saved.rows.length > 1 ? 'ies' : 'y'} from DB`);
+            } catch (e) {
+                console.warn('[Auto-mute] persisted-state load failed (using in-memory only):', e.message);
+            }
+        }
         const next = {};
         const transitions = [];
         for (const row of r.rows) {
@@ -4968,13 +5012,7 @@ async function refreshTriggerScorecard() {
             // stays muted until its avg genuinely recovers to
             // AUTOMUTE_UNMUTE_AT, regardless of sample size. Muting a NEW
             // strategy still requires the full sample + day gates.
-            if (AUTOMUTE_ENABLED && coachAvg !== null) {
-                if (_mutedStrategies.has(key)) {
-                    muted = coachAvg < AUTOMUTE_UNMUTE_AT;
-                } else if (coachN >= AUTOMUTE_MIN_SAMPLES && dayGateSatisfied) {
-                    muted = coachAvg < 0;
-                }
-            }
+            muted = decideAutomute({ wasMuted: _mutedStrategies.has(key), coachN, coachAvg, dayGateSatisfied });
             next[key] = {
                 instrument: row.instrument, source: row.source,
                 dirN, dirWinPct: dirN > 0 ? Math.round(100 * Number(row.dir_wins) / dirN) : null,
@@ -4986,6 +5024,18 @@ async function refreshTriggerScorecard() {
         }
         _triggerScorecard = next;
         _scorecardLoadedAt = Date.now();
+        // Persist every mute/un-mute change (including the first load, so
+        // strategies already muted by the rules get saved). Non-fatal on error.
+        for (const t of transitions) {
+            try {
+                await dbPool.query(
+                    `INSERT INTO strategy_mute_state (key, muted, updated_at) VALUES ($1, $2, NOW())
+                     ON CONFLICT (key) DO UPDATE SET muted = EXCLUDED.muted, updated_at = NOW()`,
+                    [t.key, t.muted]);
+            } catch (e) {
+                console.warn('[Auto-mute] persist failed for', t.key, e.message);
+            }
+        }
         // Announce mute/unmute changes (not on the very first load after a
         // deploy — that would re-announce every already-muted strategy).
         if (!firstLoad) {
@@ -5070,7 +5120,22 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
             console.log(`🔇 [Auto-mute] suppressed ${instrument} ${source} ${direction} alert (Trade-Coach avg ${card.coachAvg?.toFixed(1)}%, n=${card.coachN}) — still tracked`);
             return;
         }
-        const block = buildTrackRecordBlock(card, agree, disagree);
+        // 3 Oct — Bitcoin liquidity gate. Measures the REAL bid-ask spread of the
+        // ATM option this signal would buy. BLOCK (no two-sided market, or spread
+        // over BTC_SPREAD_BLOCK_PCT) suppresses the Telegram alert only — the fire
+        // is still logged and tracked, exactly like auto-mute, so the effect of the
+        // gate stays measurable (see /api/bitcoin-weekend-split). Weekend = thin
+        // hours: gets a label even when the spread itself is fine.
+        let liqLine = null;
+        if (instrument === 'BITCOIN') {
+            const liq = assessBitcoinLiquidity(marketState.bitcoin?.pcr, direction);
+            if (liq.level === 'BLOCK' && BTC_LIQUIDITY_GATE_ENABLED) {
+                console.log(`💧 [BTC Liquidity] suppressed ${source} ${direction} alert — ${liq.reason}${liq.weekend ? ' (weekend)' : ''} — still tracked`);
+                return;
+            }
+            liqLine = liquidityLine(liq);
+        }
+        const block = buildTrackRecordBlock(card, agree, disagree) + (liqLine ? `\n${liqLine}` : '');
         const parts = msg.split('\n');
         const footerIdx = parts.map(l => l.trim().startsWith('<i>')).lastIndexOf(true);
         finalMsg = footerIdx >= 0
@@ -5443,6 +5508,81 @@ async function finalizeVolAdjustedCoach() {
     }
 }
 
+// ── Bitcoin spread tracking (3 Oct) ──────────────────────────────────────────
+// Locks, for every recent Bitcoin signal that already has a locked long strike,
+// the matching defined-risk vertical spread (see src/utils/btcSpread.js) priced
+// at EXECUTABLE bid/ask, then evaluateBitcoinSpreads() prices the same two legs
+// again once the signal is 30 minutes old. Same honest limitation as the
+// single-leg tracker: entry is locked at the next harvest cycle (<=10 min after
+// fire) from the live chain, since fire-time quotes aren't stored.
+async function lockBitcoinSpreads() {
+    if (!dbPool) return;
+    try {
+        const chain = marketState.bitcoin?.pcr;
+        if (!chain?.quotes || !Object.keys(chain.quotes).length) return;
+        const rows = await dbPool.query(`
+            SELECT id, direction, entry_strike, entry_chain_id FROM signal_outcomes
+            WHERE instrument = 'BITCOIN' AND entry_strike IS NOT NULL
+              AND spread_entry_debit IS NULL AND spread_result IS NULL
+              AND fire_ts >= NOW() - INTERVAL '10 minutes'
+        `);
+        let locked = 0;
+        for (const row of rows.rows) {
+            if ((row.entry_chain_id || null) !== (chain.chainId || null)) continue; // chain rolled — strikes aren't comparable
+            const longStrike = Number(row.entry_strike);
+            const shortStrike = pickShortStrike(chain.quotes, row.direction, longStrike, BTC_SPREAD_WIDTH_STEPS);
+            if (shortStrike === null) continue;
+            const debit = spreadEntryDebit(chain.quotes, row.direction, longStrike, shortStrike);
+            if (debit === null) continue;
+            const r = await dbPool.query(
+                `UPDATE signal_outcomes SET spread_short_strike = $1, spread_entry_debit = $2
+                 WHERE id = $3 AND spread_entry_debit IS NULL AND spread_result IS NULL`,
+                [shortStrike, debit, row.id]);
+            locked += r.rowCount || 0;
+        }
+        if (locked > 0) console.log(`📊 [BTC Spreads] Locked ${locked} spread(s) (width ${BTC_SPREAD_WIDTH_STEPS} strikes)`);
+    } catch (e) {
+        console.warn('[BTC Spreads] lock error:', e.message);
+    }
+}
+
+async function evaluateBitcoinSpreads() {
+    if (!dbPool) return;
+    try {
+        const pending = await dbPool.query(`
+            SELECT id, direction, entry_strike, entry_chain_id, spread_short_strike, spread_entry_debit, fire_ts FROM signal_outcomes
+            WHERE instrument = 'BITCOIN' AND spread_entry_debit IS NOT NULL AND spread_result IS NULL
+              AND fire_ts <= NOW() - INTERVAL '${OUTCOME_EVAL_DELAY_MIN} minutes'
+            ORDER BY fire_ts ASC LIMIT 300
+        `);
+        if (!pending.rows.length) return;
+        const chain = marketState.bitcoin?.pcr;
+        let resolved = 0, abandoned = 0;
+        for (const row of pending.rows) {
+            const ageMin = (Date.now() - new Date(row.fire_ts).getTime()) / 60000;
+            let outcome = null, exitValue = null;
+            if (chain?.quotes && (row.entry_chain_id || null) === (chain.chainId || null)) {
+                exitValue = spreadExitValue(chain.quotes, row.direction, Number(row.entry_strike), Number(row.spread_short_strike));
+                outcome = spreadOutcome(Number(row.spread_entry_debit), exitValue);
+            }
+            if (outcome) {
+                await dbPool.query(
+                    `UPDATE signal_outcomes SET spread_exit_value = $1, spread_pct_move = $2, spread_result = $3 WHERE id = $4`,
+                    [exitValue, parseFloat(outcome.pct.toFixed(2)), outcome.result, row.id]);
+                resolved++;
+            } else if (ageMin > 120) {
+                // Can't be priced even 2h later (chain rolled / quotes gone): mark so
+                // it stops occupying this ordered query forever. Excluded from stats.
+                await dbPool.query(`UPDATE signal_outcomes SET spread_result = 'NO_DATA' WHERE id = $1`, [row.id]);
+                abandoned++;
+            }
+        }
+        if (resolved > 0 || abandoned > 0) console.log(`📊 [BTC Spreads] Resolved ${resolved} spread outcome(s)${abandoned ? `, ${abandoned} abandoned (no data)` : ''}`);
+    } catch (e) {
+        console.warn('[BTC Spreads] evaluate error:', e.message);
+    }
+}
+
 async function harvestSignalOutcomes() {
     if (!dbPool) return;
     // 26 Sep — diagnostic logging added: user reported only NIFTY showing
@@ -5501,6 +5641,9 @@ async function harvestSignalOutcomes() {
     } catch (e) {
         console.warn('[Signal Outcomes] entry_premium backfill error:', e.message);
     }
+
+    // 3 Oct — lock the Bitcoin spread leg for any fresh signal that now has a locked long strike.
+    await lockBitcoinSpreads();
 
     // 26 Sep — TOTAL current state (not just this cycle's delta) — this is
     // the line that actually answers "does Crude/Bitcoin data exist in
@@ -9659,6 +9802,16 @@ async function initDB() {
         // recomputeCoachForLiveGrid() re-scores any row whose grid doesn't
         // match its instrument's current live grid.
         await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS coach_grid TEXT`);
+        // 3 Oct — Bitcoin defined-risk spread tracking (Bull Call / Bear Put
+        // spread on each Bitcoin signal). Long leg = entry_strike (already
+        // locked above); these columns hold the short leg + executable-price
+        // entry/exit. All NULL for non-Bitcoin rows and for Bitcoin rows that
+        // fired before this feature. spread_result: WIN|LOSS|FLAT|NO_DATA.
+        await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS spread_short_strike NUMERIC`);
+        await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS spread_entry_debit NUMERIC`);
+        await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS spread_exit_value NUMERIC`);
+        await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS spread_pct_move NUMERIC`);
+        await dbPool.query(`ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS spread_result TEXT`);
         console.log('✅ PostgreSQL signal_outcomes table ready');
 
         // 27 Sep — periodic premium-samples for the Trade-Coach simulation
@@ -12001,7 +12154,95 @@ app.get('/api/signal-accuracy', async (req, res) => {
         // 28 Sep — flag strategies whose Telegram alerts are currently
         // auto-muted (30+ Trade-Coach results with a negative average).
         const rows = r.rows.map(row => ({ ...row, muted: _mutedStrategies.has(`${row.instrument}|${row.source}`) }));
-        res.json({ success: true, rows, automute: { enabled: AUTOMUTE_ENABLED, minSamples: AUTOMUTE_MIN_SAMPLES } });
+        res.json({ success: true, rows, automute: { enabled: AUTOMUTE_ENABLED, minSamples: AUTOMUTE_MIN_SAMPLES, fastMinSamples: AUTOMUTE_FAST_MIN_SAMPLES, fastAvgPct: AUTOMUTE_FAST_AVG } });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 3 Oct — live view of Bitcoin option liquidity (what the alert gate sees right now).
+app.get('/api/bitcoin-liquidity', (req, res) => {
+    const chain = marketState.bitcoin?.pcr;
+    const now = new Date();
+    res.json({
+        success: true,
+        gateEnabled: BTC_LIQUIDITY_GATE_ENABLED,
+        weekendThinNow: isBitcoinWeekendThin(now),
+        thresholds: btcLiquidityThresholds(),
+        chainAgeNote: 'chain refreshes every ~60s while the Bitcoin window is open',
+        atm: { strike: chain?.atmStrike ?? null, CE: chain?.atmCEquote ?? null, PE: chain?.atmPEquote ?? null },
+        bullish_CE: assessBitcoinLiquidity(chain, 'BULLISH', now),
+        bearish_PE: assessBitcoinLiquidity(chain, 'BEARISH', now),
+    });
+});
+
+// 3 Oct — Bitcoin results split WEEKEND vs WEEKDAY (UTC Sat/Sun, same definition
+// as the liquidity gate). Answers "do weekend signals actually do worse here?"
+// with this app's own data, so the gate thresholds can be tuned from evidence.
+// Includes fires the gate suppressed (they are still tracked).
+app.get('/api/bitcoin-weekend-split', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const r = await dbPool.query(`
+            SELECT COALESCE(source, 'ALL SOURCES') AS source,
+                   CASE WHEN EXTRACT(DOW FROM fire_ts AT TIME ZONE 'UTC') IN (0,6) THEN 'WEEKEND' ELSE 'WEEKDAY' END AS bucket,
+                   COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')) AS dir_n,
+                   ROUND(100.0 * COUNT(*) FILTER (WHERE result = 'WIN')
+                         / NULLIF(COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')), 0), 1) AS dir_win_pct,
+                   COUNT(*) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL) AS coach_n,
+                   ROUND(AVG(GREATEST(-100, LEAST(100, coach_result)))
+                         FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL), 1) AS avg_coach_pct,
+                   ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY coach_result)
+                         FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL))::numeric, 1) AS median_coach_pct
+            FROM signal_outcomes
+            WHERE instrument = 'BITCOIN'
+            GROUP BY GROUPING SETS (
+                (source, CASE WHEN EXTRACT(DOW FROM fire_ts AT TIME ZONE 'UTC') IN (0,6) THEN 'WEEKEND' ELSE 'WEEKDAY' END),
+                (CASE WHEN EXTRACT(DOW FROM fire_ts AT TIME ZONE 'UTC') IN (0,6) THEN 'WEEKEND' ELSE 'WEEKDAY' END)
+            )
+            ORDER BY 1, 2
+        `);
+        res.json({ success: true, definition: 'WEEKEND = Saturday/Sunday UTC', rows: r.rows });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 3 Oct — results of the defined-risk Bitcoin SPREAD tracking (Bull Call / Bear Put),
+// priced at executable bid/ask. ?weekend=1 → weekend fires only, ?weekend=0 → weekdays only
+// (UTC Sat/Sun, same as the liquidity gate). 'single_leg_ltp_*' are the app's older
+// naked-option numbers on the SAME rows, shown for rough comparison only — they use
+// last-traded prices (no bid-ask cost), so they look better than a like-for-like result.
+app.get('/api/bitcoin-spread-accuracy', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const dow = `EXTRACT(DOW FROM fire_ts AT TIME ZONE 'UTC')`;
+        const wk = req.query.weekend === '1' ? `AND ${dow} IN (0,6)` : req.query.weekend === '0' ? `AND ${dow} NOT IN (0,6)` : '';
+        const r = await dbPool.query(`
+            SELECT COALESCE(source, 'ALL SOURCES') AS source,
+                   COUNT(*) AS spread_n,
+                   COUNT(*) FILTER (WHERE spread_result = 'WIN')  AS win_n,
+                   COUNT(*) FILTER (WHERE spread_result = 'LOSS') AS loss_n,
+                   COUNT(*) FILTER (WHERE spread_result = 'FLAT') AS flat_n,
+                   ROUND(100.0 * COUNT(*) FILTER (WHERE spread_result = 'WIN')
+                         / NULLIF(COUNT(*) FILTER (WHERE spread_result IN ('WIN','LOSS')), 0), 1) AS win_rate_pct,
+                   ROUND(AVG(spread_pct_move), 1) AS avg_spread_pct,
+                   ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY spread_pct_move))::numeric, 1) AS median_spread_pct,
+                   ROUND(AVG(spread_entry_debit), 1) AS avg_debit,
+                   ROUND(AVG(premium_pct_move) FILTER (WHERE premium_pct_move IS NOT NULL), 1) AS single_leg_ltp_avg_pct,
+                   ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY premium_pct_move)
+                          FILTER (WHERE premium_pct_move IS NOT NULL))::numeric, 1) AS single_leg_ltp_median_pct
+            FROM signal_outcomes
+            WHERE instrument = 'BITCOIN' AND spread_pct_move IS NOT NULL AND spread_result <> 'NO_DATA' ${wk}
+            GROUP BY ROLLUP (source)
+            ORDER BY (source IS NULL), source
+        `);
+        res.json({
+            success: true, widthSteps: BTC_SPREAD_WIDTH_STEPS,
+            filter: req.query.weekend === '1' ? 'weekend only' : req.query.weekend === '0' ? 'weekdays only' : 'all',
+            note: 'Spread pricing is executable (pay ask / receive bid, exit at bid / ask). Win/loss threshold ±10%. Need ~30+ rows per source before trusting a verdict.',
+            rows: r.rows,
+        });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
@@ -13268,6 +13509,9 @@ function startPollingIntervals() {
     setTimeout(() => { harvestOutcomesTick(); setInterval(harvestOutcomesTick, 5 * 60 * 1000); }, 150 * 1000);
     const evaluateOutcomesTick = () => evaluateSignalOutcomes().catch(e => console.warn('[Signal Outcomes] evaluate tick error:', e.message));
     setTimeout(() => { evaluateOutcomesTick(); setInterval(evaluateOutcomesTick, 5 * 60 * 1000); }, 155 * 1000);
+    // 3 Oct — Bitcoin spread outcome evaluation, same 5 min cadence, staggered after evaluate.
+    const evaluateBtcSpreadsTick = () => evaluateBitcoinSpreads().catch(e => console.warn('[BTC Spreads] tick error:', e.message));
+    setTimeout(() => { evaluateBtcSpreadsTick(); setInterval(evaluateBtcSpreadsTick, 5 * 60 * 1000); }, 157 * 1000);
     // Trade-Coach path-sampling + finalization (27 Sep) — 5 min cadence,
     // staggered after harvest/evaluate.
     const sampleOutcomePathsTick = () => sampleOutcomePaths().catch(e => console.warn('[Signal Outcomes] path-sample tick error:', e.message));
