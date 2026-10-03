@@ -4958,8 +4958,22 @@ async function refreshTriggerScorecard() {
             const coachAvg = row.coach_avg == null ? null : Number(row.coach_avg);
             let muted = false;
             const dayGateSatisfied = coachDays >= automuteMinDaysFor(row.instrument) || coachN >= AUTOMUTE_HIGH_CONFIDENCE_SAMPLES;
-            if (AUTOMUTE_ENABLED && coachN >= AUTOMUTE_MIN_SAMPLES && dayGateSatisfied && coachAvg !== null) {
-                muted = _mutedStrategies.has(key) ? coachAvg < AUTOMUTE_UNMUTE_AT : coachAvg < 0;
+            // 3 Oct — FIX: the un-mute side of the hysteresis used to sit
+            // behind the same sample gate as the mute side, so an already-
+            // muted strategy whose sample merely SHRANK below 30 (seen live:
+            // the Bitcoin Main Engine duplicate cleanup took it from ~135 to
+            // 18 rows) was un-muted at avg -21.1% — "not enough data to mute"
+            // was being read as "good enough to un-mute". A smaller sample
+            // is not evidence of improvement: once muted, a strategy now
+            // stays muted until its avg genuinely recovers to
+            // AUTOMUTE_UNMUTE_AT, regardless of sample size. Muting a NEW
+            // strategy still requires the full sample + day gates.
+            if (AUTOMUTE_ENABLED && coachAvg !== null) {
+                if (_mutedStrategies.has(key)) {
+                    muted = coachAvg < AUTOMUTE_UNMUTE_AT;
+                } else if (coachN >= AUTOMUTE_MIN_SAMPLES && dayGateSatisfied) {
+                    muted = coachAvg < 0;
+                }
             }
             next[key] = {
                 instrument: row.instrument, source: row.source,
