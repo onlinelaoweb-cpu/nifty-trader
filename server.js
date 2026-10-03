@@ -98,6 +98,8 @@ const { assessBitcoinLiquidity, liquidityLine, isBitcoinWeekendThin, thresholds:
 // 3 Oct — defined-risk spread tracking for Bitcoin signals (pure helpers).
 const { pickShortStrike, spreadEntryDebit, spreadExitValue, spreadOutcome } = require('./src/utils/btcSpread');
 const BTC_SPREAD_WIDTH_STEPS = Math.max(1, parseInt(process.env.BTC_SPREAD_WIDTH_STEPS) || 2); // short leg = N listed strikes further OTM
+// 3 Oct — weekly Bitcoin Telegram report (pure formatter + due-check).
+const { weekKeyIST, isWeeklySummaryDue, formatBtcWeeklySummary } = require('./src/utils/btcWeeklySummary');
 // BTC_LIQUIDITY_GATE=off → still labels alerts with liquidity, but never suppresses them.
 const BTC_LIQUIDITY_GATE_ENABLED = String(process.env.BTC_LIQUIDITY_GATE || 'on').toLowerCase() !== 'off';
 const {
@@ -5580,6 +5582,99 @@ async function evaluateBitcoinSpreads() {
         if (resolved > 0 || abandoned > 0) console.log(`📊 [BTC Spreads] Resolved ${resolved} spread outcome(s)${abandoned ? `, ${abandoned} abandoned (no data)` : ''}`);
     } catch (e) {
         console.warn('[BTC Spreads] evaluate error:', e.message);
+    }
+}
+
+// ── Bitcoin weekly Telegram report (3 Oct) ───────────────────────────────────
+// Sent once per ISO week, Sunday 21:00-23:59 IST (the evening before the week
+// starts). "Sent for week X" is stored in Postgres so a Railway restart or a
+// redeploy the same evening can't send a duplicate — and if the server was down
+// at 21:00, the next tick that night still sends it. Without a DB it falls back
+// to an in-memory flag (worst case after a restart: one duplicate).
+let _btcWeeklySentWeekKey = null;
+let _btcWeeklyInFlight = false;
+
+async function collectBtcWeeklyData() {
+    const out = { spread: null, split: [], muted: [] };
+    if (dbPool) {
+        const sp = await dbPool.query(`
+            SELECT COUNT(*) AS n_all,
+                   COUNT(*) FILTER (WHERE fire_ts >= NOW() - INTERVAL '7 days') AS n7,
+                   COUNT(*) FILTER (WHERE spread_result = 'WIN')  AS wins_all,
+                   COUNT(*) FILTER (WHERE spread_result = 'LOSS') AS losses_all,
+                   AVG(spread_pct_move) AS avg_all,
+                   PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY spread_pct_move) AS median_all,
+                   AVG(spread_pct_move) FILTER (WHERE fire_ts >= NOW() - INTERVAL '7 days') AS avg7,
+                   PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY spread_pct_move)
+                       FILTER (WHERE fire_ts >= NOW() - INTERVAL '7 days') AS median7,
+                   AVG(premium_pct_move) AS sl_avg_all,
+                   PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY premium_pct_move) AS sl_median_all
+            FROM signal_outcomes
+            WHERE instrument = 'BITCOIN' AND spread_pct_move IS NOT NULL AND spread_result <> 'NO_DATA'
+        `);
+        out.spread = sp.rows[0] || null;
+        const wk = await dbPool.query(`
+            SELECT CASE WHEN EXTRACT(DOW FROM fire_ts AT TIME ZONE 'UTC') IN (0,6) THEN 'WEEKEND' ELSE 'WEEKDAY' END AS bucket,
+                   COUNT(*) AS n,
+                   COUNT(*) FILTER (WHERE fire_ts >= NOW() - INTERVAL '7 days') AS n7,
+                   AVG(GREATEST(-100, LEAST(100, coach_result))) AS avg,
+                   PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY coach_result) AS median
+            FROM signal_outcomes
+            WHERE instrument = 'BITCOIN' AND coach_result IS NOT NULL AND entry_strike IS NOT NULL
+            GROUP BY 1
+        `);
+        out.split = wk.rows;
+    }
+    out.muted = [..._mutedStrategies].filter(k => k.startsWith('BITCOIN|')).map(k => k.slice('BITCOIN|'.length)).sort();
+    return out;
+}
+
+async function sendBtcWeeklySummary(ist) {
+    const msg = formatBtcWeeklySummary(await collectBtcWeeklyData(), weekKeyIST(ist || getIST()));
+    if (isConfigured()) await sendRawMessage(msg);
+    return msg;
+}
+
+async function btcWeeklySummaryTick() {
+    if (_btcWeeklyInFlight) return;
+    _btcWeeklyInFlight = true;
+    try {
+        const ist = getIST();
+        // Cheap pre-check first so the DB is only touched on Sunday evenings.
+        if (!isWeeklySummaryDue(ist, null)) return;
+        let lastSent = _btcWeeklySentWeekKey;
+        if (dbPool) {
+            try {
+                await dbPool.query(`CREATE TABLE IF NOT EXISTS weekly_summary_state (
+                    name TEXT PRIMARY KEY, week_key TEXT NOT NULL, sent_at TIMESTAMPTZ DEFAULT NOW())`);
+                const r = await dbPool.query(`SELECT week_key FROM weekly_summary_state WHERE name = 'bitcoin'`);
+                if (r.rows[0]?.week_key) lastSent = r.rows[0].week_key;
+            } catch (e) { console.warn('[BTC Weekly] state load failed (using in-memory flag):', e.message); }
+        }
+        if (!isWeeklySummaryDue(ist, lastSent)) return;
+        const wk = weekKeyIST(ist);
+        // Mark BEFORE sending: a failed send is retried on the next tick only if
+        // sendRawMessage throws; marking first prevents a double-send if the
+        // send succeeds but the follow-up DB write is what fails.
+        _btcWeeklySentWeekKey = wk;
+        if (dbPool) {
+            await dbPool.query(
+                `INSERT INTO weekly_summary_state (name, week_key, sent_at) VALUES ('bitcoin', $1, NOW())
+                 ON CONFLICT (name) DO UPDATE SET week_key = EXCLUDED.week_key, sent_at = NOW()`, [wk]
+            ).catch(e => console.warn('[BTC Weekly] state save failed:', e.message));
+        }
+        try {
+            await sendBtcWeeklySummary(ist);
+            console.log(`📅 [BTC Weekly] Sent weekly Bitcoin report (${wk})`);
+        } catch (e) {
+            _btcWeeklySentWeekKey = null; // allow a retry on the next tick
+            if (dbPool) await dbPool.query(`DELETE FROM weekly_summary_state WHERE name = 'bitcoin' AND week_key = $1`, [wk]).catch(() => {});
+            throw e;
+        }
+    } catch (e) {
+        console.warn('[BTC Weekly] tick error:', e.message);
+    } finally {
+        _btcWeeklyInFlight = false;
     }
 }
 
@@ -12248,6 +12343,19 @@ app.get('/api/bitcoin-spread-accuracy', async (req, res) => {
     }
 });
 
+// 3 Oct — preview the weekly Bitcoin report any time (does NOT affect the Sunday
+// schedule). ?send=1 also pushes it to Telegram right now, as a test.
+app.get('/api/bitcoin-weekly-summary', async (req, res) => {
+    try {
+        const ist = getIST();
+        const text = req.query.send === '1' ? await sendBtcWeeklySummary(ist)
+                   : formatBtcWeeklySummary(await collectBtcWeeklyData(), weekKeyIST(ist));
+        res.json({ success: true, sentToTelegram: req.query.send === '1' && isConfigured(), nextAutoSend: 'Sunday 21:00 IST', text });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // Volume scanner Phase 1 debug endpoint — confirms the F&O stock universe
 // resolves correctly (expect ~180-200 stocks) before Phase 2 wires up live
 // WebSocket subscriptions + volume-baseline tracking.
@@ -13512,6 +13620,8 @@ function startPollingIntervals() {
     // 3 Oct — Bitcoin spread outcome evaluation, same 5 min cadence, staggered after evaluate.
     const evaluateBtcSpreadsTick = () => evaluateBitcoinSpreads().catch(e => console.warn('[BTC Spreads] tick error:', e.message));
     setTimeout(() => { evaluateBtcSpreadsTick(); setInterval(evaluateBtcSpreadsTick, 5 * 60 * 1000); }, 157 * 1000);
+    // 3 Oct — weekly Bitcoin report (Sunday 21:00 IST onwards, once per ISO week).
+    setTimeout(() => { btcWeeklySummaryTick(); setInterval(btcWeeklySummaryTick, 10 * 60 * 1000); }, 240 * 1000);
     // Trade-Coach path-sampling + finalization (27 Sep) — 5 min cadence,
     // staggered after harvest/evaluate.
     const sampleOutcomePathsTick = () => sampleOutcomePaths().catch(e => console.warn('[Signal Outcomes] path-sample tick error:', e.message));
