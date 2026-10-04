@@ -1,6 +1,74 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- AUTH SHIM (4 Oct): when APP_TOKEN is set on the server, EVERY /api call must carry the token, but
+     ~45 of the dashboard's own calls are plain fetch('/api/...') / EventSource('/api/stream') that never
+     did — so with APP_TOKEN set the whole dashboard went blank (found by loading it against a token-protected
+     server: 32/32 calls = 401, even after logging in). This attaches the saved login token (vn_token) to
+     every same-origin /api call, in ONE place, without touching those ~45 call sites.
+       - fetch      -> adds the x-app-token header (an explicit header set by the caller is never overwritten)
+       - EventSource-> can't send headers, so the token goes in ?key= (the server accepts it there)
+       - /api/health stays untouched (the server leaves it open for the splash screen)
+       - no saved token => nothing is added (the login overlay is shown in that case, as before)
+       - a 401 while a token WAS sent means the saved token is wrong/old (e.g. APP_TOKEN was changed):
+         the saved token is cleared and the login overlay is shown once, instead of a silently blank page.
+     Must stay the FIRST script on the page so it wraps fetch before anything uses it. -->
+<script>
+(function () {
+  try {
+    var nativeFetch = window.fetch;
+    if (typeof nativeFetch !== 'function') return;
+    var kicked = false;
+    function tok() {
+      try { return window._appToken || localStorage.getItem('vn_token') || ''; } catch (e) { return ''; }
+    }
+    function apiUrl(u) {
+      try {
+        var raw = typeof u === 'string' ? u : (u && (u.url || (u.href))) || '';
+        var x = new URL(raw, window.location.href);
+        return x.origin === window.location.origin && x.pathname.indexOf('/api/') === 0 &&
+               x.pathname !== '/api/health' && x.pathname !== '/api/auth/check';
+      } catch (e) { return false; }
+    }
+    window.fetch = function (input, init) {
+      var t = tok(), sent = false;
+      if (t && apiUrl(input)) {
+        try {
+          var h = new Headers((init && init.headers) || (input && typeof input === 'object' && input.headers) || undefined);
+          if (!h.has('x-app-token')) { h.set('x-app-token', t); sent = true; }
+          init = Object.assign({}, init || {}, { headers: h });
+        } catch (e) { /* never break a request because of the shim */ }
+      }
+      var p = nativeFetch.call(this, input, init);
+      if (sent) {
+        p.then(function (r) {
+          if (r && r.status === 401 && !kicked) {
+            kicked = true;
+            try { localStorage.removeItem('vn_token'); } catch (e) {}
+            var ov = document.getElementById('vn-login');
+            if (ov) ov.classList.remove('hide');
+          }
+        }, function () {});
+      }
+      return p;
+    };
+    var NativeES = window.EventSource;
+    if (typeof NativeES === 'function') {
+      var ES = function (url, cfg) {
+        var t = tok();
+        if (t && apiUrl(url) && String(url).indexOf('key=') < 0) {
+          url = String(url) + (String(url).indexOf('?') < 0 ? '?' : '&') + 'key=' + encodeURIComponent(t);
+        }
+        return new NativeES(url, cfg);
+      };
+      ES.prototype = NativeES.prototype;
+      ES.CONNECTING = NativeES.CONNECTING; ES.OPEN = NativeES.OPEN; ES.CLOSED = NativeES.CLOSED;
+      window.EventSource = ES;
+    }
+  } catch (e) { /* the app must still load without it */ }
+})();
+</script>
+
 <meta charset="UTF-8"/>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>

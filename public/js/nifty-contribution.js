@@ -71,7 +71,8 @@
     var h = '<div class="nc-card">';
     h += '<div class="nc-head"><div class="nc-title">⚖️ NIFTY KAUN CHALA RAHA HAI</div>' +
          '<div class="nc-tag">' + (d.marketClosed ? 'LAST SESSION' : 'LIVE') + '</div></div>';
-    var topW = d.topSummary && isNum(d.topSummary.weight) ? d.topSummary.weight : null;
+    // official weight of all 10 stocks — NOT only those that have a quote right now (would read 0.0% with no quotes)
+    var topW = rows.reduce(function (a, r) { return a + (isNum(r.weight) ? r.weight : 0); }, 0) || null;
     h += '<div class="nc-sub">Top-10 stocks' + (topW !== null ? ' = ' + topW.toFixed(1) + '% of Nifty' : '') +
          ' · official NSE weights (' + esc(d.asOf) + ')</div>';
     if (d.stale) h += '<div class="nc-warn">⚠️ Weights ' + esc(d.ageDays) + ' din purane hain — NSE factsheet se <b>niftyWeights.js</b> update karo.</div>';
