@@ -27,7 +27,13 @@ const NEW_GATE_LABELS = {
     deltaAligned: 'Delta', pocClear: 'POC', convictionOk: 'Trend Conviction', premiumOk: 'Premium already +40%',
     physicsLaw1: 'Physics Law-1', physicsLaw3: 'Physics Law-3', dynLevelsClear: 'Dynamic Levels',
     sequenceAligned: 'Sequence', contradictionOk: 'Contradiction',
-    other: 'Confidence floor / confirmation / Trend Lock',
+    breadthAligned: 'Breadth', renkoAligned: 'Renko', gapClear: 'Gap', regimeClear: 'Regime',
+    bosChochAligned: 'BOS/CHOCH', newsClear: 'News',
+    // ── split out of the old catch-all 'other' bucket (3 Oct) by reading the live engine's own ⛔/🔒 reasons
+    trendLock: 'Trend Lock (reversal hold)', confidenceFloor: '60% confidence floor',
+    dynRangeCap: 'Dynamic-Levels range-pocket cap', deltaMtfCap: 'Delta+MTF w/o Conviction cap', breakoutCap: 'Raw-ORB breakout cap',
+    confirming: '2-cycle confirmation (timing only)',
+    other: 'Unclassified (no flag/reason matched)',
 };
 
 // snap = values captured inside combineSignals right after the original gate block:
@@ -43,6 +49,39 @@ function classicCandidate(snap) {
     return { direction: snap.gateSignal, confidence: c, why: null };
 }
 
+// Read the live engine's own reason lines (the same text a user sees in the app) and
+// turn the blockers that have NO qualityGate flag into named gate keys. Pure.
+// Rules, and why:
+//  - Trend Lock: only the 🔒 "holding" lines block (🔓 "flip allowed" does not).
+//  - 60% confidence floor: when it fired AND a confidence cap that sits below 60 (range-pocket 55,
+//    Delta+MTF 55) also fired, the CAP is the real cause, so the generic floor is not blamed. The
+//    raw-ORB cap is 60, which passes the floor by itself, so it is only named when the floor fired
+//    for a reason that is not a 55-cap. If the floor fired with no cap reason, it is plain low
+//    confidence ('confidenceFloor').
+//  - '2-cycle confirmation' is timing only (the live engine needs one more tick); it is reported so
+//    those rows are visibly "not a real filter" and not mistaken for a gate that rejects trades.
+//  - ALL_FACTORS_HARD_GATE (off by default): the failed factor names are read straight from its line.
+function classifyLiveBlockers(reasons) {
+    const R = Array.isArray(reasons) ? reasons.map(String) : [];
+    const has = re => R.some(r => re.test(r));
+    const out = [];
+    if (has(/🔒\s*Trend Lock/)) out.push('trendLock');
+    const m = R.map(r => r.match(/ALL_FACTORS_HARD_GATE blocked[^]*?failed:\s*([A-Za-z, ]+)/)).find(Boolean);
+    if (m) for (const k of m[1].split(',').map(x => x.trim()).filter(Boolean)) out.push(k);
+    if (has(/Dynamic H1\([^)]*\)[^]*range pocket \(hard gate ON\)/)) out.push('dynLevelsClear');
+    const floorFired = has(/Confidence [\d.]+% < 60% minimum/);
+    if (floorFired) {
+        const caps = [];
+        if (has(/Confidence capped at 55%[^]*Dynamic H1/)) caps.push('dynRangeCap');
+        if (has(/Confidence capped at 55%[^]*Delta\+3\/3MTF/)) caps.push('deltaMtfCap');
+        if (caps.length) out.push(...caps);
+        else if (has(/Confidence capped at 60%[^]*raw ORB break/)) out.push('breakoutCap');
+        else out.push('confidenceFloor');
+    }
+    if (has(/Signal confirming — cycle/)) out.push('confirming');
+    return [...new Set(out)];
+}
+
 // Which newer gates are blocking right now? qualityGate = marketState.qualityGate.
 // finalSignal = the live engine's final decision at the same moment.
 function blockedByNewGates(qualityGate, finalSignal, classicDirection, extra = {}) {
@@ -50,7 +89,9 @@ function blockedByNewGates(qualityGate, finalSignal, classicDirection, extra = {
     const out = [];
     for (const k of NEW_GATE_KEYS) if (qualityGate && qualityGate[k] === false) out.push(k);
     if (extra.dynLevelsHardBlocked) out.push('dynLevelsClear');
-    if (!out.length) out.push('other'); // confidence floor, 2-cycle confirmation, Trend Lock etc. (no per-gate flag exists for those)
+    // blockers with no qualityGate flag are recovered from the live engine's reason lines (extra.liveReasons)
+    for (const k of classifyLiveBlockers(extra.liveReasons)) if (!out.includes(k)) out.push(k);
+    if (!out.length) out.push('other'); // nothing matched at all
     return out;
 }
 
@@ -97,4 +138,4 @@ function buildClassicMessage({ direction, nifty, confidence, blockedBy, vix, atm
     return lines.join('\n');
 }
 
-module.exports = { CLASSIC_MIN_CONF, NEW_GATE_KEYS, NEW_GATE_LABELS, classicCandidate, blockedByNewGates, createClassicTracker, buildClassicMessage, toDir, roundTo };
+module.exports = { CLASSIC_MIN_CONF, NEW_GATE_KEYS, NEW_GATE_LABELS, classicCandidate, classifyLiveBlockers, blockedByNewGates, createClassicTracker, buildClassicMessage, toDir, roundTo };

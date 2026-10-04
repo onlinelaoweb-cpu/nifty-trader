@@ -102,6 +102,7 @@ const { pickShortStrike, spreadEntryDebit, spreadExitValue, spreadOutcome } = re
 const BTC_SPREAD_WIDTH_STEPS = Math.max(1, parseInt(process.env.BTC_SPREAD_WIDTH_STEPS) || 2); // short leg = N listed strikes further OTM
 // 3 Oct — weekly Bitcoin Telegram report (pure formatter + due-check).
 const { weekKeyIST, isWeeklySummaryDue, formatBtcWeeklySummary } = require('./src/utils/btcWeeklySummary');
+const { formatNiftyWeeklySummary } = require('./src/utils/niftyWeeklySummary'); // 3 Oct — Sunday NIFTY report (Classic vs live, gate verdicts, Delta-Response study)
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
 const { classicCandidate, blockedByNewGates, createClassicTracker, buildClassicMessage, toDir: classicToDir, roundTo: classicRoundTo, NEW_GATE_LABELS: CLASSIC_GATE_LABELS } = require('./src/utils/niftyClassic');
 const NIFTY_CLASSIC_ENABLED  = String(process.env.NIFTY_CLASSIC || 'on').toLowerCase() !== 'off';           // off → no logging, no alerts
@@ -5710,6 +5711,75 @@ async function btcWeeklySummaryTick() {
     }
 }
 
+// ── NIFTY weekly Telegram report (3 Oct) ─────────────────────────────────────
+// Sunday 21:00 IST onwards, once per ISO week, same persistence + retry logic as the
+// Bitcoin report (own row 'nifty' in weekly_summary_state). Friday's existing weekly
+// gate review is untouched; this one adds the Classic-vs-live verdicts.
+let _niftyWeeklySentWeekKey = null;
+let _niftyWeeklyInFlight = false;
+
+async function collectNiftyWeeklyData() {
+    const out = { week: { classic: null, live: null }, buckets: [], deltaResp: [] };
+    if (!dbPool) return out;
+    const c7 = await dbPool.query(`
+        SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE live_fired)::int AS live_fired,
+               COUNT(*) FILTER (WHERE NOT live_fired)::int AS held_back
+        FROM nifty_classic_log WHERE ts >= NOW() - INTERVAL '7 days'`).catch(() => null);
+    out.week.classic = c7?.rows[0] || null;
+    const l7 = await dbPool.query(`
+        SELECT COALESCE(SUM(main), 0)::int AS main, COALESCE(SUM(mtf_strong_sent), 0)::int AS mtf_strong_sent
+        FROM daily_signal_counts WHERE trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - 7`).catch(() => null);
+    out.week.live = l7?.rows[0] || null;
+    try { out.buckets = (await queryNiftyClassicBuckets()).rows; } catch (e) { console.warn('[NIFTY Weekly] classic buckets error:', e.message); }
+    try { out.deltaResp = await queryDeltaResponseStudy(180); } catch (e) { console.warn('[NIFTY Weekly] delta-response error:', e.message); }
+    return out;
+}
+
+async function sendNiftyWeeklySummary(ist) {
+    const msg = formatNiftyWeeklySummary(await collectNiftyWeeklyData(), weekKeyIST(ist || getIST()));
+    if (isConfigured()) await sendRawMessage(msg);
+    return msg;
+}
+
+async function niftyWeeklySummaryTick() {
+    if (_niftyWeeklyInFlight) return;
+    _niftyWeeklyInFlight = true;
+    try {
+        const ist = getIST();
+        if (!isWeeklySummaryDue(ist, null)) return;       // cheap pre-check: DB only touched on Sunday evenings
+        let lastSent = _niftyWeeklySentWeekKey;
+        if (dbPool) {
+            try {
+                await dbPool.query(`CREATE TABLE IF NOT EXISTS weekly_summary_state (
+                    name TEXT PRIMARY KEY, week_key TEXT NOT NULL, sent_at TIMESTAMPTZ DEFAULT NOW())`);
+                const r = await dbPool.query(`SELECT week_key FROM weekly_summary_state WHERE name = 'nifty'`);
+                if (r.rows[0]?.week_key) lastSent = r.rows[0].week_key;
+            } catch (e) { console.warn('[NIFTY Weekly] state load failed (using in-memory flag):', e.message); }
+        }
+        if (!isWeeklySummaryDue(ist, lastSent)) return;
+        const wk = weekKeyIST(ist);
+        _niftyWeeklySentWeekKey = wk;                      // mark BEFORE sending (no double-send if only the DB write fails)
+        if (dbPool) {
+            await dbPool.query(
+                `INSERT INTO weekly_summary_state (name, week_key, sent_at) VALUES ('nifty', $1, NOW())
+                 ON CONFLICT (name) DO UPDATE SET week_key = EXCLUDED.week_key, sent_at = NOW()`, [wk]
+            ).catch(e => console.warn('[NIFTY Weekly] state save failed:', e.message));
+        }
+        try {
+            await sendNiftyWeeklySummary(ist);
+            console.log(`📅 [NIFTY Weekly] Sent weekly NIFTY report (${wk})`);
+        } catch (e) {
+            _niftyWeeklySentWeekKey = null;                // allow a retry on the next tick
+            if (dbPool) await dbPool.query(`DELETE FROM weekly_summary_state WHERE name = 'nifty' AND week_key = $1`, [wk]).catch(() => {});
+            throw e;
+        }
+    } catch (e) {
+        console.warn('[NIFTY Weekly] tick error:', e.message);
+    } finally {
+        _niftyWeeklyInFlight = false;
+    }
+}
+
 async function harvestSignalOutcomes() {
     if (!dbPool) return;
     // 26 Sep — diagnostic logging added: user reported only NIFTY showing
@@ -6626,6 +6696,7 @@ async function niftyClassicTick(snap, finalSignal, price, liveReasons) {
     const qg = { ...(marketState.qualityGate || {}) };
     const blockedAtFire = blockedByNewGates(qg, finalSignal, dir, {
         dynLevelsHardBlocked: DYNAMIC_LEVELS_HARD_GATE && qg.dynLevelsClear === false,
+        liveReasons, // 3 Oct — lets blockers with no qualityGate flag (Trend Lock, 60% floor, confidence caps…) be named instead of lumped as 'other'
     });
     const vix = marketState.vix > 0 ? marketState.vix : null;
     const atmStrike = classicRoundTo(price, 50);
@@ -10175,6 +10246,12 @@ async function initDB() {
         for (const col of ['attr_delta', 'attr_theta', 'attr_vega', 'attr_other', 'exit_nifty', 'exit_vix']) {
             await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS ${col} NUMERIC`).catch(()=>{});
         }
+        // Delta Response Check outcome (3 Oct) — lets us test, with real closed trades, whether the
+        // "SLOW RESPONSE" warning actually predicts worse trades. NULL = the check never judged this
+        // trade (Nifty never moved enough in its favour), which is NOT the same as "judged and fine".
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS delta_resp_warned BOOLEAN`).catch(()=>{});
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS delta_resp_warn_min INT`).catch(()=>{});
+        await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS min_resp_ratio NUMERIC`).catch(()=>{});
         console.log('✅ PostgreSQL signal_performance table ready');
 
         // ── journal_trades table — manually entered trades from the Journal tab ──
@@ -10782,8 +10859,11 @@ async function updateSignalPerformance() {
         // ── Delta Response Check — fires at most once per trade ─────────────
         const dResp = computeDeltaResponse(rec, live);
         rec.respRatio = dResp ? dResp.ratio : null;
+        // 3 Oct — remember the WORST ratio seen while the check was judging, for the outcome study (see /api/delta-response-check)
+        if (dResp && (rec.minRespRatio == null || dResp.ratio < rec.minRespRatio)) rec.minRespRatio = dResp.ratio;
         if (dResp && !rec.deltaRespWarned && elapsedMin >= DELTA_RESP_MIN_MIN && dResp.ratio < DELTA_RESP_WARN_RATIO) {
             rec.deltaRespWarned = true;
+            rec.deltaRespWarnMin = elapsedMin;
             // theta estimate so far (same method as the Exit Warning)
             let thetaSoFar = null;
             if (rec.entryNiftyForTheta && rec.entryVixForTheta && rec.entryDTE != null) {
@@ -10931,6 +11011,15 @@ async function updateSignalPerformance() {
                             [attr.delta, attr.theta, attr.vega, attr.other, attr.exitSpot, attr.exitVix, rec.id]
                         );
                     } catch (e) { console.warn('[Attribution] save error:', e.message); }
+                }
+                // Delta Response outcome (3 Oct) — only trades the check actually judged (minRespRatio set).
+                if (rec.minRespRatio != null) {
+                    try {
+                        await dbPool.query(
+                            `UPDATE signal_performance SET delta_resp_warned=$1, delta_resp_warn_min=$2, min_resp_ratio=$3 WHERE id=$4`,
+                            [!!rec.deltaRespWarned, rec.deltaRespWarnMin ?? null, rec.minRespRatio, rec.id]
+                        );
+                    } catch (e) { console.warn('[DeltaResponse] save error:', e.message); }
                 }
             }
             // ── Reverse-sync (10 Aug) — mirror of closeTradeAuto()'s own sync:
@@ -11782,6 +11871,41 @@ app.get('/api/trade-history', async (req, res) => {
 // ── /api/signal-performance — automatic tracking, no manual entry needed ────
 // Returns today's live open cards (Entry/High/Target Hit/Time Taken) plus
 // today/weekly/monthly accuracy rollups.
+async function queryDeltaResponseStudy(days) {
+    const r = await dbPool.query(`
+        SELECT CASE WHEN delta_resp_warned THEN 'WARNED' ELSE 'JUDGED_NOT_WARNED' END AS bucket,
+               COUNT(*)::int AS trades,
+               COUNT(*) FILTER (WHERE target_hit)::int AS target_hit_n,
+               COUNT(*) FILTER (WHERE sl_hit)::int AS sl_hit_n,
+               COUNT(*) FILTER (WHERE COALESCE(partial_win, false))::int AS partial_n,
+               COUNT(*) FILTER (WHERE NOT COALESCE(target_hit, false) AND NOT COALESCE(sl_hit, false) AND NOT COALESCE(partial_win, false))::int AS timed_out_n,
+               ROUND(100.0 * COUNT(*) FILTER (WHERE target_hit) / NULLIF(COUNT(*), 0), 1) AS target_hit_pct,
+               ROUND(100.0 * COUNT(*) FILTER (WHERE sl_hit) / NULLIF(COUNT(*), 0), 1) AS sl_hit_pct,
+               ROUND(AVG(max_gain_pct)::numeric, 1) AS avg_max_gain_pct,
+               ROUND(AVG(max_adverse_pct)::numeric, 1) AS avg_max_adverse_pct,
+               ROUND(AVG(min_resp_ratio)::numeric, 2) AS avg_min_ratio,
+               ROUND(AVG(delta_resp_warn_min)::numeric, 0) AS avg_warn_minute
+        FROM signal_performance
+        WHERE closed = true AND min_resp_ratio IS NOT NULL
+          AND trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - $1::int
+        GROUP BY 1 ORDER BY 1`, [days]);
+    return r.rows;
+}
+
+// 3 Oct — does the "SLOW RESPONSE" (Delta-Response) warning predict worse trades?
+// Only trades the check actually judged (Nifty moved 20+ pts in their favour) are included:
+// WARNED = ratio fell below 0.5 at some point; JUDGED_NOT_WARNED = judged, never warned.
+// Trades the check never judged are excluded on purpose (it says nothing about them).
+// ?days=60 (default 60, max 180). Need ~30 trades in BOTH groups before reading anything into it.
+app.get('/api/delta-response-check', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const days = Math.min(parseInt(req.query.days) || 60, 180);
+        res.json({ success: true, days, groups: await queryDeltaResponseStudy(days),
+            howToRead: 'If WARNED has a clearly lower target_hit_pct / higher sl_hit_pct than JUDGED_NOT_WARNED over 30+ trades each, the warning is useful. If not, it is just noise. avg_warn_minute = how many minutes into the trade the warning came.' });
+    } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
 // 3 Oct — Greeks P&L attribution summary. For closed trades with attribution saved, shows the
 // average ₹/share contribution of direction, time decay and IV change, split by outcome and by
 // CALL/PUT — i.e. "are my losers losing on direction, on theta, or on IV?"
@@ -12622,37 +12746,56 @@ app.get('/api/bitcoin-weekly-summary', async (req, res) => {
 // Gate rows overlap (one signal can be blocked by several gates at once), so
 // don't add them up. Results: direction after 30 min; "coach" = the Trade-Coach
 // premium simulation (needs ~90 min). Need ~30+ rows per bucket to trust a verdict.
+// (query lives in queryNiftyClassicBuckets() so the Sunday weekly report reads the exact same numbers)
+async function queryNiftyClassicBuckets() {
+    await ensureNiftyClassicTable();
+    const M = `COUNT(*) AS n,
+        COUNT(*) FILTER (WHERE ts >= NOW() - INTERVAL '7 days') AS n7,
+        COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')) AS dir_n,
+        ROUND(100.0 * COUNT(*) FILTER (WHERE result = 'WIN') / NULLIF(COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')), 0), 1) AS dir_win_pct,
+        COUNT(*) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL) AS coach_n,
+        ROUND(AVG(GREATEST(-100, LEAST(100, coach_result))) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL), 1) AS avg_coach_pct,
+        ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY coach_result) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL))::numeric, 1) AS median_coach_pct`;
+    const r = await dbPool.query(`
+        WITH c AS (
+            SELECT l.id, l.ts, l.live_fired, l.blocked_by, o.result, o.coach_result, o.entry_strike
+            FROM nifty_classic_log l
+            JOIN signal_outcomes o ON o.source_table = 'nifty_classic_log' AND o.source_id = l.id
+        )
+        SELECT 'ALL Classic signals' AS bucket, ${M} FROM c
+        UNION ALL SELECT 'Live engine ALSO fired', ${M} FROM c WHERE live_fired
+        UNION ALL SELECT 'Held back by a newer gate', ${M} FROM c WHERE NOT live_fired
+        UNION ALL SELECT 'blocked by: ' || g, ${M} FROM c, LATERAL unnest(string_to_array(blocked_by, ',')) AS g
+                  WHERE NOT live_fired AND g <> '' GROUP BY g
+    `);
+    const rows = r.rows.map(x => ({ ...x, bucket: x.bucket.startsWith('blocked by: ')
+        ? 'blocked by: ' + (CLASSIC_GATE_LABELS[x.bucket.slice(12)] || x.bucket.slice(12)) : x.bucket }));
+    const logged = await dbPool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE live_fired)::int AS live_fired, COUNT(*) FILTER (WHERE NOT live_fired)::int AS held_back FROM nifty_classic_log`);
+    return { rows, logged: logged.rows[0] };
+}
+
 app.get('/api/nifty-classic-accuracy', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
-        await ensureNiftyClassicTable();
-        const M = `COUNT(*) AS n,
-            COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')) AS dir_n,
-            ROUND(100.0 * COUNT(*) FILTER (WHERE result = 'WIN') / NULLIF(COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')), 0), 1) AS dir_win_pct,
-            COUNT(*) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL) AS coach_n,
-            ROUND(AVG(GREATEST(-100, LEAST(100, coach_result))) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL), 1) AS avg_coach_pct,
-            ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY coach_result) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL))::numeric, 1) AS median_coach_pct`;
-        const r = await dbPool.query(`
-            WITH c AS (
-                SELECT l.id, l.live_fired, l.blocked_by, o.result, o.coach_result, o.entry_strike
-                FROM nifty_classic_log l
-                JOIN signal_outcomes o ON o.source_table = 'nifty_classic_log' AND o.source_id = l.id
-            )
-            SELECT 'ALL Classic signals' AS bucket, ${M} FROM c
-            UNION ALL SELECT 'Live engine ALSO fired', ${M} FROM c WHERE live_fired
-            UNION ALL SELECT 'Held back by a newer gate', ${M} FROM c WHERE NOT live_fired
-            UNION ALL SELECT 'blocked by: ' || g, ${M} FROM c, LATERAL unnest(string_to_array(blocked_by, ',')) AS g
-                      WHERE NOT live_fired AND g <> '' GROUP BY g
-        `);
-        const rows = r.rows.map(x => ({ ...x, bucket: x.bucket.startsWith('blocked by: ')
-            ? 'blocked by: ' + (CLASSIC_GATE_LABELS[x.bucket.slice(12)] || x.bucket.slice(12)) : x.bucket }));
-        const logged = await dbPool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE live_fired)::int AS live_fired, COUNT(*) FILTER (WHERE NOT live_fired)::int AS held_back FROM nifty_classic_log`);
+        const { rows, logged } = await queryNiftyClassicBuckets();
         res.json({
             success: true, enabled: NIFTY_CLASSIC_ENABLED, telegram: NIFTY_CLASSIC_TELEGRAM, maxAlertsPerDay: NIFTY_CLASSIC_MAX_ALERTS_PER_DAY,
-            logged: logged.rows[0],
-            note: 'Gate rows overlap. Trust a bucket only with 30+ resolved rows. Classic = original 6-filter rule re-created in parallel, not June\'s literal code.',
+            logged,
+            note: 'Gate rows overlap. Trust a bucket only with 30+ resolved rows. Classic = original 6-filter rule re-created in parallel, not June\'s literal code. "timing only" = the live engine just needed one more tick, not a real filter.',
             rows,
         });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 3 Oct — preview the Sunday NIFTY report any time; ?send=1 also pushes it to Telegram now (a test; does not affect the schedule).
+app.get('/api/nifty-weekly-summary', async (req, res) => {
+    try {
+        const ist = getIST();
+        const text = req.query.send === '1' ? await sendNiftyWeeklySummary(ist)
+                   : formatNiftyWeeklySummary(await collectNiftyWeeklyData(), weekKeyIST(ist));
+        res.json({ success: true, sentToTelegram: req.query.send === '1' && isConfigured(), nextAutoSend: 'Sunday 21:00 IST', text });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
@@ -13924,6 +14067,8 @@ function startPollingIntervals() {
     setTimeout(() => { evaluateBtcSpreadsTick(); setInterval(evaluateBtcSpreadsTick, 5 * 60 * 1000); }, 157 * 1000);
     // 3 Oct — weekly Bitcoin report (Sunday 21:00 IST onwards, once per ISO week).
     setTimeout(() => { btcWeeklySummaryTick(); setInterval(btcWeeklySummaryTick, 10 * 60 * 1000); }, 240 * 1000);
+    // 3 Oct — weekly NIFTY report (Sunday 21:00 IST onwards, once per ISO week); offset ~5 min from the Bitcoin one.
+    setTimeout(() => { niftyWeeklySummaryTick(); setInterval(niftyWeeklySummaryTick, 10 * 60 * 1000); }, 540 * 1000);
     // Trade-Coach path-sampling + finalization (27 Sep) — 5 min cadence,
     // staggered after harvest/evaluate.
     const sampleOutcomePathsTick = () => sampleOutcomePaths().catch(e => console.warn('[Signal Outcomes] path-sample tick error:', e.message));
