@@ -360,6 +360,33 @@ function computeTrendConviction(marketState) {
     };
 }
 
+// ── Absolute-VIX tiers for option BUYERS (4 Oct 2026, from options-Greeks webinar review) ──
+// High VIX = expensive premiums = more theta + more IV-crush risk for a buyer, whatever the
+// signal's own confidence says. Rule of thumb from the webinar, adopted as starting values:
+//   VIX < 15        normal
+//   15 – 20         "ELEVATED"  size capped to 50%
+//   20 – 30         "HIGH"      size capped to 25%
+//   >= 30           "EXTREME"   no option buying (size 0%)
+// SIZE ONLY — never changes the signal, grade or confidence, and never blocks a signal from
+// firing (same philosophy as the expiry / VIX-spike / Low-VIX caps). Every threshold is an env
+// override; VIX_TIER_CAPS=off disables the whole feature. These are textbook starting points,
+// NOT tuned on this app's own trades — the entry_vix column + /api/greeks-attribution exist so
+// they can be checked against real outcomes.
+const _num = (v, d) => { const n = parseFloat(v); return Number.isFinite(n) ? n : d; };
+const VIX_TIER_ENABLED = (process.env.VIX_TIER_CAPS || 'on').toLowerCase() !== 'off';
+const VIX_T1 = _num(process.env.VIX_TIER1, 15), VIX_T2 = _num(process.env.VIX_TIER2, 20), VIX_T3 = _num(process.env.VIX_TIER3, 30);
+const VIX_T1_PCT = _num(process.env.VIX_TIER1_PCT, 50), VIX_T2_PCT = _num(process.env.VIX_TIER2_PCT, 25);
+
+// Returns null when no tier applies, else { tier, capPct, why }.
+function vixTier(vix) {
+    if (!VIX_TIER_ENABLED || !(vix > 0)) return null;
+    const v = Math.round(vix * 10) / 10;
+    if (vix >= VIX_T3) return { tier: 'EXTREME',  capPct: 0,          why: `VIX ${v} ≥ ${VIX_T3} — premiums over-expensive, IV-crush risk` };
+    if (vix >= VIX_T2) return { tier: 'HIGH',     capPct: VIX_T2_PCT, why: `VIX ${v} ≥ ${VIX_T2} — expensive premiums, heavy theta/IV risk` };
+    if (vix >= VIX_T1) return { tier: 'ELEVATED', capPct: VIX_T1_PCT, why: `VIX ${v} ≥ ${VIX_T1} — premiums getting expensive` };
+    return null;
+}
+
 function computeMarketRegime(marketState) {
     const dt = marketState.dayType;
     const expiry = isExpiryDay();
@@ -373,6 +400,8 @@ function computeMarketRegime(marketState) {
     if (eventCaution) tags.push('EVENT_DAY');
     if (vixSpike) tags.push('HIGH_VIX');
     if (lowVix) tags.push('LOW_VIX');
+    const vt = vixTier(marketState.vix);
+    if (vt) tags.push(`VIX_${vt.tier}`);
     if (gapDay) tags.push('GAP_DAY');
     if (dt?.trendProbability >= 60) tags.push('TRENDING');
     else if (dt?.rangeProbability >= 60) tags.push('RANGE');
@@ -383,6 +412,7 @@ function computeMarketRegime(marketState) {
     if (tags.includes('EVENT_DAY'))  activeRules.push(`Confidence capped 60% (${marketState.eventCountdown?.title || 'high-impact event'} approaching)`);
     if (tags.includes('HIGH_VIX'))   activeRules.push('Size capped 50% (VIX spiked vs today\'s open)');
     if (tags.includes('LOW_VIX'))    activeRules.push('Size capped 65% (Low VIX regime — historically weakest expectancy: +0.31R vs +0.69-0.81R in Trending/Range)');
+    if (vt) activeRules.push(`Size capped ${vt.capPct}%${vt.capPct === 0 ? " — no option buying" : ""} (${vt.why})`);
     if (tags.includes('GAP_DAY'))    activeRules.push(`Large ${marketState.premarketGap?.zone === 'GAP_UP' ? 'gap-up' : 'gap-down'} open (${marketState.premarketGap?.gapPct}%) — first-hour moves less reliable, gap-fill risk both ways`);
     if (tags.includes('RANGE'))      activeRules.push('Dynamic Levels no-trade range-pocket cap active');
     if (tags.includes('TRENDING'))   activeRules.push('Momentum/breakout confluence factors weighted normally');
@@ -665,5 +695,5 @@ module.exports = {
     computeTrapZone, computeDynamicLevelsState, computeContradictionScore,
     checkAgreementSequence, computeTrendConviction, computeMarketRegime,
     computeDataHealth, computeEventCountdown, computeProbabilityEngine,
-    buildSetupDNA, pickStrikeAndPremium,
+    buildSetupDNA, pickStrikeAndPremium, vixTier,
 };

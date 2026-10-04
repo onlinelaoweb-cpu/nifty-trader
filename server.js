@@ -28,7 +28,7 @@ const { computeSmartMoneyBias, computeDayType, computeConfidenceBreakdown,
         computeTrapZone, computeDynamicLevelsState, computeContradictionScore,
         checkAgreementSequence, computeTrendConviction, computeMarketRegime,
         computeDataHealth, computeEventCountdown, computeProbabilityEngine,
-        buildSetupDNA, pickStrikeAndPremium } = require('./src/utils/signalReaders');
+        buildSetupDNA, pickStrikeAndPremium, vixTier } = require('./src/utils/signalReaders');
 
 // ── SSE: Server-Sent Events for instant frontend push ────────────────────────
 const _sseClients = new Set();
@@ -6874,6 +6874,21 @@ async function updatePrice(price, change, changePct, source) {
         marketState.tradeQuality.sizeHint = `${beforePct}%→65% (Low VIX regime — weakest historical expectancy)`;
         marketState.tradeQuality.pct = 65;
         marketState.tradeQuality.lowVixCapped = true;
+    }
+    // ── Absolute-VIX tier caps (4 Oct) — see vixTier() in signalReaders.js for the rationale.
+    // Only ever LOWERS the size (min with whatever the grade / expiry / spike / Low-VIX caps left),
+    // only touches sizing, and leaves Grade + confidence untouched. At VIX >= 30 the size goes to 0
+    // ("no option buying") but the signal itself still fires — it is not gated.
+    if (signal !== 'WAIT') {
+        const vt = vixTier(marketState.vix);
+        if (vt && marketState.tradeQuality.pct > vt.capPct) {
+            const beforePct = marketState.tradeQuality.pct;
+            marketState.tradeQuality.sizeHint = vt.capPct === 0
+                ? `No option buying — ${vt.why}`
+                : `${beforePct}%→${vt.capPct}% (${vt.why})`;
+            marketState.tradeQuality.pct = vt.capPct;
+            marketState.tradeQuality.vixTierCapped = vt.tier;
+        }
     }
     marketState.rsi=indicators.rsi; marketState.ema9=indicators.ema9;
     marketState.ema21=indicators.ema21; marketState.vwap=indicators.vwap;
