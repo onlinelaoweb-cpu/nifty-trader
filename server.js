@@ -28,7 +28,7 @@ const { computeSmartMoneyBias, computeDayType, computeConfidenceBreakdown,
         computeTrapZone, computeDynamicLevelsState, computeContradictionScore,
         checkAgreementSequence, computeTrendConviction, computeMarketRegime,
         computeDataHealth, computeEventCountdown, computeProbabilityEngine,
-        buildSetupDNA, pickStrikeAndPremium, vixTier } = require('./src/utils/signalReaders');
+        buildSetupDNA, pickStrikeAndPremium, vixTier, computeKnownEventGuard, expiryLateCap } = require('./src/utils/signalReaders');
 
 // ── SSE: Server-Sent Events for instant frontend push ────────────────────────
 const _sseClients = new Set();
@@ -117,7 +117,7 @@ const BTC_LIQUIDITY_GATE_ENABLED = String(process.env.BTC_LIQUIDITY_GATE || 'on'
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
-    sendCloseSummary, sendExitAlert, sendMomentumExitWarning, sendDeltaResponseWarning,
+    sendCloseSummary, sendExitAlert, sendMomentumExitWarning, sendDeltaResponseWarning, sendEventIvWarning,
     sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured,
     sendScalpAlert, sendSignalTimeline, sendPartialProfitAlert,
     sendWeeklyGateReview,
@@ -6917,6 +6917,15 @@ async function updatePrice(price, change, changePct, source) {
         marketState.tradeQuality.pct = 50;
         marketState.tradeQuality.expiryCapped = true;
     }
+    // ── Expiry-day LATE cap (4 Oct) — tighter after the afternoon cut-off; size only ──
+    if (signal !== 'WAIT' && isExpiryDay()) {
+        const lc = expiryLateCap(getIST());
+        if (lc && marketState.tradeQuality.pct > lc.capPct) {
+            marketState.tradeQuality.sizeHint = `${marketState.tradeQuality.pct}%→${lc.capPct}% (${lc.why})`;
+            marketState.tradeQuality.pct = lc.capPct;
+            marketState.tradeQuality.expiryLateCapped = true;
+        }
+    }
     // ── VIX-spike size cap ────────────────────────────────────────────────────
     // A sudden intraday VIX jump (news shock, global cue) is real risk on any
     // day, not just expiry — premiums can move violently in both directions
@@ -6963,6 +6972,15 @@ async function updatePrice(price, change, changePct, source) {
                 : `${beforePct}%→${vt.capPct}% (${vt.why})`;
             marketState.tradeQuality.pct = vt.capPct;
             marketState.tradeQuality.vixTierCapped = vt.tier;
+        }
+    }
+    // ── Known-event IV-crush size cap (4 Oct) — see computeKnownEventGuard() ──
+    if (signal !== 'WAIT') {
+        const kg = marketState.knownEventGuard;
+        if (kg && marketState.tradeQuality.pct > kg.capPct) {
+            marketState.tradeQuality.sizeHint = `${marketState.tradeQuality.pct}%→${kg.capPct}% (${kg.why})`;
+            marketState.tradeQuality.pct = kg.capPct;
+            marketState.tradeQuality.eventIvCapped = kg.tier;
         }
     }
     marketState.rsi=indicators.rsi; marketState.ema9=indicators.ema9;
@@ -7462,6 +7480,8 @@ async function refreshMTF() {
         // ── Economic Event Countdown — see combineSignals() for the caution-
         // window confidence cap this feeds ──────────────────────────────────
         try { marketState.eventCountdown = computeEventCountdown(marketState); } catch(e) { console.warn('[EventCountdown] error:', e.message); }
+        // 4 Oct — known-event IV-crush guard (size cap before RBI-type events); see computeKnownEventGuard()
+        try { marketState.knownEventGuard = computeKnownEventGuard(marketState); } catch(e) { marketState.knownEventGuard = null; }
 
         // ── Pre-market gate ────────────────────────────
         // Before 09:15 IST the candle history is overnight/multi-day data.
@@ -8734,25 +8754,25 @@ let _calendarFetchedDate = null;
 
 const HARDCODED_INDIA_EVENTS = [
   // RBI MPC FY2026-27 schedule (decision announced on last day of 3-day meeting)
-  { title: 'RBI MPC Decision',    date: '2026-06-05', impact: 'high',   country: 'IN', category: 'monetary'   },
-  { title: 'RBI MPC Decision',    date: '2026-08-06', impact: 'high',   country: 'IN', category: 'monetary'   },
-  { title: 'RBI MPC Decision',    date: '2026-10-08', impact: 'high',   country: 'IN', category: 'monetary'   },
-  { title: 'RBI MPC Decision',    date: '2026-12-03', impact: 'high',   country: 'IN', category: 'monetary'   },
-  { title: 'RBI MPC Decision',    date: '2027-02-04', impact: 'high',   country: 'IN', category: 'monetary'   },
+  { title: 'RBI MPC Decision',    date: '2026-06-05', time: '10:00', impact: 'high',   country: 'IN', category: 'monetary'   },
+  { title: 'RBI MPC Decision',    date: '2026-08-06', time: '10:00', impact: 'high',   country: 'IN', category: 'monetary'   },
+  { title: 'RBI MPC Decision',    date: '2026-10-08', time: '10:00', impact: 'high',   country: 'IN', category: 'monetary'   },
+  { title: 'RBI MPC Decision',    date: '2026-12-03', time: '10:00', impact: 'high',   country: 'IN', category: 'monetary'   },
+  { title: 'RBI MPC Decision',    date: '2027-02-04', time: '10:00', impact: 'high',   country: 'IN', category: 'monetary'   },
   // India macro data releases (approximate monthly dates — NSE/MOSPI schedule)
-  { title: 'India CPI Inflation', date: '2026-06-12', impact: 'medium', country: 'IN', category: 'inflation'  },
-  { title: 'India WPI Inflation', date: '2026-06-15', impact: 'medium', country: 'IN', category: 'inflation'  },
-  { title: 'India IIP Data',      date: '2026-06-12', impact: 'medium', country: 'IN', category: 'industrial' },
-  { title: 'India CPI Inflation', date: '2026-07-14', impact: 'medium', country: 'IN', category: 'inflation'  },
-  { title: 'India IIP Data',      date: '2026-07-11', impact: 'medium', country: 'IN', category: 'industrial' },
-  { title: 'India CPI Inflation', date: '2026-08-13', impact: 'medium', country: 'IN', category: 'inflation'  },
-  { title: 'India IIP Data',      date: '2026-08-12', impact: 'medium', country: 'IN', category: 'industrial' },
-  { title: 'India GDP Q1 FY27',   date: '2026-08-31', impact: 'high',   country: 'IN', category: 'gdp'        },
-  { title: 'India CPI Inflation', date: '2026-09-14', impact: 'medium', country: 'IN', category: 'inflation'  },
-  { title: 'India CPI Inflation', date: '2026-10-13', impact: 'medium', country: 'IN', category: 'inflation'  },
-  { title: 'India GDP Q2 FY27',   date: '2026-11-30', impact: 'high',   country: 'IN', category: 'gdp'        },
-  { title: 'India CPI Inflation', date: '2026-11-12', impact: 'medium', country: 'IN', category: 'inflation'  },
-  { title: 'India CPI Inflation', date: '2026-12-14', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India CPI Inflation', date: '2026-06-12', time: '16:00', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India WPI Inflation', date: '2026-06-15', time: '12:00', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India IIP Data',      date: '2026-06-12', time: '16:00', impact: 'medium', country: 'IN', category: 'industrial' },
+  { title: 'India CPI Inflation', date: '2026-07-14', time: '16:00', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India IIP Data',      date: '2026-07-11', time: '16:00', impact: 'medium', country: 'IN', category: 'industrial' },
+  { title: 'India CPI Inflation', date: '2026-08-13', time: '16:00', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India IIP Data',      date: '2026-08-12', time: '16:00', impact: 'medium', country: 'IN', category: 'industrial' },
+  { title: 'India GDP Q1 FY27',   date: '2026-08-31', time: '16:00', impact: 'high',   country: 'IN', category: 'gdp'        },
+  { title: 'India CPI Inflation', date: '2026-09-14', time: '16:00', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India CPI Inflation', date: '2026-10-13', time: '16:00', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India GDP Q2 FY27',   date: '2026-11-30', time: '16:00', impact: 'high',   country: 'IN', category: 'gdp'        },
+  { title: 'India CPI Inflation', date: '2026-11-12', time: '16:00', impact: 'medium', country: 'IN', category: 'inflation'  },
+  { title: 'India CPI Inflation', date: '2026-12-14', time: '16:00', impact: 'medium', country: 'IN', category: 'inflation'  },
 ];
 
 async function fetchCalendarEvents() {
@@ -8861,7 +8881,9 @@ function scheduleEventAlerts(evList) {
     const key = ev.title + ev.date;
     if (_alertedEvents.has(key)) continue;
     const [h, m] = ev.time.split(':').map(Number);
-    const eventMs = new Date(ist).setHours(h, m, 0, 0);
+    // 4 Oct FIX: was new Date(ist).setHours(h, m) — IST wall-clock as a UTC instant, so on a UTC server the
+    // "30 min before" alert fired 5.5 h LATE (invisible until now because the RBI entry had no time).
+    const eventMs = new Date(`${ev.date}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00+05:30`).getTime();
     const alertMs = eventMs - 30 * 60 * 1000;
     const delay   = alertMs - Date.now();
     if (delay > 0 && delay < 8 * 60 * 60 * 1000) {
@@ -10859,6 +10881,14 @@ async function updateSignalPerformance() {
         }
 
         if (live) { rec.high = Math.max(rec.high, live); rec.low = Math.min(rec.low, live); }
+
+        // ── Known-event heads-up (4 Oct) — once per open trade, ~30 min before an RBI-type event ──
+        const kegNow = marketState.knownEventGuard;
+        if (kegNow && !rec.eventWarned && kegNow.hoursRemaining > 0 && kegNow.hoursRemaining <= 0.55) {
+            rec.eventWarned = true;
+            console.log(`⚠️ [EventGuard] ${rec.signal} ${rec.strike}${rec.type} open into ${kegNow.title} (${Math.round(kegNow.hoursRemaining * 60)} min) — heads-up sent`);
+            sendEventIvWarning(rec, kegNow, live).catch(e => console.warn('[EventGuard] send error:', e.message));
+        }
 
         // ── Delta Response Check — fires at most once per trade ─────────────
         const dResp = computeDeltaResponse(rec, live);

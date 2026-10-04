@@ -387,6 +387,92 @@ function vixTier(vix) {
     return null;
 }
 
+// ── Known-event IV-crush guard (4 Oct 2026, from options-Greeks webinar review) ──
+// Before a KNOWN event (RBI policy, Budget, election result) option premiums are inflated by
+// high IV; once the event is out, IV collapses ("IV crush") and a buyer can lose money even when
+// the direction call was right. The older Event Countdown only caps CONFIDENCE in the last 3 h.
+// This adds a SIZE cap that starts earlier:
+//   24 h … 1 h before the event  -> size capped 50%   (PRE)
+//   last 1 h                     -> size capped 25%   (NEAR)
+// Scope: India, high-impact, with a known time INSIDE market hours (09:15-15:30 IST) — i.e. the
+// RBI MPC decision. After-close releases (GDP, CPI) affect the NEXT day's open, not today's IV,
+// so they are left to the existing countdown. SIZE ONLY — never changes the signal or confidence.
+// Starting values from the webinar, not tuned on this app's trades. KNOWN_EVENT_GUARD=off disables.
+const KEG_ENABLED  = (process.env.KNOWN_EVENT_GUARD || 'on').toLowerCase() !== 'off';
+const KEG_PRE_H    = _num(process.env.KEG_PRE_HOURS, 24);
+const KEG_NEAR_H   = _num(process.env.KEG_NEAR_HOURS, 1);
+const KEG_PRE_PCT  = _num(process.env.KEG_PRE_PCT, 50);
+const KEG_NEAR_PCT = _num(process.env.KEG_NEAR_PCT, 25);
+
+function computeKnownEventGuard(marketState) {
+    try {
+        if (!KEG_ENABLED) return null;
+        const nowMs = Date.now();   // real instant — event times below carry an explicit +05:30, so this must NOT be getIST().getTime() (that is IST wall-clock labelled as UTC on a UTC server = 5.5 h skew)
+        let best = null, bestDiff = Infinity;
+        for (const ev of (marketState.calendarEvents || [])) {
+            if (ev.impact !== 'high' || ev.country !== 'IN') continue;
+            if (ev.category === 'expiry') continue;                      // the weekly F&O expiry marker is NOT a news event
+            if (!ev.time || ev.time === '--:--') continue;               // unknown time -> can't place it in the day
+            const [hh, mm] = String(ev.time).split(':').map(Number);
+            const mins = hh * 60 + (mm || 0);
+            if (!(mins >= 555 && mins <= 930)) continue;                 // only events that land inside market hours
+            const diff = new Date(`${ev.date}T${ev.time}:00+05:30`).getTime() - nowMs;
+            if (diff > 0 && diff <= KEG_PRE_H * 3600000 && diff < bestDiff) { bestDiff = diff; best = ev; }
+        }
+        if (!best) return null;
+        const hours = bestDiff / 3600000;
+        const near = hours <= KEG_NEAR_H;
+        const h = Math.floor(hours), m = Math.floor((hours - h) * 60);
+        return {
+            title: best.title, date: best.date, time: best.time,
+            hoursRemaining: parseFloat(hours.toFixed(2)),
+            tier: near ? 'NEAR' : 'PRE', capPct: near ? KEG_NEAR_PCT : KEG_PRE_PCT,
+            why: `${best.title} in ${h}h ${m}m — premiums inflated, IV usually crashes after a known event`,
+        };
+    } catch (e) { return null; }
+}
+
+// ── Expiry-day LATE cap (4 Oct 2026) ─────────────────────────────────────────
+// The existing expiry-day cap is a flat 50% all day. Theta and gamma are far heavier in the
+// afternoon (see the theta hurdle: ~₹10/hr and 80%+ of a typical target's gain in 2 h near the
+// close), so after a cut-off time on expiry day the cap tightens. Size only. Env:
+// EXPIRY_LATE_CUTOFF ('HH:MM' IST, default 13:30), EXPIRY_LATE_PCT (default 25), EXPIRY_LATE_CAP=off.
+const EXPIRY_LATE_ENABLED = (process.env.EXPIRY_LATE_CAP || 'on').toLowerCase() !== 'off';
+const EXPIRY_LATE_PCT = _num(process.env.EXPIRY_LATE_PCT, 25);
+const EXPIRY_LATE_MIN = (() => {
+    const m = String(process.env.EXPIRY_LATE_CUTOFF || '13:30').match(/^(\d{1,2}):(\d{2})$/);
+    return m ? (+m[1]) * 60 + (+m[2]) : 13 * 60 + 30;
+})();
+function expiryLateCap(ist) {
+    if (!EXPIRY_LATE_ENABLED || !ist) return null;
+    const mins = ist.getHours() * 60 + ist.getMinutes();
+    if (mins < EXPIRY_LATE_MIN) return null;
+    const hh = String(Math.floor(EXPIRY_LATE_MIN / 60)).padStart(2, '0'), mm = String(EXPIRY_LATE_MIN % 60).padStart(2, '0');
+    return { capPct: EXPIRY_LATE_PCT, why: `expiry day after ${hh}:${mm} — theta/gamma at their heaviest` };
+}
+
+// ── Next-week alternative on expiry day (4 Oct 2026) — INFORMATION ONLY ──────────
+// On expiry day a same-strike option for the FOLLOWING week costs more but decays far slower
+// and carries less gamma risk (webinar's "on expiry day trade next week's option" advice).
+// This only prices that alternative for the Telegram alert; the tracked signal, entry, SL and
+// target are unchanged. Uses the same Black-Scholes/VIX estimate as the rest of the app.
+function computeNextWeekAlt(nifty, strike, type, vixPct, dte, todayThetaPerHr) {
+    try {
+        if (!(dte > 0) || dte >= 1.0) return null;          // expiry day only
+        const dteNext = dte + 7;
+        const prem = bsEstimate(nifty, strike, dteNext / 365, vixPct / 100, type);
+        const g = calcGreeks(nifty, strike, dteNext / 365, vixPct / 100, type);
+        if (!(prem > 0) || !g || !g.theta || !g.delta) return null;
+        const thetaPerHr = Math.abs(g.theta) / 6.25;
+        return {
+            strike, type, premium: Math.round(prem * 10) / 10,
+            delta: parseFloat(Math.abs(g.delta).toFixed(2)),
+            thetaPerHr: parseFloat(thetaPerHr.toFixed(1)),
+            todayThetaPerHr: todayThetaPerHr != null ? todayThetaPerHr : null,
+        };
+    } catch (e) { return null; }
+}
+
 function computeMarketRegime(marketState) {
     const dt = marketState.dayType;
     const expiry = isExpiryDay();
@@ -402,6 +488,8 @@ function computeMarketRegime(marketState) {
     if (lowVix) tags.push('LOW_VIX');
     const vt = vixTier(marketState.vix);
     if (vt) tags.push(`VIX_${vt.tier}`);
+    const keg = marketState.knownEventGuard;
+    if (keg) tags.push('EVENT_IV_RISK');
     if (gapDay) tags.push('GAP_DAY');
     if (dt?.trendProbability >= 60) tags.push('TRENDING');
     else if (dt?.rangeProbability >= 60) tags.push('RANGE');
@@ -412,6 +500,7 @@ function computeMarketRegime(marketState) {
     if (tags.includes('EVENT_DAY'))  activeRules.push(`Confidence capped 60% (${marketState.eventCountdown?.title || 'high-impact event'} approaching)`);
     if (tags.includes('HIGH_VIX'))   activeRules.push('Size capped 50% (VIX spiked vs today\'s open)');
     if (tags.includes('LOW_VIX'))    activeRules.push('Size capped 65% (Low VIX regime — historically weakest expectancy: +0.31R vs +0.69-0.81R in Trending/Range)');
+    if (keg) activeRules.push(`Size capped ${keg.capPct}% (${keg.why})`);
     if (vt) activeRules.push(`Size capped ${vt.capPct}%${vt.capPct === 0 ? " — no option buying" : ""} (${vt.why})`);
     if (tags.includes('GAP_DAY'))    activeRules.push(`Large ${marketState.premarketGap?.zone === 'GAP_UP' ? 'gap-up' : 'gap-down'} open (${marketState.premarketGap?.gapPct}%) — first-hour moves less reliable, gap-fill risk both ways`);
     if (tags.includes('RANGE'))      activeRules.push('Dynamic Levels no-trade range-pocket cap active');
@@ -443,8 +532,10 @@ function computeDataHealth(marketState) {
 
 function computeEventCountdown(marketState) {
     const events = marketState.calendarEvents || [];
-    const ist = getIST();
-    const nowMs = ist.getTime();
+    // 4 Oct FIX: was `getIST().getTime()` — IST wall-clock treated as a UTC instant, then compared with event
+    // times parsed WITH +05:30. On a UTC server (Railway) that made every event appear 5.5 h earlier than real,
+    // so the 3 h caution window fired at the wrong time of day and the "in Xh Ym" label was wrong.
+    const nowMs = Date.now();
     let nearest = null, minDiffMs = Infinity;
 
     for (const ev of events) {
@@ -651,8 +742,9 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState, marketState) {
         : parseFloat((strike - entryPremium).toFixed(2));
 
     const thetaHurdle = computeThetaHurdle(nifty, strike, type, entryPremium, target, effectiveVix, dte);
+    const nextWeekAlt = computeNextWeekAlt(nifty, strike, type, effectiveVix, dte, thetaHurdle ? thetaHurdle.thetaPerHr : null);
 
-    return { type, strike, entry: entryPremium, sl, target, slSource, rrMultiplier, bep, premiumAgeSec, strikeOI, strikeVolume, lowLiquidity, positionSizeNote, thetaHurdle };
+    return { type, strike, entry: entryPremium, sl, target, slSource, rrMultiplier, bep, premiumAgeSec, strikeOI, strikeVolume, lowLiquidity, positionSizeNote, thetaHurdle, nextWeekAlt };
 }
 
 // ── Theta hurdle (3 Oct 2026, from options-Greeks webinar review) ───────────
@@ -695,5 +787,5 @@ module.exports = {
     computeTrapZone, computeDynamicLevelsState, computeContradictionScore,
     checkAgreementSequence, computeTrendConviction, computeMarketRegime,
     computeDataHealth, computeEventCountdown, computeProbabilityEngine,
-    buildSetupDNA, pickStrikeAndPremium, vixTier,
+    buildSetupDNA, pickStrikeAndPremium, vixTier, computeKnownEventGuard, expiryLateCap,
 };

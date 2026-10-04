@@ -209,6 +209,11 @@ async function sendSignalAlert(state, prevSignal, strikeData = null, autoLogged 
         const thetaNote = th
             ? `\n⏳ Theta  : ~₹${th.thetaPerHr}/hr (~₹${Math.round(th.thetaPerHr * LOT)}/lot) — Nifty must move ~${th.ptsPerHr} pts/hr in your favour just to cover decay${th.heavy ? `\n⚠️ Theta-heavy: 2h of decay ≈ ${th.cost2hPctOfTarget}% of target gain — needs a quick move, avoid waiting` : ''}`
             : '';
+        // Expiry-day alternative (4 Oct) — information only; the tracked signal stays on today's expiry
+        const nw = strikeData.nextWeekAlt;
+        const nextWeekNote = nw
+            ? `\n🔁 Expiry-day alternative: NEXT-WEEK ${nw.strike}${nw.type} ≈ ₹${nw.premium} (~₹${Math.round(nw.premium * LOT)}/lot, Δ ${nw.delta}) — decay ~₹${nw.thetaPerHr}/hr${nw.todayThetaPerHr != null ? ` vs ~₹${nw.todayThetaPerHr}/hr today` : ''}. Slower decay, less gamma risk, smaller % moves, more capital per lot. Info only — this signal is tracked on today's expiry.`
+            : '';
         const sizeNote = strikeData.positionSizeNote
             ? `\n📏 Size note: ${strikeData.positionSizeNote}`
             : '';
@@ -216,7 +221,7 @@ async function sendSignalAlert(state, prevSignal, strikeData = null, autoLogged 
 📥 Entry : ₹${strikeData.entry}${stalenessNote}
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
-📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep} (Nifty needs ${strikeData.type === 'CE' ? 'to reach' : 'to fall to'} this by expiry to break even)` : ''}${thetaNote}${liquidityNote}${sizeNote}`;
+📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep} (Nifty needs ${strikeData.type === 'CE' ? 'to reach' : 'to fall to'} this by expiry to break even)` : ''}${thetaNote}${nextWeekNote}${liquidityNote}${sizeNote}`;
 
         // ── AI Trade Coach block — entry-zone + staged profit plan ───────────
         const coach = strikeData.coach;
@@ -950,6 +955,30 @@ Time decay and falling IV are eating the move. Not an auto-exit — reassess: bo
     await sendMessage(msg);
 }
 
+// ── Known-event heads-up for OPEN trades (4 Oct 2026) ───────────────────────
+// Sent once per open trade when a known event (RBI-type) is ~30 min away: the classic
+// IV-crush setup where a long option can lose premium right after the announcement even if
+// the direction is right. A heads-up only — never an exit instruction.
+async function sendEventIvWarning(rec, keg, livePremium) {
+    const dirLabel = rec.signal === 'BUY CALL' ? 'CALL' : 'PUT';
+    const mins = Math.max(1, Math.round(keg.hoursRemaining * 60));
+    const pl = (livePremium && rec.entry) ? ((livePremium - rec.entry) / rec.entry) * 100 : null;
+    const plLine = pl !== null ? `\nYour trade now: ₹${livePremium} vs entry ₹${rec.entry} (${pl >= 0 ? '+' : ''}${pl.toFixed(1)}%)` : '';
+    const msg = `
+⚠️ <b>KNOWN EVENT IN ~${mins} MIN — IV-CRUSH RISK</b>
+━━━━━━━━━━━━━━━━━━
+📌 ${keg.title} at ${keg.time} IST
+You hold: ${dirLabel} ${rec.strike}${rec.type}${plLine}
+
+Premiums are inflated ahead of a known event and usually fall sharply once it is out — even when the direction is right.
+Consider: book profit, tighten the SL, or skip adding. Not an auto-exit.
+━━━━━━━━━━━━━━━━━━
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
+<i>Vardaan AI</i>
+`.trim();
+    await sendMessage(msg);
+}
+
 // ── Smart Partial Profit Book ─────────────────────────────────────────────
 // Requested 25 Jul audit: "instead of only a static +30% price threshold,
 // trigger off R:R already banked + Delta weakening + RSI crossing back
@@ -1048,6 +1077,7 @@ module.exports = {
     sendExitAlert,
     sendMomentumExitWarning,
     sendDeltaResponseWarning,
+    sendEventIvWarning,
     sendNishanebaazAlert,
     sendSpreadAlert,
     sendRawMessage,
