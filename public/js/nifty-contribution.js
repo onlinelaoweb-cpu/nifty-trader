@@ -99,11 +99,14 @@
     }
 
     var n = d.nifty || {};
-    h += '<div class="nc-tot"><span>Nifty total</span><span style="color:' + col(n.change) + ';font-weight:700;">' +
-         pts(n.change) + ' (' + pct(n.changePct) + ')</span></div>';
+    h += '<div class="nc-tot"><span>Nifty total' + (n.source === 'yahoo' || n.source === 'app' ? ' <span style="color:var(--dim);font-size:9px;">(' + esc(n.source) + ')</span>' : '') + '</span>' +
+         '<span style="color:' + col(n.change) + ';font-weight:700;">' + pts(n.change) + ' (' + pct(n.changePct) + ')</span></div>';
+    if (n.source === 'none') {
+      h += '<div class="nc-sub" style="margin-top:4px;">Nifty ka move abhi bharosemand nahi mila, isliye "Baaki 40" aur verdict band hain (sirf top-10 ka asar upar dikh raha hai).</div>';
+    }
     if (d.top3 && isNum(d.top3.sharePct)) {
-      h += '<div class="nc-sub" style="margin-top:4px;">Top-3 movers (' + d.top3.names.map(esc).join(', ') + ') = ' +
-           d.top3.sharePct + '% of net move (' + pts(d.top3.pts) + ')</div>';
+      h += '<div class="nc-sub" style="margin-top:4px;">Top-' + d.top3.names.length + ' ' + (d.top3.kind === 'lifters' ? 'lifters' : 'draggers') +
+           ' (' + d.top3.names.map(esc).join(', ') + ') = ' + d.top3.sharePct + '% of net move (' + pts(d.top3.pts) + ')</div>';
     }
 
     var secs = Array.isArray(d.sectors) ? d.sectors : [];

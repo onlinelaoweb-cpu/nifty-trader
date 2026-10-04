@@ -5,6 +5,14 @@
 // factsheet). The other 40 stocks are NOT estimated: their combined contribution is
 // DERIVED as (Nifty's actual move) − (top-10 contribution), and labelled as derived.
 //
+// WHERE THE NIFTY MOVE COMES FROM (important — a real bug was found here on 4 Oct):
+//   1. Yahoo's index quote (^NSEI) fetched in the SAME request as the stocks — same moment, same
+//      source, so "index − top-10" is a like-for-like subtraction and it still works when the
+//      market is closed (it then shows the last session's move).
+//   2. else the app's own live Nifty, but ONLY when the market is open and the number is real.
+//   3. else NOTHING: the derived "rest" line and the verdict are switched off. The app zeroes
+//      marketState.nifty/change on weekends; that 0 is "no data", never "Nifty did not move".
+//
 // Everything below except fetchTopQuotes() is PURE (no I/O, no clock) so it is
 // unit-testable. Display only — nothing here feeds signals, gates or alerts.
 
@@ -21,16 +29,30 @@ function weightAgeDays(weights, nowMs) {
 // quotes: { SYMBOL: { price, changePct } }  (symbol = NSE symbol, e.g. 'HDFCBANK', 'M&M')
 // nifty : { price, change, changePct, prevClose }  — the app's own live Nifty numbers
 // sectors: marketState.global.sectors  ({ bankNifty:{changePct}, niftyIT:{changePct}, ... })
-function computeNiftyContribution({ weights, quotes, nifty, sectors, nowMs, marketClosed, quoteSource, quotesAt }) {
+function computeNiftyContribution({ weights, quotes, nifty, indexQuote, sectors, nowMs, marketClosed, quoteSource, quotesAt }) {
     const q = quotes || {};
-    const prevClose = (() => {
+    // ── Which Nifty numbers can be trusted? (see header) ──
+    const appPrev = (() => {
         const p = num(nifty?.prevClose);
         if (p && p > 0) return p;
         const price = num(nifty?.price), ch = num(nifty?.change);
         return price && ch !== null ? price - ch : null;
     })();
-    const niftyPts = num(nifty?.change);
-    const niftyPct = num(nifty?.changePct);
+    const yIdx = (() => {                                  // Yahoo ^NSEI, sanity-checked
+        const price = num(indexQuote?.price), prev = num(indexQuote?.prevClose);
+        if (!(price > 0) || !(prev > 0) || Math.abs(price / prev - 1) > 0.15) return null;
+        return { price, prevClose: prev, change: price - prev, changePct: ((price - prev) / prev) * 100 };
+    })();
+    const appLive = !marketClosed && num(nifty?.price) > 0 && num(nifty?.change) !== null && appPrev > 0;
+    let basis = null;
+    if (yIdx) basis = { ...yIdx, source: 'yahoo' };
+    else if (appLive) basis = { price: num(nifty.price), prevClose: appPrev, change: num(nifty.change),
+                                changePct: num(nifty.changePct) ?? (num(nifty.change) / appPrev) * 100, source: 'app' };
+    // Per-stock points need a base level; with no trustworthy index data the app's prevClose is used
+    // (off by <1% at most) so the stock rows still show — only the derived 'rest' and verdict are disabled.
+    const prevClose = basis ? basis.prevClose : (appPrev > 0 ? appPrev : null);
+    const niftyPts = basis ? basis.change : null;
+    const niftyPct = basis ? basis.changePct : null;
 
     const pts = (weight, pct) => (prevClose && pct !== null) ? (weight / 100) * (pct / 100) * prevClose : null;
 
@@ -74,12 +96,18 @@ function computeNiftyContribution({ weights, quotes, nifty, sectors, nowMs, mark
                     topAvgMove: r2(topAvgMove), restImpliedMove: r2(restImpliedMove) };
     }
 
-    // Top-3 movers' share of the net index move (only when the net move is big enough to mean something)
+    // Who pushed the net move the most? The three biggest contributors IN THE SAME DIRECTION as the net move
+    // (draggers when the index fell, lifters when it rose), and their share of that net move. Contributors
+    // pulling the other way are deliberately not mixed in — a "share" with the opposite sign is meaningless.
+    // Shown only when the net move is big enough (>= 10 pts) to mean something.
     let top3 = null;
-    if (niftyPts !== null && Math.abs(niftyPts) >= 10 && priced.length >= 3) {
-        const t3 = priced.slice().sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts)).slice(0, 3);
-        const s = t3.reduce((a, r) => a + r.pts, 0);
-        top3 = { names: t3.map(r => r.name), pts: r1(s), sharePct: Math.round((s / niftyPts) * 100) };
+    if (niftyPts !== null && Math.abs(niftyPts) >= 10) {
+        const dir = Math.sign(niftyPts);
+        const same = priced.filter(r => Math.sign(r.pts) === dir).sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts)).slice(0, 3);
+        if (same.length) {
+            const sum = same.reduce((a, r) => a + r.pts, 0);
+            top3 = { kind: dir < 0 ? 'draggers' : 'lifters', names: same.map(r => r.name), pts: r1(sum), sharePct: Math.round((sum / niftyPts) * 100) };
+        }
     }
 
     // Sectors: official weight (always) + live move of the matching app index where there is one
@@ -94,7 +122,7 @@ function computeNiftyContribution({ weights, quotes, nifty, sectors, nowMs, mark
         asOf: weights.asOf, source: weights.source, ageDays,
         stale: ageDays !== null && ageDays > (weights.staleAfterDays ?? 45),
         marketClosed: !!marketClosed, quoteSource: quoteSource || 'none', quotesAt: quotesAt || null,
-        nifty: { price: num(nifty?.price), change: niftyPts === null ? null : r1(niftyPts), changePct: niftyPct === null ? null : r2(niftyPct), prevClose },
+        nifty: { price: basis ? r2(basis.price) : null, change: niftyPts === null ? null : r1(niftyPts), changePct: niftyPct === null ? null : r2(niftyPct), prevClose: prevClose === null ? null : r2(prevClose), source: basis ? basis.source : 'none' },
         top10: rows,
         topSummary: { weight: r2(topWeight), pts: topPtsRaw === null ? null : r1(topPtsRaw), avgMovePct: topAvgMove === null ? null : r2(topAvgMove), missing },
         rest: { weight: r2(restWeight), pts: restPtsRaw === null ? null : r1(restPtsRaw), impliedMovePct: restImpliedMove === null ? null : r2(restImpliedMove), derived: true, partial: missing.length > 0 },
@@ -103,27 +131,34 @@ function computeNiftyContribution({ weights, quotes, nifty, sectors, nowMs, mark
 }
 
 // Yahoo "spark" batch quote — the same no-auth endpoint breadth.js already relies on from Railway.
-// Symbols are URL-encoded (needed for "M&M.NS"). Returns { SYMBOL: {price, changePct} } or null.
-async function fetchTopQuotes(axios, yahooSymbols) {
+// Stocks AND the Nifty index (^NSEI) go in ONE request so every number is from the same moment.
+// Symbols are URL-encoded ("M&M.NS", "^NSEI"). Returns { quotes: {SYMBOL:{price,changePct}}, index } or null
+// when no stock quote came back. `index` is { price, prevClose } or null (the card then falls back, see header).
+async function fetchTopQuotes(axios, yahooSymbols, indexSymbol = '^NSEI') {
     const HEADERS = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
         'Accept': 'application/json', 'Accept-Language': 'en-US,en;q=0.9',
         'Referer': 'https://finance.yahoo.com/', 'Origin': 'https://finance.yahoo.com',
     };
-    const url = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${yahooSymbols.map(encodeURIComponent).join(',')}&range=1d&interval=1d&indicators=close&includeTimestamps=false`;
+    const all = indexSymbol ? [...yahooSymbols, indexSymbol] : yahooSymbols;
+    const url = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${all.map(encodeURIComponent).join(',')}&range=1d&interval=1d&indicators=close&includeTimestamps=false`;
     try {
         const res = await axios.get(url, { timeout: 10000, headers: HEADERS });
         const spark = res.data?.spark?.result;
         if (!Array.isArray(spark)) return null;
-        const out = {};
+        const quotes = {};
+        let index = null;
         for (const s of spark) {
-            const sym = String(s.symbol || '').replace(/\.NS$/, '');
+            const raw = String(s.symbol || '');
             const meta = s.response?.[0]?.meta || {};
             const price = num(meta.regularMarketPrice);
             const prev = num(meta.chartPreviousClose) ?? num(meta.previousClose);
-            if (sym && price > 0 && prev > 0) out[sym] = { price: r2(price), changePct: r2(((price - prev) / prev) * 100) };
+            if (!(price > 0) || !(prev > 0)) continue;
+            if (indexSymbol && raw === indexSymbol) { index = { price: r2(price), prevClose: r2(prev) }; continue; }
+            const sym = raw.replace(/\.NS$/, '');
+            if (sym) quotes[sym] = { price: r2(price), changePct: r2(((price - prev) / prev) * 100) };
         }
-        return Object.keys(out).length ? out : null;
+        return Object.keys(quotes).length ? { quotes, index } : null;
     } catch (e) {
         console.warn('[NiftyContribution] Yahoo spark failed:', e.response?.status || e.message);
         return null;

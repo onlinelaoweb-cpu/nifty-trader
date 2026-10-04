@@ -12811,7 +12811,7 @@ app.get('/api/nifty-weekly-summary', async (req, res) => {
 // cached 45 s in market hours / 5 min otherwise; if Yahoo is unreachable it falls back to the
 // stocks breadth already holds, and if that is empty it keeps the last good snapshot for 30 min.
 // DISPLAY ONLY — nothing here feeds signals, gates or alerts.
-let _ncQuotes = { at: 0, data: null, source: 'none' };
+let _ncQuotes = { at: 0, data: null, index: null, source: 'none' };
 let _ncInFlight = null;
 async function getNiftyContributionQuotes() {
     const ist = getIST();
@@ -12822,11 +12822,12 @@ async function getNiftyContributionQuotes() {
     if (_ncInFlight) return _ncInFlight;               // many tabs/refreshes at once -> one upstream call
     _ncInFlight = (async () => {
         try {
-            let data = await fetchTopQuotes(axios, NIFTY_WEIGHTS.top10.map(x => x.yahoo));
+            const got = await fetchTopQuotes(axios, NIFTY_WEIGHTS.top10.map(x => x.yahoo));
+            let data = got?.quotes || null, index = got?.index || null;
             let source = 'yahoo';
-            if (!data) { data = quotesFromBreadth(marketState.breadth?.stocks); source = data ? 'breadth' : 'none'; }
-            if (data) _ncQuotes = { at: Date.now(), data, source };
-            else if (!_ncQuotes.data || Date.now() - _ncQuotes.at > 30 * 60 * 1000) _ncQuotes = { at: 0, data: null, source: 'none' };
+            if (!data) { data = quotesFromBreadth(marketState.breadth?.stocks); index = null; source = data ? 'breadth' : 'none'; }
+            if (data) _ncQuotes = { at: Date.now(), data, index, source };
+            else if (!_ncQuotes.data || Date.now() - _ncQuotes.at > 30 * 60 * 1000) _ncQuotes = { at: 0, data: null, index: null, source: 'none' };
             return _ncQuotes;
         } finally { _ncInFlight = null; }
     })();
@@ -12836,7 +12837,7 @@ app.get('/api/nifty-contribution', async (req, res) => {
     try {
         const qs = await getNiftyContributionQuotes();
         const result = computeNiftyContribution({
-            weights: NIFTY_WEIGHTS, quotes: qs.data,
+            weights: NIFTY_WEIGHTS, quotes: qs.data, indexQuote: qs.index,
             nifty: { price: marketState.nifty, change: marketState.change, changePct: marketState.changePct, prevClose: marketState.prevClose },
             sectors: marketState.global?.sectors, nowMs: Date.now(), marketClosed: !!marketState.marketClosed,
             quoteSource: qs.source, quotesAt: qs.at ? new Date(qs.at).toISOString() : null,
