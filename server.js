@@ -61,6 +61,7 @@ const { calculateSRLevels }         = require('./src/api/levels');
 const { computeDynamicLevels, classifyDynamicLevels } = require('./src/api/dynamicLevels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo, detectBOSCHOCH } = require('./src/api/physicsOfTrading');
 const { computeOptionGreeksDashboard, calcGreeks } = require('./src/api/optionGreeks');
+const { computeGreeksAttribution, attributionLine } = require('./src/utils/greeksAttribution'); // 3 Oct: P&L split into direction / time / IV
 const { getRenkoAnalysis } = require('./src/api/renko');
 // DISABLED (per decision to stay pure option-buyer, no selling/spread strategies):
 // const { suggestSpreadStrategy } = require('./src/api/spreadStrategy');
@@ -10152,6 +10153,13 @@ async function initDB() {
         // tag from buildSetupDNA() — see that function for what it means.
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS entry_vix NUMERIC`).catch(()=>{});
         await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS setup_dna TEXT`).catch(()=>{});
+        // Greeks P&L attribution (3 Oct) — ₹ per share split of each closed trade's premium
+        // change into direction (delta/gamma), time (theta), IV (vega) and "other" (residual),
+        // plus the Nifty/VIX at close. Written by saveGreeksAttribution(); NULL on older rows and on
+        // EOD-carried closes (no same-session exit price to attribute against).
+        for (const col of ['attr_delta', 'attr_theta', 'attr_vega', 'attr_other', 'exit_nifty', 'exit_vix']) {
+            await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS ${col} NUMERIC`).catch(()=>{});
+        }
         console.log('✅ PostgreSQL signal_performance table ready');
 
         // ── journal_trades table — manually entered trades from the Journal tab ──
@@ -10882,7 +10890,16 @@ async function updateSignalPerformance() {
             // Fires the moment a trade actually closes, not batched into the EOD
             // digest — genuinely "live." Uses only data already tracked on rec,
             // nothing new computed.
-            sendSignalTimeline(rec, outcomeLabel, maxGainPct, elapsedMin, closedAt, maxAdverseExcursionPct).catch(e => console.warn('[SignalTimeline] send error:', e.message));
+            // Greeks P&L attribution (3 Oct) — uses the OBSERVED live premium + the Nifty/VIX at this
+            // same moment (not the target/SL level) so all three legs describe one instant. Skipped when
+            // there's no live tick (timeout with a missing strike) — attributing against a stale price
+            // would be noise.
+            const attr = live ? computeGreeksAttribution(rec, {
+                premium: live, spot: marketState.nifty, vix: marketState.vix,
+                dte: daysToNextExpiry(), elapsedMin,
+            }) : null;
+            if (attr) console.log(`🔬 [Attribution] ${rec.signal} ${rec.strike}${rec.type} | actual ${attr.actual >= 0 ? '+' : ''}${attr.actual} = dir ${attr.delta} + time ${attr.theta} + IV ${attr.vega} + other ${attr.other}`);
+            sendSignalTimeline(rec, outcomeLabel, maxGainPct, elapsedMin, closedAt, maxAdverseExcursionPct, attr ? attributionLine(attr) : '').catch(e => console.warn('[SignalTimeline] send error:', e.message));
             if (dbPool && rec.id) {
                 try {
                     await dbPool.query(
@@ -10890,6 +10907,16 @@ async function updateSignalPerformance() {
                         [rec.high, rec.low, targetHit, slHit, elapsedMin, closedAt, maxGainPct, maxAdverseExcursionPct, partialWin, rec.exitWarned, exitPremium, rec.id]
                     );
                 } catch (e) { console.warn('[SignalPerf] update error:', e.message); }
+                // separate UPDATE on purpose: the existing close query above stays byte-for-byte
+                // untouched, so a problem with the new columns can never block a trade from closing.
+                if (attr) {
+                    try {
+                        await dbPool.query(
+                            `UPDATE signal_performance SET attr_delta=$1, attr_theta=$2, attr_vega=$3, attr_other=$4, exit_nifty=$5, exit_vix=$6 WHERE id=$7`,
+                            [attr.delta, attr.theta, attr.vega, attr.other, attr.exitSpot, attr.exitVix, rec.id]
+                        );
+                    } catch (e) { console.warn('[Attribution] save error:', e.message); }
+                }
             }
             // ── Reverse-sync (10 Aug) — mirror of closeTradeAuto()'s own sync:
             // if signal_performance closes FIRST (its own target/SL/90-min-
@@ -11740,6 +11767,34 @@ app.get('/api/trade-history', async (req, res) => {
 // ── /api/signal-performance — automatic tracking, no manual entry needed ────
 // Returns today's live open cards (Entry/High/Target Hit/Time Taken) plus
 // today/weekly/monthly accuracy rollups.
+// 3 Oct — Greeks P&L attribution summary. For closed trades with attribution saved, shows the
+// average ₹/share contribution of direction, time decay and IV change, split by outcome and by
+// CALL/PUT — i.e. "are my losers losing on direction, on theta, or on IV?"
+//   ?days=30 (default 30, max 180)   Needs a few weeks of trades before it means much.
+app.get('/api/greeks-attribution', async (req, res) => {
+    try {
+        if (!dbPool) return res.json({ error: 'no database' });
+        const days = Math.min(parseInt(req.query.days) || 30, 180);
+        const r = await dbPool.query(`
+            SELECT
+              CASE WHEN target_hit THEN 'TARGET' WHEN sl_hit THEN 'SL' WHEN partial_win THEN 'PARTIAL' ELSE 'TIMED_OUT' END AS outcome,
+              option_type,
+              COUNT(*)::int AS trades,
+              ROUND(AVG(attr_delta)::numeric, 2) AS avg_direction,
+              ROUND(AVG(attr_theta)::numeric, 2) AS avg_time_decay,
+              ROUND(AVG(attr_vega)::numeric, 2)  AS avg_iv_change,
+              ROUND(AVG(attr_other)::numeric, 2) AS avg_other
+            FROM signal_performance
+            WHERE closed = true AND attr_delta IS NOT NULL
+              AND trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - $1::int
+            GROUP BY 1, 2 ORDER BY 1, 2`, [days]);
+        res.json({
+            days, groups: r.rows,
+            howToRead: 'Per-share ₹. direction = delta/gamma gain, time_decay = theta cost, iv_change = vega×ΔVIX, other = model residual. If SL/TIMED_OUT rows are dominated by time_decay, entries are too slow/late; by iv_change, IV crush; by direction, simply wrong side.',
+        });
+    } catch (e) { res.json({ error: e.message }); }
+});
+
 app.get('/api/signal-performance', async (req, res) => {
     try {
         const summary = await getSignalPerformanceSummary();

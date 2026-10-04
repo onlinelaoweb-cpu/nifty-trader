@@ -705,7 +705,7 @@ instead of riding the full swing target.
 // live, not a batched end-of-day summary. Uses only data already tracked on
 // the record (rec.startTs, rec.entry, rec.exitWarned) — nothing new computed,
 // same principle as the Engine Checklist: surface what already exists.
-async function sendSignalTimeline(rec, outcomeLabel, maxGainPct, elapsedMin, closedAt, maxAdverseExcursionPct) {
+async function sendSignalTimeline(rec, outcomeLabel, maxGainPct, elapsedMin, closedAt, maxAdverseExcursionPct, attributionText = '') {
     if (!rec) return;
     const fmt = ts => new Date(ts).toLocaleTimeString('en-IN', { hour12: true, hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
     const fmtDate = ts => new Date(ts).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' });
@@ -738,7 +738,7 @@ async function sendSignalTimeline(rec, outcomeLabel, maxGainPct, elapsedMin, clo
 📥 Entry       ₹${rec.entry} (same moment)
 ${rec.exitWarned ? `⚠️ Weakened    conviction faded before this closed — you got a heads-up at the time\n` : ''}🏁 Closed      ${closedTimeLabel} — <b>${outcomeLabel}</b>
 ━━━━━━━━━━━━━━━━━━
-⏱ Duration: ${elapsedMin} min · Best price reached: +${maxGainPct}%${maeLine}
+⏱ Duration: ${elapsedMin} min · Best price reached: +${maxGainPct}%${maeLine}${attributionText ? `\n${attributionText}` : ''}
 <i>Vardaan AI</i>
 `.trim();
 
