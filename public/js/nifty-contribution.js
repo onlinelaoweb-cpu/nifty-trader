@@ -17,7 +17,9 @@
   function pct(v, d) { return isNum(v) ? (v > 0 ? '+' : '') + v.toFixed(d == null ? 2 : d) + '%' : '—'; }
   function pts(v) {
     if (!isNum(v)) return '—';
-    var a = Math.abs(v), t = a >= 10 ? Math.round(v) : v.toFixed(1);
+    // round half AWAY from zero, like the header's toFixed(0): Math.round(-198.5) is -198 in JS, but the
+    // dashboard header shows -199 for the same number, so the card must say -199 too.
+    var a = Math.abs(v), t = a >= 10 ? (v < 0 ? -1 : 1) * Math.round(a) : v.toFixed(1);
     return (v > 0 ? '+' : '') + t + ' pts';
   }
   function col(v) { return !isNum(v) || Math.abs(v) < 0.005 ? 'var(--dim)' : v > 0 ? 'var(--green)' : 'var(--red)'; }
