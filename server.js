@@ -12839,7 +12839,10 @@ app.get('/api/nifty-contribution', async (req, res) => {
         const result = computeNiftyContribution({
             weights: NIFTY_WEIGHTS, quotes: qs.data, indexQuote: qs.index,
             nifty: { price: marketState.nifty, change: marketState.change, changePct: marketState.changePct, prevClose: marketState.prevClose },
-            sectors: marketState.global?.sectors, nowMs: Date.now(), marketClosed: !!marketState.marketClosed,
+            sectors: marketState.global?.sectors, nowMs: Date.now(),
+            // 4 Oct — decided from the clock/holiday calendar, NOT marketState.marketClosed: that flag is
+            // flipped to false by any price update, so on a Sunday it read "open" and the card said LIVE.
+            marketClosed: !isMarketOpen(),
             quoteSource: qs.source, quotesAt: qs.at ? new Date(qs.at).toISOString() : null,
         });
         res.json({ success: true, ...result });
