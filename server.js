@@ -103,6 +103,10 @@ const BTC_SPREAD_WIDTH_STEPS = Math.max(1, parseInt(process.env.BTC_SPREAD_WIDTH
 // 3 Oct — weekly Bitcoin Telegram report (pure formatter + due-check).
 const { weekKeyIST, isWeeklySummaryDue, formatBtcWeeklySummary } = require('./src/utils/btcWeeklySummary');
 const { formatNiftyWeeklySummary } = require('./src/utils/niftyWeeklySummary'); // 3 Oct — Sunday NIFTY report (Classic vs live, gate verdicts, Delta-Response study)
+// 3 Oct — "Who is driving Nifty" card: official top-10/sector weights + contribution maths (display only).
+const { NIFTY_WEIGHTS, validateNiftyWeights } = require('./src/utils/niftyWeights');
+const { computeNiftyContribution, fetchTopQuotes, quotesFromBreadth } = require('./src/utils/niftyContribution');
+{ const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
 const { classicCandidate, blockedByNewGates, createClassicTracker, buildClassicMessage, toDir: classicToDir, roundTo: classicRoundTo, NEW_GATE_LABELS: CLASSIC_GATE_LABELS } = require('./src/utils/niftyClassic');
 const NIFTY_CLASSIC_ENABLED  = String(process.env.NIFTY_CLASSIC || 'on').toLowerCase() !== 'off';           // off → no logging, no alerts
@@ -12796,6 +12800,48 @@ app.get('/api/nifty-weekly-summary', async (req, res) => {
         const text = req.query.send === '1' ? await sendNiftyWeeklySummary(ist)
                    : formatNiftyWeeklySummary(await collectNiftyWeeklyData(), weekKeyIST(ist));
         res.json({ success: true, sentToTelegram: req.query.send === '1' && isConfigured(), nextAutoSend: 'Sunday 21:00 IST', text });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 3 Oct — "Who is driving Nifty": contribution of the 10 heaviest stocks (official NSE weights)
+// to today's Nifty move, plus the remaining 40 stocks as one DERIVED line and the official
+// sector weights. Quotes come from Yahoo's spark endpoint (same no-auth one breadth.js uses),
+// cached 45 s in market hours / 5 min otherwise; if Yahoo is unreachable it falls back to the
+// stocks breadth already holds, and if that is empty it keeps the last good snapshot for 30 min.
+// DISPLAY ONLY — nothing here feeds signals, gates or alerts.
+let _ncQuotes = { at: 0, data: null, source: 'none' };
+let _ncInFlight = null;
+async function getNiftyContributionQuotes() {
+    const ist = getIST();
+    const mins = ist.getHours() * 60 + ist.getMinutes();
+    const inMarket = ist.getDay() >= 1 && ist.getDay() <= 5 && mins >= 555 && mins <= 930;
+    const ttl = inMarket ? 45 * 1000 : 5 * 60 * 1000;
+    if (_ncQuotes.data && Date.now() - _ncQuotes.at < ttl) return _ncQuotes;
+    if (_ncInFlight) return _ncInFlight;               // many tabs/refreshes at once -> one upstream call
+    _ncInFlight = (async () => {
+        try {
+            let data = await fetchTopQuotes(axios, NIFTY_WEIGHTS.top10.map(x => x.yahoo));
+            let source = 'yahoo';
+            if (!data) { data = quotesFromBreadth(marketState.breadth?.stocks); source = data ? 'breadth' : 'none'; }
+            if (data) _ncQuotes = { at: Date.now(), data, source };
+            else if (!_ncQuotes.data || Date.now() - _ncQuotes.at > 30 * 60 * 1000) _ncQuotes = { at: 0, data: null, source: 'none' };
+            return _ncQuotes;
+        } finally { _ncInFlight = null; }
+    })();
+    return _ncInFlight;
+}
+app.get('/api/nifty-contribution', async (req, res) => {
+    try {
+        const qs = await getNiftyContributionQuotes();
+        const result = computeNiftyContribution({
+            weights: NIFTY_WEIGHTS, quotes: qs.data,
+            nifty: { price: marketState.nifty, change: marketState.change, changePct: marketState.changePct, prevClose: marketState.prevClose },
+            sectors: marketState.global?.sectors, nowMs: Date.now(), marketClosed: !!marketState.marketClosed,
+            quoteSource: qs.source, quotesAt: qs.at ? new Date(qs.at).toISOString() : null,
+        });
+        res.json({ success: true, ...result });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
