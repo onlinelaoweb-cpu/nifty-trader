@@ -61,7 +61,8 @@ const { calculateSRLevels }         = require('./src/api/levels');
 const { computeDynamicLevels, classifyDynamicLevels } = require('./src/api/dynamicLevels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo, detectBOSCHOCH } = require('./src/api/physicsOfTrading');
 const { computeOptionGreeksDashboard, calcGreeks } = require('./src/api/optionGreeks');
-const { computeGreeksAttribution, attributionLine } = require('./src/utils/greeksAttribution'); // 3 Oct: P&L split into direction / time / IV
+const { computeGreeksAttribution, attributionLine } = require('./src/utils/greeksAttribution');
+const { getIvPct, getAtmIvIfFresh } = require('./src/utils/ivSource'); // 5 Oct: option's own IV (Fyers chain) instead of VIX when available // 3 Oct: P&L split into direction / time / IV
 const { getRenkoAnalysis } = require('./src/api/renko');
 // DISABLED (per decision to stay pure option-buyer, no selling/spread strategies):
 // const { suggestSpreadStrategy } = require('./src/api/spreadStrategy');
@@ -91,7 +92,7 @@ const {
     getFnOStockList,                              // Volume scanner Phase 1: F&O stock universe + EQ tokens
     getCurrentFyersFutSymbol,                     // correct NSE:NIFTY{YY}{MMM}FUT symbol (NIFTY-I is invalid on Fyers)
     fetchFyersIntradayHistory,                     // 20 Sep: BankNifty candles for Index Confirmation trigger
-    probeFyersGreeks, getFyersGreeksProbe,         // 3 Oct: read-only experiment — does Fyers' option chain return Greeks?
+    probeFyersGreeks, getFyersGreeksProbe, refreshFyersAtmIv,         // 3 Oct: read-only experiment — does Fyers' option chain return Greeks?
 } = require('./src/api/nseData');
 // 25 Sep — Delta Exchange India client, for the new Bitcoin-options feature.
 const { fetchDeltaTicker, getNearestBTCExpiry, fetchDeltaOptionChain, fetchDeltaHistoricalCandles } = require('./src/api/deltaExchange');
@@ -4604,11 +4605,23 @@ async function checkNiftyBrahmastraTrigger() {
 
         const nifty = marketState.nifty;
         const isBull = direction === 'BULLISH';
+        // 5 Oct — "5 aligned" can be ONE fact counted five times: Fast Momentum, Sustained Drift, ORB, Trend
+        // Rider, Index Confirm and Volume Confirm are all reading the same price swing. Count the distinct
+        // FAMILIES so the alert says how many independent angles really agree. Informational only —
+        // Brahmastra's firing rule is unchanged.
+        const BRAH_FAMILY = {
+            'Fast Momentum': 'price move', 'Sustained Drift': 'price move', 'ORB': 'price move', 'Trend Rider': 'price move',
+            'Index Confirm': 'price move', 'Volume Confirm': 'price move',
+            'S/R Bounce': 'S/R level', 'Murarka': 'option premium', 'Opt RSI Diverge': 'option premium', 'Broad Market Shift': 'broad market',
+        };
+        const families = [...new Set(sources.map(x => BRAH_FAMILY[x] || x))];
+        const independentLine = `🧩 Independent angles: <b>${families.length}</b> (${families.join(' + ')})${families.length === 1 ? ' — all the same underlying move, not separate confirmations' : ''}`;
         const msg = `
 🚀 <b>BRAHMASTRA — ${sources.length} TRIGGERS ALIGNED ${direction}</b>
 ━━━━━━━━━━━━━━━━━━
 NIFTY ${nifty?.toFixed(1)}
 Agreeing sources (last ${BRAHMASTRA_WINDOW_MIN}min): ${sources.join(', ')}
+${independentLine}
 ━━━━━━━━━━━━━━━━━━
 ⚠️ <b>Still EXPLORATORY — NOT Main Engine confirmed.</b> This combines other exploratory triggers, each still unproven on its own — combining them doesn't make them proven, this needs its own track record too. Use your own judgment, size small.
 ━━━━━━━━━━━━━━━━━━
@@ -5172,11 +5185,18 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
             liqLine = liquidityLine(liq);
         }
         const block = buildTrackRecordBlock(card, agree, disagree) + (liqLine ? `\n${liqLine}` : '');
-        const parts = msg.split('\n');
+        // 5 Oct — many trigger texts carry a static "No historical track record yet ..." sentence that
+        // contradicts the real track-record block we are about to append (seen on Murarka, Broad Market
+        // Shift, ORB, Volume/Index Confirm ...). When this strategy HAS results, drop the stale sentence.
+        let msgBody = msg;
+        if (card && (card.dirN > 0 || card.coachN > 0)) {
+            msgBody = msg.replace(/No historical track record yet[^.\n]*\.\s*/g, '').replace(/,\s*no historical track record yet(?=\.)/gi, '').replace(/ +\n/g, '\n');
+        }
+        const parts = msgBody.split('\n');
         const footerIdx = parts.map(l => l.trim().startsWith('<i>')).lastIndexOf(true);
         finalMsg = footerIdx >= 0
             ? [...parts.slice(0, footerIdx), block, ...parts.slice(footerIdx)].join('\n')
-            : `${msg}\n${block}`;
+            : `${msgBody}\n${block}`;
     } catch (e) {
         console.warn('[Trigger Alert] scoring error, sending plain alert:', e.message);
         finalMsg = msg;
@@ -8584,7 +8604,7 @@ async function refreshPCR() {
                 ).catch(e => console.warn('[Murarka] log error:', e.message));
             }
             if (isConfigured() && isMarketOpen()) {
-                sendTriggerAlert('NIFTY', 'Murarka', murarkaEntry.side, `🧪 <u><b>EXPLORATORY TRIGGER</b></u>\n🎯 <b>Murarka Entry — BUY ${murarkaEntry.side}</b>\n━━━━━━━━━━━━━━━━━━\n${murarkaEntry.reason}\n━━━━━━━━━━━━━━━━━━\n⚠️ Exploratory — no historical track record yet, this is the first time it's being logged.\n<i>Vardaan AI — Murarka Strategy</i>`)
+                sendTriggerAlert('NIFTY', 'Murarka', murarkaEntry.side, `🧪 <u><b>EXPLORATORY TRIGGER</b></u>\n🎯 <b>Murarka Entry — BUY ${murarkaEntry.side}</b>\n━━━━━━━━━━━━━━━━━━\n${murarkaEntry.reason}\n━━━━━━━━━━━━━━━━━━\n⚠️ Exploratory — this idea came straight out of a chat conversation. See the track record line below for how it has actually done so far.\n<i>Vardaan AI — Murarka Strategy</i>`)
                     .catch(e => console.warn('[Murarka] alert error:', e.message));
             }
         } else if (!murarkaEntry.active) {
@@ -10711,6 +10731,7 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
         // move the trader is actually trying to capture.
         entryNiftyForTheta: marketState.nifty ?? null,
         entryVixForTheta: marketState.vix ?? null,
+        entryAtmIv: getAtmIvIfFresh(),   // 5 Oct: option's own IV (Fyers chain) at entry, or null -> VIX is used
         entryDTE: (typeof daysToNextExpiry === 'function' ? daysToNextExpiry() : null),
         // ── Setup DNA + entry VIX (8 Aug) — see buildSetupDNA() header ──────
         setupDNA: buildSetupDNA(signal, marketState),
@@ -10776,6 +10797,29 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
 // live LTP from the full option chain (same source pickStrikeAndPremium
 // already uses for entry), same ATM-only shortcut retained as a fast path
 // since that's still the common case and avoids an extra array scan.
+// ── IV pair + theta-so-far helpers (5 Oct) ──────────────────────────────────
+// ONE place decides which volatility the per-trade Greeks maths use, so the delta check, the exit
+// warnings and the P&L attribution can never disagree. Entry and now must come from the SAME
+// source (mixing a VIX entry with a chain-IV exit would invent a fake "IV change").
+function ivPairFor(rec) {
+    const nowAtm = getAtmIvIfFresh();
+    if (rec.entryAtmIv != null && nowAtm != null) return { iv0: rec.entryAtmIv, iv1: nowAtm, src: 'chain' };
+    return { iv0: rec.entryVixForTheta, iv1: marketState.vix, src: 'vix' };
+}
+// ₹/share of time decay since entry, NEGATIVE = cost. Session basis: a calendar-day theta spread over
+// the 375-minute NSE session (same basis as the "Θ ~₹x/hr" line in alerts — they used to disagree:
+// this was spread over 24 h, so warnings said ~₹0.4 while the alert line said ~₹5/hr).
+function thetaCostSoFar(rec, elapsedMin) {
+    try {
+        if (!rec.entryNiftyForTheta || rec.entryDTE == null || typeof calcGreeks !== 'function') return null;
+        const iv0 = (rec.entryAtmIv != null) ? rec.entryAtmIv : rec.entryVixForTheta;
+        if (!iv0) return null;
+        const g = calcGreeks(rec.entryNiftyForTheta, rec.strike, Math.max(rec.entryDTE, 0.04) / 365, iv0 / 100, rec.type);
+        if (!g || g.theta == null) return null;
+        return parseFloat((g.theta * (Math.min(Math.max(elapsedMin, 0), 375) / 375)).toFixed(2));
+    } catch (e) { return null; }
+}
+
 // ── Delta Response Check helper ─────────────────────────────────────────────
 // Returns { favourMove, expectedGain, actualGain, ratio, avgDelta } or null when
 // there isn't enough information / movement yet to judge fairly.
@@ -10786,8 +10830,9 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
 function computeDeltaResponse(rec, live) {
     try {
         if (!DELTA_RESP_ENABLED || !live || !rec.entry) return null;
-        const spot0 = rec.entryNiftyForTheta, vix0 = rec.entryVixForTheta, dte0 = rec.entryDTE;
-        const spot1 = marketState.nifty, vix1 = marketState.vix;
+        const spot0 = rec.entryNiftyForTheta, dte0 = rec.entryDTE;
+        const spot1 = marketState.nifty;
+        const { iv0: vix0, iv1: vix1 } = ivPairFor(rec);   // 5 Oct: option's own IV when available, else VIX
         if (!spot0 || !spot1 || !vix0 || !vix1 || dte0 == null || typeof calcGreeks !== 'function') return null;
         const favourMove = rec.type === 'CE' ? (spot1 - spot0) : (spot0 - spot1);
         if (!(favourMove >= DELTA_RESP_MIN_MOVE)) return null;
@@ -10898,12 +10943,8 @@ async function updateSignalPerformance() {
         if (dResp && !rec.deltaRespWarned && elapsedMin >= DELTA_RESP_MIN_MIN && dResp.ratio < DELTA_RESP_WARN_RATIO) {
             rec.deltaRespWarned = true;
             rec.deltaRespWarnMin = elapsedMin;
-            // theta estimate so far (same method as the Exit Warning)
-            let thetaSoFar = null;
-            if (rec.entryNiftyForTheta && rec.entryVixForTheta && rec.entryDTE != null) {
-                const gT = calcGreeks(rec.entryNiftyForTheta, rec.strike, Math.max(rec.entryDTE, 0.04) / 365, rec.entryVixForTheta / 100, rec.type);
-                if (gT && gT.theta != null) thetaSoFar = parseFloat((gT.theta * (elapsedMin / (60 * 24))).toFixed(2));
-            }
+            // time decay so far — same helper as the exit warnings (session basis)
+            const thetaSoFar = thetaCostSoFar(rec, elapsedMin);
             console.log(`⚠️ [DeltaResponse] ${rec.signal} ${rec.strike}${rec.type}: Nifty +${dResp.favourMove}pts in favour, expected ~₹${dResp.expectedGain}, actual ₹${dResp.actualGain} (ratio ${dResp.ratio})`);
             sendDeltaResponseWarning(rec, dResp, elapsedMin, thetaSoFar).catch(e => console.warn('[DeltaResponse] send error:', e.message));
         }
@@ -10960,14 +11001,7 @@ async function updateSignalPerformance() {
                     // (theta itself isn't constant as spot/vix/DTE move), not
                     // a live-repriced theta — good enough to answer "roughly how
                     // much of my open loss so far is just time, not direction."
-                    let thetaDecaySoFar = null;
-                    if (rec.entryNiftyForTheta && rec.entryVixForTheta && rec.entryDTE != null && calcGreeks) {
-                        const T0 = Math.max(rec.entryDTE, 0.04) / 365;
-                        const g = calcGreeks(rec.entryNiftyForTheta, rec.strike, T0, rec.entryVixForTheta / 100, rec.type);
-                        if (g && g.theta != null) {
-                            thetaDecaySoFar = parseFloat((g.theta * (elapsedMin / (60 * 24))).toFixed(2)); // negative = decay cost per share
-                        }
-                    }
+                    const thetaDecaySoFar = thetaCostSoFar(rec, elapsedMin);   // 5 Oct: unified session basis (was spread over 24 h)
                     if (live && rrAchieved >= 1.5) {
                         const gainPct = Math.round(((live - rec.entry) / rec.entry) * 1000) / 10;
                         sendPartialProfitAlert(rec, live, gainPct, Math.round(rrAchieved * 10) / 10, decayedConf, thetaDecaySoFar).catch(e => console.warn('[PartialProfit] send error:', e.message));
@@ -11023,8 +11057,9 @@ async function updateSignalPerformance() {
             // same moment (not the target/SL level) so all three legs describe one instant. Skipped when
             // there's no live tick (timeout with a missing strike) — attributing against a stale price
             // would be noise.
-            const attr = live ? computeGreeksAttribution(rec, {
-                premium: live, spot: marketState.nifty, vix: marketState.vix,
+            const ivp = ivPairFor(rec);   // 5 Oct: entry+exit IV from the SAME source (option's own IV, else VIX)
+            const attr = live ? computeGreeksAttribution({ ...rec, entryVixForTheta: ivp.iv0 }, {
+                premium: live, spot: marketState.nifty, vix: ivp.iv1, vixReal: marketState.vix, ivSource: ivp.src,
                 dte: daysToNextExpiry(), elapsedMin,
             }) : null;
             if (attr) console.log(`🔬 [Attribution] ${rec.signal} ${rec.strike}${rec.type} | actual ${attr.actual >= 0 ? '+' : ''}${attr.actual} = dir ${attr.delta} + time ${attr.theta} + IV ${attr.vega} + other ${attr.other}`);
@@ -14338,21 +14373,25 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshBreadth,        2*60*1000), 90*1000);   // 2 min — breadth is fast-changing
     setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
-    // 3 Oct — Fyers Greeks probe: every 15 min during market hours, at most 4 tries a day,
-    // stops as soon as it has a definite answer ('found'). Read-only; see probeFyersGreeks().
+    // 3 Oct — Fyers Greeks probe (every 15 min, max 4 tries/day, until it has a definite answer).
+    // 5 Oct — once the probe says 'found', refresh the ATM implied volatility from the same chain every
+    // minute (refreshFyersAtmIv -> ivSource) so theta/delta/attribution maths use the option's own IV
+    // instead of VIX. Read-only; any failure silently falls back to VIX.
     {
-        let _gpDay = '', _gpDone = false, _gpTries = 0;
+        let _gpDay = '', _gpDone = false, _gpTries = 0, _gpLastTry = 0;
         setTimeout(() => setInterval(async () => {
             try {
                 if (!isMarketOpen() || !marketState.nifty) return;
                 const day = getIST().toDateString();
-                if (day !== _gpDay) { _gpDay = day; _gpDone = false; _gpTries = 0; }
-                if (_gpDone || _gpTries >= 4) return;
-                _gpTries++;
+                if (day !== _gpDay) { _gpDay = day; _gpDone = false; _gpTries = 0; _gpLastTry = 0; }
+                const st = getFyersGreeksProbe().status;
+                if (st === 'found') { await refreshFyersAtmIv(marketState.nifty); return; }
+                if (_gpDone || _gpTries >= 4 || (Date.now() - _gpLastTry) < 14 * 60 * 1000) return;
+                _gpTries++; _gpLastTry = Date.now();
                 const r = await probeFyersGreeks(marketState.nifty);
                 if (r.status === 'found' || r.status === 'not-available') _gpDone = true;
-            } catch (e) { console.warn('[Fyers-Greeks] probe tick error:', e.message); }
-        }, 15 * 60 * 1000), 8 * 60 * 1000);
+            } catch (e) { console.warn('[Fyers-Greeks] tick error:', e.message); }
+        }, 60 * 1000), 8 * 60 * 1000);
     }
     setTimeout(() => setInterval(syncOptionFlowFast,       30*1000), 5*1000);   // 3 Aug fix — no network call, just stops throwing away fresh nseData cache
     // Phase 1 (4 Sep, MCX CRUDEOIL expansion) — session router heartbeat, log-only.

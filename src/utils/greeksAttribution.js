@@ -59,7 +59,8 @@ function computeGreeksAttribution(rec, exit) {
 
         return {
             delta: r2(deltaPnl), theta: r2(thetaPnl), vega: r2(vegaPnl), other: r2(other),
-            actual: r2(actual), exitSpot: r2(spot1), exitVix: r2(vix1),
+            actual: r2(actual), exitSpot: r2(spot1), exitVix: r2(exit.vixReal != null ? exit.vixReal : vix1),
+            ivSource: exit.ivSource || 'vix',
             // only name a "drag" on a trade that actually lost money — on a winner it's noise
             mainDrag: (actual < 0 && worst.v < -0.5) ? worst.k : null,
             mainDriver: best.v > 0.5 ? best.k : null,
@@ -72,7 +73,7 @@ function fmtRs(v) { return `${v >= 0 ? '+' : '−'}₹${Math.abs(v).toFixed(1)}`
 // One-line Telegram summary, per share.
 function attributionLine(a) {
     if (!a) return '';
-    return `🔬 P&L split (per share): Direction ${fmtRs(a.delta)} · Time ${fmtRs(a.theta)} · IV ${fmtRs(a.vega)} · Other ${fmtRs(a.other)}`
+    return `🔬 P&L split (per share): Direction ${fmtRs(a.delta)} · Time ${fmtRs(a.theta)} · IV ${fmtRs(a.vega)}${a.ivSource === 'chain' ? '' : ' (VIX proxy)'} · Other ${fmtRs(a.other)}`
         + (a.mainDrag ? `\n   Biggest drag: ${a.mainDrag}` : '');
 }
 

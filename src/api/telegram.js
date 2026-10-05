@@ -419,7 +419,7 @@ async function sendMTFAlert(state, strikeData = null, autoLogged = false) {
         : lq?.label === 'Strong Confluence'
             ? `🟡 <b>WATCH ONLY</b> — strong setup on the MTF tracker, but the main engine still says WAIT. Size down or skip until it confirms.`
             : lq?.label === 'Moderate'
-                ? `🟠 <b>WEAK</b> — only partial confluence. Skip unless you have your own confirmation.`
+                ? `🟠 <b>MODERATE LEAD (2/4)</b> — only partial confluence. Skip unless you have your own confirmation.`
                 : `⚪ <b>LOW CONVICTION</b> — treat as background noise, no action needed.`;
 
     // ── "Main Engine blocked by" — requested independently across three audits
@@ -530,7 +530,7 @@ ${lqLine}${state.momentumDecayWarning ? `\n${state.momentumDecayWarning}` : ''}`
 ${verdictLine}${blockedByLine}
 ━━━━━━━━━━━━━━━━━━
 ${alignTitle}
-${emoji} <b>${state.mtf.signal}</b> — ${state.mtf.strength} | NIFTY: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}${rangeWarning}
+${emoji} <b>${state.mtf.signal}</b> — TF votes: ${state.mtf.strength} | NIFTY: ${state.nifty.toLocaleString('en-IN', {minimumFractionDigits: 2})}${rangeWarning}
 ━━━━━━━━━━━━━━━━━━
 ${referenceOnlyNote}${levelsBlock}
 ━━━━━━━━━━━━━━━━━━${detailsBlock}

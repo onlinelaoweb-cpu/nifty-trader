@@ -40,6 +40,7 @@
 
 'use strict';
 const axios = require('axios');
+const { setAtmIv } = require('../utils/ivSource');
 let _telegram = null;
 try { _telegram = require('./telegram'); } catch (e) { /* optional — nseData can run without it in tests */ }
 
@@ -2123,6 +2124,7 @@ async function probeFyersGreeks(spotPrice) {
                 fyersGreeksProbe.variant = variant;
                 fyersGreeksProbe.atmCE = ce; fyersGreeksProbe.atmPE = pe;
                 fyersGreeksProbe.note = 'Fyers returned Greeks fields';
+                { const ivs = [ce && ce.iv, pe && pe.iv].filter(x => Number.isFinite(x)); if (ivs.length) setAtmIv(ivs.reduce((a, b) => a + b, 0) / ivs.length); }
                 console.log(`[Fyers-Greeks] ✅ Greeks returned (greeks=${variant}) | CE ${JSON.stringify(ce)} | PE ${JSON.stringify(pe)}`);
                 return fyersGreeksProbe;
             }
@@ -2136,6 +2138,31 @@ async function probeFyersGreeks(spotPrice) {
     return fyersGreeksProbe;
 }
 function getFyersGreeksProbe() { return fyersGreeksProbe; }
+
+// 5 Oct — once the probe has proven Fyers returns Greeks, refresh the ATM implied volatility from the
+// same option chain every minute so the app's Greeks maths can use the option's OWN IV instead of VIX.
+// Silent on failure: ivSource falls back to VIX when the chain IV goes stale.
+async function refreshFyersAtmIv(spotPrice) {
+    try {
+        if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID || !(spotPrice > 0) || fyersGreeksProbe.status !== 'found') return null;
+        const res = await axios.get('https://api-t1.fyers.in/data/options-chain-v3', {
+            params: { symbol: 'NSE:NIFTY50-INDEX', strikecount: 2, timestamp: '', greeks: fyersGreeksProbe.variant || '1' },
+            headers: { 'Authorization': `${FYERS_APP_ID}:${FYERS_ACCESS_TOKEN}`, 'Content-Type': 'application/json', 'version': '3' },
+            timeout: 8_000,
+        });
+        const rows = (res.data?.data?.optionsChain || []).filter(r => r.option_type === 'CE' || r.option_type === 'PE');
+        const atm = Math.round(spotPrice / 50) * 50;
+        const near = side => rows.filter(r => r.option_type === side)
+            .sort((a, b) => Math.abs(Number(a.strike_price) - atm) - Math.abs(Number(b.strike_price) - atm))[0];
+        const ce = _extractGreeks(near('CE')), pe = _extractGreeks(near('PE'));
+        const ivs = [ce && ce.iv, pe && pe.iv].filter(x => Number.isFinite(x));
+        if (!ivs.length) return null;
+        const iv = ivs.reduce((a, b) => a + b, 0) / ivs.length;
+        setAtmIv(iv);
+        fyersGreeksProbe.atmCE = ce; fyersGreeksProbe.atmPE = pe; fyersGreeksProbe.lastTs = new Date().toISOString();
+        return iv;
+    } catch (e) { return null; }
+}
 
 async function _fetchBankNiftyPCRFallback() {
     const bnSpot = _getBankNiftySpot();
@@ -2720,6 +2747,7 @@ module.exports = {
     getFnOStockList,
     probeFyersGreeks,
     getFyersGreeksProbe,
+    refreshFyersAtmIv,
 
     // Snapshots (for /debug routes)
     getPCRState,

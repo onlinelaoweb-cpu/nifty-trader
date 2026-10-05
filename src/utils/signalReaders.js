@@ -12,6 +12,7 @@ const { computeDynamicLevels, classifyDynamicLevels } = require('../api/dynamicL
 const { getIST, daysToNextExpiry } = require('./timeWindows');
 const { bsEstimate } = require('./pureCalc');
 const { calcGreeks } = require('../api/optionGreeks');
+const { getIvPct } = require('./ivSource');
 
 function computeSmartMoneyBias(marketState) {
     let score = 0;
@@ -741,7 +742,8 @@ function pickStrikeAndPremium(signal, nifty, vix, pcrState, marketState) {
         ? parseFloat((strike + entryPremium).toFixed(2))
         : parseFloat((strike - entryPremium).toFixed(2));
 
-    const thetaHurdle = computeThetaHurdle(nifty, strike, type, entryPremium, target, effectiveVix, dte);
+    // 5 Oct: theta from the option's OWN IV (Fyers chain) when fresh, else VIX as before
+    const thetaHurdle = computeThetaHurdle(nifty, strike, type, entryPremium, target, getIvPct(effectiveVix).iv, dte);
     const nextWeekAlt = computeNextWeekAlt(nifty, strike, type, effectiveVix, dte, thetaHurdle ? thetaHurdle.thetaPerHr : null);
 
     return { type, strike, entry: entryPremium, sl, target, slSource, rrMultiplier, bep, premiumAgeSec, strikeOI, strikeVolume, lowLiquidity, positionSizeNote, thetaHurdle, nextWeekAlt };
