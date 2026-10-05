@@ -118,7 +118,7 @@ const BTC_LIQUIDITY_GATE_ENABLED = String(process.env.BTC_LIQUIDITY_GATE || 'on'
 const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
-    sendCloseSummary, sendExitAlert, sendMomentumExitWarning, sendDeltaResponseWarning, sendEventIvWarning,
+    sendCloseSummary, sendExitAlert, sendMomentumExitWarning, sendDeltaResponseWarning, sendEventIvWarning, sendNoProgressWarning,
     sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured,
     sendScalpAlert, sendSignalTimeline, sendPartialProfitAlert,
     sendWeeklyGateReview,
@@ -375,6 +375,36 @@ const DELTA_RESP_ENABLED   = (process.env.DELTA_RESPONSE_CHECK || 'on').toLowerC
 const DELTA_RESP_MIN_MOVE  = parseFloat(process.env.DELTA_RESP_MIN_MOVE  || '20');  // Nifty pts in favour before judging
 const DELTA_RESP_MIN_MIN   = parseFloat(process.env.DELTA_RESP_MIN_MIN   || '5');   // minutes in trade before judging
 const DELTA_RESP_WARN_RATIO = parseFloat(process.env.DELTA_RESP_WARN_RATIO || '0.5'); // actual/expected below this => warn
+
+// ── No-progress nudge (5 Oct 2026, from the options-Greeks webinar review) ──
+// "Held 2 hours, ₹12 went to theta, no delta gain." A trade that is still open after TIME_STOP_MIN minutes
+// and has never been more than TIME_STOP_MAX_GAIN % above entry (and is not currently above entry+3%) is
+// going nowhere while time decay keeps charging. ONE heads-up per trade — never an auto-exit (the existing
+// 90-minute auto-close is unchanged). TIME_STOP_NUDGE=off disables.
+const TIME_STOP_ENABLED  = (process.env.TIME_STOP_NUDGE || 'on').toLowerCase() !== 'off';
+const TIME_STOP_MIN      = parseFloat(process.env.TIME_STOP_MIN || '40');
+const TIME_STOP_MAX_GAIN = parseFloat(process.env.TIME_STOP_MAX_GAIN || '10');
+
+// ── VIX direction (5 Oct 2026) — LOG ONLY ───────────────────────────────────
+// Hypothesis from the webinar: a PUT bought on a bounce is hit three ways (delta, VIX falling, theta),
+// while a CALL bought into falling VIX loses vega. We do NOT act on it yet: every tracked signal just
+// records how VIX moved over the previous ~15 min (vix_slope15) and /api/vix-direction-study shows win-rate
+// by CALL/PUT x VIX rising/flat/falling once there is enough data.
+const _vixSamples = [];   // { ts, vix } — one per minute while the market is open
+function recordVixSample() {
+    if (!(marketState.vix > 0)) return;
+    const now = Date.now();
+    _vixSamples.push({ ts: now, vix: marketState.vix });
+    while (_vixSamples.length && now - _vixSamples[0].ts > 40 * 60 * 1000) _vixSamples.shift();
+}
+function vixSlope15() {
+    if (!(marketState.vix > 0) || !_vixSamples.length) return null;
+    const target = Date.now() - 15 * 60 * 1000;
+    let ref = null;
+    for (const smp of _vixSamples) { if (smp.ts <= target) ref = smp; else break; }   // newest sample at least 15 min old
+    if (!ref || (target - ref.ts) > 10 * 60 * 1000) return null;                        // none close enough to 15 min ago
+    return Math.round((marketState.vix - ref.vix) * 100) / 100;
+}
 // ── Shadow-tracking for TIMED OUT signals (7 Aug audit request) ─────────────
 // Live cases surfaced by Prabhash (screenshots) showed a repeating pattern:
 // a signal gets marked "TIMED OUT" at 90 min, then the underlying premium
@@ -4997,6 +5027,66 @@ let _scorecardInFlight = false;
 const _mutedStrategies = new Set();
 const _recentTriggerFires = [];      // { instrument, source, direction, ts, muted }
 
+// ── Exploratory digest (5 Oct 2026) ──────────────────────────────────────────
+// Live-session review: ~25 exploratory trigger messages in ~70 minutes, many contradicting each other,
+// against 2 real tracked trades. Triggers that have NOT yet earned a verdict (fewer than DIGEST_MIN_TRADES
+// Trade-Coach results) are now held and sent as ONE summary every DIGEST_MINUTES per instrument. They are
+// still fully logged, tracked and scored exactly as before — only the Telegram delivery is batched.
+// Proven triggers (>= DIGEST_MIN_TRADES results, e.g. Fast Momentum, Brahmastra) still alert immediately.
+// Auto-mute and the Bitcoin liquidity gate still run first. EXPLORATORY_DIGEST=off restores one-by-one alerts.
+const DIGEST_ENABLED    = (process.env.EXPLORATORY_DIGEST || 'on').toLowerCase() !== 'off';
+const DIGEST_MIN_TRADES = parseInt(process.env.DIGEST_MIN_TRADES || '30');
+const DIGEST_MINUTES    = parseInt(process.env.DIGEST_MINUTES || '30');
+const _digestQueue = { NIFTY: [], CRUDE: [], BITCOIN: [] };
+function _digestPrice(instrument) {
+    const v = instrument === 'NIFTY' ? marketState.nifty
+            : instrument === 'CRUDE' ? marketState.crudeoil?.price
+            : instrument === 'BITCOIN' ? marketState.bitcoin?.price : null;
+    return v > 0 ? v : null;
+}
+function queueDigestItem(instrument, source, direction, card, agree, disagree) {
+    if (!_digestQueue[instrument]) _digestQueue[instrument] = [];
+    _digestQueue[instrument].push({
+        ts: Date.now(), source, direction, price: _digestPrice(instrument),
+        dirN: card?.dirN || 0, dirWinPct: card?.dirWinPct ?? null,
+        coachN: card?.coachN || 0, coachAvg: card?.coachAvg ?? null,
+        agree: agree.size, disagree: disagree.size,
+    });
+    console.log(`📦 [Digest] queued ${instrument} ${source} ${direction} (${_digestQueue[instrument].length} waiting)`);
+}
+async function flushDigest(instrument, force = false) {
+    const q = _digestQueue[instrument];
+    if (!q || !q.length) return;
+    if (!force && (Date.now() - q[0].ts) < DIGEST_MINUTES * 60 * 1000) return;
+    const items = q.splice(0, q.length);
+    const bull = items.filter(i => i.direction === 'BULLISH').length, bear = items.filter(i => i.direction === 'BEARISH').length;
+    const lean = bull === bear ? 'split — triggers disagree' : (bull > bear ? 'leaning BULLISH' : 'leaning BEARISH');
+    const clock = t => new Date(t).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
+    const fmtPx = v => v == null ? '' : ' @' + (v >= 1000 ? Math.round(v).toLocaleString('en-IN') : v.toFixed(2));
+    const MAX_LINES = 18;
+    const lines = items.slice(0, MAX_LINES).map(i => {
+        const arrow = i.direction === 'BULLISH' ? '▲' : '▼';
+        const rec = i.coachN > 0
+            ? `record: ${i.dirN > 0 ? `direction ${i.dirWinPct}% (${i.dirN})` : 'direction --'} · avg ${i.coachAvg > 0 ? '+' : ''}${Number(i.coachAvg).toFixed(1)}% (${i.coachN})`
+            : 'no record yet';
+        return `• ${clock(i.ts)} ${i.source} ${arrow}${fmtPx(i.price)} — ${rec}`;
+    });
+    const more = items.length > MAX_LINES ? `\n…and ${items.length - MAX_LINES} more` : '';
+    const msg = `
+📦 <b>EXPLORATORY DIGEST — ${instrument}</b> (${items.length} trigger${items.length === 1 ? '' : 's'}, ~${DIGEST_MINUTES} min)
+━━━━━━━━━━━━━━━━━━
+▲ Bullish ${bull} · ▼ Bearish ${bear} → <b>${lean}</b>
+${lines.join('\n')}${more}
+━━━━━━━━━━━━━━━━━━
+Unproven triggers (under ${DIGEST_MIN_TRADES} results) are batched here to cut noise. All are still logged and tracked; proven ones alert instantly. Not Main Engine confirmed — use your own judgment.
+<i>Vardaan AI — Exploratory Digest</i>
+`.trim();
+    try { await sendRawMessage(msg); console.log(`📦 [Digest] sent ${instrument}: ${items.length} triggers (${bull}▲ ${bear}▼)`); }
+    catch (e) { console.warn('[Digest] send error:', e.message); }
+}
+setInterval(() => { for (const k of Object.keys(_digestQueue)) flushDigest(k).catch(() => {}); }, 60 * 1000);
+
+
 // Maps every raw direction token the triggers use onto BULLISH/BEARISH — same
 // semantics as the dirExpr entries in OUTCOME_SOURCES (CE=bullish, PE=bearish,
 // BEARISH_FADING=bullish, CONFIRMED_x / BOS_x). Anything else (e.g.
@@ -5197,6 +5287,11 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
         finalMsg = footerIdx >= 0
             ? [...parts.slice(0, footerIdx), block, ...parts.slice(footerIdx)].join('\n')
             : `${msgBody}\n${block}`;
+        // 5 Oct — unproven trigger -> hold for the digest instead of alerting one by one (see DIGEST_* above)
+        if (DIGEST_ENABLED && (card?.coachN || 0) < DIGEST_MIN_TRADES) {
+            queueDigestItem(instrument, source, direction, card, agree, disagree);
+            return;
+        }
     } catch (e) {
         console.warn('[Trigger Alert] scoring error, sending plain alert:', e.message);
         finalMsg = msg;
@@ -10289,7 +10384,7 @@ async function initDB() {
         // change into direction (delta/gamma), time (theta), IV (vega) and "other" (residual),
         // plus the Nifty/VIX at close. Written by saveGreeksAttribution(); NULL on older rows and on
         // EOD-carried closes (no same-session exit price to attribute against).
-        for (const col of ['attr_delta', 'attr_theta', 'attr_vega', 'attr_other', 'exit_nifty', 'exit_vix']) {
+        for (const col of ['attr_delta', 'attr_theta', 'attr_vega', 'attr_other', 'exit_nifty', 'exit_vix', 'vix_slope15']) {
             await dbPool.query(`ALTER TABLE signal_performance ADD COLUMN IF NOT EXISTS ${col} NUMERIC`).catch(()=>{});
         }
         // Delta Response Check outcome (3 Oct) — lets us test, with real closed trades, whether the
@@ -10738,6 +10833,8 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
         entryVix: marketState.vix ?? null,
         // ── Delta Response Check state (see computeDeltaResponse) ──
         deltaRespWarned: false, respRatio: null,
+        noProgressWarned: false,
+        entryVixSlope: vixSlope15(),   // 5 Oct (log only): VIX change over the previous ~15 min, null if unknown
     };
     openPerfRecords.push(rec);
     if (dbPool) {
@@ -10749,6 +10846,10 @@ async function startSignalPerformance(signal, strikeData, source = 'main') {
             );
             rec.id = r.rows[0]?.id ?? null;
         } catch (e) { console.warn('[SignalPerf] insert error:', e.message); }
+        // 5 Oct — separate UPDATE so the existing insert stays untouched (log-only VIX slope for the study endpoint)
+        if (rec.id && rec.entryVixSlope != null) {
+            dbPool.query(`UPDATE signal_performance SET vix_slope15=$1 WHERE id=$2`, [rec.entryVixSlope, rec.id]).catch(e => console.warn('[VixSlope] save error:', e.message));
+        }
     }
 
     // 12 Sep — Murarka-rule A/B comparison (see strike_ab_test table header
@@ -10933,6 +11034,17 @@ async function updateSignalPerformance() {
             rec.eventWarned = true;
             console.log(`⚠️ [EventGuard] ${rec.signal} ${rec.strike}${rec.type} open into ${kegNow.title} (${Math.round(kegNow.hoursRemaining * 60)} min) — heads-up sent`);
             sendEventIvWarning(rec, kegNow, live).catch(e => console.warn('[EventGuard] send error:', e.message));
+        }
+
+        // ── No-progress nudge (5 Oct) — once per trade, see TIME_STOP_* above ──
+        if (TIME_STOP_ENABLED && live && !rec.noProgressWarned && elapsedMin >= TIME_STOP_MIN && rec.entry > 0) {
+            const bestGainPct = ((rec.high - rec.entry) / rec.entry) * 100;
+            if (bestGainPct < TIME_STOP_MAX_GAIN && live <= rec.entry * 1.03) {
+                rec.noProgressWarned = true;
+                const nowPct = ((live - rec.entry) / rec.entry) * 100;
+                console.log(`⏱️ [NoProgress] ${rec.signal} ${rec.strike}${rec.type}: ${elapsedMin} min, best ${bestGainPct.toFixed(1)}%, now ${nowPct.toFixed(1)}% — heads-up sent`);
+                sendNoProgressWarning(rec, live, elapsedMin, bestGainPct, nowPct, thetaCostSoFar(rec, elapsedMin)).catch(e => console.warn('[NoProgress] send error:', e.message));
+            }
         }
 
         // ── Delta Response Check — fires at most once per trade ─────────────
@@ -12001,6 +12113,28 @@ app.get('/api/greeks-attribution', async (req, res) => {
             days, groups: r.rows,
             howToRead: 'Per-share ₹. direction = delta/gamma gain, time_decay = theta cost, iv_change = vega×ΔVIX, other = model residual. If SL/TIMED_OUT rows are dominated by time_decay, entries are too slow/late; by iv_change, IV crush; by direction, simply wrong side.',
         });
+    } catch (e) { res.json({ error: e.message }); }
+});
+
+// 5 Oct — VIX-direction study (LOG ONLY, nothing acts on it). Does a CALL/PUT do better or worse depending on
+// whether VIX was rising, flat or falling over the ~15 min before the signal? Closed tracked signals only.
+// Win = target hit or +30% book-half reached (same as the Insights tab). ?days=60 (max 365).
+app.get('/api/vix-direction-study', async (req, res) => {
+    try {
+        if (!dbPool) return res.json({ error: 'no database' });
+        const days = Math.min(parseInt(req.query.days) || 60, 365);
+        const r = await dbPool.query(`
+            SELECT option_type,
+                   CASE WHEN vix_slope15 <= -0.10 THEN 'VIX falling' WHEN vix_slope15 >= 0.10 THEN 'VIX rising' ELSE 'VIX flat' END AS vix_move,
+                   COUNT(*)::int AS trades,
+                   ROUND(100.0 * COUNT(*) FILTER (WHERE target_hit OR COALESCE(partial_win,false)) / COUNT(*), 0) AS win_pct,
+                   ROUND(100.0 * COUNT(*) FILTER (WHERE sl_hit) / COUNT(*), 0) AS sl_pct,
+                   ROUND((AVG((exit_premium - entry) / NULLIF(entry,0) * 100) FILTER (WHERE exit_premium IS NOT NULL AND entry > 0))::numeric, 1) AS avg_result_pct
+            FROM signal_performance
+            WHERE closed = true AND vix_slope15 IS NOT NULL
+              AND trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - $1::int
+            GROUP BY 1, 2 ORDER BY 1, 2`, [days]);
+        res.json({ days, groups: r.rows, note: 'Log-only study. Webinar hypothesis: PUTs suffer when VIX falls on a bounce, CALLs lose vega when VIX falls. Needs ~30 trades per group before it means anything.' });
     } catch (e) { res.json({ error: e.message }); }
 });
 
@@ -14373,6 +14507,7 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshBreadth,        2*60*1000), 90*1000);   // 2 min — breadth is fast-changing
     setTimeout(() => setInterval(refreshSR,            10*60*1000), 120*1000);
     setTimeout(() => setInterval(refreshPCR,            3*60*1000), 150*1000);
+    setInterval(() => { try { if (isMarketOpen()) recordVixSample(); } catch (e) {} }, 60 * 1000);   // 5 Oct: VIX history for the log-only slope
     // 3 Oct — Fyers Greeks probe (every 15 min, max 4 tries/day, until it has a definite answer).
     // 5 Oct — once the probe says 'found', refresh the ATM implied volatility from the same chain every
     // minute (refreshFyersAtmIv -> ivSource) so theta/delta/attribution maths use the option's own IV

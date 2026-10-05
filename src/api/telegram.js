@@ -979,6 +979,26 @@ Consider: book profit, tighten the SL, or skip adding. Not an auto-exit.
     await sendMessage(msg);
 }
 
+// ── No-progress nudge (5 Oct 2026) ──────────────────────────────────────────
+// Once per trade: still open after ~40 min, never meaningfully in profit, time decay keeps charging.
+// A heads-up only — never an exit instruction (the 90-minute auto-close is unchanged).
+async function sendNoProgressWarning(rec, live, elapsedMin, bestGainPct, nowPct, thetaSoFar) {
+    const dirLabel = rec.signal === 'BUY CALL' ? 'CALL' : 'PUT';
+    const thetaLine = (thetaSoFar != null) ? `\n⏳ Time decay so far: ~₹${Math.abs(thetaSoFar)}/share (estimate)` : '';
+    const msg = `
+⏱️ <b>NO PROGRESS — ${elapsedMin} MIN IN</b>
+━━━━━━━━━━━━━━━━━━
+Your ${dirLabel} (${rec.strike}${rec.type}, entry ₹${rec.entry}) has not gone anywhere:
+Best so far: ${bestGainPct >= 0 ? '+' : ''}${bestGainPct.toFixed(1)}% · Now ₹${live} (${nowPct >= 0 ? '+' : ''}${nowPct.toFixed(1)}%)${thetaLine}
+
+An option that stays flat while time passes is losing value every minute. Consider: exit, or move the SL to cut the loss. Not an auto-exit.
+━━━━━━━━━━━━━━━━━━
+⏰ ${new Date().toLocaleTimeString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' })}
+<i>Vardaan AI</i>
+`.trim();
+    await sendMessage(msg);
+}
+
 // ── Smart Partial Profit Book ─────────────────────────────────────────────
 // Requested 25 Jul audit: "instead of only a static +30% price threshold,
 // trigger off R:R already banked + Delta weakening + RSI crossing back
@@ -1078,6 +1098,7 @@ module.exports = {
     sendMomentumExitWarning,
     sendDeltaResponseWarning,
     sendEventIvWarning,
+    sendNoProgressWarning,
     sendNishanebaazAlert,
     sendSpreadAlert,
     sendRawMessage,
