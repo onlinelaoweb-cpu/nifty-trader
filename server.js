@@ -11092,6 +11092,7 @@ async function updateSignalPerformance() {
         entryConfidence: r.entryConfidence,
         currentConfidence: computeDecayedConfidence(r.entryConfidence, r.entryDelta, r.entryRSI, marketState.delta?.deltaPct, marketState.rsi, r.signal),
         elapsedMin: Math.round((Date.now() - r.startTs) / 60000),
+        source: r.source ?? null,        // 4 Oct: which engine fired this ('main' | 'mtf') — used by the Track Record engine card
         respRatio: r.respRatio ?? null,   // Delta Response Check: actual ÷ expected premium gain (null until enough Nifty movement)
     }));
 }
@@ -12668,6 +12669,133 @@ app.get('/api/signal-accuracy', async (req, res) => {
         // auto-muted (30+ Trade-Coach results with a negative average).
         const rows = r.rows.map(row => ({ ...row, muted: _mutedStrategies.has(`${row.instrument}|${row.source}`) }));
         res.json({ success: true, rows, automute: { enabled: AUTOMUTE_ENABLED, minSamples: AUTOMUTE_MIN_SAMPLES, fastMinSamples: AUTOMUTE_FAST_MIN_SAMPLES, fastAvgPct: AUTOMUTE_FAST_AVG } });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 4 Oct — ENGINE TRACK RECORD: Main Engine, MTF Tracker and Classic side by side, for the
+// Track Record tab. READ-ONLY — it only reads tables the app already fills.
+//   Main Engine / MTF Tracker -> signal_performance (source 'main' | 'mtf'): the tracker follows ONE
+//     real strike's premium after the alert and records target / stop-loss / timeout, best gain and
+//     worst drawdown. "Win" here = hit the target OR reached the +30% "book half" stage (same
+//     definition as the Insights tab's "real accuracy"). Rows from before the `source` column
+//     existed have no engine tag; they are counted in `untagged`, never guessed into an engine.
+//   Classic -> nifty_classic_log joined to signal_outcomes: direction right after 30 min plus the
+//     Trade-Coach premium simulation (a different measuring stick — the sim, not the live tracker).
+//     Split into "live engine also fired" vs "held back by a newer gate".
+// ?days=7|30|0  (0 = all time; default 30)
+async function queryEngineTrackRecord(days) {
+    const dayFilterPerf = `($1::int = 0 OR trade_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE - $1::int)`;
+    const trackerRows = await dbPool.query(`
+        SELECT source, lead_quality,
+               COUNT(*)::int AS total,
+               COUNT(*) FILTER (WHERE target_hit)::int AS target_n,
+               COUNT(*) FILTER (WHERE target_hit OR COALESCE(partial_win, false))::int AS win_n,
+               COUNT(*) FILTER (WHERE sl_hit)::int AS sl_n,
+               COUNT(*) FILTER (WHERE NOT COALESCE(target_hit, false) AND NOT COALESCE(sl_hit, false))::int AS timeout_n,
+               ROUND(AVG(max_gain_pct)::numeric, 1)    AS avg_best_gain_pct,
+               ROUND(AVG(max_adverse_pct)::numeric, 1) AS avg_worst_dd_pct,
+               ROUND(AVG(time_taken_min)::numeric, 0)  AS avg_minutes,
+               COUNT(*) FILTER (WHERE exit_premium IS NOT NULL AND entry > 0)::int AS result_n,
+               ROUND((AVG((exit_premium - entry) / NULLIF(entry, 0) * 100) FILTER (WHERE exit_premium IS NOT NULL AND entry > 0))::numeric, 1) AS avg_result_pct,
+               ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY (exit_premium - entry) / NULLIF(entry, 0) * 100)
+                      FILTER (WHERE exit_premium IS NOT NULL AND entry > 0))::numeric, 1) AS median_result_pct
+        FROM signal_performance
+        WHERE closed = true AND source IN ('main', 'mtf') AND ${dayFilterPerf}
+        GROUP BY source, lead_quality`, [days]);
+    const untagged = (await dbPool.query(
+        `SELECT COUNT(*)::int AS n FROM signal_performance WHERE closed = true AND source IS NULL AND ${dayFilterPerf}`, [days])).rows[0]?.n || 0;
+    const openNow = (marketState.signalPerformance?.open || []);
+
+    const shape = r => {
+        const t = r.total || 0, pct = n => (t ? Math.round((n / t) * 100) : null);
+        return {
+            total: t, targetHitPct: pct(r.target_n), winPct: pct(r.win_n), slPct: pct(r.sl_n), timedOutPct: pct(r.timeout_n),
+            avgBestGainPct: r.avg_best_gain_pct != null ? Number(r.avg_best_gain_pct) : null,
+            avgWorstDrawdownPct: r.avg_worst_dd_pct != null ? Number(r.avg_worst_dd_pct) : null,
+            avgMinutes: r.avg_minutes != null ? Number(r.avg_minutes) : null,
+            resultN: r.result_n || 0,
+            avgResultPct: r.avg_result_pct != null ? Number(r.avg_result_pct) : null,
+            medianResultPct: r.median_result_pct != null ? Number(r.median_result_pct) : null,
+        };
+    };
+    const sum = rows => rows.reduce((a, r) => {
+        const w = r.total || 0;
+        a.total += w; a.target_n += r.target_n; a.win_n += r.win_n; a.sl_n += r.sl_n; a.timeout_n += r.timeout_n; a.result_n += r.result_n;
+        const add = (k, v) => { if (v != null) { a['_' + k + 'w'] += Number(v) * w; a['_' + k + 'n'] += w; } };
+        add('g', r.avg_best_gain_pct); add('d', r.avg_worst_dd_pct); add('m', r.avg_minutes);
+        if (r.result_n && r.avg_result_pct != null) { a._rw += Number(r.avg_result_pct) * r.result_n; a._rn += r.result_n; }
+        return a;
+    }, { total: 0, target_n: 0, win_n: 0, sl_n: 0, timeout_n: 0, result_n: 0, _gw: 0, _gn: 0, _dw: 0, _dn: 0, _mw: 0, _mn: 0, _rw: 0, _rn: 0 });
+    const merged = rows => {
+        const a = sum(rows);
+        return shape({ ...a,
+            avg_best_gain_pct: a._gn ? (a._gw / a._gn).toFixed(1) : null,
+            avg_worst_dd_pct: a._dn ? (a._dw / a._dn).toFixed(1) : null,
+            avg_minutes: a._mn ? (a._mw / a._mn).toFixed(0) : null,
+            avg_result_pct: a._rn ? (a._rw / a._rn).toFixed(1) : null,
+            median_result_pct: null,   // a median cannot be merged across groups — only shown for single-group rows
+        });
+    };
+    const main = trackerRows.rows.filter(r => r.source === 'main');
+    const mtf  = trackerRows.rows.filter(r => r.source === 'mtf');
+    const qOrder = ['Strong Confluence', 'Moderate', 'Weak / Isolated'];
+    const mtfByQuality = qOrder.map(q => {
+        const r = mtf.find(x => x.lead_quality === q);
+        return r ? { quality: q, ...shape(r) } : null;
+    }).filter(Boolean);
+    const mtfOther = mtf.filter(x => !qOrder.includes(x.lead_quality));
+    if (mtfOther.length) mtfByQuality.push({ quality: 'Untagged quality', ...merged(mtfOther) });
+
+    // ── Classic ──
+    await ensureNiftyClassicTable();
+    const M = `COUNT(*)::int AS logged,
+        COUNT(*) FILTER (WHERE result IN ('WIN','LOSS','FLAT'))::int AS resolved,
+        COUNT(*) FILTER (WHERE result = 'WIN')::int AS wins,
+        COUNT(*) FILTER (WHERE result = 'LOSS')::int AS losses,
+        ROUND(100.0 * COUNT(*) FILTER (WHERE result = 'WIN') / NULLIF(COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')), 0), 1) AS dir_win_pct,
+        COUNT(*) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL)::int AS coach_n,
+        ROUND(AVG(GREATEST(-100, LEAST(100, coach_result))) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL), 1) AS avg_coach_pct,
+        ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY coach_result) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL))::numeric, 1) AS median_coach_pct`;
+    const cl = await dbPool.query(`
+        WITH c AS (
+            SELECT l.live_fired, o.result, o.coach_result, o.entry_strike
+            FROM nifty_classic_log l
+            LEFT JOIN signal_outcomes o ON o.source_table = 'nifty_classic_log' AND o.source_id = l.id
+            WHERE ($1::int = 0 OR l.ts >= NOW() - ($1::int * INTERVAL '1 day'))
+        )
+        SELECT 'all' AS bucket, ${M} FROM c
+        UNION ALL SELECT 'live', ${M} FROM c WHERE live_fired
+        UNION ALL SELECT 'held', ${M} FROM c WHERE NOT live_fired`, [days]);
+    const clean = r => r ? ({
+        logged: r.logged, resolved: r.resolved, wins: r.wins, losses: r.losses,
+        dirWinPct: r.dir_win_pct != null ? Number(r.dir_win_pct) : null,
+        coachN: r.coach_n, avgCoachPct: r.avg_coach_pct != null ? Number(r.avg_coach_pct) : null,
+        medianCoachPct: r.median_coach_pct != null ? Number(r.median_coach_pct) : null,
+    }) : null;
+    const cb = Object.fromEntries(cl.rows.map(r => [r.bucket, clean(r)]));
+
+    return {
+        days,
+        engines: {
+            main: { label: 'Main Engine', basis: 'tracker', openNow: openNow.filter(o => o.source === 'main').length, ...merged(main), single: main.length === 1 ? shape(main[0]) : null },
+            mtf:  { label: 'MTF Tracker', basis: 'tracker', openNow: openNow.filter(o => o.source === 'mtf').length, ...merged(mtf), byQuality: mtfByQuality },
+            classic: { label: 'Classic (original 6-filter rule)', basis: 'sim', all: cb.all, liveAlsoFired: cb.live, heldBack: cb.held },
+        },
+        untagged,
+        notes: {
+            tracker: 'Main Engine / MTF Tracker: the tracker follows one real strike after each alert. Win = hit target or reached the +30% "book half" stage. "Avg result" = premium change at the moment the tracker closed the trade (target, stop-loss or timeout) — it does not model partial booking.',
+            classic: 'Classic: direction after 30 min + the Trade-Coach premium simulation. Different measuring stick from the tracker — compare each engine with its own history, not across engines.',
+        },
+    };
+}
+app.get('/api/engine-track-record', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const raw = parseInt(req.query.days);
+        const days = Number.isFinite(raw) ? Math.max(0, Math.min(raw, 365)) : 30;
+        res.json({ success: true, ...(await queryEngineTrackRecord(days)) });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }

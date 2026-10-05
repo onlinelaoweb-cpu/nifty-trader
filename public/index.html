@@ -4214,10 +4214,11 @@ function switchTab(name,btn){
     if (_bitcoinTabTimer) { clearInterval(_bitcoinTabTimer); _bitcoinTabTimer = null; }
   }
   if(name==='signalAccuracy'){
+    fetchEngineTrackRecord();
     fetchSignalAccuracy();
     fetchExhaustionReversalAccuracy();
     if (_signalAccuracyTabTimer) clearInterval(_signalAccuracyTabTimer);
-    _signalAccuracyTabTimer = setInterval(() => { fetchSignalAccuracy(); fetchExhaustionReversalAccuracy(); }, 30000);
+    _signalAccuracyTabTimer = setInterval(() => { fetchEngineTrackRecord(); fetchSignalAccuracy(); fetchExhaustionReversalAccuracy(); }, 30000);
   } else {
     if (_signalAccuracyTabTimer) { clearInterval(_signalAccuracyTabTimer); _signalAccuracyTabTimer = null; }
   }
@@ -10221,6 +10222,21 @@ function renderBitcoinLiveUI(d) {
     <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:12px;">
       Real accuracy of every NIFTY + Crude + Bitcoin exploratory trigger — did price actually move the predicted direction by 0.15%+ within 30min of the fire. WIN/LOSS/FLAT, not just "fired". Recent fires also show real option-premium win-rate (10%+ move), plus a Trade-Coach simulation: this app's own exit rules, replayed against the actual premium path — per-instrument grids chosen by an out-of-sample backtest (NIFTY: SL -15%, breakeven +10%, half-book +15%, exit +25% · Bitcoin: SL -30%, breakeven +20%, half-book +30%, exit +40% · Crude: SL -20%, breakeven +20%, half-book +30%, exit +40%) — 90min after each fire, showing what a disciplined trader following the coaching would have actually made. Low sample counts are not statistically reliable yet — treat as early signal, not verdict.
     </div>
+    <!-- 4 Oct — ENGINE TRACK RECORD: Main Engine / MTF Tracker / Classic side by side.
+         Data: /api/engine-track-record (read-only; reads tables the app already fills). -->
+    <div style="border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px 10px 8px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;">
+        <div style="font-size:11px;color:var(--dim);letter-spacing:0.5px;">🏁 NIFTY ENGINES — MAIN · MTF · CLASSIC</div>
+        <div id="etr-range" style="display:flex;gap:4px;">
+          <button data-d="7"  onclick="setEngineRange(7)"  style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:rgba(255,255,255,0.06);color:var(--dim);cursor:pointer;">7D</button>
+          <button data-d="30" onclick="setEngineRange(30)" style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:rgba(255,255,255,0.06);color:var(--dim);cursor:pointer;">30D</button>
+          <button data-d="0"  onclick="setEngineRange(0)"  style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:rgba(255,255,255,0.06);color:var(--dim);cursor:pointer;">ALL</button>
+        </div>
+      </div>
+      <div id="etr-body" style="font-size:12px;">Loading...</div>
+    </div>
+
+    <div style="font-size:11px;color:var(--dim);margin:0 0 6px;letter-spacing:0.5px;">🎯 EXPLORATORY TRIGGERS</div>
     <div id="sa-body">Loading...</div>
 
     <div style="font-size:11px;color:var(--dim);margin:20px 0 6px;letter-spacing:0.5px;border-top:1px solid rgba(255,255,255,0.08);padding-top:16px;">🧭 EXHAUSTION-REVERSAL <span style="opacity:0.6;">(daily timeframe — separate from the above)</span></div>
@@ -10262,6 +10278,97 @@ async function fetchExhaustionReversalAccuracy() {
     });
     html += '</div>';
     body.innerHTML = html;
+  } catch (e) { body.textContent = 'Failed to load'; }
+}
+</script>
+
+<script>
+// 4 Oct — Engine Track Record card (Main Engine / MTF Tracker / Classic). Numbers only come from
+// /api/engine-track-record; nothing is computed here except display colours.
+let _etrDays = 30;
+function setEngineRange(d) { _etrDays = d; fetchEngineTrackRecord(); }
+async function fetchEngineTrackRecord() {
+  const body = document.getElementById('etr-body');
+  if (!body) return;
+  document.querySelectorAll('#etr-range button').forEach(b => {
+    const on = Number(b.dataset.d) === _etrDays;
+    b.style.color = on ? 'var(--accent)' : 'var(--dim)';
+    b.style.borderColor = on ? 'var(--accent)' : 'var(--border)';
+  });
+  try {
+    const r = await fetch('/api/engine-track-record?days=' + _etrDays).then(r => r.json());
+    if (!r.success) { body.textContent = 'Failed to load: ' + (r.error || 'unknown error'); return; }
+    const col = p => p == null ? 'var(--dim)' : p >= 55 ? 'var(--green)' : p < 45 ? 'var(--red)' : 'var(--amber)';
+    const sgn = v => v == null ? '--' : (v > 0 ? '+' : '') + v + '%';
+    const pcol = v => v == null ? 'var(--dim)' : v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--amber)';
+    const line = (txt, color) => `<div style="font-size:10px;color:${color || 'var(--dim)'};margin-top:3px;">${txt}</div>`;
+    const lowTag = n => n > 0 && n < 10 ? ' · <span style="color:var(--amber);">low sample</span>' : '';
+    const range = _etrDays === 0 ? 'all time' : 'last ' + _etrDays + ' days';
+
+    // ── tracker-based card (Main Engine / MTF Tracker) ──
+    const trackerCard = (e, extra) => {
+      const t = e.total || 0;
+      const open = e.openNow ? ` · <span style="color:var(--accent);">${e.openNow} open now</span>` : '';
+      if (!t) {
+        return `<div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px;">
+          <div style="font-size:12.5px;font-weight:600;">${e.label}</div>
+          ${line('No closed trades in this range yet' + open.replace(' · ', ' — '))}</div>`;
+      }
+      const resLine = e.avgResultPct != null
+        ? line(`Avg result at close: <b>${sgn(e.avgResultPct)}</b>${e.single && e.single.medianResultPct != null ? ` (median ${sgn(e.single.medianResultPct)})` : ''} · n=${e.resultN}`, pcol(e.avgResultPct))
+        : '';
+      return `<div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+        <div style="min-width:0;">
+          <div style="font-size:12.5px;font-weight:600;">${e.label}</div>
+          <div style="font-size:10px;color:var(--dim);margin-top:2px;">${t} trades · ${range}${lowTag(t)}${open}</div>
+          ${line(`🎯 Target ${e.targetHitPct}% · 🛑 SL ${e.slPct}% · ⏱ Timed out ${e.timedOutPct}%`)}
+          ${resLine}
+          ${line(`Avg best gain ${sgn(e.avgBestGainPct)} · worst dip ${sgn(e.avgWorstDrawdownPct)}${e.avgMinutes != null ? ` · avg ${e.avgMinutes} min` : ''}`)}
+          ${extra || ''}
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div style="font-family:'Orbitron',monospace;font-size:18px;font-weight:700;color:${col(e.winPct)};">${e.winPct != null ? e.winPct + '%' : '--'}</div>
+          <div style="font-size:9px;color:var(--dim);">win</div>
+        </div>
+      </div>`;
+    };
+
+    const mtfQuality = (r.engines.mtf.byQuality || []).map(q =>
+      line(`↳ ${q.quality}: ${q.total} trades · win <span style="color:${col(q.winPct)};">${q.winPct}%</span> · avg result <span style="color:${pcol(q.avgResultPct)};">${sgn(q.avgResultPct)}</span>${lowTag(q.total)}`)).join('');
+
+    // ── Classic card ──
+    const c = r.engines.classic;
+    const cLine = (label, x) => !x || !x.logged ? '' :
+      line(`↳ ${label}: ${x.logged} logged · direction right ${x.dirWinPct != null ? Math.round(x.dirWinPct) + '%' : '--'} (${x.wins}W/${x.losses}L)` +
+           ` · Coach-sim avg <span style="color:${pcol(x.avgCoachPct)};">${sgn(x.avgCoachPct)}</span> (n=${x.coachN})${lowTag(x.resolved)}`);
+    const ca = c.all;
+    const classicHtml = !ca || !ca.logged
+      ? `<div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px;">
+           <div style="font-size:12.5px;font-weight:600;">${c.label}</div>
+           ${line('No Classic signals logged in this range yet')}</div>`
+      : `<div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+          <div style="min-width:0;">
+            <div style="font-size:12.5px;font-weight:600;">${c.label} <span style="font-size:9px;color:var(--dim);border:1px solid var(--border);border-radius:4px;padding:0 4px;margin-left:4px;">SIM</span></div>
+            <div style="font-size:10px;color:var(--dim);margin-top:2px;">${ca.logged} logged · ${ca.resolved} resolved · ${range}${lowTag(ca.resolved)}</div>
+            ${line(`Trade-Coach sim avg: <b>${sgn(ca.avgCoachPct)}</b>${ca.medianCoachPct != null ? ` (median ${sgn(ca.medianCoachPct)})` : ''} · n=${ca.coachN}`, pcol(ca.avgCoachPct))}
+            ${cLine('Live engine also fired', c.liveAlsoFired)}
+            ${cLine('Held back by a newer gate', c.heldBack)}
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <div style="font-family:'Orbitron',monospace;font-size:18px;font-weight:700;color:${col(ca.dirWinPct)};">${ca.dirWinPct != null ? Math.round(ca.dirWinPct) + '%' : '--'}</div>
+            <div style="font-size:9px;color:var(--dim);">direction</div>
+          </div>
+        </div>`;
+
+    const untagged = r.untagged > 0
+      ? line(`${r.untagged} older closed trade(s) have no engine tag and are not counted above.`) : '';
+    body.innerHTML = `<div style="display:flex;flex-direction:column;gap:6px;">
+        ${trackerCard(r.engines.main)}
+        ${trackerCard(r.engines.mtf, mtfQuality)}
+        ${classicHtml}
+      </div>
+      ${untagged}
+      ${line('Main/MTF: live tracker on one real strike — win = target hit or +30% "book half" reached. Classic: direction after 30 min + Trade-Coach premium simulation (a different yardstick — compare each engine with its own history, not across engines). Measured, not proven.')}`;
   } catch (e) { body.textContent = 'Failed to load'; }
 }
 </script>
