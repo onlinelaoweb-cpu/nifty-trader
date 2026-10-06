@@ -107,6 +107,9 @@ const { formatNiftyWeeklySummary } = require('./src/utils/niftyWeeklySummary'); 
 // 3 Oct — "Who is driving Nifty" card: official top-10/sector weights + contribution maths (display only).
 const { NIFTY_WEIGHTS, validateNiftyWeights } = require('./src/utils/niftyWeights');
 const { computeNiftyContribution, fetchTopQuotes, quotesFromBreadth } = require('./src/utils/niftyContribution');
+// 7 Oct — day audit + trigger-combination study (read-only research endpoints; pure helpers).
+const { computeComboStudy } = require('./src/utils/comboStudy');
+const dayAuditLib = require('./src/utils/dayAudit');
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
 const { classicCandidate, blockedByNewGates, createClassicTracker, buildClassicMessage, toDir: classicToDir, roundTo: classicRoundTo, NEW_GATE_LABELS: CLASSIC_GATE_LABELS } = require('./src/utils/niftyClassic');
@@ -4113,7 +4116,8 @@ ${isConfirmed ? '✅ Volume backs this move — Dow Theory\'s "genuine trend" pa
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Volume Confirmation Trigger (exploratory)</i>
 `.trim();
-        await sendTriggerAlert('NIFTY', 'Volume Confirm', isConfirmed ? direction : null, msg);
+        if (isConfirmed) await sendTriggerAlert('NIFTY', 'Volume Confirm', direction, msg);
+        else await weakVolumeAlert('NIFTY', direction, nifty, ratio, msg);   // 7 Oct: WEAK -> digest, not a raw message
         console.log(`📶 [Volume Confirmation] ${result} — ${bosEvent}, ratio:${ratio.toFixed(2)}x`);
 
         if (dbPool) {
@@ -4779,7 +4783,8 @@ ${isConfirmed ? '✅ Volume backs this move — Dow Theory\'s "genuine trend" pa
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — Crude Volume Confirmation Trigger (exploratory)</i>
 `.trim();
-        await sendTriggerAlert('CRUDE', 'Volume Confirm', isConfirmed ? direction : null, msg);
+        if (isConfirmed) await sendTriggerAlert('CRUDE', 'Volume Confirm', direction, msg);
+        else await weakVolumeAlert('CRUDE', direction, crude, ratio, msg);
         console.log(`🛢️📶 [Crude Volume Confirmation] ${result} — ${bosEvent}, ratio:${ratio.toFixed(2)}x`);
 
         if (dbPool) {
@@ -5112,7 +5117,10 @@ async function flushDigest(instrument, force = false) {
     const q = _digestQueue[instrument];
     if (!q || !q.length) return;
     if (!force && (Date.now() - q[0].ts) < DIGEST_MINUTES * 60 * 1000) return;
-    const items = q.splice(0, q.length);
+    const all = q.splice(0, q.length);
+    // 7 Oct — Volume WEAK breaks (untracked, see weakVolumeAlert) are listed on their own line and are NOT counted in
+    // the bullish/bearish lean: the app itself calls them "weaker, more suspect", so they must not out-vote real triggers.
+    const weak = all.filter(i => i.untracked), items = all.filter(i => !i.untracked);
     const bull = items.filter(i => i.direction === 'BULLISH').length, bear = items.filter(i => i.direction === 'BEARISH').length;
     const lean = bull === bear ? 'split — triggers disagree' : (bull > bear ? 'leaning BULLISH' : 'leaning BEARISH');
     const clock = t => new Date(t).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
@@ -5126,7 +5134,7 @@ async function flushDigest(instrument, force = false) {
         else if (i.liq.level === 'UNKNOWN') t.push('liquidity?');
         return t.length ? ` [${t.join(' ')}]` : '';
     };
-    const weekendNote = items.some(i => i.liq && i.liq.weekend) ? '\n🌙 Weekend hours — thin liquidity: limit orders only, half size.' : '';
+    const weekendNote = all.some(i => i.liq && i.liq.weekend) ? '\n🌙 Weekend hours — thin liquidity: limit orders only, half size.' : '';
     const MAX_LINES = 18;
     const lines = items.slice(0, MAX_LINES).map(i => {
         const arrow = i.direction === 'BULLISH' ? '▲' : '▼';
@@ -5136,19 +5144,62 @@ async function flushDigest(instrument, force = false) {
         return `• ${clock(i.ts)} ${i.source} ${arrow}${fmtPx(i.price)} — ${rec}${liqTag(i)}`;
     });
     const more = items.length > MAX_LINES ? `\n…and ${items.length - MAX_LINES} more` : '';
+    const WEAK_MAX = 10;
+    const weakLine = weak.length
+        ? `\n📶 <b>Volume WEAK breaks</b> (not tracked, volume under ${VOL_CONFIRM_RATIO_THRESHOLD}x average): ` +
+          weak.slice(0, WEAK_MAX).map(i => `${clock(i.ts)}${i.direction === 'BULLISH' ? '▲' : '▼'}${fmtPx(i.price).replace(' @', '')} (${Number(i.volRatio).toFixed(2)}x)${liqTag(i)}`).join(' · ') +
+          (weak.length > WEAK_MAX ? ` …+${weak.length - WEAK_MAX} more` : '')
+        : '';
+    const head = weak.length
+        ? `${items.length} trigger${items.length === 1 ? '' : 's'} + ${weak.length} weak-volume break${weak.length === 1 ? '' : 's'}`
+        : `${items.length} trigger${items.length === 1 ? '' : 's'}`;
+    const leanLine = items.length ? `▲ Bullish ${bull} · ▼ Bearish ${bear} → <b>${lean}</b>` : 'No tracked trigger in this window — only weak-volume breaks (below).';
+    const body = items.length ? `${lines.join('\n')}${more}` : '';
     const msg = `
-📦 <b>EXPLORATORY DIGEST — ${instrument}</b> (${items.length} trigger${items.length === 1 ? '' : 's'}, ~${DIGEST_MINUTES} min)
+📦 <b>EXPLORATORY DIGEST — ${instrument}</b> (${head}, ~${DIGEST_MINUTES} min)
 ━━━━━━━━━━━━━━━━━━
-▲ Bullish ${bull} · ▼ Bearish ${bear} → <b>${lean}</b>${weekendNote}
-${lines.join('\n')}${more}
+${leanLine}${weekendNote}${body ? '\n' + body : ''}${weakLine}
 ━━━━━━━━━━━━━━━━━━
 Unproven triggers (under ${DIGEST_MIN_TRADES} results) are batched here to cut noise. All are still logged and tracked; proven ones alert instantly. Not Main Engine confirmed — use your own judgment.
 <i>Vardaan AI — Exploratory Digest</i>
 `.trim();
-    try { await sendRawMessage(msg); console.log(`📦 [Digest] sent ${instrument}: ${items.length} triggers (${bull}▲ ${bear}▼)`); }
+    try { await sendRawMessage(msg); console.log(`📦 [Digest] sent ${instrument}: ${items.length} triggers (${bull}▲ ${bear}▼)${weak.length ? ` + ${weak.length} weak-volume` : ''}`); }
     catch (e) { console.warn('[Digest] send error:', e.message); }
 }
 setInterval(() => { for (const k of Object.keys(_digestQueue)) flushDigest(k).catch(() => {}); }, 60 * 1000);
+
+// 7 Oct — VOLUME WEAK alerts. Until now a WEAK result called sendTriggerAlert(..., direction = null), and an undirected
+// alert is sent RAW: no auto-mute, no digest, no Bitcoin liquidity gate. On 7 Oct that was 18 messages in one day
+// (NIFTY 7, Crude 5, Bitcoin 6) of the alert type the app itself labels "weaker, more suspect" — and Bitcoin ones
+// would still have arrived on a weekend when the liquidity gate was blocking everything else.
+// Now a WEAK break: (1) Bitcoin -> goes through the liquidity gate like every other Bitcoin alert (BLOCK = suppressed),
+// (2) is held for the digest as ONE compact entry (time, direction, price, volume ratio) instead of a full message,
+// (3) stays UNTRACKED exactly as before (no outcome row, no track record) — only the Telegram delivery changes.
+// EXPLORATORY_DIGEST=off restores the old one-message-each behaviour. Any error falls back to sending the original
+// message, so this layer can never lose an alert.
+async function weakVolumeAlert(instrument, direction, price, ratio, msg) {
+    try {
+        let liq = null;
+        if (instrument === 'BITCOIN') {
+            liq = assessBitcoinLiquidity(marketState.bitcoin?.pcr, direction);
+            if (liq.level === 'BLOCK' && BTC_LIQUIDITY_GATE_ENABLED) {
+                console.log(`💧 [BTC Liquidity] suppressed Volume WEAK ${direction} alert — ${liq.reason}${liq.weekend ? ' (weekend)' : ''}`);
+                return;
+            }
+        }
+        if (!DIGEST_ENABLED) return sendRawMessage(msg);
+        if (!_digestQueue[instrument]) _digestQueue[instrument] = [];
+        _digestQueue[instrument].push({
+            ts: Date.now(), source: 'Volume WEAK', direction, price: price > 0 ? price : null, untracked: true, volRatio: ratio,
+            dirN: 0, dirWinPct: null, coachN: 0, coachAvg: null, agree: 0, disagree: 0,
+            liq: liq ? { level: liq.level, weekend: !!liq.weekend, spreadPct: liq.spreadPct } : null,
+        });
+        console.log(`📦 [Digest] queued ${instrument} Volume WEAK ${direction} ${Number(ratio).toFixed(2)}x (${_digestQueue[instrument].length} waiting)`);
+    } catch (e) {
+        console.warn('[Volume WEAK] digest layer error, sending the plain alert:', e.message);
+        return sendRawMessage(msg);
+    }
+}
 
 
 // Maps every raw direction token the triggers use onto BULLISH/BEARISH — same
@@ -8220,7 +8271,8 @@ ${isConfirmed ? '✅ Volume backs this move — Dow Theory\'s "genuine trend" pa
 ⚠️ <b>EXPLORATORY — NOT the Bitcoin Main Engine confirmed.</b> Volume from Delta's own ticker. No historical track record yet.
 <i>Vardaan AI — Bitcoin Volume Confirmation Trigger (exploratory)</i>
 `.trim();
-        await sendTriggerAlert('BITCOIN', 'Volume Confirm', isConfirmed ? direction : null, msg);
+        if (isConfirmed) await sendTriggerAlert('BITCOIN', 'Volume Confirm', direction, msg);
+        else await weakVolumeAlert('BITCOIN', direction, bitcoin, ratio, msg);
         console.log(`₿📶 [Bitcoin Volume Confirmation] ${result} — ${bosEvent}, ratio:${ratio.toFixed(2)}x`);
 
         if (dbPool) {
@@ -13243,6 +13295,142 @@ app.get('/api/nifty-contribution', async (req, res) => {
             quoteSource: qs.source, quotesAt: qs.at ? new Date(qs.at).toISOString() : null,
         });
         res.json({ success: true, ...result });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 7 Oct — DAY AUDIT for NIFTY, CRUDE and BITCOIN, straight from the database (exact results, not Telegram
+// eyeballing). /api/day-audit?date=2026-10-07 (default: today, IST) [&instrument=NIFTY] [&format=text].
+//   * per trigger: how many fired, 30-min WIN/LOSS/FLAT, Trade-Coach premium result
+//   * NIFTY: every tracked trade of the day (entry, exit, outcome, best gain, worst dip, ₹/lot)
+//   * the day's price range, and a plain-language reading of how tradable the day was
+//   * which trigger COMBINATIONS completed that day (anecdotal — see /api/combo-study for the real test)
+// READ-ONLY. "Day" = the IST calendar date of the fire time.
+const DAY_AUDIT_INSTRUMENTS = ['NIFTY', 'CRUDE', 'BITCOIN'];
+app.get('/api/day-audit', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        const asked = String(req.query.date || '');
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? asked : todayIST;
+        if (!Number.isFinite(Date.parse(date + 'T00:00:00Z'))) return res.json({ success: false, error: 'bad date, use YYYY-MM-DD' });
+        const only = String(req.query.instrument || '').toUpperCase();
+        const list = DAY_AUDIT_INSTRUMENTS.includes(only) ? [only] : DAY_AUDIT_INSTRUMENTS;
+        const dayWhere = `(fire_ts AT TIME ZONE 'Asia/Kolkata')::date = $2::date`;
+        const instruments = {};
+        for (const ins of list) {
+            const src = await dbPool.query(`
+                SELECT source,
+                       COUNT(*)::int AS fires,
+                       COUNT(*) FILTER (WHERE direction = 'BULLISH')::int AS bull,
+                       COUNT(*) FILTER (WHERE direction = 'BEARISH')::int AS bear,
+                       COUNT(*) FILTER (WHERE result = 'WIN')::int  AS wins,
+                       COUNT(*) FILTER (WHERE result = 'LOSS')::int AS losses,
+                       COUNT(*) FILTER (WHERE result = 'FLAT')::int AS flats,
+                       COUNT(*) FILTER (WHERE result IS NULL)::int  AS pending,
+                       ROUND(100.0 * COUNT(*) FILTER (WHERE result = 'WIN')
+                             / NULLIF(COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')), 0), 1) AS dir_win_pct,
+                       COUNT(*) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL)::int AS coach_n,
+                       ROUND(AVG(GREATEST(-100, LEAST(100, coach_result))) FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL), 1) AS coach_avg,
+                       ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY coach_result)
+                              FILTER (WHERE coach_result IS NOT NULL AND entry_strike IS NOT NULL))::numeric, 1) AS coach_median,
+                       ROUND(AVG(premium_pct_move) FILTER (WHERE premium_pct_move IS NOT NULL), 1) AS prem_avg,
+                       to_char(MIN(fire_ts) AT TIME ZONE 'Asia/Kolkata', 'HH24:MI') AS first_ist,
+                       to_char(MAX(fire_ts) AT TIME ZONE 'Asia/Kolkata', 'HH24:MI') AS last_ist
+                FROM signal_outcomes WHERE instrument = $1 AND ${dayWhere}
+                GROUP BY source ORDER BY COUNT(*) DESC, source`, [ins, date]);
+            const bySource = src.rows.map(r => ({
+                source: r.source, fires: r.fires, bull: r.bull, bear: r.bear, wins: r.wins, losses: r.losses, flats: r.flats, pending: r.pending,
+                dirWinPct: r.dir_win_pct === null ? null : Number(r.dir_win_pct), coachN: r.coach_n,
+                coachAvg: r.coach_avg === null ? null : Number(r.coach_avg), coachMedian: r.coach_median === null ? null : Number(r.coach_median),
+                premAvg: r.prem_avg === null ? null : Number(r.prem_avg), firstFire: r.first_ist, lastFire: r.last_ist,
+            }));
+            const rng = await dbPool.query(`
+                SELECT MIN(entry_price) AS lo, MAX(entry_price) AS hi,
+                       (ARRAY_AGG(entry_price ORDER BY fire_ts ASC, id ASC))[1]  AS first,
+                       (ARRAY_AGG(entry_price ORDER BY fire_ts DESC, id DESC))[1] AS last
+                FROM signal_outcomes WHERE instrument = $1 AND entry_price > 0 AND ${dayWhere}`, [ins, date]);
+            const range = dayAuditLib.deriveRange(rng.rows[0]);
+            const tot = dayAuditLib.totals(bySource);
+            const entry = { totals: tot, range, reading: dayAuditLib.readingFor(tot, range), bySource };
+
+            if (ins === 'NIFTY') {
+                const tr = await dbPool.query(`
+                    SELECT id, to_char(ts AT TIME ZONE 'Asia/Kolkata', 'HH24:MI') AS time_ist, source, signal, option_type, strike,
+                           entry, sl, target, exit_premium, target_hit, sl_hit, partial_win, closed,
+                           max_gain_pct, max_adverse_pct, time_taken_min, lead_quality
+                    FROM signal_performance WHERE trade_date = $1::date ORDER BY ts ASC, id ASC`, [date]);
+                const trades = tr.rows.map(r => {
+                    const t = dayAuditLib.tradeOutcome(r);
+                    t.pnlPerLot = t.pnlPerShare === null ? null : Math.round(t.pnlPerShare * LOT_SIZE);
+                    return t;
+                });
+                entry.trackedTrades = trades;
+                entry.tradeSummary = dayAuditLib.tradeSummary(trades, LOT_SIZE);
+            }
+
+            const rows = await dbPool.query(`
+                SELECT id, source, direction, fire_ts, result,
+                       CASE WHEN entry_strike IS NOT NULL THEN coach_result END AS coach_result
+                FROM signal_outcomes WHERE instrument = $1 AND direction IN ('BULLISH','BEARISH') AND ${dayWhere}
+                ORDER BY fire_ts ASC, id ASC`, [ins, date]);
+            const cs = computeComboStudy(rows.rows, { windowMin: 10, declusterMin: 30, minN: 1, minDays: 1, minHalfN: 1, topK: 4, includeAll: true });
+            entry.combosToday = {
+                tested: cs.combosTested,
+                list: cs.all.slice(0, 6).map(c => ({ combo: c.combo, direction: c.direction, n: c.n, dirN: c.dirN, dirWinPct: c.dirWinPct, coachAvg: c.coachAvg, coachN: c.coachN })),
+            };
+            instruments[ins] = entry;
+        }
+        const out = {
+            success: true, date, instruments,
+            notes: [
+                `WIN/LOSS = the underlying moved the predicted way by at least ${dayAuditLib.WIN_LOSS_THRESHOLD_PCT}% within 30 min; anything smaller is FLAT. Coach = Trade-Coach premium simulation (needs ~90 min to resolve).`,
+                'Combos listed here come from ONE day — a handful of events, so anecdotal. The real test is /api/combo-study over the whole history.',
+            ],
+        };
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain; charset=utf-8').send(dayAuditLib.formatDayAuditText(out));
+        res.json(out);
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 7 Oct — TRIGGER COMBINATION STUDY over the history in signal_outcomes. "When trigger X and trigger Y fire
+// the same way within a few minutes, does the later one do better than usual?" — built to be hard to fool
+// (de-clustered, needs distinct DAYS, older-half/newer-half check, reports how many combos would pass by luck).
+// /api/combo-study?instrument=NIFTY|CRUDE|BITCOIN|ALL &days=90 &window=10 &minN=30 &minDays=4 &size=2|3 &exclude=Brahmastra
+// READ-ONLY research — nothing here feeds signals, gates or alerts.
+app.get('/api/combo-study', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const days = clampInt(req.query.days, 90, 1, 365), windowMin = clampInt(req.query.window, 10, 1, 60);
+        const minN = clampInt(req.query.minN, 30, 5, 500), minDays = clampInt(req.query.minDays, 4, 1, 60);
+        const sizes = req.query.size === '2' ? [2] : req.query.size === '3' ? [3] : [2, 3];
+        const exclude = req.query.exclude !== undefined ? String(req.query.exclude).split(',').map(x => x.trim()).filter(Boolean) : ['Brahmastra'];
+        const want = String(req.query.instrument || 'NIFTY').toUpperCase();
+        const list = want === 'ALL' ? DAY_AUDIT_INSTRUMENTS : (DAY_AUDIT_INSTRUMENTS.includes(want) ? [want] : ['NIFTY']);
+        const instruments = {};
+        for (const ins of list) {
+            const r = await dbPool.query(`
+                SELECT id, source, direction, fire_ts, result,
+                       CASE WHEN entry_strike IS NOT NULL THEN coach_result END AS coach_result
+                FROM signal_outcomes
+                WHERE instrument = $1 AND direction IN ('BULLISH','BEARISH') AND fire_ts >= NOW() - ($2::int * INTERVAL '1 day')
+                ORDER BY fire_ts ASC, id ASC LIMIT 60000`, [ins, days]);
+            instruments[ins] = computeComboStudy(r.rows, { windowMin, declusterMin: 30, minN, minDays, sizes, exclude });
+        }
+        res.json({
+            success: true, days, instruments,
+            howToRead: [
+                'Event = a trigger fires and, in the previous <window> minutes, other triggers fired the SAME way. The event is scored with the LATER trigger\'s own 30-min result and Trade-Coach premium result.',
+                'Events of one combo closer than 30 min are merged (they would be the same market move counted twice). A combo needs minN events AND minDays distinct days to qualify.',
+                '"holds" = positive Trade-Coach average in BOTH the older and the newer half of the days. Even with no real edge about 1 combo in 4 passes that by luck: compare holdsBothHalves with expectedByLuckAlone. If they are close, there is no combination edge yet.',
+                'Brahmastra is excluded by default (it fires because other triggers agreed — pairing it with its own members is circular). Pass exclude= to change.',
+                'Compare every combo with `baseline` (all fires) — a combo is only interesting if it clearly beats that.',
+            ],
+        });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
