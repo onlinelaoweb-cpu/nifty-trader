@@ -5085,6 +5085,11 @@ const _recentTriggerFires = [];      // { instrument, source, direction, ts, mut
 const DIGEST_ENABLED    = (process.env.EXPLORATORY_DIGEST || 'on').toLowerCase() !== 'off';
 const DIGEST_MIN_TRADES = parseInt(process.env.DIGEST_MIN_TRADES || '30');
 const DIGEST_MINUTES    = parseInt(process.env.DIGEST_MINUTES || '30');
+// 7 Oct — sources that are NEVER batched: they alert instantly even with < DIGEST_MIN_TRADES results. Default: Classic
+// (the NIFTY original-rule tracker): it is already capped at NIFTY_CLASSIC_MAX_ALERTS_PER_DAY, and its alert carries the
+// "held back by <gate>" reason + ATM strike/premium that a one-line digest entry cannot, and a 30-minute-late entry alert is
+// useless. Override: DIGEST_EXEMPT="Classic,Brahmastra" (comma list, exact source names); DIGEST_EXEMPT="" exempts nothing.
+const DIGEST_EXEMPT = new Set(String(process.env.DIGEST_EXEMPT ?? 'Classic').split(',').map(x => x.trim()).filter(Boolean));
 const _digestQueue = { NIFTY: [], CRUDE: [], BITCOIN: [] };
 function _digestPrice(instrument) {
     const v = instrument === 'NIFTY' ? marketState.nifty
@@ -5092,13 +5097,14 @@ function _digestPrice(instrument) {
             : instrument === 'BITCOIN' ? marketState.bitcoin?.price : null;
     return v > 0 ? v : null;
 }
-function queueDigestItem(instrument, source, direction, card, agree, disagree) {
+function queueDigestItem(instrument, source, direction, card, agree, disagree, liq) {
     if (!_digestQueue[instrument]) _digestQueue[instrument] = [];
     _digestQueue[instrument].push({
         ts: Date.now(), source, direction, price: _digestPrice(instrument),
         dirN: card?.dirN || 0, dirWinPct: card?.dirWinPct ?? null,
         coachN: card?.coachN || 0, coachAvg: card?.coachAvg ?? null,
         agree: agree.size, disagree: disagree.size,
+        liq: liq ? { level: liq.level, weekend: !!liq.weekend, spreadPct: liq.spreadPct } : null,   // 7 Oct: Bitcoin liquidity at queue time
     });
     console.log(`📦 [Digest] queued ${instrument} ${source} ${direction} (${_digestQueue[instrument].length} waiting)`);
 }
@@ -5111,19 +5117,29 @@ async function flushDigest(instrument, force = false) {
     const lean = bull === bear ? 'split — triggers disagree' : (bull > bear ? 'leaning BULLISH' : 'leaning BEARISH');
     const clock = t => new Date(t).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
     const fmtPx = v => v == null ? '' : ' @' + (v >= 1000 ? Math.round(v).toLocaleString('en-IN') : v.toFixed(2));
+    // 7 Oct — Bitcoin liquidity travels with the digest line (🌙 = Sat/Sun UTC thin hours, ⚠️ = wide ATM bid-ask spread)
+    const liqTag = i => {
+        if (!i.liq) return '';
+        const t = [];
+        if (i.liq.weekend) t.push('🌙');
+        if (i.liq.level === 'THIN') t.push(`⚠️ wide spread ${i.liq.spreadPct}%`);
+        else if (i.liq.level === 'UNKNOWN') t.push('liquidity?');
+        return t.length ? ` [${t.join(' ')}]` : '';
+    };
+    const weekendNote = items.some(i => i.liq && i.liq.weekend) ? '\n🌙 Weekend hours — thin liquidity: limit orders only, half size.' : '';
     const MAX_LINES = 18;
     const lines = items.slice(0, MAX_LINES).map(i => {
         const arrow = i.direction === 'BULLISH' ? '▲' : '▼';
         const rec = i.coachN > 0
             ? `record: ${i.dirN > 0 ? `direction ${i.dirWinPct}% (${i.dirN})` : 'direction --'} · avg ${i.coachAvg > 0 ? '+' : ''}${Number(i.coachAvg).toFixed(1)}% (${i.coachN})`
             : 'no record yet';
-        return `• ${clock(i.ts)} ${i.source} ${arrow}${fmtPx(i.price)} — ${rec}`;
+        return `• ${clock(i.ts)} ${i.source} ${arrow}${fmtPx(i.price)} — ${rec}${liqTag(i)}`;
     });
     const more = items.length > MAX_LINES ? `\n…and ${items.length - MAX_LINES} more` : '';
     const msg = `
 📦 <b>EXPLORATORY DIGEST — ${instrument}</b> (${items.length} trigger${items.length === 1 ? '' : 's'}, ~${DIGEST_MINUTES} min)
 ━━━━━━━━━━━━━━━━━━
-▲ Bullish ${bull} · ▼ Bearish ${bear} → <b>${lean}</b>
+▲ Bullish ${bull} · ▼ Bearish ${bear} → <b>${lean}</b>${weekendNote}
 ${lines.join('\n')}${more}
 ━━━━━━━━━━━━━━━━━━
 Unproven triggers (under ${DIGEST_MIN_TRADES} results) are batched here to cut noise. All are still logged and tracked; proven ones alert instantly. Not Main Engine confirmed — use your own judgment.
@@ -5313,9 +5329,10 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
         // is still logged and tracked, exactly like auto-mute, so the effect of the
         // gate stays measurable (see /api/bitcoin-weekend-split). Weekend = thin
         // hours: gets a label even when the spread itself is fine.
-        let liqLine = null;
+        let liqLine = null, liqInfo = null;
         if (instrument === 'BITCOIN') {
             const liq = assessBitcoinLiquidity(marketState.bitcoin?.pcr, direction);
+            liqInfo = liq;
             if (liq.level === 'BLOCK' && BTC_LIQUIDITY_GATE_ENABLED) {
                 console.log(`💧 [BTC Liquidity] suppressed ${source} ${direction} alert — ${liq.reason}${liq.weekend ? ' (weekend)' : ''} — still tracked`);
                 return;
@@ -5336,8 +5353,8 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
             ? [...parts.slice(0, footerIdx), block, ...parts.slice(footerIdx)].join('\n')
             : `${msgBody}\n${block}`;
         // 5 Oct — unproven trigger -> hold for the digest instead of alerting one by one (see DIGEST_* above)
-        if (DIGEST_ENABLED && (card?.coachN || 0) < DIGEST_MIN_TRADES) {
-            queueDigestItem(instrument, source, direction, card, agree, disagree);
+        if (DIGEST_ENABLED && !DIGEST_EXEMPT.has(source) && (card?.coachN || 0) < DIGEST_MIN_TRADES) {
+            queueDigestItem(instrument, source, direction, card, agree, disagree, liqInfo);
             return;
         }
     } catch (e) {
@@ -5799,6 +5816,7 @@ async function collectBtcWeeklyData() {
     if (dbPool) {
         const sp = await dbPool.query(`
             SELECT COUNT(*) AS n_all,
+                   COUNT(DISTINCT (fire_ts AT TIME ZONE 'UTC')::date) AS days_all,
                    COUNT(*) FILTER (WHERE fire_ts >= NOW() - INTERVAL '7 days') AS n7,
                    COUNT(*) FILTER (WHERE spread_result = 'WIN')  AS wins_all,
                    COUNT(*) FILTER (WHERE spread_result = 'LOSS') AS losses_all,
@@ -5816,6 +5834,7 @@ async function collectBtcWeeklyData() {
         const wk = await dbPool.query(`
             SELECT CASE WHEN EXTRACT(DOW FROM fire_ts AT TIME ZONE 'UTC') IN (0,6) THEN 'WEEKEND' ELSE 'WEEKDAY' END AS bucket,
                    COUNT(*) AS n,
+                   COUNT(DISTINCT (fire_ts AT TIME ZONE 'UTC')::date) AS days,
                    COUNT(*) FILTER (WHERE fire_ts >= NOW() - INTERVAL '7 days') AS n7,
                    AVG(GREATEST(-100, LEAST(100, coach_result))) AS avg,
                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY coach_result) AS median
@@ -13045,6 +13064,7 @@ app.get('/api/bitcoin-weekend-split', async (req, res) => {
         const r = await dbPool.query(`
             SELECT COALESCE(source, 'ALL SOURCES') AS source,
                    CASE WHEN EXTRACT(DOW FROM fire_ts AT TIME ZONE 'UTC') IN (0,6) THEN 'WEEKEND' ELSE 'WEEKDAY' END AS bucket,
+                   COUNT(DISTINCT (fire_ts AT TIME ZONE 'UTC')::date) AS days,
                    COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')) AS dir_n,
                    ROUND(100.0 * COUNT(*) FILTER (WHERE result = 'WIN')
                          / NULLIF(COUNT(*) FILTER (WHERE result IN ('WIN','LOSS')), 0), 1) AS dir_win_pct,
@@ -13080,6 +13100,7 @@ app.get('/api/bitcoin-spread-accuracy', async (req, res) => {
         const r = await dbPool.query(`
             SELECT COALESCE(source, 'ALL SOURCES') AS source,
                    COUNT(*) AS spread_n,
+                   COUNT(DISTINCT (fire_ts AT TIME ZONE 'UTC')::date) AS days,
                    COUNT(*) FILTER (WHERE spread_result = 'WIN')  AS win_n,
                    COUNT(*) FILTER (WHERE spread_result = 'LOSS') AS loss_n,
                    COUNT(*) FILTER (WHERE spread_result = 'FLAT') AS flat_n,
@@ -13099,7 +13120,7 @@ app.get('/api/bitcoin-spread-accuracy', async (req, res) => {
         res.json({
             success: true, widthSteps: BTC_SPREAD_WIDTH_STEPS,
             filter: req.query.weekend === '1' ? 'weekend only' : req.query.weekend === '0' ? 'weekdays only' : 'all',
-            note: 'Spread pricing is executable (pay ask / receive bid, exit at bid / ask). Win/loss threshold ±10%. Need ~30+ rows per source before trusting a verdict.',
+            note: 'Spread pricing is executable (pay ask / receive bid, exit at bid / ask). Win/loss threshold ±10%. Need ~30+ rows AND 4+ days per source before trusting a verdict: trades on the same day move together, so `days` matters as much as the row count. The single-leg columns use last-traded prices (no bid-ask cost) and are NOT comparable with the spread columns.',
             rows: r.rows,
         });
     } catch (e) {

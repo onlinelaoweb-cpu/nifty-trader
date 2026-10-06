@@ -29,7 +29,7 @@
     var st = document.createElement('style');
     st.id = 'nc-style';
     st.textContent =
-      '.nc-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;}' +
+      '.nc-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;max-width:760px;}' +
       '.nc-head{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px;}' +
       '.nc-title{font-family:Orbitron,monospace;font-size:12px;color:var(--amber);letter-spacing:2px;}' +
       '.nc-tag{font-size:9px;letter-spacing:1px;padding:2px 6px;border-radius:8px;border:1px solid var(--border);color:var(--dim);white-space:nowrap;}' +
@@ -54,7 +54,12 @@
   function verdictText(v) {
     if (!v) return 'Data abhi poora nahi — quotes ya Nifty number missing.';
     var t = isNum(v.topAvgMove) ? pct(v.topAvgMove) : '—', r = isNum(v.restImpliedMove) ? '≈ ' + pct(v.restImpliedMove) : '—';
-    if (v.kind === 'BROAD') return '✅ Move broad hai — top-10 (' + t + ') aur baaki 40 (' + r + ') dono ek hi taraf.';
+    if (v.kind === 'BROAD') {
+      var icon = v.direction < 0 ? '📉' : '📈', verb = v.direction < 0 ? 'girawat' : 'badhat';
+      if (v.dominant === 'rest')  return icon + ' ' + verb.charAt(0).toUpperCase() + verb.slice(1) + ' zyadatar baaki 40 se — baaki 40 ' + r + ' vs top-10 ' + t + '. Heavyweights ne move ko kam kiya, asli ' + (v.direction < 0 ? 'dard' : 'jor') + ' chhote/mid stocks mein.';
+      if (v.dominant === 'top10') return icon + ' ' + verb.charAt(0).toUpperCase() + verb.slice(1) + ' zyadatar top-10 heavyweights se — top-10 ' + t + ' vs baaki 40 ' + r + '.';
+      return icon + ' Move broad hai — top-10 (' + t + ') aur baaki 40 (' + r + ') lagbhag barabar, ek hi taraf.';
+    }
     if (v.kind === 'DIVERGENT') return '⚠️ Move narrow/divergent — top-10 ek taraf (' + t + '), baaki 40 dusri taraf (' + r + '). Sirf heavyweights par bharosa mat karo.';
     if (v.kind === 'FLAT') return '➖ Dono baskets lagbhag flat (' + t + ' / ' + r + ').';
     if (v.kind === 'ONE_SIDED') return '↔️ Ek basket flat, doosra move kar raha hai (top-10 ' + t + ' / baaki 40 ' + r + ').';

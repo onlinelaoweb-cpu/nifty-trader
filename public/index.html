@@ -4238,7 +4238,10 @@ function switchTab(name,btn){
     if(_lastState){
       if(_lastState.breadth)updateBreadthUI(_lastState.breadth);
       if(_lastState.global){updateGlobalUI(_lastState.global);updateSectorHeatmap(_lastState.global.sectors);}
-      if(_lastState.optionFlow){updateState(_lastState);}
+      // 4 Oct FIX: this called updateState(), a function that has never existed (broken since 1 Jun, 'auto premiums'),
+      // so opening Breadth/Global threw a ReferenceError that also skipped the PCR trend / Fibo / Physics / FII-DII lines
+      // below. renderDashboard(s) is what actually paints the option-flow card; same try/catch as every other call site.
+      if(_lastState.optionFlow){ try { renderDashboard(_lastState); } catch(e) { console.warn('renderDashboard (tab cache):', e.message); } }
       if(_lastState.pcrHistory){updatePCRTrend(_lastState.pcrHistory);drawPCRSlopeChart(_lastState.pcrHistory);}
       if(_lastState.pcrSlope)updatePCRSlopeLabel(_lastState.pcrSlope);
       if(_lastState.fiboCard)updateFiboCard(_lastState.fiboCard);

@@ -17,6 +17,7 @@
 // unit-testable. Display only — nothing here feeds signals, gates or alerts.
 
 const DAY_MS = 86400000;
+const DOMINANCE_RATIO = 2;   // one basket must move >= 2x the other to be called 'dominant'
 const num = v => (typeof v === 'number' && Number.isFinite(v)) ? v : (v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
 const r2 = v => v === null ? null : Math.round(v * 100) / 100;
 const r1 = v => v === null ? null : Math.round(v * 10) / 10;
@@ -92,7 +93,15 @@ function computeNiftyContribution({ weights, quotes, nifty, indexQuote, sectors,
     if (topAvgMove !== null && restImpliedMove !== null) {
         const a = Math.abs(topAvgMove) < EPS ? 0 : Math.sign(topAvgMove);
         const b = Math.abs(restImpliedMove) < EPS ? 0 : Math.sign(restImpliedMove);
-        verdict = { kind: a === 0 && b === 0 ? 'FLAT' : (a !== 0 && b !== 0 && a === b) ? 'BROAD' : (a !== 0 && b !== 0) ? 'DIVERGENT' : 'ONE_SIDED',
+        const kind = a === 0 && b === 0 ? 'FLAT' : (a !== 0 && b !== 0 && a === b) ? 'BROAD' : (a !== 0 && b !== 0) ? 'DIVERGENT' : 'ONE_SIDED';
+        // When both baskets move the same way, say WHICH one moved much more. "Much" = at least DOMINANCE_RATIO times
+        // the other's size (a plain, visible rule — not a statistical test). Otherwise they are about equal.
+        let dominant = null;
+        if (kind === 'BROAD') {
+            const ratio = Math.abs(restImpliedMove) / Math.abs(topAvgMove);
+            dominant = ratio >= DOMINANCE_RATIO ? 'rest' : ratio <= 1 / DOMINANCE_RATIO ? 'top10' : null;
+        }
+        verdict = { kind, dominant, direction: kind === 'BROAD' ? a : null,
                     topAvgMove: r2(topAvgMove), restImpliedMove: r2(restImpliedMove) };
     }
 
