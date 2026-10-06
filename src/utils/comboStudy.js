@@ -131,4 +131,55 @@ function computeComboStudy(rows, opts = {}) {
 }
 function windowMin(o) { return o.windowMin ?? 10; }
 
-module.exports = { computeComboStudy, summarize, dayKey };
+// ── SINGLE-TRIGGER study ──────────────────────────────────────────────────
+// Same safeguards as the combination study, applied to each trigger on its own, so that "Brahmastra shows +4.7%"
+// can be tested instead of believed: de-clustered (events of one trigger closer than declusterMin are merged),
+// needs distinct DAYS, and the older-half / newer-half check ("holds" = positive Trade-Coach average in BOTH).
+// With K triggers tested, SOME will look good by chance: expectedByLuckAlone is 25% of those that qualify.
+// opts: { declusterMin=30, minN=30, minDays=4, minHalfN=10, bySide=false (split BULLISH/BEARISH) }
+// Display/research only. PURE.
+function computeTriggerStudy(rows, opts = {}) {
+    const declusterMs = (opts.declusterMin ?? 30) * 60000;
+    const minN = opts.minN ?? 30, minDays = opts.minDays ?? 4, minHalfN = opts.minHalfN ?? 10;
+    const data = [];
+    for (const r of rows || []) {
+        const ts = typeof r.fire_ts === 'number' ? r.fire_ts : Date.parse(r.fire_ts);
+        if (!Number.isFinite(ts) || (r.direction !== 'BULLISH' && r.direction !== 'BEARISH') || !r.source) continue;
+        data.push({ id: r.id, ts, src: String(r.source), dir: r.direction, result: r.result || null, coach: num(r.coach_result), day: dayKey(ts) });
+    }
+    data.sort((a, b) => a.ts - b.ts || (a.id ?? 0) - (b.id ?? 0));
+    const baselineRaw = summarize(data);
+    const groups = new Map();
+    for (const d of data) {
+        const key = opts.bySide ? `${d.src} | ${d.dir}` : d.src;
+        let g = groups.get(key); if (!g) { g = { source: d.src, direction: opts.bySide ? d.dir : null, rows: [] }; groups.set(key, g); }
+        g.rows.push(d);
+    }
+    const out = []; let dropped = 0;
+    for (const g of groups.values()) {
+        const kept = []; let last = -Infinity;
+        for (const e of g.rows) { if (e.ts - last >= declusterMs) { kept.push(e); last = e.ts; } else dropped++; }
+        const st = summarize(kept);
+        const dayList = [...new Set(kept.map(e => e.day))].sort();
+        const cut = dayList[Math.floor(dayList.length / 2)];
+        const so = summarize(kept.filter(e => e.day < cut)), sn = summarize(kept.filter(e => e.day >= cut));
+        const qualifies = st.n >= minN && st.days >= minDays && st.coachN >= Math.min(minN, 10);
+        const holds = qualifies && dayList.length >= 2 && so.coachN >= minHalfN && sn.coachN >= minHalfN && so.coachAvg > 0 && sn.coachAvg > 0;
+        out.push({ source: g.source, direction: g.direction, rawFires: g.rows.length, ...st, qualifies, holds,
+            vsBaseline: (st.coachAvg !== null && baselineRaw.coachAvg !== null) ? r1(st.coachAvg - baselineRaw.coachAvg) : null,
+            olderHalf: { n: so.n, coachN: so.coachN, coachAvg: so.coachAvg, dirWinPct: so.dirWinPct },
+            newerHalf: { n: sn.n, coachN: sn.coachN, coachAvg: sn.coachAvg, dirWinPct: sn.dirWinPct } });
+    }
+    const byAvg = (a, b) => (b.coachAvg ?? -1e9) - (a.coachAvg ?? -1e9);
+    const q = out.filter(x => x.qualifies);
+    return {
+        params: { declusterMin: opts.declusterMin ?? 30, minN, minDays, minHalfN, bySide: !!opts.bySide },
+        fires: data.length, days: baselineRaw.days, baseline: baselineRaw,
+        triggersTested: out.length, qualifying: q.length, holdsBothHalves: q.filter(x => x.holds).length,
+        expectedByLuckAlone: Math.round(q.length * 0.25 * 10) / 10,
+        droppedByDeclustering: dropped,
+        triggers: out.slice().sort((a, b) => (b.qualifies - a.qualifies) || byAvg(a, b)),
+    };
+}
+
+module.exports = { computeComboStudy, computeTriggerStudy, summarize, dayKey };

@@ -5,6 +5,7 @@
 // Display/audit only.
 
 const WIN_LOSS_THRESHOLD_PCT = 0.15;   // the app's own 30-min WIN/LOSS threshold (see Signal Outcomes Tracking)
+const GAVE_BACK_FROM_PCT = 25, GAVE_BACK_TO_PCT = 5;   // a trade that was +25% at its best and ended <= +5% "gave it back"
 const MOSTLY_FLAT_PCT = 60;            // "mostly flat day" when at least this share of resolved checks were FLAT
 const n = v => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v))) ? null : Number(v);
 const r1 = v => v === null ? null : Math.round(v * 10) / 10;
@@ -60,15 +61,33 @@ function tradeOutcome(r) {
     };
 }
 
+// The tracker stores a STOP at the stop LEVEL (-25%), but the premium had usually already gone further by the time
+// it was checked (every ~30 s; a 0-1 DTE option can move Rs 3-5 in that time) — the alert on 6 Oct said -27% and
+// -31.5% while the stored result said -25%. So for a STOP the audit also reports the worst point the premium reached
+// (max_adverse_pct, the low seen), which is what the stop alert actually saw. A stop is exited at/near its low.
+function withStopSlippage(t, lot) {
+    if (t.outcome !== 'STOP' || t.worstDipPct === null || t.pnlPct === null || !(t.entry > 0)) return t;
+    if (t.worstDipPct >= t.pnlPct) return t;             // no extra drop beyond the stored result
+    return { ...t,
+        slippagePct: r1(t.worstDipPct - t.pnlPct),
+        pnlPerLotAtWorst: lot ? Math.round(t.entry * (t.worstDipPct / 100) * lot) : null };
+}
+
 function tradeSummary(trades, lot) {
     const closed = trades.filter(t => t.outcome !== 'OPEN');
     const withPnl = trades.filter(t => t.pnlPerShare !== null);
+    // total if every STOP is taken at the worst point the alert saw (others as stored)
+    const asAlerted = lot && withPnl.length
+        ? Math.round(withPnl.reduce((a, t) => a + (t.pnlPerLotAtWorst !== undefined && t.pnlPerLotAtWorst !== null ? t.pnlPerLotAtWorst / lot : t.pnlPerShare) * lot, 0)) : null;
     return {
         n: trades.length, closed: closed.length, open: trades.length - closed.length,
         targetHits: trades.filter(t => t.outcome === 'TARGET').length, stops: trades.filter(t => t.outcome === 'STOP').length,
         timeouts: trades.filter(t => t.outcome === 'TIMEOUT' || t.outcome === 'PARTIAL').length,
         avgPnlPct: withPnl.length ? r1(withPnl.reduce((a, t) => a + (t.pnlPct ?? 0), 0) / withPnl.length) : null,
         totalPnlPerLot: lot && withPnl.length ? Math.round(withPnl.reduce((a, t) => a + t.pnlPerShare * lot, 0)) : null,
+        totalPnlPerLotAsAlerted: asAlerted,
+        // closed trades that were up >= GAVE_BACK_FROM_PCT at their best but finished at or below +GAVE_BACK_TO_PCT
+        gaveBack: closed.filter(t => t.bestGainPct !== null && t.bestGainPct >= GAVE_BACK_FROM_PCT && t.pnlPct !== null && t.pnlPct <= GAVE_BACK_TO_PCT).length,
         lot: lot || null,
     };
 }
@@ -83,7 +102,12 @@ function formatDayAuditText(a) {
     for (const ins of Object.keys(a.instruments || {})) {
         const d = a.instruments[ins];
         L.push('', `━━ ${ins} ━━`);
-        if (!d.totals || !d.totals.fires) { L.push('No signals logged this day.'); continue; }
+        const hasTrades = !!(d.trackedTrades && d.trackedTrades.length);
+        if (!d.totals || !d.totals.fires) {
+            L.push('No signals logged this day.');
+            if (!hasTrades) continue;      // tracked trades exist independently of the exploratory triggers — never hide them
+        }
+        if (d.totals && d.totals.fires) {
         if (d.range) L.push(`Price ${d.range.first} → ${d.range.last} (net ${sg(d.range.netPts)} pts, ${sg(d.range.netPct)}%) · low ${d.range.lo} · high ${d.range.hi} · range ${d.range.rangePts} pts (${d.range.rangePct}%)`);
         const t = d.totals;
         L.push(`${t.fires} fires · WIN ${t.wins} / LOSS ${t.losses} / FLAT ${t.flats} / pending ${t.pending} · direction right ${f(t.dirWinPct)}%`);
@@ -93,16 +117,22 @@ function formatDayAuditText(a) {
             L.push(` • ${s.source}: ${s.fires} (▲${s.bull} ▼${s.bear}) W${s.wins} L${s.losses} F${s.flats}${s.pending ? ' P' + s.pending : ''}` +
                    `${s.coachN ? ` · coach avg ${sg(s.coachAvg)}% (n=${s.coachN})` : ''}`);
         }
-        if (d.trackedTrades && d.trackedTrades.length) {
+        }
+        if (hasTrades) {
             L.push('Tracked trades:');
             for (const x of d.trackedTrades) {
                 L.push(` • ${x.time || '--:--'} ${x.source || ''} ${x.type || ''} ${f(x.strike)} @${f(x.entry)} → ${x.outcome}` +
                        `${x.pnlPct !== null ? ` ${sg(x.pnlPct)}%` : ''}${x.pnlPerLot !== undefined && x.pnlPerLot !== null ? ` (${rs(x.pnlPerLot)}/lot)` : ''}` +
-                       ` · best ${sg(x.bestGainPct)}% · worst ${sg(x.worstDipPct)}%${x.minutes ? ` · ${x.minutes} min` : ''}`);
+                       ` · best ${sg(x.bestGainPct)}% · worst ${sg(x.worstDipPct)}%${x.minutes ? ` · ${x.minutes} min` : ''}` +
+                       `${x.slippagePct !== undefined ? ` · ⚠️ stop saw ${sg(x.worstDipPct)}% (${rs(x.pnlPerLotAtWorst)}/lot) — ${Math.abs(x.slippagePct)} pts past the stop level` : ''}`);
             }
             const s = d.tradeSummary;
             L.push(`   total: ${s.n} trades · target ${s.targetHits} · stop ${s.stops} · other ${s.timeouts} · open ${s.open}` +
                    `${s.totalPnlPerLot !== null ? ` · ${rs(s.totalPnlPerLot)}/lot` : ''}`);
+            if (s.totalPnlPerLotAsAlerted !== null && s.totalPnlPerLotAsAlerted !== s.totalPnlPerLot) {
+                L.push(`   stops taken at the worst point the alert saw: ${rs(s.totalPnlPerLotAsAlerted)}/lot (the stored figure above takes each stop at its -25% level)`);
+            }
+            if (s.gaveBack) L.push(`   ${pl(s.gaveBack, 'trade')} were up ${GAVE_BACK_FROM_PCT}%+ at their best but ended at ${GAVE_BACK_TO_PCT}% or below (gave it back)`);
         }
         if (d.combosToday && d.combosToday.list && d.combosToday.list.length) {
             L.push('Combos that completed today (ANECDOTAL — a few events only):');
@@ -113,4 +143,4 @@ function formatDayAuditText(a) {
     return L.join('\n');
 }
 
-module.exports = { deriveRange, totals, readingFor, tradeOutcome, tradeSummary, formatDayAuditText, WIN_LOSS_THRESHOLD_PCT, MOSTLY_FLAT_PCT };
+module.exports = { deriveRange, totals, readingFor, tradeOutcome, withStopSlippage, tradeSummary, GAVE_BACK_FROM_PCT, GAVE_BACK_TO_PCT, formatDayAuditText, WIN_LOSS_THRESHOLD_PCT, MOSTLY_FLAT_PCT };

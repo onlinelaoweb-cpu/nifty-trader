@@ -108,7 +108,7 @@ const { formatNiftyWeeklySummary } = require('./src/utils/niftyWeeklySummary'); 
 const { NIFTY_WEIGHTS, validateNiftyWeights } = require('./src/utils/niftyWeights');
 const { computeNiftyContribution, fetchTopQuotes, quotesFromBreadth } = require('./src/utils/niftyContribution');
 // 7 Oct — day audit + trigger-combination study (read-only research endpoints; pure helpers).
-const { computeComboStudy } = require('./src/utils/comboStudy');
+const { computeComboStudy, computeTriggerStudy } = require('./src/utils/comboStudy');
 const dayAuditLib = require('./src/utils/dayAudit');
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
@@ -13362,7 +13362,7 @@ app.get('/api/day-audit', async (req, res) => {
                            max_gain_pct, max_adverse_pct, time_taken_min, lead_quality
                     FROM signal_performance WHERE trade_date = $1::date ORDER BY ts ASC, id ASC`, [date]);
                 const trades = tr.rows.map(r => {
-                    const t = dayAuditLib.tradeOutcome(r);
+                    const t = dayAuditLib.withStopSlippage(dayAuditLib.tradeOutcome(r), LOT_SIZE);
                     t.pnlPerLot = t.pnlPerShare === null ? null : Math.round(t.pnlPerShare * LOT_SIZE);
                     return t;
                 });
@@ -13429,6 +13429,43 @@ app.get('/api/combo-study', async (req, res) => {
                 '"holds" = positive Trade-Coach average in BOTH the older and the newer half of the days. Even with no real edge about 1 combo in 4 passes that by luck: compare holdsBothHalves with expectedByLuckAlone. If they are close, there is no combination edge yet.',
                 'Brahmastra is excluded by default (it fires because other triggers agreed — pairing it with its own members is circular). Pass exclude= to change.',
                 'Compare every combo with `baseline` (all fires) — a combo is only interesting if it clearly beats that.',
+            ],
+        });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 7 Oct — SINGLE-TRIGGER STUDY: the same safeguards as /api/combo-study, applied to each trigger on its own
+// (de-clustered, needs distinct days, older-half / newer-half check, luck estimate). Use it to test whether a trigger
+// that "looks good" (e.g. Brahmastra) keeps looking good in BOTH halves of the history.
+// /api/trigger-study?instrument=NIFTY|CRUDE|BITCOIN|ALL &days=90 &minN=30 &minDays=4 &side=split (BULLISH/BEARISH apart)
+// READ-ONLY research — nothing here feeds signals, gates or alerts.
+app.get('/api/trigger-study', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const days = clampInt(req.query.days, 90, 1, 365), minN = clampInt(req.query.minN, 30, 5, 500), minDays = clampInt(req.query.minDays, 4, 1, 60);
+        const bySide = String(req.query.side || '').toLowerCase() === 'split';
+        const want = String(req.query.instrument || 'NIFTY').toUpperCase();
+        const list = want === 'ALL' ? DAY_AUDIT_INSTRUMENTS : (DAY_AUDIT_INSTRUMENTS.includes(want) ? [want] : ['NIFTY']);
+        const instruments = {};
+        for (const ins of list) {
+            const r = await dbPool.query(`
+                SELECT id, source, direction, fire_ts, result,
+                       CASE WHEN entry_strike IS NOT NULL THEN coach_result END AS coach_result
+                FROM signal_outcomes
+                WHERE instrument = $1 AND direction IN ('BULLISH','BEARISH') AND fire_ts >= NOW() - ($2::int * INTERVAL '1 day')
+                ORDER BY fire_ts ASC, id ASC LIMIT 60000`, [ins, days]);
+            instruments[ins] = computeTriggerStudy(r.rows, { declusterMin: 30, minN, minDays, bySide });
+        }
+        res.json({
+            success: true, days, instruments,
+            howToRead: [
+                'Each trigger is scored on the Trade-Coach premium simulation of its own fires; fires of one trigger closer than 30 min are merged (the same market move counted once).',
+                '"holds" = positive average in BOTH the older and the newer half of the days. With K triggers tested, the best-looking one will almost always pass by chance: compare holdsBothHalves with expectedByLuckAlone.',
+                'vsBaseline = the trigger\'s average minus the average of ALL fires of that instrument. A trigger is only interesting if it beats that by a clear margin in both halves.',
+                'Brahmastra fires because other triggers agreed, so it is not an independent trigger — read it as a combination.',
             ],
         });
     } catch (e) {
