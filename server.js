@@ -196,13 +196,49 @@ app.use(express.static('public', { etag: false, maxAge: 0, index: false }));
 // market data (nifty/vix/breadth), never personal trades/journal/P&L.
 // Fails open exactly like requireToken below when APP_TOKEN isn't set —
 // this is a genuine no-op until the user configures the env var.
+// 6 Oct — LIVE-STREAM AUTH FALLBACK. Railway logs showed both the laptop and the phone being blocked on
+// /api/stream with "key:WRONG" while every other call (which sends the token as a header) worked, so the live
+// dashboard never got its WebSocket ticks and fell back to slow polling. Rather than depend on the ?key= value
+// reaching the server intact, the server now also hands out a small cookie to any client that has
+// authenticated with the header, and accepts that cookie for GET /api/stream ONLY (the stream is read-only;
+// cookie auth is deliberately NOT accepted for any other route, so it cannot be abused for cross-site writes).
+// The cookie holds a SHA-256 derived from the token (never the token itself), is HttpOnly + SameSite=Strict,
+// and is scoped to the /api/stream path.
+const _crypto = require('crypto');
+const _authCookieVal = (secret) => _crypto.createHash('sha256').update('vn-stream|' + secret).digest('hex');
+function _hasStreamCookie(req, secret) {
+    try {
+        const m = String(req.headers.cookie || '').match(/(?:^|;\s*)vn_stream=([a-f0-9]{64})/);
+        if (!m) return false;
+        const a = Buffer.from(m[1]), b = Buffer.from(_authCookieVal(secret));
+        return a.length === b.length && _crypto.timingSafeEqual(a, b);
+    } catch (e) { return false; }
+}
+const _cookieRescueLogged = new Map();   // ip -> last log ts (so a 5-second reconnect loop does not spam the log)
 app.use('/api', (req, res, next) => {
     if (req.path === '/health') return next();
     const secret = process.env.APP_TOKEN;
     if (!secret) return next();
-    const provided = req.headers['x-app-token'] || req.query.key;
-    if (provided === secret) return next();
-    console.warn(`[Auth] Blocked unauthorized ${req.method} to ${req.path} from ${req.ip} | key:${req.query.key ? (req.query.key === secret ? 'ok' : 'WRONG') : 'missing'} header:${req.headers['x-app-token'] ? (req.headers['x-app-token'] === secret ? 'ok' : 'WRONG') : 'missing'} | ${String(req.headers['user-agent'] || '?').slice(0, 90)}`);
+    const rawKey = Array.isArray(req.query.key) ? req.query.key[req.query.key.length - 1] : req.query.key;
+    const key = rawKey == null ? '' : String(rawKey).trim();
+    const provided = req.headers['x-app-token'] || key;
+    if (provided === secret) {
+        // authenticated by header/key -> make sure this browser holds the stream cookie (set once, 30 days)
+        if (req.method === 'GET' && req.path !== '/stream' && !_hasStreamCookie(req, secret)) {
+            const https = req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+            res.append('Set-Cookie', `vn_stream=${_authCookieVal(secret)}; Path=/api/stream; Max-Age=2592000; HttpOnly; SameSite=Strict${https ? '; Secure' : ''}`);
+        }
+        return next();
+    }
+    if (req.method === 'GET' && req.path === '/stream' && _hasStreamCookie(req, secret)) {
+        const last = _cookieRescueLogged.get(req.ip) || 0;
+        if (Date.now() - last > 10 * 60 * 1000) {
+            _cookieRescueLogged.set(req.ip, Date.now());
+            console.warn(`[Auth] /stream let in by cookie from ${req.ip} — its ?key= was ${key ? 'WRONG (keyLen ' + key.length + ' vs tokenLen ' + secret.length + ')' : 'missing'} | ${String(req.headers['user-agent'] || '?').slice(0, 80)}`);
+        }
+        return next();
+    }
+    console.warn(`[Auth] Blocked unauthorized ${req.method} to ${req.path} from ${req.ip} | key:${key ? 'WRONG(len ' + key.length + ' vs ' + secret.length + ')' : 'missing'} header:${req.headers['x-app-token'] ? (req.headers['x-app-token'] === secret ? 'ok' : 'WRONG') : 'missing'} cookie:${_hasStreamCookie(req, secret) ? 'ok' : 'none'} | ${String(req.headers['user-agent'] || '?').slice(0, 90)}`);
     return res.status(401).json({ success: false, msg: 'Unauthorized — set X-App-Token header or ?key= param' });
 });
 
