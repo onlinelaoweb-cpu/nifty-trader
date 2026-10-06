@@ -79,7 +79,11 @@
 <meta name="apple-mobile-web-app-title" content="Vardaan AI"/>
 <title>Vardaan AI</title>
 <link rel="manifest" href="/manifest.json"/>
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&family=Orbitron:wght@700;900&display=swap" rel="stylesheet"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<!-- 6 Oct: fonts load without blocking the page's scripts (a slow Google Fonts response used to hold up the whole dashboard start) -->
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&family=Orbitron:wght@700;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'"/>
+<noscript><link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&family=Orbitron:wght@700;900&display=swap" rel="stylesheet"/></noscript>
 <style>
 :root{
   --bg0:#000000;--bg1:#050505;--bg2:#0a0a0c;--bg3:#101014;
@@ -4714,6 +4718,10 @@ function startSSE() {
 function startPolling() {
   // Try SSE first — instant updates, no polling overhead
   startSSE();
+  // 6 Oct: ALSO fetch the first state right now. Before this, the first data on open depended entirely on the
+  // live stream connecting (or the 3 s/30 s fallback timers) — if the stream was slow or blocked the screen
+  // sat on '--' for 10-12 s. Whichever arrives first renders; the other just refreshes it.
+  fetchSignal();
   // Always keep a slow poll as safety net (30s) — catches missed SSE events
   if (_pollTimer) clearInterval(_pollTimer);
   _pollTimer = setInterval(fetchSignal, 30000);

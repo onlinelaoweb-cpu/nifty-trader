@@ -174,6 +174,18 @@ app.use('/api', (req, res, next) => {
     if (req.path === '/stream') return next();
     return apiLimiter(req, res, next);
 });
+// 6 Oct — gzip for the dashboard page (653 KB -> ~150 KB) and the big /api JSON payloads. The live stream
+// (text/event-stream) is EXCLUDED — compressing it would buffer events and delay every live update.
+// If the 'compression' package is not installed the app simply serves uncompressed, exactly as before.
+try {
+    const compression = require('compression');
+    app.use(compression({
+        filter: (req, res) => {
+            if (req.path === '/api/stream' || String(req.headers.accept || '').includes('text/event-stream')) return false;
+            return compression.filter(req, res);
+        },
+    }));
+} catch (e) { console.warn('[Compression] package not installed — serving uncompressed:', e.message); }
 app.use(express.json());
 app.use(express.static('public', { etag: false, maxAge: 0, index: false }));
 
@@ -190,7 +202,7 @@ app.use('/api', (req, res, next) => {
     if (!secret) return next();
     const provided = req.headers['x-app-token'] || req.query.key;
     if (provided === secret) return next();
-    console.warn(`[Auth] Blocked unauthorized ${req.method} to ${req.path} from ${req.ip}`);
+    console.warn(`[Auth] Blocked unauthorized ${req.method} to ${req.path} from ${req.ip} | key:${req.query.key ? (req.query.key === secret ? 'ok' : 'WRONG') : 'missing'} header:${req.headers['x-app-token'] ? (req.headers['x-app-token'] === secret ? 'ok' : 'WRONG') : 'missing'} | ${String(req.headers['user-agent'] || '?').slice(0, 90)}`);
     return res.status(401).json({ success: false, msg: 'Unauthorized — set X-App-Token header or ?key= param' });
 });
 
@@ -12290,10 +12302,11 @@ app.get('/api/stream', (req, res) => {
     res.flushHeaders();
 
     // Send current state immediately on connect so client doesn't wait
-    res.write(`event: signal\ndata: ${JSON.stringify(buildSignalPayload())}\n\n`);
+    const _firstPayload = JSON.stringify(buildSignalPayload());
+    res.write(`event: signal\ndata: ${_firstPayload}\n\n`);
 
     _sseClients.add(res);
-    console.log(`[SSE] Client connected (total: ${_sseClients.size})`);
+    console.log(`[SSE] Client connected (total: ${_sseClients.size}) | first payload ${Math.round(_firstPayload.length / 1024)} KB | ${String(req.headers['user-agent'] || '?').slice(0, 60)}`);
 
     // Heartbeat every 8s — Railway proxy drops idle connections ~19s.
     // FIX: was 10s which was too close to the Railway timeout causing
