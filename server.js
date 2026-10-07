@@ -13550,11 +13550,11 @@ app.get('/api/regime-study', async (req, res) => {
         let snaps;
         try {
             snaps = await dbPool.query(`
-                SELECT ts, vix, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, signal, health_total, trend_prob, range_prob FROM market_snapshot_log
+                SELECT ts, vix, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, signal, mtf_signal, health_total, trend_prob, range_prob FROM market_snapshot_log
                 WHERE ts >= NOW() - (($1::int + 1) * INTERVAL '1 day') ORDER BY ts ASC LIMIT 100000`, [days]);
         } catch (e3) {
             snaps = await dbPool.query(`
-                SELECT ts, vix, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, signal FROM market_snapshot_log
+                SELECT ts, vix, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, signal, mtf_signal FROM market_snapshot_log
                 WHERE ts >= NOW() - (($1::int + 1) * INTERVAL '1 day') ORDER BY ts ASC LIMIT 100000`, [days]);
         }
         const daily = await dbPool.query(`
@@ -13566,7 +13566,7 @@ app.get('/api/regime-study', async (req, res) => {
         const pct = (a, b) => b ? Math.round((1000 * a) / b) / 10 : null;
         res.json({
             success: true, instrument: 'NIFTY', days, adxTimeframe: adxTf,
-            coverage: { ...coverage, snapshotMatchPct: pct(coverage.withSnapshot, coverage.fires), adxPct: pct(coverage.withAdx, coverage.fires), vixPct: pct(coverage.withVix, coverage.fires), dayTypePct: pct(coverage.withDayType, coverage.fires), healthPct: pct(coverage.withHealth, coverage.fires), liveDayPct: pct(coverage.withLiveDay, coverage.fires), enginePct: pct(coverage.withEngine, coverage.fires), maxGapMin: gap },
+            coverage: { ...coverage, snapshotMatchPct: pct(coverage.withSnapshot, coverage.fires), adxPct: pct(coverage.withAdx, coverage.fires), vixPct: pct(coverage.withVix, coverage.fires), dayTypePct: pct(coverage.withDayType, coverage.fires), healthPct: pct(coverage.withHealth, coverage.fires), liveDayPct: pct(coverage.withLiveDay, coverage.fires), enginePct: pct(coverage.withEngine, coverage.fires), mtfPct: pct(coverage.withMtf, coverage.fires), maxGapMin: gap },
             study,
             howToRead: [
                 'Regime is read at the moment each trigger fired, from the latest 5-minute snapshot at or before the fire (never from later data). Fires with no snapshot within <gap> minutes get no ADX/VIX bucket and are simply left out of those tables — see `coverage` for how many.',
@@ -13576,6 +13576,7 @@ app.get('/api/regime-study', async (req, res) => {
                 'verdict UNTESTABLE = premium results exist for only one half of the days (the simulation started later) — not a failure.',
                 'Every bucket shows coachCoveragePct (how many of its events have a premium result) and thinPremium (under 20 results): a bucket average resting on a handful of results means nothing. VIX especially tracks the CALENDAR (the older, low-VIX weeks have almost no premium results), so a VIX bucket is mostly an older-vs-newer comparison.',
                 'health / liveDay / engine (8 Oct): health = Insights Market Health at fire time (LOW <40, MID 40-60, HIGH >=60); liveDay = the live Trend-vs-Range probability (not the hindsight dayType); engine = Main Engine AGREES / WAIT / OPPOSES the trigger direction at that moment. health and liveDay start filling on 8 Oct (check healthPct / liveDayPct in coverage); engine works on all history. All three are knowable at fire time, so they can become real filters.',
+                'mtf (8 Oct): the 5m/15m/1h vote at fire time vs the trigger direction (AGREES / OPPOSES / WAIT). Unlike engine (Main Engine was WAIT on every fire so far) this has real variation. A dimension with only one populated bucket is listed in study.degenerateDimensions and is excluded from the cell counts and the luck estimate.',
                 'Cells overlap, so read independentHoldingTriggers (distinct triggers) rather than holdsBothHalves: one trigger that is positive in every slicing shows up as several HOLDS cells.',
             ],
         });

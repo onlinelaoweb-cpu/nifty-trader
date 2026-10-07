@@ -12,6 +12,9 @@
 //   health  — the Insights tab's Market Health score (0-100):   LOW (<40) · MID (40-60) · HIGH (>=60)      [needs health_total column; fills from 8 Oct]
 //   liveDay — the Insights tab's live Trend-vs-Range probability: RANGE-LIKE (range>=60) · TREND-LIKE (trend>=60) · UNCLEAR   [fills from 8 Oct]
 //   engine  — what the Main Engine said at that moment vs the trigger's direction: AGREES · WAIT · OPPOSES   [works on all history]
+//   mtf     — the 5m/15m/1h multi-timeframe vote at that moment vs the trigger's direction: AGREES · OPPOSES · WAIT   [works on all history]
+//   (a dimension that ends up with only ONE bucket carries no information — 'engine' was that on 8 Oct, Main Engine said WAIT on every
+//    fire — so it is shown but kept OUT of the cell counts and the luck estimate; see degenerateDimensions)
 // and with ONE hindsight tag (research only — NOT knowable at fire time):
 //   dayType — from that day's OHLC (nifty_daily_history): TREND DAY if |close-open| / (high-low) >= 0.5, else RANGE DAY.
 //
@@ -41,6 +44,14 @@ function bucketEngine(signal, direction) {
     if (!want || (sig !== 'BUY CALL' && sig !== 'BUY PUT')) return null;
     return sig === want ? 'ENGINE AGREES' : 'ENGINE OPPOSES';
 }
+function bucketMtf(mtfSignal, direction) {
+    if (!mtfSignal) return null;
+    const sig = String(mtfSignal).toUpperCase();
+    if (sig === 'WAIT') return 'MTF WAIT';
+    const want = direction === 'BULLISH' ? 'BUY CALL' : direction === 'BEARISH' ? 'BUY PUT' : null;
+    if (!want || (sig !== 'BUY CALL' && sig !== 'BUY PUT')) return null;
+    return sig === want ? 'MTF AGREES' : 'MTF OPPOSES';
+}
 function bucketSession(ms) {
     const d = new Date(ms + IST_MS), m = d.getUTCHours() * 60 + d.getUTCMinutes();
     if (m >= 555 && m < 630) return 'OPEN 09:15-10:30';
@@ -60,11 +71,11 @@ function attachRegime(fires, snapshots, dailyRows, opts = {}) {
     const adxCol = { '5m': 'mtf_5m_adx', '15m': 'mtf_15m_adx', '1h': 'mtf_1h_adx' }[opts.adxTf || '15m'] || 'mtf_15m_adx';
     const maxGap = (opts.maxGapMin ?? 10) * 60000;
     const snaps = (snapshots || []).map(s => ({ ts: typeof s.ts === 'number' ? s.ts : Date.parse(s.ts), vix: num(s.vix), adx: num(s[adxCol]),
-            health: num(s.health_total), trendProb: num(s.trend_prob), rangeProb: num(s.range_prob), signal: s.signal || null }))
+            health: num(s.health_total), trendProb: num(s.trend_prob), rangeProb: num(s.range_prob), signal: s.signal || null, mtfSignal: s.mtf_signal || null }))
         .filter(s => Number.isFinite(s.ts)).sort((a, b) => a.ts - b.ts);
     const dayMap = new Map(); for (const d of dailyRows || []) { const t = dayTypeOf(d); if (t && d.date) dayMap.set(String(d.date).slice(0, 10), t); }
     const out = []; const gaps = [];
-    const cov = { fires: 0, withSnapshot: 0, withAdx: 0, withVix: 0, withDayType: 0, withHealth: 0, withLiveDay: 0, withEngine: 0 };
+    const cov = { fires: 0, withSnapshot: 0, withAdx: 0, withVix: 0, withDayType: 0, withHealth: 0, withLiveDay: 0, withEngine: 0, withMtf: 0 };
     let j = 0;
     const sorted = (fires || []).map(f => ({ ...f, _ts: typeof f.fire_ts === 'number' ? f.fire_ts : Date.parse(f.fire_ts) })).filter(f => Number.isFinite(f._ts)).sort((a, b) => a._ts - b._ts);
     for (const f of sorted) {
@@ -75,12 +86,13 @@ function attachRegime(fires, snapshots, dailyRows, opts = {}) {
         const adx = s ? bucketAdx(s.adx) : null, vix = s ? bucketVix(s.vix) : null;
         if (adx) cov.withAdx++; if (vix) cov.withVix++;
         const health = s ? bucketHealth(s.health) : null, liveDay = s ? bucketLiveDay(s.trendProb, s.rangeProb) : null, engine = s ? bucketEngine(s.signal, f.direction) : null;
-        if (health) cov.withHealth++; if (liveDay) cov.withLiveDay++; if (engine) cov.withEngine++;
+        const mtf = s ? bucketMtf(s.mtfSignal, f.direction) : null;
+        if (health) cov.withHealth++; if (liveDay) cov.withLiveDay++; if (engine) cov.withEngine++; if (mtf) cov.withMtf++;
         const dk = dayKey(f._ts);
         const dayType = opts.todayKey && dk >= opts.todayKey ? null : (dayMap.get(dk) || null);   // today's candle is still forming
         if (dayType) cov.withDayType++;
         out.push({ id: f.id, source: f.source, direction: f.direction, fire_ts: f._ts, result: f.result, coach_result: f.coach_result,
-                   regime: { adx, vix, session: bucketSession(f._ts), dayType, health, liveDay, engine } });
+                   regime: { adx, vix, session: bucketSession(f._ts), dayType, health, liveDay, engine, mtf } });
     }
     gaps.sort((a, b) => a - b);
     cov.medianGapMin = gaps.length ? r1(gaps[gaps.length >> 1]) : null;
@@ -91,7 +103,7 @@ function attachRegime(fires, snapshots, dailyRows, opts = {}) {
     return { rows: out, coverage: cov };
 }
 
-const DIMENSIONS = ['adx', 'vix', 'session', 'dayType', 'health', 'liveDay', 'engine'];
+const DIMENSIONS = ['adx', 'vix', 'session', 'dayType', 'health', 'liveDay', 'engine', 'mtf'];
 
 function computeRegimeStudy(tagged, opts = {}) {
     const declusterMs = (opts.declusterMin ?? 30) * 60000;
@@ -114,8 +126,9 @@ function computeRegimeStudy(tagged, opts = {}) {
         const cut = days[Math.floor(days.length / 2)];
         return { days, older: summarize(list.filter(e => e.day < cut)), newer: summarize(list.filter(e => e.day >= cut)) };
     };
-    const dimensions = {}; const allCells = [];
+    const dimensions = {}; const allCells = []; const degenerateDimensions = [];
     for (const dim of DIMENSIONS) {
+        const cellsOfDim = [];
         const buckets = new Map();
         for (const e of kept) { const b = e.regime[dim]; if (b) (buckets.get(b) || buckets.set(b, []).get(b)).push(e); }
         const outB = {};
@@ -136,12 +149,16 @@ function computeRegimeStudy(tagged, opts = {}) {
                     vsBucket: (st.coachAvg !== null && pooled.coachAvg !== null) ? r1(st.coachAvg - pooled.coachAvg) : null,
                     olderHalf: { n: h.older.n, coachN: h.older.coachN, coachAvg: h.older.coachAvg, dirN: h.older.dirN, dirWinPct: h.older.dirWinPct },
                     newerHalf: { n: h.newer.n, coachN: h.newer.coachN, coachAvg: h.newer.coachAvg, dirN: h.newer.dirN, dirWinPct: h.newer.dirWinPct } };
-                cells.push(cell); allCells.push(cell);
+                cells.push(cell); cellsOfDim.push(cell);
             }
             cells.sort((a, c) => (c.qualifies - a.qualifies) || ((c.coachAvg ?? -1e9) - (a.coachAvg ?? -1e9)));
             outB[b] = { pooled, cells };
         }
         dimensions[dim] = outB;
+        // A dimension with fewer than 2 populated buckets cannot separate anything: its cells just repeat the overall result.
+        // Keep it visible, but do NOT let it inflate the cell counts / "holds" tally / luck estimate.
+        if (Object.keys(outB).length < 2) { if (Object.keys(outB).length === 1) degenerateDimensions.push({ dimension: dim, onlyBucket: Object.keys(outB)[0] }); }
+        else allCells.push(...cellsOfDim);
     }
     const q = allCells.filter(c => c.qualifies), tq = q.filter(c => c.testable);
     const byAvg = (a, c) => (c.coachAvg ?? -1e9) - (a.coachAvg ?? -1e9);
@@ -151,7 +168,7 @@ function computeRegimeStudy(tagged, opts = {}) {
     for (const c of q.filter(x => x.holds)) holdBy.set(c.source, (holdBy.get(c.source) || 0) + 1);
     const holdingTriggers = [...holdBy.entries()].map(([source, cells]) => ({ source, cells })).sort((a, b) => b.cells - a.cells);
     return {
-        params: { declusterMin: opts.declusterMin ?? 30, minN, minDays, minHalfN },
+        params: { declusterMin: opts.declusterMin ?? 30, minN, minDays, minHalfN }, degenerateDimensions,
         keptEvents: kept.length, droppedByDeclustering: dropped, baseline: summarize(kept),
         cellsTested: allCells.length, qualifying: q.length, qualifyingTestable: tq.length,
         holdsBothHalves: q.filter(c => c.holds).length, expectedByLuckAlone: Math.round(tq.length * 0.25 * 10) / 10,
@@ -163,4 +180,4 @@ function computeRegimeStudy(tagged, opts = {}) {
     };
 }
 
-module.exports = { attachRegime, computeRegimeStudy, bucketAdx, bucketVix, bucketSession, bucketHealth, bucketLiveDay, bucketEngine, dayTypeOf, DIMENSIONS };
+module.exports = { attachRegime, computeRegimeStudy, bucketAdx, bucketVix, bucketSession, bucketHealth, bucketLiveDay, bucketEngine, bucketMtf, dayTypeOf, DIMENSIONS };

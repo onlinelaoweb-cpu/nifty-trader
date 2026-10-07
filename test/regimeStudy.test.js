@@ -40,4 +40,27 @@ const st = R.computeRegimeStudy(rows, { minN: 5, minDays: 3, minHalfN: 3 });
 assert.ok(st.dimensions.health['HEALTH HIGH (>=60)'], 'health bucket present');
 assert.ok(st.dimensions.engine['ENGINE WAIT'], 'engine bucket present');
 assert.ok(!st.dimensions.liveDay || Object.keys(st.dimensions.liveDay).length === 0, 'null liveDay skipped');
+
+// ── mtf buckets ──
+assert.strictEqual(R.bucketMtf('BUY CALL', 'BULLISH'), 'MTF AGREES'); assert.strictEqual(R.bucketMtf('BUY PUT', 'BEARISH'), 'MTF AGREES');
+assert.strictEqual(R.bucketMtf('BUY PUT', 'BULLISH'), 'MTF OPPOSES'); assert.strictEqual(R.bucketMtf('WAIT', 'BEARISH'), 'MTF WAIT');
+assert.strictEqual(R.bucketMtf(null, 'BULLISH'), null); assert.strictEqual(R.bucketMtf('BUY CALL', 'NEUTRAL'), null);
+// attachRegime carries mtf from the snapshot's mtf_signal
+out = R.attachRegime(fires, [{ ts: t0 - 60000, vix: 14, mtf_15m_adx: 27, signal: 'WAIT', mtf_signal: 'BUY CALL' }], [], { adxTf: '15m' });
+assert.strictEqual(out.rows[0].regime.mtf, 'MTF AGREES'); assert.strictEqual(out.rows[0].regime.engine, 'ENGINE WAIT'); assert.strictEqual(out.coverage.withMtf, 1);
+
+// ── degenerate dimension: one bucket only -> shown, but kept out of cell counts / luck estimate ──
+const rows2 = [];
+for (let d = 1; d <= 8; d++) for (let k = 0; k < 6; k++) {
+    const ts = Date.UTC(2026, 9, d, 5, 30) + k * 3600000;
+    rows2.push({ id: d * 100 + k, source: 'A', direction: 'BULLISH', fire_ts: ts, result: 'WIN', coach_result: 4,
+        regime: { adx: k % 2 ? 'TREND (>=25)' : 'RANGE (<20)', vix: null, session: null, dayType: null, health: null, liveDay: null,
+                  engine: 'ENGINE WAIT',                                  // single bucket -> degenerate
+                  mtf: k % 2 ? 'MTF AGREES' : 'MTF WAIT' } });          // two buckets -> counted
+}
+const st2 = R.computeRegimeStudy(rows2, { minN: 5, minDays: 3, minHalfN: 3, declusterMin: 30 });
+assert.deepStrictEqual(st2.degenerateDimensions, [{ dimension: 'engine', onlyBucket: 'ENGINE WAIT' }]);
+assert.ok(st2.dimensions.engine['ENGINE WAIT'], 'degenerate dimension is still shown');
+assert.strictEqual(st2.cellsTested, 4, 'adx(2 cells)+mtf(2 cells) counted; engine excluded');
+assert.ok(!st2.holding.some(c => c.dimension === 'engine') && !st2.best.some(c => c.dimension === 'engine'));
 console.log('regimeStudy: all tests passed');
