@@ -13515,6 +13515,8 @@ app.get('/api/regime-study', async (req, res) => {
                 'dayType is a HINDSIGHT tag (TREND DAY if |close-open|/(high-low) >= 0.5): it cannot be known at fire time, so use it only to understand WHY a trigger worked, not as a filter. Today (day still forming) is never tagged.',
                 'Each cell = one trigger in one bucket. vsBucket = the cell\'s average minus the average of ALL triggers in that bucket. With ~12 triggers x ~11 buckets some cells look good by luck: compare holdsBothHalves with expectedByLuckAlone (25% of qualifyingTestable). A cell that HOLDS in both halves AND beats its bucket is the only kind worth a closer look.',
                 'verdict UNTESTABLE = premium results exist for only one half of the days (the simulation started later) — not a failure.',
+                'Every bucket shows coachCoveragePct (how many of its events have a premium result) and thinPremium (under 20 results): a bucket average resting on a handful of results means nothing. VIX especially tracks the CALENDAR (the older, low-VIX weeks have almost no premium results), so a VIX bucket is mostly an older-vs-newer comparison.',
+                'Cells overlap, so read independentHoldingTriggers (distinct triggers) rather than holdsBothHalves: one trigger that is positive in every slicing shows up as several HOLDS cells.',
             ],
         });
     } catch (e) {

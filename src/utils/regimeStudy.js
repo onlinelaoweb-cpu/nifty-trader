@@ -99,7 +99,10 @@ function computeRegimeStudy(tagged, opts = {}) {
         for (const e of kept) { const b = e.regime[dim]; if (b) (buckets.get(b) || buckets.set(b, []).get(b)).push(e); }
         const outB = {};
         for (const [b, list] of buckets) {
-            const pooled = summarize(list), cellsBySrc = new Map();
+            const pooled0 = summarize(list), cellsBySrc = new Map();
+            // How much premium data stands behind the bucket's average? A bucket of 122 events with 6 premium results (the real
+            // VIX-LOW case on 7 Oct: the premium simulation did not exist yet in that older period) must not read as a +20% finding.
+            const pooled = { ...pooled0, coachCoveragePct: pooled0.n ? r1(100 * pooled0.coachN / pooled0.n) : null, thinPremium: pooled0.coachN < 20 };
             for (const e of list) (cellsBySrc.get(e.src) || cellsBySrc.set(e.src, []).get(e.src)).push(e);
             const cells = [];
             for (const [src, evs] of cellsBySrc) {
@@ -121,11 +124,18 @@ function computeRegimeStudy(tagged, opts = {}) {
     }
     const q = allCells.filter(c => c.qualifies), tq = q.filter(c => c.testable);
     const byAvg = (a, c) => (c.coachAvg ?? -1e9) - (a.coachAvg ?? -1e9);
+    // The same fire sits in one bucket of EVERY dimension, so cells overlap: one trigger that is positive everywhere shows up as
+    // several "HOLDS" cells (on 7 Oct: three cells, all Brahmastra). Count distinct triggers, not cells, as the independent evidence.
+    const holdBy = new Map();
+    for (const c of q.filter(x => x.holds)) holdBy.set(c.source, (holdBy.get(c.source) || 0) + 1);
+    const holdingTriggers = [...holdBy.entries()].map(([source, cells]) => ({ source, cells })).sort((a, b) => b.cells - a.cells);
     return {
         params: { declusterMin: opts.declusterMin ?? 30, minN, minDays, minHalfN },
         keptEvents: kept.length, droppedByDeclustering: dropped, baseline: summarize(kept),
         cellsTested: allCells.length, qualifying: q.length, qualifyingTestable: tq.length,
         holdsBothHalves: q.filter(c => c.holds).length, expectedByLuckAlone: Math.round(tq.length * 0.25 * 10) / 10,
+        holdingTriggers, independentHoldingTriggers: holdingTriggers.length,
+        luckNote: 'Cells overlap (a fire is in one bucket of every dimension), so holdsBothHalves overstates independent evidence — compare independentHoldingTriggers (distinct triggers) with the luck estimate, and only trust a result that is not just one trigger repeated.',
         best: q.slice().sort(byAvg).slice(0, topK), worst: q.slice().sort((a, c) => -byAvg(a, c)).slice(0, topK),
         holding: q.filter(c => c.holds).sort(byAvg).slice(0, topK),
         dimensions,
