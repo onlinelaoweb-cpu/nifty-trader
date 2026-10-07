@@ -8,6 +8,10 @@
 //   adx   — ADX of the chosen timeframe (default 15m):  RANGE (<20) · WEAK (20-25) · TREND (>=25)
 //   vix   — VIX:                                         LOW (<13) · MID (13-15) · HIGH (>=15)   (15 = the app's ELEVATED tier)
 //   session — IST time of day:                           OPEN 09:15-10:30 · MID 10:30-13:30 · LATE 13:30-15:30
+// 8 Oct — three more tradable-at-fire-time dimensions, read from the same snapshot (so no hindsight):
+//   health  — the Insights tab's Market Health score (0-100):   LOW (<40) · MID (40-60) · HIGH (>=60)      [needs health_total column; fills from 8 Oct]
+//   liveDay — the Insights tab's live Trend-vs-Range probability: RANGE-LIKE (range>=60) · TREND-LIKE (trend>=60) · UNCLEAR   [fills from 8 Oct]
+//   engine  — what the Main Engine said at that moment vs the trigger's direction: AGREES · WAIT · OPPOSES   [works on all history]
 // and with ONE hindsight tag (research only — NOT knowable at fire time):
 //   dayType — from that day's OHLC (nifty_daily_history): TREND DAY if |close-open| / (high-low) >= 0.5, else RANGE DAY.
 //
@@ -23,6 +27,20 @@ const r1 = v => v === null ? null : Math.round(v * 10) / 10;
 
 const bucketAdx = v => { const x = num(v); return x === null ? null : x < 20 ? 'RANGE (<20)' : x < 25 ? 'WEAK (20-25)' : 'TREND (>=25)'; };
 const bucketVix = v => { const x = num(v); return x === null || x <= 0 ? null : x < 13 ? 'LOW (<13)' : x < 15 ? 'MID (13-15)' : 'HIGH (>=15)'; };
+const bucketHealth = v => { const x = num(v); return x === null ? null : x < 40 ? 'HEALTH LOW (<40)' : x < 60 ? 'HEALTH MID (40-60)' : 'HEALTH HIGH (>=60)'; };
+function bucketLiveDay(trend, range) {
+    const t = num(trend), r = num(range);
+    if (t === null && r === null) return null;
+    return (r !== null && r >= 60) ? 'RANGE-LIKE (range>=60)' : (t !== null && t >= 60) ? 'TREND-LIKE (trend>=60)' : 'UNCLEAR';
+}
+function bucketEngine(signal, direction) {
+    if (!signal) return null;
+    const sig = String(signal).toUpperCase();
+    if (sig === 'WAIT') return 'ENGINE WAIT';
+    const want = direction === 'BULLISH' ? 'BUY CALL' : direction === 'BEARISH' ? 'BUY PUT' : null;
+    if (!want || (sig !== 'BUY CALL' && sig !== 'BUY PUT')) return null;
+    return sig === want ? 'ENGINE AGREES' : 'ENGINE OPPOSES';
+}
 function bucketSession(ms) {
     const d = new Date(ms + IST_MS), m = d.getUTCHours() * 60 + d.getUTCMinutes();
     if (m >= 555 && m < 630) return 'OPEN 09:15-10:30';
@@ -41,11 +59,12 @@ function dayTypeOf(row) {
 function attachRegime(fires, snapshots, dailyRows, opts = {}) {
     const adxCol = { '5m': 'mtf_5m_adx', '15m': 'mtf_15m_adx', '1h': 'mtf_1h_adx' }[opts.adxTf || '15m'] || 'mtf_15m_adx';
     const maxGap = (opts.maxGapMin ?? 10) * 60000;
-    const snaps = (snapshots || []).map(s => ({ ts: typeof s.ts === 'number' ? s.ts : Date.parse(s.ts), vix: num(s.vix), adx: num(s[adxCol]) }))
+    const snaps = (snapshots || []).map(s => ({ ts: typeof s.ts === 'number' ? s.ts : Date.parse(s.ts), vix: num(s.vix), adx: num(s[adxCol]),
+            health: num(s.health_total), trendProb: num(s.trend_prob), rangeProb: num(s.range_prob), signal: s.signal || null }))
         .filter(s => Number.isFinite(s.ts)).sort((a, b) => a.ts - b.ts);
     const dayMap = new Map(); for (const d of dailyRows || []) { const t = dayTypeOf(d); if (t && d.date) dayMap.set(String(d.date).slice(0, 10), t); }
     const out = []; const gaps = [];
-    const cov = { fires: 0, withSnapshot: 0, withAdx: 0, withVix: 0, withDayType: 0 };
+    const cov = { fires: 0, withSnapshot: 0, withAdx: 0, withVix: 0, withDayType: 0, withHealth: 0, withLiveDay: 0, withEngine: 0 };
     let j = 0;
     const sorted = (fires || []).map(f => ({ ...f, _ts: typeof f.fire_ts === 'number' ? f.fire_ts : Date.parse(f.fire_ts) })).filter(f => Number.isFinite(f._ts)).sort((a, b) => a._ts - b._ts);
     for (const f of sorted) {
@@ -55,11 +74,13 @@ function attachRegime(fires, snapshots, dailyRows, opts = {}) {
         if (s) { cov.withSnapshot++; gaps.push((f._ts - s.ts) / 60000); }
         const adx = s ? bucketAdx(s.adx) : null, vix = s ? bucketVix(s.vix) : null;
         if (adx) cov.withAdx++; if (vix) cov.withVix++;
+        const health = s ? bucketHealth(s.health) : null, liveDay = s ? bucketLiveDay(s.trendProb, s.rangeProb) : null, engine = s ? bucketEngine(s.signal, f.direction) : null;
+        if (health) cov.withHealth++; if (liveDay) cov.withLiveDay++; if (engine) cov.withEngine++;
         const dk = dayKey(f._ts);
         const dayType = opts.todayKey && dk >= opts.todayKey ? null : (dayMap.get(dk) || null);   // today's candle is still forming
         if (dayType) cov.withDayType++;
         out.push({ id: f.id, source: f.source, direction: f.direction, fire_ts: f._ts, result: f.result, coach_result: f.coach_result,
-                   regime: { adx, vix, session: bucketSession(f._ts), dayType } });
+                   regime: { adx, vix, session: bucketSession(f._ts), dayType, health, liveDay, engine } });
     }
     gaps.sort((a, b) => a - b);
     cov.medianGapMin = gaps.length ? r1(gaps[gaps.length >> 1]) : null;
@@ -70,7 +91,7 @@ function attachRegime(fires, snapshots, dailyRows, opts = {}) {
     return { rows: out, coverage: cov };
 }
 
-const DIMENSIONS = ['adx', 'vix', 'session', 'dayType'];
+const DIMENSIONS = ['adx', 'vix', 'session', 'dayType', 'health', 'liveDay', 'engine'];
 
 function computeRegimeStudy(tagged, opts = {}) {
     const declusterMs = (opts.declusterMin ?? 30) * 60000;
@@ -142,4 +163,4 @@ function computeRegimeStudy(tagged, opts = {}) {
     };
 }
 
-module.exports = { attachRegime, computeRegimeStudy, bucketAdx, bucketVix, bucketSession, dayTypeOf, DIMENSIONS };
+module.exports = { attachRegime, computeRegimeStudy, bucketAdx, bucketVix, bucketSession, bucketHealth, bucketLiveDay, bucketEngine, dayTypeOf, DIMENSIONS };
