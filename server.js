@@ -114,6 +114,8 @@ const regimeLib = require('./src/utils/regimeStudy');   // 7 Oct — do triggers
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
 const { classicCandidate, blockedByNewGates, createClassicTracker, buildClassicMessage, toDir: classicToDir, roundTo: classicRoundTo, NEW_GATE_LABELS: CLASSIC_GATE_LABELS } = require('./src/utils/niftyClassic');
+const { createNiftyAlertPolicy } = require('./src/utils/niftyAlertPolicy');   // 7 Oct — NIFTY live-alert allowlist / early-session block / daily cap
+const niftyAlertPolicy = createNiftyAlertPolicy();
 const NIFTY_CLASSIC_ENABLED  = String(process.env.NIFTY_CLASSIC || 'on').toLowerCase() !== 'off';           // off → no logging, no alerts
 const NIFTY_CLASSIC_TELEGRAM = String(process.env.NIFTY_CLASSIC_TELEGRAM || 'on').toLowerCase() !== 'off'; // off → log + track only
 const NIFTY_CLASSIC_MAX_ALERTS_PER_DAY = Math.max(0, parseInt(process.env.NIFTY_CLASSIC_MAX_ALERTS_PER_DAY ?? '4', 10) || 0);
@@ -5357,6 +5359,7 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
     const direction = normalizeTriggerDirection(rawDirection);
     if (!direction) return sendRawMessage(msg);   // undirected / untracked alert — unchanged
     let finalMsg = msg;
+    let countPolicyLive = false;   // 7 Oct — set only when a NIFTY alert passes the live-alert policy and actually reaches Telegram
     try {
         if (!_scorecardLoadedAt) await refreshTriggerScorecard();
         const key = `${instrument}|${source}`;
@@ -5404,15 +5407,31 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
         finalMsg = footerIdx >= 0
             ? [...parts.slice(0, footerIdx), block, ...parts.slice(footerIdx)].join('\n')
             : `${msgBody}\n${block}`;
+        // 7 Oct — NIFTY live-alert policy (allowlist + no live alerts before 10:30 + daily cap, see niftyAlertPolicy.js).
+        // A blocked alert goes to the batched digest (or is only logged when EXPLORATORY_DIGEST=off). It is ALWAYS still
+        // logged, tracked and scored — only the instant Telegram delivery changes. NIFTY_ALERT_POLICY=off restores old behaviour.
+        if (instrument === 'NIFTY') {
+            const pol = niftyAlertPolicy.decide(source, now);
+            if (!pol.live) {
+                niftyAlertPolicy.recordDigested(now);
+                console.log(`🚦 [Alert policy] NIFTY ${source} ${direction} not sent live — ${pol.reason} — still tracked`);
+                if (DIGEST_ENABLED) queueDigestItem(instrument, source, direction, card, agree, disagree, liqInfo);
+                return;
+            }
+            countPolicyLive = pol.counted;
+        }
         // 5 Oct — unproven trigger -> hold for the digest instead of alerting one by one (see DIGEST_* above)
         if (DIGEST_ENABLED && !DIGEST_EXEMPT.has(source) && (card?.coachN || 0) < DIGEST_MIN_TRADES) {
+            countPolicyLive = false;   // went to the digest, not an instant alert
             queueDigestItem(instrument, source, direction, card, agree, disagree, liqInfo);
             return;
         }
     } catch (e) {
         console.warn('[Trigger Alert] scoring error, sending plain alert:', e.message);
         finalMsg = msg;
+        countPolicyLive = false;
     }
+    if (countPolicyLive) niftyAlertPolicy.recordLive();
     return sendRawMessage(finalMsg);
 }
 
@@ -13235,6 +13254,9 @@ async function queryNiftyClassicBuckets() {
     const logged = await dbPool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE live_fired)::int AS live_fired, COUNT(*) FILTER (WHERE NOT live_fired)::int AS held_back FROM nifty_classic_log`);
     return { rows, logged: logged.rows[0] };
 }
+
+// 7 Oct — current NIFTY live-alert policy + today's counters (read-only).
+app.get('/api/alert-policy', (req, res) => res.json({ success: true, nifty: niftyAlertPolicy.status() }));
 
 app.get('/api/nifty-classic-accuracy', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
