@@ -6674,7 +6674,15 @@ async function checkTelegramAlerts(newSignal) {
         // isFull3 true), which doesn't match ANY of the score>=2 branches
         // below (send OR suppress-log), so it fell through completely
         // silently. This makes that always visible going forward.
-        console.log(`[MTF] leadQuality: ${leadQuality.label} (score:${leadQuality.score}/4 — full3:${isFull3} delta:${deltaMatches} highConf:${highConf} mainConfluence:${mainConfluence})`);
+        // 7 Oct: this line printed once per WebSocket tick (~1/second, thousands per session) and buried every real
+        // log line. Now: print only when the verdict CHANGES, plus a heartbeat every 5 minutes. Nothing else changed.
+        {
+            const _lqKey = `${leadQuality.label}|${leadQuality.score}|${isFull3}|${deltaMatches}|${highConf}|${mainConfluence}`;
+            if (_lqKey !== global._lqLastKey || Date.now() - (global._lqLastTs || 0) > 5 * 60 * 1000) {
+                global._lqLastKey = _lqKey; global._lqLastTs = Date.now();
+                console.log(`[MTF] leadQuality: ${leadQuality.label} (score:${leadQuality.score}/4 — full3:${isFull3} delta:${deltaMatches} highConf:${highConf} mainConfluence:${mainConfluence})`);
+            }
+        }
         marketState.momentumDecayWarning = checkMomentumDecay(
             marketState.mtf.signal, deltaPct, marketState.rsi,
             (marketState.nifty > marketState.vwap) ? 'ABOVE' : 'BELOW',
