@@ -110,6 +110,7 @@ const { computeNiftyContribution, fetchTopQuotes, quotesFromBreadth } = require(
 // 7 Oct — day audit + trigger-combination study (read-only research endpoints; pure helpers).
 const { computeComboStudy, computeTriggerStudy } = require('./src/utils/comboStudy');
 const dayAuditLib = require('./src/utils/dayAudit');
+const regimeLib = require('./src/utils/regimeStudy');   // 7 Oct — do triggers work in some regimes and fail in others?
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
 const { classicCandidate, blockedByNewGates, createClassicTracker, buildClassicMessage, toDir: classicToDir, roundTo: classicRoundTo, NEW_GATE_LABELS: CLASSIC_GATE_LABELS } = require('./src/utils/niftyClassic');
@@ -13468,6 +13469,52 @@ app.get('/api/trigger-study', async (req, res) => {
                 'vsBaseline = the trigger\'s average minus the average of ALL fires of that instrument. vsMixBaseline = minus what an average fire with the SAME bullish/bearish mix earned: if the market trended, bullish fires get a tailwind that has nothing to do with the trigger, and `lopsided: true` (80%+ one direction) marks the triggers most affected.',
                 'dirHolds (informational) repeats the half-check on the 30-min WIN/LOSS direction results, which cover the whole window even where premium results do not; it ignores FLAT outcomes and is also helped by a trending market.',
                 'Brahmastra fires because other triggers agreed, so it is not an independent trigger — read it as a combination.',
+            ],
+        });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// 7 Oct — REGIME STUDY (NIFTY): do the triggers work in some market regimes and fail in others? Every NIFTY fire is tagged
+// with the regime AT FIRE TIME from the 5-minute market_snapshot_log (ADX, VIX, time of day) plus one HINDSIGHT tag
+// (trend day / range day, from that day's OHLC) — then each trigger is scored per regime with the same safeguards as the other
+// studies (de-clustered, distinct days, older/newer half, luck estimate). The response also reports COVERAGE: how many fires
+// could be matched to a snapshot — so you can see how much data this has to work with.
+// /api/regime-study?days=90 &adx=15m|5m|1h &minN=20 &minDays=4 &minHalfN=10 &gap=10
+// READ-ONLY research — nothing here feeds signals, gates or alerts. NIFTY only (Crude/Bitcoin have no periodic snapshot log).
+app.get('/api/regime-study', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const days = clampInt(req.query.days, 90, 1, 365), minN = clampInt(req.query.minN, 20, 5, 500), minDays = clampInt(req.query.minDays, 4, 1, 60), gap = clampInt(req.query.gap, 10, 1, 60), minHalfN = clampInt(req.query.minHalfN, 10, 3, 100);
+        const adxTf = ['5m', '15m', '1h'].includes(String(req.query.adx)) ? String(req.query.adx) : '15m';
+        const fires = await dbPool.query(`
+            SELECT id, source, direction, fire_ts, result,
+                   CASE WHEN entry_strike IS NOT NULL THEN coach_result END AS coach_result
+            FROM signal_outcomes
+            WHERE instrument = 'NIFTY' AND direction IN ('BULLISH','BEARISH') AND fire_ts >= NOW() - ($1::int * INTERVAL '1 day')
+            ORDER BY fire_ts ASC, id ASC LIMIT 60000`, [days]);
+        const snaps = await dbPool.query(`
+            SELECT ts, vix, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx FROM market_snapshot_log
+            WHERE ts >= NOW() - (($1::int + 1) * INTERVAL '1 day') ORDER BY ts ASC LIMIT 100000`, [days]);
+        const daily = await dbPool.query(`
+            SELECT to_char(date, 'YYYY-MM-DD') AS date, open, high, low, close FROM nifty_daily_history
+            WHERE date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date - ($1::int + 1)`, [days]);
+        const todayKey = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        const { rows, coverage } = regimeLib.attachRegime(fires.rows, snaps.rows, daily.rows, { adxTf, maxGapMin: gap, todayKey });
+        const study = regimeLib.computeRegimeStudy(rows, { minN, minDays, minHalfN, declusterMin: 30 });
+        const pct = (a, b) => b ? Math.round((1000 * a) / b) / 10 : null;
+        res.json({
+            success: true, instrument: 'NIFTY', days, adxTimeframe: adxTf,
+            coverage: { ...coverage, snapshotMatchPct: pct(coverage.withSnapshot, coverage.fires), adxPct: pct(coverage.withAdx, coverage.fires), vixPct: pct(coverage.withVix, coverage.fires), dayTypePct: pct(coverage.withDayType, coverage.fires), maxGapMin: gap },
+            study,
+            howToRead: [
+                'Regime is read at the moment each trigger fired, from the latest 5-minute snapshot at or before the fire (never from later data). Fires with no snapshot within <gap> minutes get no ADX/VIX bucket and are simply left out of those tables — see `coverage` for how many.',
+                'ADX buckets: RANGE (<20), WEAK (20-25), TREND (>=25). VIX: LOW (<13), MID (13-15), HIGH (>=15). Session (IST): OPEN 09:15-10:30, MID 10:30-13:30, LATE 13:30-15:30.',
+                'dayType is a HINDSIGHT tag (TREND DAY if |close-open|/(high-low) >= 0.5): it cannot be known at fire time, so use it only to understand WHY a trigger worked, not as a filter. Today (day still forming) is never tagged.',
+                'Each cell = one trigger in one bucket. vsBucket = the cell\'s average minus the average of ALL triggers in that bucket. With ~12 triggers x ~11 buckets some cells look good by luck: compare holdsBothHalves with expectedByLuckAlone (25% of qualifyingTestable). A cell that HOLDS in both halves AND beats its bucket is the only kind worth a closer look.',
+                'verdict UNTESTABLE = premium results exist for only one half of the days (the simulation started later) — not a failure.',
             ],
         });
     } catch (e) {
