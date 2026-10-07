@@ -103,9 +103,13 @@ function computeComboStudy(rows, opts = {}) {
         const older = kept.filter(e => e.day < cut), newer = kept.filter(e => e.day >= cut);
         const so = summarize(older), sn = summarize(newer);
         const qualifies = stats.n >= minN && stats.days >= minDays && stats.coachN >= Math.min(minN, 10);
-        const holds = qualifies && dayList.length >= 2 && so.coachN >= minHalfN && sn.coachN >= minHalfN && so.coachAvg > 0 && sn.coachAvg > 0;
+        // "testable" = BOTH halves have enough premium results to judge. When the premium simulation only exists for
+        // the newer days (it started later than the direction tracking), a combo cannot be tested — that is NOT the same as failing.
+        const testable = qualifies && dayList.length >= 2 && so.coachN >= minHalfN && sn.coachN >= minHalfN;
+        const holds = testable && so.coachAvg > 0 && sn.coachAvg > 0;
         out.push({
-            combo: key.split(' | ')[0], direction: key.split(' | ')[1], size: c.sources.length, ...stats, qualifies, holds,
+            combo: key.split(' | ')[0], direction: key.split(' | ')[1], size: c.sources.length, ...stats, qualifies, testable, holds,
+            verdict: !qualifies ? 'TOO FEW' : !testable ? 'UNTESTABLE (premium results cover only one half)' : holds ? 'HOLDS' : 'FAILS',
             olderHalf: { n: so.n, coachN: so.coachN, coachAvg: so.coachAvg, dirWinPct: so.dirWinPct },
             newerHalf: { n: sn.n, coachN: sn.coachN, coachAvg: sn.coachAvg, dirWinPct: sn.dirWinPct },
         });
@@ -119,8 +123,9 @@ function computeComboStudy(rows, opts = {}) {
         params: { windowMin: windowMin(opts), declusterMin: opts.declusterMin ?? 30, minN, minDays, sizes, exclude: [...exclude] },
         fires: data.length, days: baseline.days, baseline,
         perSource: Object.fromEntries(Object.entries(bySource).map(([k, v]) => [k, summarize(v)])),
-        combosTested: out.length, qualifying: q.length, holdsBothHalves: holdsCount,
-        expectedByLuckAlone: Math.round(q.length * 0.25 * 10) / 10,   // P(both halves positive | no edge) ≈ 1/4
+        combosTested: out.length, qualifying: q.length, qualifyingTestable: q.filter(x => x.testable).length, holdsBothHalves: holdsCount,
+        // P(both halves positive | no edge) ≈ 1/4 — and only combos that CAN be tested can pass, so only they count
+        expectedByLuckAlone: Math.round(q.filter(x => x.testable).length * 0.25 * 10) / 10,
         droppedByDeclustering: droppedByCluster,
         best, worst,
         holding: q.filter(x => x.holds).sort(byAvg).slice(0, topK),
@@ -140,7 +145,8 @@ function windowMin(o) { return o.windowMin ?? 10; }
 // Display/research only. PURE.
 function computeTriggerStudy(rows, opts = {}) {
     const declusterMs = (opts.declusterMin ?? 30) * 60000;
-    const minN = opts.minN ?? 30, minDays = opts.minDays ?? 4, minHalfN = opts.minHalfN ?? 10;
+    const minN = opts.minN ?? 30, minDays = opts.minDays ?? 4, minHalfN = opts.minHalfN ?? 10, minHalfDirN = opts.minHalfDirN ?? 8;
+    const LOPSIDED_PCT = 80;
     const data = [];
     for (const r of rows || []) {
         const ts = typeof r.fire_ts === 'number' ? r.fire_ts : Date.parse(r.fire_ts);
@@ -149,6 +155,9 @@ function computeTriggerStudy(rows, opts = {}) {
     }
     data.sort((a, b) => a.ts - b.ts || (a.id ?? 0) - (b.id ?? 0));
     const baselineRaw = summarize(data);
+    // What an AVERAGE fire of that instrument earned, by direction. If the market trended, bullish fires have a tailwind
+    // that has nothing to do with the trigger — so a trigger is also compared with a baseline of the SAME direction mix.
+    const baseBull = summarize(data.filter(d => d.dir === 'BULLISH')), baseBear = summarize(data.filter(d => d.dir === 'BEARISH'));
     const groups = new Map();
     for (const d of data) {
         const key = opts.bySide ? `${d.src} | ${d.dir}` : d.src;
@@ -164,19 +173,36 @@ function computeTriggerStudy(rows, opts = {}) {
         const cut = dayList[Math.floor(dayList.length / 2)];
         const so = summarize(kept.filter(e => e.day < cut)), sn = summarize(kept.filter(e => e.day >= cut));
         const qualifies = st.n >= minN && st.days >= minDays && st.coachN >= Math.min(minN, 10);
-        const holds = qualifies && dayList.length >= 2 && so.coachN >= minHalfN && sn.coachN >= minHalfN && so.coachAvg > 0 && sn.coachAvg > 0;
-        out.push({ source: g.source, direction: g.direction, rawFires: g.rows.length, ...st, qualifies, holds,
+        // premium-based check: needs enough premium results in BOTH halves; "can't test" is not "failed"
+        const testable = qualifies && dayList.length >= 2 && so.coachN >= minHalfN && sn.coachN >= minHalfN;
+        const holds = testable && so.coachAvg > 0 && sn.coachAvg > 0;
+        // direction-based check (informational): the 30-min WIN/LOSS tracking covers the whole window
+        const dirTestable = dayList.length >= 2 && so.dirN >= minHalfDirN && sn.dirN >= minHalfDirN;
+        const dirHolds = dirTestable && so.dirWinPct > 50 && sn.dirWinPct > 50;
+        const nb = kept.filter(e => e.dir === 'BULLISH').length, bullPct = kept.length ? r1(100 * nb / kept.length) : null;
+        // baseline with the same bullish/bearish mix as this trigger
+        let mixBase = null;
+        if (kept.length) {
+            const bb = baseBull.coachAvg, be = baseBear.coachAvg, wb = nb / kept.length;
+            if (wb === 1) mixBase = bb; else if (wb === 0) mixBase = be; else if (bb !== null && be !== null) mixBase = wb * bb + (1 - wb) * be;
+        }
+        out.push({ source: g.source, direction: g.direction, rawFires: g.rows.length, ...st, qualifies, testable, holds,
+            verdict: !qualifies ? 'TOO FEW' : !testable ? 'UNTESTABLE (premium results cover only one half)' : holds ? 'HOLDS' : 'FAILS',
+            dirTestable, dirHolds,
+            bullPct, lopsided: !opts.bySide && bullPct !== null && (bullPct >= LOPSIDED_PCT || bullPct <= 100 - LOPSIDED_PCT),
             vsBaseline: (st.coachAvg !== null && baselineRaw.coachAvg !== null) ? r1(st.coachAvg - baselineRaw.coachAvg) : null,
-            olderHalf: { n: so.n, coachN: so.coachN, coachAvg: so.coachAvg, dirWinPct: so.dirWinPct },
-            newerHalf: { n: sn.n, coachN: sn.coachN, coachAvg: sn.coachAvg, dirWinPct: sn.dirWinPct } });
+            vsMixBaseline: (st.coachAvg !== null && mixBase !== null) ? r1(st.coachAvg - mixBase) : null,
+            olderHalf: { n: so.n, coachN: so.coachN, coachAvg: so.coachAvg, dirN: so.dirN, dirWinPct: so.dirWinPct },
+            newerHalf: { n: sn.n, coachN: sn.coachN, coachAvg: sn.coachAvg, dirN: sn.dirN, dirWinPct: sn.dirWinPct } });
     }
     const byAvg = (a, b) => (b.coachAvg ?? -1e9) - (a.coachAvg ?? -1e9);
-    const q = out.filter(x => x.qualifies);
+    const q = out.filter(x => x.qualifies), tq = q.filter(x => x.testable);
     return {
-        params: { declusterMin: opts.declusterMin ?? 30, minN, minDays, minHalfN, bySide: !!opts.bySide },
+        params: { declusterMin: opts.declusterMin ?? 30, minN, minDays, minHalfN, minHalfDirN, bySide: !!opts.bySide },
         fires: data.length, days: baselineRaw.days, baseline: baselineRaw,
-        triggersTested: out.length, qualifying: q.length, holdsBothHalves: q.filter(x => x.holds).length,
-        expectedByLuckAlone: Math.round(q.length * 0.25 * 10) / 10,
+        baselineBySide: { BULLISH: { n: baseBull.n, coachAvg: baseBull.coachAvg, dirWinPct: baseBull.dirWinPct }, BEARISH: { n: baseBear.n, coachAvg: baseBear.coachAvg, dirWinPct: baseBear.dirWinPct } },
+        triggersTested: out.length, qualifying: q.length, qualifyingTestable: tq.length, holdsBothHalves: q.filter(x => x.holds).length,
+        expectedByLuckAlone: Math.round(tq.length * 0.25 * 10) / 10,   // only triggers that CAN be tested can pass by luck
         droppedByDeclustering: dropped,
         triggers: out.slice().sort((a, b) => (b.qualifies - a.qualifies) || byAvg(a, b)),
     };

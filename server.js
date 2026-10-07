@@ -13426,7 +13426,7 @@ app.get('/api/combo-study', async (req, res) => {
             howToRead: [
                 'Event = a trigger fires and, in the previous <window> minutes, other triggers fired the SAME way. The event is scored with the LATER trigger\'s own 30-min result and Trade-Coach premium result.',
                 'Events of one combo closer than 30 min are merged (they would be the same market move counted twice). A combo needs minN events AND minDays distinct days to qualify.',
-                '"holds" = positive Trade-Coach average in BOTH the older and the newer half of the days. Even with no real edge about 1 combo in 4 passes that by luck: compare holdsBothHalves with expectedByLuckAlone. If they are close, there is no combination edge yet.',
+                '"holds" = positive Trade-Coach average in BOTH the older and the newer half of the days. verdict UNTESTABLE = one half has too few premium results (the premium simulation started later than the direction tracking) — that is not a failure. Even with no real edge about 1 testable combo in 4 passes by luck: compare holdsBothHalves with expectedByLuckAlone (counted over qualifyingTestable). If they are close, there is no combination edge yet.',
                 'Brahmastra is excluded by default (it fires because other triggers agreed — pairing it with its own members is circular). Pass exclude= to change.',
                 'Compare every combo with `baseline` (all fires) — a combo is only interesting if it clearly beats that.',
             ],
@@ -13463,8 +13463,10 @@ app.get('/api/trigger-study', async (req, res) => {
             success: true, days, instruments,
             howToRead: [
                 'Each trigger is scored on the Trade-Coach premium simulation of its own fires; fires of one trigger closer than 30 min are merged (the same market move counted once).',
-                '"holds" = positive average in BOTH the older and the newer half of the days. With K triggers tested, the best-looking one will almost always pass by chance: compare holdsBothHalves with expectedByLuckAlone.',
-                'vsBaseline = the trigger\'s average minus the average of ALL fires of that instrument. A trigger is only interesting if it beats that by a clear margin in both halves.',
+                'verdict: HOLDS = positive premium average in BOTH the older and the newer half of the days. FAILS = enough data in both halves and it did not hold. UNTESTABLE = the premium simulation only exists for one half of the days (it started later than the direction tracking), so nothing can be concluded — that is NOT a failure. TOO FEW = under minN events or minDays days.',
+                'expectedByLuckAlone counts only triggers that CAN be tested (25% of qualifyingTestable). Compare it with holdsBothHalves: if they are close there is no edge yet.',
+                'vsBaseline = the trigger\'s average minus the average of ALL fires of that instrument. vsMixBaseline = minus what an average fire with the SAME bullish/bearish mix earned: if the market trended, bullish fires get a tailwind that has nothing to do with the trigger, and `lopsided: true` (80%+ one direction) marks the triggers most affected.',
+                'dirHolds (informational) repeats the half-check on the 30-min WIN/LOSS direction results, which cover the whole window even where premium results do not; it ignores FLAT outcomes and is also helped by a trending market.',
                 'Brahmastra fires because other triggers agreed, so it is not an independent trigger — read it as a combination.',
             ],
         });
