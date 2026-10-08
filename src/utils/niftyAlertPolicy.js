@@ -10,6 +10,10 @@
 // Rules, in order (first match wins):
 //   1. NIFTY_ALERT_POLICY=off              -> everything live (old behaviour)
 //   2. source in NIFTY_POLICY_EXEMPT       -> live, not counted (default: Classic — it has its own daily cap)
+//   2b. source in NIFTY_LIVE_PRIORITY_SOURCES -> live, not counted, NEVER held by the early-session rule or the daily cap
+//                                             (default: Brahmastra — the one trigger with a consistent record; 8 Oct, so a
+//                                             proven signal is not blocked just because other alerts used up the cap).
+//                                             Set it to empty (NIFTY_LIVE_PRIORITY_SOURCES=) to switch this off.
 //   3. NIFTY_LIVE_ALERT_SOURCES            -> only these sources may be live (default: Brahmastra,Murarka).
 //                                             "ALL" disables just this rule.
 //   4. before NIFTY_NO_LIVE_BEFORE (IST)   -> digest (default 10:30)
@@ -42,6 +46,7 @@ function createNiftyAlertPolicy(env = process.env) {
     const allowAll = liveList.some(x => x.toUpperCase() === 'ALL');
     const liveSources = new Set(liveList);
     const exempt = new Set(parseList(env.NIFTY_POLICY_EXEMPT, 'Classic'));
+    const priority = new Set(parseList(env.NIFTY_LIVE_PRIORITY_SOURCES, 'Brahmastra'));
     const noLiveBeforeMin = parseHHMM(env.NIFTY_NO_LIVE_BEFORE, 10 * 60 + 30);
     const maxLive = parseIntOr(env.NIFTY_MAX_LIVE_ALERTS_PER_DAY, 3);
     const state = { day: null, live: 0, digested: 0 };
@@ -56,6 +61,7 @@ function createNiftyAlertPolicy(env = process.env) {
         rollDay(nowMs);
         if (!enabled) return { live: true, counted: false, reason: null };
         if (exempt.has(source)) return { live: true, counted: false, reason: null };
+        if (priority.has(source)) return { live: true, counted: false, reason: null };   // priority: bypasses allowlist, early hold and cap
         if (!allowAll && !liveSources.has(source)) {
             return { live: false, counted: false, reason: `${source} is not on the live allowlist (${[...liveSources].join(', ') || 'empty'})` };
         }
@@ -72,7 +78,7 @@ function createNiftyAlertPolicy(env = process.env) {
     function status(nowMs = Date.now()) {
         rollDay(nowMs);
         return {
-            enabled, liveSources: allowAll ? 'ALL' : [...liveSources], exempt: [...exempt],
+            enabled, liveSources: allowAll ? 'ALL' : [...liveSources], exempt: [...exempt], prioritySources: [...priority],
             noLiveBefore: hhmm(noLiveBeforeMin), maxLivePerDay: maxLive || 'no cap',
             today: { day: state.day, liveSent: state.live, sentToDigestByPolicy: state.digested },
         };

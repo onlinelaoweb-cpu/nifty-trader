@@ -111,6 +111,7 @@ const { computeNiftyContribution, fetchTopQuotes, quotesFromBreadth } = require(
 const { computeComboStudy, computeTriggerStudy } = require('./src/utils/comboStudy');
 const dayAuditLib = require('./src/utils/dayAudit');
 const regimeLib = require('./src/utils/regimeStudy');   // 7 Oct — do triggers work in some regimes and fail in others?
+const delayLib = require('./src/utils/coachDelayBacktest');   // 8 Oct — would waiting for confirmation before entering avoid the trades that go straight against us?
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
 const { classicCandidate, blockedByNewGates, createClassicTracker, buildClassicMessage, toDir: classicToDir, roundTo: classicRoundTo, NEW_GATE_LABELS: CLASSIC_GATE_LABELS } = require('./src/utils/niftyClassic');
@@ -1731,8 +1732,12 @@ function combineSignals(indicators) {
     // of picking a side, it adds or drags against whichever side the tally
     // already leads on other factors. Deliberately soft (±1 vote, same order
     // as Volume's base tier) since GEX is context, not a trigger by itself.
+    // 8 Oct — GEX vote is now OFF by default (env GEX_VOTE=on restores the old behaviour). Reason: the GEX number's scale is
+    // unverified (~₹5.7 lakh Cr vs a ±300 Cr threshold, so it fired on every tick) and its sign is PCR-like, so the vote was an
+    // always-on drag against the leading side. Greeks are still logged to market_snapshot_log for the regime study.
+    const gexVoteOn = String(process.env.GEX_VOTE || 'off').toLowerCase() === 'on';
     const gexData = marketState.optionGreeks;
-    if (gexData?.available) {
+    if (gexVoteOn && gexData?.available) {
         if (gexData.gexCr <= -300) {
             // Negative GEX: dealers net-short gamma → moves tend to amplify.
             // Supports whatever direction is already leading, doesn't create one.
@@ -9643,9 +9648,9 @@ async function initDB() {
             )
         `);
         // 8 Oct — Insights-tab readings saved with every 5-min snapshot so the regime study can test them against outcomes
-        // (Market Health score, live Trend/Range probability). Older rows stay NULL. Additive only; failure is harmless
+        // (Market Health score, live Trend/Range probability, Option-Greeks GEX / Gamma Flip / Max Gamma strike). Older rows stay NULL. Additive only; failure is harmless
         // (saveMarketSnapshot falls back to the original columns).
-        for (const col of ['health_total INT', 'trend_prob INT', 'range_prob INT']) {
+        for (const col of ['health_total INT', 'trend_prob INT', 'range_prob INT', 'gex_cr NUMERIC', 'gamma_flip INT', 'max_gamma_strike INT']) {
             await dbPool.query(`ALTER TABLE market_snapshot_log ADD COLUMN IF NOT EXISTS ${col}`).catch(e => console.warn('[snapshot] add column failed:', e.message));
         }
         console.log('✅ PostgreSQL market_snapshot_log table ready');
@@ -10879,27 +10884,34 @@ async function saveMarketSnapshot() {
             s.pcr, s.atmPcr, s.mtf?.signal ?? null,
             s.mtf?.tf5m?.adx ?? null, s.mtf?.tf15m?.adx ?? null, s.mtf?.tf1h?.adx ?? null
         ];
-        // 8 Oct — also store Market Health + live Trend/Range probability (see ALTER above). If the extended insert ever
-        // fails (e.g. the columns could not be added), fall back to the original insert so snapshots never stop.
-        const intOrNull = v => (v === null || v === undefined || !Number.isFinite(Number(v))) ? null : Math.round(Number(v));
-        try {
-            await dbPool.query(
-                `INSERT INTO market_snapshot_log
-                  (signal, confidence, nifty, rsi, vix, pcr, atm_pcr, mtf_signal,
-                   mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, health_total, trend_prob, range_prob)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-                [...baseVals, intOrNull(s.marketHealth?.total), intOrNull(s.dayType?.trendProbability), intOrNull(s.dayType?.rangeProbability)]
-            );
-        } catch (e2) {
-            console.warn('[snapshot] extended insert failed, using original columns:', e2.message);
-            await dbPool.query(
-                `INSERT INTO market_snapshot_log
-                  (signal, confidence, nifty, rsi, vix, pcr, atm_pcr, mtf_signal,
-                   mtf_5m_adx, mtf_15m_adx, mtf_1h_adx)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-                baseVals
-            );
+        const BASE_COLS = 'signal, confidence, nifty, rsi, vix, pcr, atm_pcr, mtf_signal, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx';
+        // 8 Oct — also store Market Health + live Trend/Range probability + Option-Greeks readings (see ALTER above).
+        // Tiered insert: full set -> health set -> original columns, so a missing column can never stop snapshots.
+        const numOrNull = v => (v === null || v === undefined || !Number.isFinite(Number(v))) ? null : Number(v);
+        const intOrNull = v => { const x = numOrNull(v); return x === null ? null : Math.round(x); };
+        const g = s.optionGreeks && s.optionGreeks.available ? s.optionGreeks : null;
+        const healthVals = [intOrNull(s.marketHealth?.total), intOrNull(s.dayType?.trendProbability), intOrNull(s.dayType?.rangeProbability)];
+        const greeksVals = [g ? numOrNull(g.gexCr) : null, g ? intOrNull(g.gammaFlipLevel) : null, g ? intOrNull(g.maxGammaStrike) : null];
+        const attempts = [
+            { cols: BASE_COLS + ', health_total, trend_prob, range_prob, gex_cr, gamma_flip, max_gamma_strike', vals: [...baseVals, ...healthVals, ...greeksVals] },
+            { cols: BASE_COLS + ', health_total, trend_prob, range_prob', vals: [...baseVals, ...healthVals] },
+            { cols: BASE_COLS, vals: baseVals },
+        ];
+        let lastErr = null;
+        for (let i = 0; i < attempts.length; i++) {
+            const a = attempts[i];
+            try {
+                await dbPool.query(
+                    `INSERT INTO market_snapshot_log (${a.cols}) VALUES (${a.vals.map((_, k) => '$' + (k + 1)).join(',')})`,
+                    a.vals
+                );
+                return;
+            } catch (e2) {
+                lastErr = e2;
+                if (i < attempts.length - 1) console.warn('[snapshot] insert with extra columns failed, trying fewer columns:', e2.message);
+            }
         }
+        throw lastErr;
     } catch (e) {
         console.error('saveMarketSnapshot error:', e.message);
     }
@@ -12929,6 +12941,49 @@ app.get('/api/coach-grid-backtest', async (req, res) => {
     }
 });
 
+// ── Delayed-entry / confirmation backtest (8 Oct) ────────────────────────────
+// Read-only research. /api/coach-delay-backtest?instrument=NIFTY&source=&decluster=30&grid=LIVE|STANDARD|QUICK_SCALP|...&minHalfN=30
+// Replays the stored premium paths: "what if we waited 5/10/15 min and only entered if the premium had already moved our way?"
+// Nothing here feeds signals, gates or alerts. See src/utils/coachDelayBacktest.js for the method and its limits.
+app.get('/api/coach-delay-backtest', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const instrument = String(req.query.instrument || 'NIFTY').toUpperCase();
+        const params = [instrument];
+        let where = `o.coach_result IS NOT NULL AND o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = $1`;
+        if (req.query.source) { params.push(String(req.query.source)); where += ` AND o.source = $${params.length}`; }
+        const r = await dbPool.query(`
+            SELECT o.id, o.source, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
+            FROM signal_outcomes o
+            JOIN signal_outcome_path p ON p.outcome_id = o.id
+            WHERE ${where}
+            ORDER BY o.id, p.sample_ts ASC`, params);
+        const byId = new Map();
+        for (const row of r.rows) {
+            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, entryPremium: Number(row.entry_premium), fireTs: new Date(row.fire_ts).getTime(), path: [] });
+            byId.get(row.id).path.push({ ts: new Date(row.sample_ts).getTime(), premium: Number(row.premium) });
+        }
+        const gridName = String(req.query.grid || 'LIVE').toUpperCase();
+        const grid = gridName === 'LIVE' ? coachGridFor(instrument) : (COACH_GRID_CANDIDATES[gridName] || coachGridFor(instrument));
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const out = delayLib.computeDelayBacktest([...byId.values()], simulateTradeCoachCore, grid, {
+            declusterMin: clampInt(req.query.decluster, 30, 0, 240), minHalfN: clampInt(req.query.minHalfN, 30, 5, 500),
+        });
+        res.json({
+            success: true, instrument, source: req.query.source || 'ALL', gridUsed: grid, ...out,
+            howToRead: [
+                'Each variant = wait delayMin minutes after the signal, then enter only if the premium is at least confirmPctAboveEntry % above the signal\'s entry premium (null = always enter, i.e. the pure cost of waiting). The Trade-Coach grid is then followed from the NEW entry price.',
+                'delta = average result per signal FIRED with the variant (skipped = 0) minus the baseline average over the same signals. Positive = waiting would have helped on this data.',
+                'Look at skippedSignalsIfTheyHadBeenTaken: if its avg is clearly negative the filter really skips bad trades; if it is positive you are skipping winners. baselineOnSameEntered shows what the trades you DID enter would have made under the current rule.',
+                'A variant only counts if olderHalf.delta AND newerHalf.delta are both positive (verdict). 9 variants are tried, so one or two will look good by chance; a few days of one market regime is not proof. Paper-test any lead before it goes anywhere near a rule.',
+                'Path samples are ~5 minutes apart, so a 5-minute delay is one sample; real fills would be closer to the trigger level.',
+            ],
+        });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 app.get('/api/signal-outcomes', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
@@ -13546,17 +13601,22 @@ app.get('/api/regime-study', async (req, res) => {
             FROM signal_outcomes
             WHERE instrument = 'NIFTY' AND direction IN ('BULLISH','BEARISH') AND fire_ts >= NOW() - ($1::int * INTERVAL '1 day')
             ORDER BY fire_ts ASC, id ASC LIMIT 60000`, [days]);
-        // 8 Oct — also read signal (Main Engine at that moment) + health/trend/range columns; fall back to the old column set if they do not exist yet
-        let snaps;
-        try {
-            snaps = await dbPool.query(`
-                SELECT ts, vix, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, signal, mtf_signal, health_total, trend_prob, range_prob FROM market_snapshot_log
-                WHERE ts >= NOW() - (($1::int + 1) * INTERVAL '1 day') ORDER BY ts ASC LIMIT 100000`, [days]);
-        } catch (e3) {
-            snaps = await dbPool.query(`
-                SELECT ts, vix, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, signal, mtf_signal FROM market_snapshot_log
-                WHERE ts >= NOW() - (($1::int + 1) * INTERVAL '1 day') ORDER BY ts ASC LIMIT 100000`, [days]);
+        // 8 Oct — also read signal (Main Engine at that moment) + health/trend/range + Greeks columns; fall back to older column sets if they do not exist yet
+        const snapCols = [
+            'ts, nifty, vix, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, signal, mtf_signal, health_total, trend_prob, range_prob, gex_cr, gamma_flip, max_gamma_strike',
+            'ts, vix, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, signal, mtf_signal, health_total, trend_prob, range_prob',
+            'ts, vix, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, signal, mtf_signal',
+        ];
+        let snaps = null, snapErr = null;
+        for (const cols of snapCols) {
+            try {
+                snaps = await dbPool.query(`
+                    SELECT ${cols} FROM market_snapshot_log
+                    WHERE ts >= NOW() - (($1::int + 1) * INTERVAL '1 day') ORDER BY ts ASC LIMIT 100000`, [days]);
+                break;
+            } catch (e3) { snapErr = e3; }
         }
+        if (!snaps) throw snapErr;
         const daily = await dbPool.query(`
             SELECT to_char(date, 'YYYY-MM-DD') AS date, open, high, low, close FROM nifty_daily_history
             WHERE date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date - ($1::int + 1)`, [days]);
@@ -13566,7 +13626,7 @@ app.get('/api/regime-study', async (req, res) => {
         const pct = (a, b) => b ? Math.round((1000 * a) / b) / 10 : null;
         res.json({
             success: true, instrument: 'NIFTY', days, adxTimeframe: adxTf,
-            coverage: { ...coverage, snapshotMatchPct: pct(coverage.withSnapshot, coverage.fires), adxPct: pct(coverage.withAdx, coverage.fires), vixPct: pct(coverage.withVix, coverage.fires), dayTypePct: pct(coverage.withDayType, coverage.fires), healthPct: pct(coverage.withHealth, coverage.fires), liveDayPct: pct(coverage.withLiveDay, coverage.fires), enginePct: pct(coverage.withEngine, coverage.fires), mtfPct: pct(coverage.withMtf, coverage.fires), maxGapMin: gap },
+            coverage: { ...coverage, snapshotMatchPct: pct(coverage.withSnapshot, coverage.fires), adxPct: pct(coverage.withAdx, coverage.fires), vixPct: pct(coverage.withVix, coverage.fires), dayTypePct: pct(coverage.withDayType, coverage.fires), healthPct: pct(coverage.withHealth, coverage.fires), liveDayPct: pct(coverage.withLiveDay, coverage.fires), enginePct: pct(coverage.withEngine, coverage.fires), mtfPct: pct(coverage.withMtf, coverage.fires), gexPct: pct(coverage.withGex, coverage.fires), flipPct: pct(coverage.withFlip, coverage.fires), pinPct: pct(coverage.withPin, coverage.fires), maxGapMin: gap },
             study,
             howToRead: [
                 'Regime is read at the moment each trigger fired, from the latest 5-minute snapshot at or before the fire (never from later data). Fires with no snapshot within <gap> minutes get no ADX/VIX bucket and are simply left out of those tables — see `coverage` for how many.',
@@ -13577,6 +13637,7 @@ app.get('/api/regime-study', async (req, res) => {
                 'Every bucket shows coachCoveragePct (how many of its events have a premium result) and thinPremium (under 20 results): a bucket average resting on a handful of results means nothing. VIX especially tracks the CALENDAR (the older, low-VIX weeks have almost no premium results), so a VIX bucket is mostly an older-vs-newer comparison.',
                 'health / liveDay / engine (8 Oct): health = Insights Market Health at fire time (LOW <40, MID 40-60, HIGH >=60); liveDay = the live Trend-vs-Range probability (not the hindsight dayType); engine = Main Engine AGREES / WAIT / OPPOSES the trigger direction at that moment. health and liveDay start filling on 8 Oct (check healthPct / liveDayPct in coverage); engine works on all history. All three are knowable at fire time, so they can become real filters.',
                 'mtf (8 Oct): the 5m/15m/1h vote at fire time vs the trigger direction (AGREES / OPPOSES / WAIT). Unlike engine (Main Engine was WAIT on every fire so far) this has real variation. A dimension with only one populated bucket is listed in study.degenerateDimensions and is excluded from the cell counts and the luck estimate.',
+                'gex / flip / pin (8 Oct): Option-Greeks at fire time. gex = sign of total GEX (a PCR-like call-vs-put OI-gamma measure, so it is often a single bucket = degenerate); flip = spot below/above the app\'s Gamma Flip level (the app\'s flip is a cumulative-by-strike crossing, NOT the textbook flip price); pin = distance of spot from the Max Gamma strike (AT <=25pt, NEAR 25-75pt, FAR >75pt). They start filling after this deploy (check gexPct / flipPct / pinPct in coverage). Research only: GEX units/scale is unverified (see /api/option-greeks), so trust the buckets\' ordering, not the absolute GEX number.',
                 'Cells overlap, so read independentHoldingTriggers (distinct triggers) rather than holdsBothHalves: one trigger that is positive in every slicing shows up as several HOLDS cells.',
             ],
         });

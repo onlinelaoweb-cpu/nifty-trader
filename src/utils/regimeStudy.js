@@ -52,6 +52,21 @@ function bucketMtf(mtfSignal, direction) {
     if (!want || (sig !== 'BUY CALL' && sig !== 'BUY PUT')) return null;
     return sig === want ? 'MTF AGREES' : 'MTF OPPOSES';
 }
+// 8 Oct — Option-Greeks readings stored with every snapshot (gex_cr, gamma_flip, max_gamma_strike, spot).
+// NOTE: the GEX sign here is essentially "call-OI-weighted gamma minus put-OI-weighted gamma" (a PCR-like measure), so 'gex'
+// will usually be a single bucket (degenerate) while PCR < 1 — it is kept so that is visible, not assumed.
+const bucketGex = v => { const x = num(v); return x === null ? null : x >= 0 ? 'GEX POSITIVE' : 'GEX NEGATIVE'; };
+function bucketFlip(spot, flip) {
+    const sp = num(spot), fl = num(flip);
+    if (sp === null || fl === null || sp <= 0 || fl <= 0) return null;
+    return sp < fl ? 'SPOT BELOW FLIP' : 'SPOT ABOVE FLIP';
+}
+function bucketPin(spot, maxGamma) {
+    const sp = num(spot), mg = num(maxGamma);
+    if (sp === null || mg === null || sp <= 0 || mg <= 0) return null;
+    const d = Math.abs(sp - mg);
+    return d <= 25 ? 'AT MAX-GAMMA (<=25pt)' : d <= 75 ? 'NEAR MAX-GAMMA (25-75pt)' : 'FAR FROM MAX-GAMMA (>75pt)';
+}
 function bucketSession(ms) {
     const d = new Date(ms + IST_MS), m = d.getUTCHours() * 60 + d.getUTCMinutes();
     if (m >= 555 && m < 630) return 'OPEN 09:15-10:30';
@@ -71,11 +86,12 @@ function attachRegime(fires, snapshots, dailyRows, opts = {}) {
     const adxCol = { '5m': 'mtf_5m_adx', '15m': 'mtf_15m_adx', '1h': 'mtf_1h_adx' }[opts.adxTf || '15m'] || 'mtf_15m_adx';
     const maxGap = (opts.maxGapMin ?? 10) * 60000;
     const snaps = (snapshots || []).map(s => ({ ts: typeof s.ts === 'number' ? s.ts : Date.parse(s.ts), vix: num(s.vix), adx: num(s[adxCol]),
-            health: num(s.health_total), trendProb: num(s.trend_prob), rangeProb: num(s.range_prob), signal: s.signal || null, mtfSignal: s.mtf_signal || null }))
+            health: num(s.health_total), trendProb: num(s.trend_prob), rangeProb: num(s.range_prob), signal: s.signal || null, mtfSignal: s.mtf_signal || null,
+            spot: num(s.nifty), gexCr: num(s.gex_cr), flip: num(s.gamma_flip), maxGamma: num(s.max_gamma_strike) }))
         .filter(s => Number.isFinite(s.ts)).sort((a, b) => a.ts - b.ts);
     const dayMap = new Map(); for (const d of dailyRows || []) { const t = dayTypeOf(d); if (t && d.date) dayMap.set(String(d.date).slice(0, 10), t); }
     const out = []; const gaps = [];
-    const cov = { fires: 0, withSnapshot: 0, withAdx: 0, withVix: 0, withDayType: 0, withHealth: 0, withLiveDay: 0, withEngine: 0, withMtf: 0 };
+    const cov = { fires: 0, withSnapshot: 0, withAdx: 0, withVix: 0, withDayType: 0, withHealth: 0, withLiveDay: 0, withEngine: 0, withMtf: 0, withGex: 0, withFlip: 0, withPin: 0 };
     let j = 0;
     const sorted = (fires || []).map(f => ({ ...f, _ts: typeof f.fire_ts === 'number' ? f.fire_ts : Date.parse(f.fire_ts) })).filter(f => Number.isFinite(f._ts)).sort((a, b) => a._ts - b._ts);
     for (const f of sorted) {
@@ -88,11 +104,13 @@ function attachRegime(fires, snapshots, dailyRows, opts = {}) {
         const health = s ? bucketHealth(s.health) : null, liveDay = s ? bucketLiveDay(s.trendProb, s.rangeProb) : null, engine = s ? bucketEngine(s.signal, f.direction) : null;
         const mtf = s ? bucketMtf(s.mtfSignal, f.direction) : null;
         if (health) cov.withHealth++; if (liveDay) cov.withLiveDay++; if (engine) cov.withEngine++; if (mtf) cov.withMtf++;
+        const gex = s ? bucketGex(s.gexCr) : null, flip = s ? bucketFlip(s.spot, s.flip) : null, pin = s ? bucketPin(s.spot, s.maxGamma) : null;
+        if (gex) cov.withGex++; if (flip) cov.withFlip++; if (pin) cov.withPin++;
         const dk = dayKey(f._ts);
         const dayType = opts.todayKey && dk >= opts.todayKey ? null : (dayMap.get(dk) || null);   // today's candle is still forming
         if (dayType) cov.withDayType++;
         out.push({ id: f.id, source: f.source, direction: f.direction, fire_ts: f._ts, result: f.result, coach_result: f.coach_result,
-                   regime: { adx, vix, session: bucketSession(f._ts), dayType, health, liveDay, engine, mtf } });
+                   regime: { adx, vix, session: bucketSession(f._ts), dayType, health, liveDay, engine, mtf, gex, flip, pin } });
     }
     gaps.sort((a, b) => a - b);
     cov.medianGapMin = gaps.length ? r1(gaps[gaps.length >> 1]) : null;
@@ -103,7 +121,7 @@ function attachRegime(fires, snapshots, dailyRows, opts = {}) {
     return { rows: out, coverage: cov };
 }
 
-const DIMENSIONS = ['adx', 'vix', 'session', 'dayType', 'health', 'liveDay', 'engine', 'mtf'];
+const DIMENSIONS = ['adx', 'vix', 'session', 'dayType', 'health', 'liveDay', 'engine', 'mtf', 'gex', 'flip', 'pin'];
 
 function computeRegimeStudy(tagged, opts = {}) {
     const declusterMs = (opts.declusterMin ?? 30) * 60000;
@@ -180,4 +198,4 @@ function computeRegimeStudy(tagged, opts = {}) {
     };
 }
 
-module.exports = { attachRegime, computeRegimeStudy, bucketAdx, bucketVix, bucketSession, bucketHealth, bucketLiveDay, bucketEngine, bucketMtf, dayTypeOf, DIMENSIONS };
+module.exports = { attachRegime, computeRegimeStudy, bucketAdx, bucketVix, bucketSession, bucketHealth, bucketLiveDay, bucketEngine, bucketMtf, bucketGex, bucketFlip, bucketPin, dayTypeOf, DIMENSIONS };

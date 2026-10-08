@@ -5,20 +5,24 @@ const ist = (d, h, m) => Date.UTC(2026, 9, d, h, m) - 5.5 * 3600 * 1000;   // 20
 
 // defaults
 let p = createNiftyAlertPolicy({});
-assert.deepStrictEqual(p.decide('Brahmastra', ist(8, 11, 0)), { live: true, counted: true, reason: null });
+assert.deepStrictEqual(p.decide('Murarka', ist(8, 11, 0)), { live: true, counted: true, reason: null });
 assert.strictEqual(p.decide('Fast Momentum', ist(8, 11, 0)).live, false, 'not on allowlist');
-assert.strictEqual(p.decide('Brahmastra', ist(8, 9, 40)).live, false, 'before 10:30');
-assert.strictEqual(p.decide('Brahmastra', ist(8, 10, 29)).live, false, '10:29 still blocked');
-assert.strictEqual(p.decide('Brahmastra', ist(8, 10, 30)).live, true, '10:30 allowed');
+assert.strictEqual(p.decide('Murarka', ist(8, 9, 40)).live, false, 'before 10:30');
+assert.strictEqual(p.decide('Murarka', ist(8, 10, 29)).live, false, '10:29 still blocked');
+assert.strictEqual(p.decide('Murarka', ist(8, 10, 30)).live, true, '10:30 allowed');
+// priority source (Brahmastra): never held early, never capped, and does not use up the cap
+assert.deepStrictEqual(p.decide('Brahmastra', ist(8, 9, 40)), { live: true, counted: false, reason: null }, 'Brahmastra live even before 10:30');
 assert.strictEqual(p.decide('Classic', ist(8, 9, 20)).live, true, 'Classic exempt even early');
 assert.strictEqual(p.decide('Classic', ist(8, 9, 20)).counted, false, 'Classic not counted');
 
 // cap = 3, only recordLive counts
 p = createNiftyAlertPolicy({});
 for (let i = 0; i < 3; i++) { assert.strictEqual(p.decide('Murarka', ist(8, 11, i)).live, true); p.recordLive(ist(8, 11, i)); }
-const capped = p.decide('Brahmastra', ist(8, 12, 0));
+const capped = p.decide('Murarka', ist(8, 12, 0));
 assert.strictEqual(capped.live, false); assert.ok(/cap reached \(3\/3\)/.test(capped.reason));
 assert.strictEqual(p.decide('Classic', ist(8, 12, 0)).live, true, 'Classic unaffected by cap');
+assert.strictEqual(p.decide('Brahmastra', ist(8, 12, 0)).live, true, 'Brahmastra unaffected by cap (priority)');
+assert.strictEqual(p.decide('Fast Momentum', ist(8, 12, 0)).live, false, 'non-priority, non-allowlisted still blocked');
 // decide() alone never consumes the cap
 p = createNiftyAlertPolicy({});
 for (let i = 0; i < 10; i++) p.decide('Murarka', ist(8, 11, 0));
@@ -39,8 +43,17 @@ for (let i = 0; i < 50; i++) p.recordLive(ist(8, 11, 0));
 assert.strictEqual(p.decide('Fast Momentum', ist(8, 11, 1)).live, true, 'cap 0 = no cap');
 p = createNiftyAlertPolicy({ NIFTY_ALERT_POLICY: 'off' });
 assert.deepStrictEqual(p.decide('ORB', ist(8, 9, 16)), { live: true, counted: false, reason: null });
-p = createNiftyAlertPolicy({ NIFTY_LIVE_ALERT_SOURCES: '' });
-assert.strictEqual(p.decide('Brahmastra', ist(8, 11, 0)).live, false, 'empty allowlist = nothing live (except exempt)');
+p = createNiftyAlertPolicy({ NIFTY_LIVE_ALERT_SOURCES: '', NIFTY_LIVE_PRIORITY_SOURCES: '' });
+assert.strictEqual(p.decide('Brahmastra', ist(8, 11, 0)).live, false, 'empty allowlist + no priority = nothing live (except exempt)');
+// priority switched off -> Brahmastra is held before 10:30 and capped like Murarka again
+p = createNiftyAlertPolicy({ NIFTY_LIVE_PRIORITY_SOURCES: '' });
+assert.strictEqual(p.decide('Brahmastra', ist(8, 9, 40)).live, false); assert.strictEqual(p.decide('Brahmastra', ist(8, 11, 0)).live, true);
+// priority list can name other sources
+p = createNiftyAlertPolicy({ NIFTY_LIVE_PRIORITY_SOURCES: 'Brahmastra, Murarka' });
+assert.strictEqual(p.decide('Murarka', ist(8, 9, 40)).live, true);
+assert.deepStrictEqual(p.status(ist(8, 11, 0)).prioritySources, ['Brahmastra', 'Murarka']);
+// policy off still wins
+p = createNiftyAlertPolicy({ NIFTY_ALERT_POLICY: 'off' }); assert.strictEqual(p.decide('Fast Momentum', ist(8, 9, 16)).live, true);
 
 // bad input falls back to defaults
 assert.strictEqual(parseHHMM('abc', 630), 630); assert.strictEqual(parseHHMM('25:00', 630), 630); assert.strictEqual(parseHHMM('9:45', 630), 585);

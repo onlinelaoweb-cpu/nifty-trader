@@ -63,4 +63,19 @@ assert.deepStrictEqual(st2.degenerateDimensions, [{ dimension: 'engine', onlyBuc
 assert.ok(st2.dimensions.engine['ENGINE WAIT'], 'degenerate dimension is still shown');
 assert.strictEqual(st2.cellsTested, 4, 'adx(2 cells)+mtf(2 cells) counted; engine excluded');
 assert.ok(!st2.holding.some(c => c.dimension === 'engine') && !st2.best.some(c => c.dimension === 'engine'));
+
+// ── Greeks buckets (gex / flip / pin) ──
+assert.strictEqual(R.bucketGex(568822), 'GEX POSITIVE'); assert.strictEqual(R.bucketGex(-5), 'GEX NEGATIVE'); assert.strictEqual(R.bucketGex(null), null);
+assert.strictEqual(R.bucketFlip(22470, 22800), 'SPOT BELOW FLIP'); assert.strictEqual(R.bucketFlip(22900, 22800), 'SPOT ABOVE FLIP');
+assert.strictEqual(R.bucketFlip(22470, null), null); assert.strictEqual(R.bucketFlip(null, 22800), null);
+assert.strictEqual(R.bucketPin(22480, 22500), 'AT MAX-GAMMA (<=25pt)'); assert.strictEqual(R.bucketPin(22475, 22500), 'AT MAX-GAMMA (<=25pt)');
+assert.strictEqual(R.bucketPin(22440, 22500), 'NEAR MAX-GAMMA (25-75pt)'); assert.strictEqual(R.bucketPin(22300, 22500), 'FAR FROM MAX-GAMMA (>75pt)');
+assert.strictEqual(R.bucketPin(22300, null), null);
+out = R.attachRegime(fires, [{ ts: t0 - 60000, nifty: 22470, vix: 14, mtf_15m_adx: 27, signal: 'WAIT', mtf_signal: 'BUY CALL', gex_cr: 100, gamma_flip: 22800, max_gamma_strike: 22500 }], [], { adxTf: '15m' });
+assert.strictEqual(out.rows[0].regime.gex, 'GEX POSITIVE'); assert.strictEqual(out.rows[0].regime.flip, 'SPOT BELOW FLIP'); assert.strictEqual(out.rows[0].regime.pin, 'NEAR MAX-GAMMA (25-75pt)');
+assert.ok(out.coverage.withGex === 1 && out.coverage.withFlip === 1 && out.coverage.withPin === 1);
+// old snapshots without the new columns -> null buckets, no crash
+out = R.attachRegime(fires, [{ ts: t0 - 60000, vix: 14, mtf_15m_adx: 27 }], [], { adxTf: '15m' });
+assert.strictEqual(out.rows[0].regime.gex, null); assert.strictEqual(out.rows[0].regime.flip, null); assert.strictEqual(out.rows[0].regime.pin, null);
+assert.ok(R.DIMENSIONS.includes('gex') && R.DIMENSIONS.includes('flip') && R.DIMENSIONS.includes('pin'));
 console.log('regimeStudy: all tests passed');
