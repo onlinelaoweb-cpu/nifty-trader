@@ -132,7 +132,12 @@ function buildClassicMessage({ direction, nifty, confidence, blockedBy, vix, atm
         `🚧 <b>Live engine is holding back</b> — blocked by: ${names || 'n/a'}.`,
     ];
     if (atmStrike) lines.push(`🎯 ATM ${atmStrike} ${bull ? 'CE' : 'PE'}${atmPremium > 0 ? ` @ ₹${Number(atmPremium).toFixed(1)}` : ''} (premium SL -20%, then follow the Trade-Coach exits)`);
-    if (Array.isArray(reasons) && reasons.length) lines.push(`ℹ️ ${reasons.slice(0, 2).join(' | ')}`);
+    // The reasons are the LIVE engine's own lines (its confidence is after all the newer caps), so label them as such —
+    // otherwise "Confidence 47% < 60%" right under "raw confidence 67%" reads like a contradiction.
+    if (Array.isArray(reasons) && reasons.length) {
+        const clean = reasons.slice(0, 2).map(r => String(r).replace(/^[⛔🔒🔓\s]+/u, '').trim()).filter(Boolean);
+        if (clean.length) lines.push(`ℹ️ Live engine's own view (after its newer gates/caps): ${clean.join(' | ')}`);
+    }
     lines.push('⚠️ <b>Experimental</b> — being measured against the live engine; use small size until the track record below proves it.');
     lines.push('<i>Vardaan AI — Classic engine (shadow tracking)</i>');
     return lines.join('\n');
