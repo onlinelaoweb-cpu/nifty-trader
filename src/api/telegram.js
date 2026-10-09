@@ -473,8 +473,9 @@ async function sendMTFAlert(state, strikeData = null, autoLogged = false) {
 🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
 🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)${liquidityNote2}${sizeNote2}`;
 
+        // 10 Oct — percentages now come from the Coach grid actually in force (NIFTY QUICK_SCALP 10/15/25), not a hardcoded 20/30/40
         const coachBlock = coach
-            ? `\n\n🧑‍🏫 <b>AI Trade Coach</b>\n✅ Ideal Entry: ${coach.idealEntryLabel} | ${coach.chaseWarning}\n📈 +20% SL→cost | +30% book 50% | +40% exit`
+            ? `\n\n🧑‍🏫 <b>AI Trade Coach</b>\n✅ Ideal Entry: ${coach.idealEntryLabel} | ${coach.chaseWarning}\n📈 ${Array.isArray(coach.plan) && coach.plan.length >= 3 ? `+${coach.plan[0].atPct}% SL→cost | +${coach.plan[1].atPct}% book 50% | +${coach.plan[2].atPct}% exit` : '+20% SL→cost | +30% book 50% | +40% exit'}`
             : '';
         levelsBlock += coachBlock;
 
