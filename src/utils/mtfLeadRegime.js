@@ -12,6 +12,8 @@
 // Pure functions (no DB, no clock). With a few dozen leads from a handful of days this can only SHOW differences, not prove them —
 // the result carries n and a `thin` flag, and many buckets on few leads will always produce some pattern by chance.
 
+const { declusterLeads } = require('./leadDecluster');
+
 const num = v => { const x = Number(v); return v === null || v === undefined || v === '' || !Number.isFinite(x) ? null : x; };
 const r1 = x => Math.round(x * 10) / 10;
 const r2 = x => Math.round(x * 100) / 100;
@@ -111,7 +113,9 @@ function computeLeadRegimeStudy(rawLeads, rawSnaps, opts = {}) {
     }
     leads.sort((a, b) => (a.ts < b.ts ? -1 : 1));
 
-    const use = opts.qualityOnly ? leads.filter(l => l.quality === opts.qualityOnly) : leads;
+    // 10 Oct — one lead per event (first lead of a side, then skip same-side leads for declusterMin minutes); 0 / missing = every lead
+    const qualityFiltered = opts.qualityOnly ? leads.filter(l => l.quality === opts.qualityOnly) : leads;
+    const use = declusterLeads(qualityFiltered, opts.declusterMin, l => Date.parse(l.ts), l => l.side);
     const good = use.filter(l => l.ret > 0), bad = use.filter(l => l.ret <= 0);
 
     const byFeature = [];
@@ -132,6 +136,7 @@ function computeLeadRegimeStudy(rawLeads, rawSnaps, opts = {}) {
         avgEfficiency: avg(rs.map(r => r.efficiency).filter(x => x !== null && x !== undefined)),
     }));
     return {
+        rawLeads: qualityFiltered.length, declusterMin: opts.declusterMin > 0 ? opts.declusterMin : 0,
         leads: use.length, matchedToSnapshot: use.filter(l => l.matched).length, unmatched,
         positive: good.length, notPositive: bad.length, all: summarise(use, minN), days, byFeature, rows: use,
         note: 'A bucket is a hypothesis, not a rule: with a few dozen leads over a few days, some pattern will appear by chance. Read the day table first — if the ADX/efficiency pattern does not also separate the days, it is probably noise. Nothing here feeds a gate or alert.',
@@ -141,6 +146,7 @@ function computeLeadRegimeStudy(rawLeads, rawSnaps, opts = {}) {
 function formatLeadRegimeText(res) {
     const f = v => v === null || v === undefined ? '--' : v;
     const L = [];
+    L.push(res.declusterMin > 0 ? `One lead per event: first lead per side, then ${res.declusterMin} min gap (${res.rawLeads} raw leads -> ${res.leads} used)` : `Every lead counted (not declustered): ${res.rawLeads}`);
     L.push(`MTF LEAD REGIME STUDY — leads ${res.leads} (matched to a market snapshot: ${res.matchedToSnapshot}), positive ${res.positive}, not positive ${res.notPositive}`);
     L.push(`ALL  n=${res.all.n}  avg ${f(res.all.avgReturnPct)}%  win ${f(res.all.winPct)}%  SL ${res.all.slHits}  peak ${f(res.all.avgPeakPct)}%`);
     L.push('');

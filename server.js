@@ -13143,11 +13143,11 @@ app.get('/api/entry-exit-quality', async (req, res) => {
         if (instrument === 'NIFTY') {
             const days = clampInt(req.query.days, 60, 1, 365);
             const t = await dbPool.query(`
-                SELECT id, ts, signal, entry, exit_premium, sl, target, target_hit, sl_hit, max_gain_pct, max_adverse_pct, post_close_max_gain_pct, lead_quality, time_taken_min
+                SELECT id, ts, signal, option_type, entry, exit_premium, sl, target, target_hit, sl_hit, max_gain_pct, max_adverse_pct, post_close_max_gain_pct, lead_quality, time_taken_min
                 FROM signal_performance
                 WHERE closed = true AND (source = 'mtf' OR (source IS NULL AND lead_quality IS NOT NULL)) AND ts >= NOW() - ($1::int * INTERVAL '1 day')
                 ORDER BY ts ASC LIMIT 5000`, [days]);
-            tracker = eeLib.computeTrackerScorecard(t.rows, { minN: 10 });
+            tracker = eeLib.computeTrackerScorecard(t.rows, { minN: 10, declusterMin: clampInt(req.query.tdecl, 60, 0, 240) });   // 10 Oct — one lead per 60 min per side by default; tdecl=0 = every lead
         }
         const result = { gridUsed: grid, scorecard, tracker };
         if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(eeLib.formatScorecardText(result));
@@ -13188,7 +13188,7 @@ app.get('/api/mtf-vote-study', async (req, res) => {
 });
 
 // ── MTF lead regime study (10 Oct) ───────────────────────────────────────────
-// Read-only research. /api/mtf-lead-regime?days=60&tol=10&minN=4&quality=Strong%20Confluence&format=text
+// Read-only research. /api/mtf-lead-regime?days=60&tol=10&minN=4&decluster=60&quality=Strong%20Confluence&format=text
 // Joins each CLOSED MTF-tracker lead (signal_performance) with the market_snapshot_log row just before it and the hour of Nifty
 // movement leading up to it: ADX on 5m/15m/1h, VIX, last-hour efficiency (one-way vs chop), whether the lead went with or against
 // that hour, time of day. Shows whether good days/leads already looked different at the moment they fired. Nothing here feeds a
@@ -13197,7 +13197,7 @@ app.get('/api/mtf-lead-regime', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
         const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
-        const days = clampInt(req.query.days, 60, 1, 365), tol = clampInt(req.query.tol, 10, 3, 30), minN = clampInt(req.query.minN, 4, 2, 50);
+        const days = clampInt(req.query.days, 60, 1, 365), tol = clampInt(req.query.tol, 10, 3, 30), minN = clampInt(req.query.minN, 4, 2, 50), decl = clampInt(req.query.decluster, 60, 0, 240);   // decluster=0 -> every lead
         const leadsQ = await dbPool.query(`
             SELECT id, ts, signal, option_type, entry, exit_premium, sl, target, target_hit, sl_hit, max_gain_pct, lead_quality
             FROM signal_performance
@@ -13212,7 +13212,7 @@ app.get('/api/mtf-lead-regime', async (req, res) => {
             snaps = sq.rows;
         }
         const quality = req.query.quality ? String(req.query.quality) : undefined;
-        const study = regimeLeadLib.computeLeadRegimeStudy(leadsQ.rows, snaps, { tolMin: tol, minN, qualityOnly: quality });
+        const study = regimeLeadLib.computeLeadRegimeStudy(leadsQ.rows, snaps, { tolMin: tol, minN, qualityOnly: quality, declusterMin: decl });
         if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(regimeLeadLib.formatLeadRegimeText(study));
         res.json({ success: true, days, snapshotsRead: snaps.length, ...study });
     } catch (e) {

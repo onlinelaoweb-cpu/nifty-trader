@@ -9925,6 +9925,9 @@ function _statRow(label, val) {
         <select id="ee-days" onchange="fetchEntryExit()" style="background:var(--card,#111);color:inherit;border:1px solid rgba(255,255,255,0.15);border-radius:6px;font-size:11px;padding:3px 6px;">
           <option value="7">7d</option><option value="30">30d</option><option value="60" selected>60d</option><option value="365">All</option>
         </select>
+        <select id="ee-tdecl" onchange="fetchEntryExit()" title="MTF tracker leads: count one lead per move, or every lead" style="background:var(--card,#111);color:inherit;border:1px solid rgba(255,255,255,0.15);border-radius:6px;font-size:11px;padding:3px 6px;">
+          <option value="60" selected>Leads: 1 per 60m</option><option value="0">Leads: all</option>
+        </select>
         <button onclick="fetchEntryExit()" style="background:transparent;color:inherit;border:1px solid rgba(255,255,255,0.15);border-radius:6px;font-size:11px;padding:3px 8px;cursor:pointer;">⟳</button>
       </div>
     </div>
@@ -9960,7 +9963,8 @@ async function fetchEntryExit() {
   try {
     const inst = (document.getElementById('ee-instrument')||{}).value || 'NIFTY';
     const days = (document.getElementById('ee-days')||{}).value || '60';
-    const r = await fetch('/api/entry-exit-quality?instrument='+encodeURIComponent(inst)+'&days='+encodeURIComponent(days));
+    const tdecl = (document.getElementById('ee-tdecl')||{}).value || '60';
+    const r = await fetch('/api/entry-exit-quality?instrument='+encodeURIComponent(inst)+'&days='+encodeURIComponent(days)+'&tdecl='+encodeURIComponent(tdecl));
     if (!r.ok) { if (st) st.textContent = 'Error ' + r.status; return; }
     const d = await r.json();
     if (!d.success) { if (st) st.textContent = 'Error: ' + (d.error || 'unknown'); return; }
@@ -9990,7 +9994,7 @@ function renderEntryExitUI(d) {
     const t = d.tracker;
     if (!t) tk.innerHTML = '';
     else {
-      let h = '<div style="font-size:11px;color:var(--dim);letter-spacing:1px;margin-bottom:4px;">MTF TRACKER LEADS (closed) — n='+t.all.n+' · avg '+_eeF(t.all.avgReturnPct,'%')+' · kept '+_eeF(t.all.captureRatio)+' · T/SL/timeout '+t.all.targetHits+'/'+t.all.slHits+'/'+t.all.timeouts+'</div>';
+      let h = '<div style="font-size:11px;color:var(--dim);letter-spacing:1px;margin-bottom:4px;">MTF TRACKER LEADS (closed) — n='+t.all.n+(t.declusterMin>0?' of '+t.rawLeads+' raw (1 per '+t.declusterMin+'m per side)':' (every lead)')+' · avg '+_eeF(t.all.avgReturnPct,'%')+' · kept '+_eeF(t.all.captureRatio)+' · T/SL/timeout '+t.all.targetHits+'/'+t.all.slHits+'/'+t.all.timeouts+'</div>';
       (t.byLeadQuality||[]).forEach(q => { h += '<div style="font-size:11px;padding:2px 0;">'+_eeEsc(q.quality)+': n='+q.n+(q.thin?' (thin)':'')+' · avg <span style="color:'+_eeCol(q.avgReturnPct)+'">'+_eeF(q.avgReturnPct,'%')+'</span> · peak '+_eeF(q.avgPeakGainPct,'%')+' · worst dip '+_eeF(q.avgWorstDrawdownPct,'%')+' · kept '+_eeF(q.captureRatio)+'</div>'; });
       const rr = t.recent || [];
       if (rr.length) h += '<div style="max-height:40vh;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid rgba(255,255,255,0.08);border-radius:8px;margin-top:6px;"><table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="position:sticky;top:0;background:var(--bg,#0b0b0b);color:var(--dim);text-align:left;"><th style="padding:5px 6px;">TIME (IST)</th><th>SIDE</th><th>QUALITY</th><th>PEAK</th><th>RET</th><th>END</th></tr></thead><tbody>'

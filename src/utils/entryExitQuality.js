@@ -19,6 +19,8 @@ const avg = a => a.length ? r1(a.reduce((s, x) => s + x, 0) / a.length) : null;
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return r1(s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2); };
 const pctOf = (k, n) => n ? Math.round((100 * k) / n) : null;
 
+const { declusterLeads } = require('./leadDecluster');
+
 const REACH_LEVELS = [5, 10];
 const EARLY_ENTRY_WINDOW_MIN = 15;
 
@@ -114,7 +116,9 @@ function computeTrackerScorecard(trades, opts = {}) {
         const exit = num(t.exit_premium), mfe = num(t.max_gain_pct), mae = num(t.max_adverse_pct), post = num(t.post_close_max_gain_pct);
         const ret = exit !== null ? ((exit - entry) / entry) * 100 : t.target_hit && num(t.target) > 0 ? ((num(t.target) - entry) / entry) * 100 : t.sl_hit && num(t.sl) > 0 ? ((num(t.sl) - entry) / entry) * 100 : null;
         if (ret === null) continue;
-        rows.push({ id: t.id ?? null, ts: t.ts ? new Date(t.ts).toISOString() : null, signal: t.signal || null, quality: t.lead_quality || 'unknown', ret: Math.round(ret * 10) / 10, mfe, mae, post, target: !!t.target_hit, sl: !!t.sl_hit, minutes: num(t.time_taken_min) });
+        const sideTxt = String(t.option_type || t.signal || '').toUpperCase();
+        const side = /CE|CALL/.test(sideTxt) ? 'CALL' : /PE|PUT/.test(sideTxt) ? 'PUT' : null;
+        rows.push({ id: t.id ?? null, side, ts: t.ts ? new Date(t.ts).toISOString() : null, signal: t.signal || null, quality: t.lead_quality || 'unknown', ret: Math.round(ret * 10) / 10, mfe, mae, post, target: !!t.target_hit, sl: !!t.sl_hit, minutes: num(t.time_taken_min) });
     }
     const sum = rs => {
         const n = rs.length, pk = rs.filter(r => r.mfe !== null && r.mfe > 0);
@@ -128,11 +132,14 @@ function computeTrackerScorecard(trades, opts = {}) {
             postCloseCoverage: posts.length, avgGainAfterCloseWithinShadowWindowPct: avg(posts.map(r => r.post)),
         };
     };
+    // 10 Oct — optional one-lead-per-event view (opts.declusterMin minutes, same side); 0 / missing = every lead, as before
+    const rawLeads = rows.length;
+    const kept = declusterLeads(rows, opts.declusterMin, r => (r.ts ? Date.parse(r.ts) : null), r => r.side);
     const by = {};
-    for (const r of rows) (by[r.quality] = by[r.quality] || []).push(r);
-    const recent = rows.filter(r => r.ts).sort((a, b) => (a.ts < b.ts ? 1 : -1)).slice(0, opts.recentLimit ?? 60)
+    for (const r of kept) (by[r.quality] = by[r.quality] || []).push(r);
+    const recent = kept.filter(r => r.ts).sort((a, b) => (a.ts < b.ts ? 1 : -1)).slice(0, opts.recentLimit ?? 60)
         .map(r => ({ id: r.id, ts: r.ts, signal: r.signal, quality: r.quality, ret: r.ret, mfe: r.mfe, mae: r.mae, post: r.post, outcome: r.target ? 'TARGET' : r.sl ? 'SL' : 'TIMEOUT', minutes: r.minutes }));
-    return { all: sum(rows), byLeadQuality: Object.entries(by).map(([quality, rs]) => ({ quality, ...sum(rs) })).sort((a, b) => b.n - a.n), recent };
+    return { rawLeads, usedLeads: kept.length, declusterMin: opts.declusterMin > 0 ? opts.declusterMin : 0, all: sum(kept), byLeadQuality: Object.entries(by).map(([quality, rs]) => ({ quality, ...sum(rs) })).sort((a, b) => b.n - a.n), recent };
 }
 
 function formatScorecardText(res) {
@@ -148,7 +155,8 @@ function formatScorecardText(res) {
     }
     if (res.tracker) {
         L.push('');
-        L.push('MTF TRACKER LEADS (closed): n=' + res.tracker.all.n + '  avg return ' + fmt(res.tracker.all.avgReturnPct) + '%  kept ' + fmt(res.tracker.all.captureRatio) + ' of peak  target/SL/timeout ' + res.tracker.all.targetHits + '/' + res.tracker.all.slHits + '/' + res.tracker.all.timeouts);
+        const dm = res.tracker.declusterMin > 0 ? ' [one lead per ' + res.tracker.declusterMin + ' min per side; ' + res.tracker.rawLeads + ' raw leads]' : ' [every lead, not declustered]';
+        L.push('MTF TRACKER LEADS (closed)' + dm + ': n=' + res.tracker.all.n + '  avg return ' + fmt(res.tracker.all.avgReturnPct) + '%  kept ' + fmt(res.tracker.all.captureRatio) + ' of peak  target/SL/timeout ' + res.tracker.all.targetHits + '/' + res.tracker.all.slHits + '/' + res.tracker.all.timeouts);
         for (const q of res.tracker.byLeadQuality) L.push('  ' + q.quality + ': n=' + q.n + '  avg ' + fmt(q.avgReturnPct) + '%  peak ' + fmt(q.avgPeakGainPct) + '%  worst dip ' + fmt(q.avgWorstDrawdownPct) + '%  kept ' + fmt(q.captureRatio));
     }
     return L.join('\n');
