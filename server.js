@@ -112,6 +112,10 @@ const { computeComboStudy, computeTriggerStudy } = require('./src/utils/comboStu
 const dayAuditLib = require('./src/utils/dayAudit');
 const regimeLib = require('./src/utils/regimeStudy');   // 7 Oct — do triggers work in some regimes and fail in others?
 const delayLib = require('./src/utils/coachDelayBacktest');   // 8 Oct — would waiting for confirmation before entering avoid the trades that go straight against us?
+const chaseLib = require('./src/utils/mtfChaseStudy');   // 9 Oct — do MTF leads that fire AFTER a big run in their direction do worse than early ones?
+const eeLib = require('./src/utils/entryExitQuality');   // 9 Oct — entry/exit scorecard: is the leak in the ENTRY or the EXIT?
+const voteLib = require('./src/utils/mtfVoteStudy');   // 9 Oct — does waiting for 15m / 1h agreement pay? (mtf_vote_log)
+const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
 const { classicCandidate, blockedByNewGates, createClassicTracker, buildClassicMessage, toDir: classicToDir, roundTo: classicRoundTo, NEW_GATE_LABELS: CLASSIC_GATE_LABELS } = require('./src/utils/niftyClassic');
@@ -9767,6 +9771,30 @@ async function initDB() {
         `);
         console.log('✅ PostgreSQL fast_momentum_log table ready');
 
+        // ── mtf_vote_log (9 Oct) ─────────────────────────────────────────────
+        // Every 5 min, per instrument, WHAT EACH TIMEFRAME SAID (1 bull / -1 bear / NULL no clean read), alert or no alert.
+        // Needed because signal_performance only keeps leads that were actually sent, and market_snapshot_log keeps only the
+        // combined verdict, so "5m+15m vs 5m+15m+1h" could never be studied. Research only — nothing reads this to decide a signal.
+        // See src/utils/mtfVoteStudy.js and /api/mtf-vote-study.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS mtf_vote_log (
+                id          SERIAL PRIMARY KEY,
+                ts          TIMESTAMPTZ DEFAULT NOW(),
+                instrument  TEXT NOT NULL,
+                price       NUMERIC,
+                v1          SMALLINT,
+                v5          SMALLINT,
+                v15         SMALLINT,
+                v1h         SMALLINT,
+                adx5        NUMERIC,
+                adx15       NUMERIC,
+                adx1h       NUMERIC,
+                combined    TEXT
+            )
+        `);
+        await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_mtf_vote_log_inst_ts ON mtf_vote_log (instrument, ts)`);
+        console.log('✅ PostgreSQL mtf_vote_log table ready');
+
         // ── stock_momentum_log table (15 Sep) ────────────────────────────────
         // Per-stock counterpart to fast_momentum_log — see
         // checkStockMomentumTrigger() for the detection logic. Same lean
@@ -10869,6 +10897,72 @@ async function saveSignalToLog(signal, prevSig) {
             qualityGate: s.qualityGate?.passed ?? false, ts: new Date().toISOString() });
     } catch (e) {
         console.error('saveSignalToLog error:', e.message);
+    }
+}
+
+// ── MTF vote logger (9 Oct) — see the mtf_vote_log table comment. Read-only observation, never throws, never alerts.
+// NIFTY reuses the 5m/15m/1h reads marketState.mtf already holds. CRUDE/BITCOIN only have in-memory 1m candles, so their 5m/15m
+// reads are computed from those; a timeframe that does not have enough bars yet (15m on crude, 1h on both) is stored as NULL.
+// 15m / 1h candle sources, cached so the exchange / Yahoo is hit only a few times an hour (15m every 10 min, 1h every 30 min,
+// last good bars kept on a 429). Bitcoin: Delta Exchange (public). Crude: Yahoo CL=F (WTI) — same family of calls the server already makes.
+const _htfBtc = createHtfCache({
+    fetch15: () => { const n = Math.floor(Date.now() / 1000); return fetchDeltaHistoricalCandles('BTCUSD', '15m', n - 16 * 3600, n); },
+    fetch1h: async () => {
+        const n = Math.floor(Date.now() / 1000);
+        const direct = await fetchDeltaHistoricalCandles('BTCUSD', '1h', n - 62 * 3600, n);
+        if (direct && direct.length) return direct;
+        // fallback if the '1h' resolution string is not accepted: build 1h bars from 15m bars (Delta times are unix seconds -> ms for aggregateCandles)
+        const q = await fetchDeltaHistoricalCandles('BTCUSD', '15m', n - 62 * 3600, n);
+        return q && q.length ? aggregateCandles(q.map(c => ({ ...c, time: c.time * 1000 })), 60) : null;
+    },
+    log: m => console.warn(m),
+});
+const _htfCrude = createHtfCache({
+    fetch15: () => fetchIntradayBars('CL=F', 15, 5 * 24 * 60),
+    fetch1h: () => fetchIntradayBars('CL=F', 60, 5 * 24 * 60),
+    log: m => console.warn(m),
+});
+const _voteOf = sig => { const v = String(sig ?? '').toUpperCase(); return v === 'BULLISH' || v === 'BULL' ? 1 : v === 'BEARISH' || v === 'BEAR' ? -1 : null; };
+async function saveMtfVoteSnapshot() {
+    if (!dbPool) return;
+    const rows = [];
+    const dv = d => d === 'BULL' ? 1 : d === 'BEAR' ? -1 : null;
+    try {
+        const n = marketState;
+        if (isMarketOpen() && n.nifty > 0 && n.mtf && n.mtf.tf5m) {
+            rows.push(['NIFTY', n.nifty, null, _voteOf(n.mtf.tf5m?.signal), _voteOf(n.mtf.tf15m?.signal), _voteOf(n.mtf.tf1h?.signal),
+                       n.mtf.tf5m?.adx ?? null, n.mtf.tf15m?.adx ?? null, n.mtf.tf1h?.adx ?? null, n.mtf.signal ?? null]);
+        }
+    } catch (e) { console.warn('[MtfVote] NIFTY error:', e.message); }
+    try {
+        const c = marketState.crudeoil;
+        if (isCrudeSessionOpen() && c?.price > 0 && Array.isArray(c.candles1m) && c.candles1m.length >= 30) {
+            const m = computeCrudeMTF(c.candles1m);
+            const htf = await _htfCrude.get();   // WTI (CL=F) 15m / 1h bars — direction reference only; price column stays the MCX price
+            const c5 = aggregateCandles(c.candles1m, 5);
+            const v15 = dv(crudeTFDirection(htf.c15 || aggregateCandles(c.candles1m, 15)));
+            const v1h = htf.c1h ? dv(crudeTFDirection(htf.c1h)) : null;
+            rows.push(['CRUDE', c.price, dv(m.tf1m), dv(m.tf5m), v15, v1h,
+                       computeCrudeIndicators(c5)?.adx ?? null, htf.c15 ? (computeCrudeIndicators(htf.c15)?.adx ?? null) : null, htf.c1h ? (computeCrudeIndicators(htf.c1h)?.adx ?? null) : null, null]);
+        }
+    } catch (e) { console.warn('[MtfVote] CRUDE error:', e.message); }
+    try {
+        const b = marketState.bitcoin;
+        if (isBitcoinWindowOpen() && b?.price > 0 && Array.isArray(b.candles1m) && b.candles1m.length >= 30) {
+            const m = computeBitcoinMTF(b.candles1m);
+            const htf = await _htfBtc.get();     // Delta Exchange BTCUSD 15m / 1h candles (public endpoint, already used for the 1m backfill)
+            // computeBitcoinMTF reads the direction of whatever bars it is given as its tf1m, so hand it the 15m / 1h bars.
+            const v15 = dv(computeBitcoinMTF(htf.c15 || aggregateCandles(b.candles1m, 15)).tf1m);
+            const v1h = htf.c1h ? dv(computeBitcoinMTF(htf.c1h).tf1m) : null;
+            rows.push(['BITCOIN', b.price, dv(m.tf1m), dv(m.tf5m), v15, v1h,
+                       computeBitcoinIndicators(aggregateCandles(b.candles1m, 5))?.adx ?? null, htf.c15 ? (computeBitcoinIndicators(htf.c15)?.adx ?? null) : null, htf.c1h ? (computeBitcoinIndicators(htf.c1h)?.adx ?? null) : null, null]);
+        }
+    } catch (e) { console.warn('[MtfVote] BITCOIN error:', e.message); }
+    for (const r of rows) {
+        try {
+            await dbPool.query(
+                `INSERT INTO mtf_vote_log (instrument, price, v1, v5, v15, v1h, adx5, adx15, adx1h, combined) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, r);
+        } catch (e) { console.warn('[MtfVote] insert error:', e.message); return; }
     }
 }
 
@@ -12977,6 +13071,124 @@ app.get('/api/coach-delay-backtest', async (req, res) => {
                 'Look at skippedSignalsIfTheyHadBeenTaken: if its avg is clearly negative the filter really skips bad trades; if it is positive you are skipping winners. baselineOnSameEntered shows what the trades you DID enter would have made under the current rule.',
                 'A variant only counts if olderHalf.delta AND newerHalf.delta are both positive (verdict). 9 variants are tried, so one or two will look good by chance; a few days of one market regime is not proof. Paper-test any lead before it goes anywhere near a rule.',
                 'Path samples are ~5 minutes apart, so a 5-minute delay is one sample; real fills would be closer to the trigger level.',
+            ],
+        });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── Entry / Exit quality scorecard (9 Oct) ──────────────────────────────────
+// Read-only research. /api/entry-exit-quality?instrument=NIFTY&source=&grid=LIVE&decluster=30&minN=15&format=text
+// Per trigger: ENTRY side (how often the premium reaches +5% / +10%, how long it takes, how deep it dips first, whether a later entry within
+// 15 min was cheaper) and EXIT side (how much of the peak the Trade-Coach grid keeps, give-back, "touched +15% but ended negative", exit-reason mix).
+// Plus the MTF-tracker leads (signal_performance): realised vs peak, SL/target/timeout mix, what the premium did after close.
+// format=text returns the same numbers as a plain-text table. Nothing here feeds signals, gates or alerts. See src/utils/entryExitQuality.js.
+app.get('/api/entry-exit-quality', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const instrument = String(req.query.instrument || 'NIFTY').toUpperCase();
+        const params = [instrument];
+        let where = `o.coach_result IS NOT NULL AND o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = $1`;
+        if (req.query.source) { params.push(String(req.query.source)); where += ` AND o.source = $${params.length}`; }
+        if (req.query.days) { params.push(clampInt(req.query.days, 60, 1, 365)); where += ` AND o.fire_ts >= NOW() - ($${params.length}::int * INTERVAL '1 day')`; }
+        const r = await dbPool.query(`
+            SELECT o.id, o.source, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
+            FROM signal_outcomes o
+            JOIN signal_outcome_path p ON p.outcome_id = o.id
+            WHERE ${where}
+            ORDER BY o.id, p.sample_ts ASC`, params);
+        const byId = new Map();
+        for (const row of r.rows) {
+            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, entryPremium: Number(row.entry_premium), fireTs: new Date(row.fire_ts).getTime(), path: [] });
+            byId.get(row.id).path.push({ ts: new Date(row.sample_ts).getTime(), premium: Number(row.premium) });
+        }
+        const gridName = String(req.query.grid || 'LIVE').toUpperCase();
+        const grid = gridName === 'LIVE' ? coachGridFor(instrument) : (COACH_GRID_CANDIDATES[gridName] || coachGridFor(instrument));
+        const scorecard = eeLib.computeScorecard([...byId.values()], simulateTradeCoachCore, grid, {
+            minN: clampInt(req.query.minN, 15, 3, 200), declusterMin: clampInt(req.query.decluster, 30, 0, 240), decluster: delayLib.declusterOutcomes,
+        });
+        let tracker = null;
+        if (instrument === 'NIFTY') {
+            const days = clampInt(req.query.days, 60, 1, 365);
+            const t = await dbPool.query(`
+                SELECT id, ts, signal, entry, exit_premium, sl, target, target_hit, sl_hit, max_gain_pct, max_adverse_pct, post_close_max_gain_pct, lead_quality, time_taken_min
+                FROM signal_performance
+                WHERE closed = true AND (source = 'mtf' OR (source IS NULL AND lead_quality IS NOT NULL)) AND ts >= NOW() - ($1::int * INTERVAL '1 day')
+                ORDER BY ts ASC LIMIT 5000`, [days]);
+            tracker = eeLib.computeTrackerScorecard(t.rows, { minN: 10 });
+        }
+        const result = { gridUsed: grid, scorecard, tracker };
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(eeLib.formatScorecardText(result));
+        res.json({
+            success: true, instrument, source: req.query.source || 'ALL', ...result,
+            howToRead: [
+                'Population = premium paths of exploratory-trigger outcomes (~5 min samples for 90 min), declustered so one move is not counted many times; scored with the live Trade-Coach grid. Results are before brokerage and slippage.',
+                'ENTRY: reach5Pct / reach10Pct = share of trades whose premium ever reached +5% / +10%. medianDipBeforeGainPct = how far it typically fell BEFORE first reaching +5% (or over the whole path if it never did). avgBetterEntryWithin15MinPct = how much cheaper (negative %) the best sample in the first 15 min was than the signal entry; delay-backtest shows waiting did not help on average, so this is a diagnostic, not a recommendation.',
+                'EXIT: captureRatio = total realised % / total peak % (only trades whose peak was above 0); 1.0 = kept the whole peak, 0.2 = kept a fifth. avgGiveBackPct = peak minus realised. touched15ButNegative = trades that were up 15%+ at some sample but the grid still ended below entry. exitReasonMix shows how many ended by stop, target or time.',
+                'diagnosis is a rule of thumb: ENTRY = fewer than 45% reach +5% or the typical dip before gain is worse than -10%; EXIT = at least 45% reach +10% but captureRatio is below 0.35. Judge it together with n; "thin" or "TOO FEW TRADES" means nothing yet.',
+                'Path samples are ~5 minutes apart, so peaks and dips between samples are missed (the real peak is at least this high, the real dip at least this deep).',
+                'tracker (NIFTY only) = closed MTF-tracker leads from signal_performance: avgGainAfterCloseWithinShadowWindowPct is the extra gain the premium showed AFTER the tracker closed the trade (only rows that were shadow-tracked, see postCloseCoverage).',
+            ],
+        });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── MTF vote study (9 Oct) ───────────────────────────────────────────────────
+// Read-only research. /api/mtf-vote-study?instrument=NIFTY|CRUDE|BITCOIN&days=30&minN=10&gap=15
+// Compares "5m only" vs "5m + 15m" vs "5m + 15m + 1h" by what the underlying price did over the next 15/30/60 min, from mtf_vote_log.
+// Needs a week or two of data to say anything. Nothing here feeds signals, gates or alerts. See src/utils/mtfVoteStudy.js.
+app.get('/api/mtf-vote-study', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const instrument = String(req.query.instrument || 'NIFTY').toUpperCase();
+        const days = clampInt(req.query.days, 30, 1, 365), minN = clampInt(req.query.minN, 10, 3, 500), gap = clampInt(req.query.gap, 15, 5, 120);
+        const r = await dbPool.query(
+            `SELECT ts, price, v5, v15, v1h FROM mtf_vote_log WHERE instrument = $1 AND ts >= NOW() - ($2::int * INTERVAL '1 day') ORDER BY ts ASC LIMIT 60000`,
+            [instrument, days]);
+        const study = voteLib.computeVoteStudy(r.rows, { minN, episodeGapMin: gap });
+        res.json({ success: true, instrument, days, ...study });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── MTF "chase" study (9 Oct) ────────────────────────────────────────────────
+// Read-only research. /api/mtf-chase-study?days=60&minN=8&gap=10
+// The MTF tracker calls a lead STRONG only when 5m + 15m + 1h all agree; the 1h turns last, so the lead can arrive after the move.
+// This tags every CLOSED MTF-tracker trade (signal_performance) with how far Nifty had already run in the trade direction
+// (previous 60 min, and since the day's open), the side-adjusted RSI and the session, then compares the realised premium returns.
+// Nothing here feeds signals, gates or alerts. Returns are before brokerage/slippage. See src/utils/mtfChaseStudy.js.
+app.get('/api/mtf-chase-study', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const days = clampInt(req.query.days, 60, 1, 365), minN = clampInt(req.query.minN, 8, 3, 200), gap = clampInt(req.query.gap, 10, 1, 60);
+        const trades = await dbPool.query(`
+            SELECT id, ts, signal, entry, exit_premium, sl, target, target_hit, sl_hit, partial_win, max_gain_pct, max_adverse_pct, lead_quality
+            FROM signal_performance
+            WHERE closed = true AND (source = 'mtf' OR (source IS NULL AND lead_quality IS NOT NULL))
+              AND ts >= NOW() - ($1::int * INTERVAL '1 day')
+            ORDER BY ts ASC LIMIT 5000`, [days]);
+        const snaps = await dbPool.query(`
+            SELECT ts, nifty, rsi FROM market_snapshot_log
+            WHERE ts >= NOW() - (($1::int + 1) * INTERVAL '1 day') AND nifty IS NOT NULL ORDER BY ts ASC LIMIT 100000`, [days]);
+        const { rows, coverage } = chaseLib.tagTrades(trades.rows, snaps.rows, { maxGapMin: gap });
+        const study = chaseLib.computeMtfChaseStudy(rows, { minN });
+        res.json({
+            success: true, days, coverage: { ...coverage, snapshotRows: snaps.rows.length, maxGapMin: gap },
+            study,
+            recentTrades: rows.slice(-15).reverse().map(r => ({ id: r.id, day: r.day, signal: r.signal, leadQuality: r.leadQuality, returnPct: r.ret, run60Pts: r.run60, runDayPts: r.runDay, rsiSide: r.rsiSide })),
+            howToRead: [
+                'Population = closed MTF-tracker trades only (the leads that actually alerted). Moderate-quality leads are included from 11 Sep; weak/isolated ones are not tracked, so "what if we had acted on the early 2-of-3 vote" cannot be answered from this table — it can only show whether LATE leads do worse.',
+                'run60Pts / runDayPts = how many Nifty points had ALREADY moved in the trade direction in the previous 60 minutes / since the day\'s opening snapshot, read from the latest 5-minute snapshot at or before the lead (never later). rsiSide = the 1-minute RSI(9) seen from the trade side (a PUT at RSI 20 shows 80). Trades with no snapshot within <gap> minutes lose these tags — see coverage.',
+                'returnPct = (exit premium - entry) / entry using the tracker\'s own SL -25% / target +50% / 90-min timeout, before brokerage and slippage. If exit_premium is missing the target or SL level is used.',
+                'earlyVsLate: early = under 50 pts of run before the lead, extended = 50+ pts. If extended is clearly worse in BOTH halves (olderHalfAvg and newerHalfAvg) the tracker is chasing; if they look alike there is no evidence of chasing. A bucket flagged thin (n below minN) means nothing yet.',
+                'Many buckets, few trades: some will look good or bad by luck. Treat this as a lead worth paper-testing, not proof; re-run after ~30 trades.',
             ],
         });
     } catch (e) {
@@ -15272,6 +15484,8 @@ function startPollingIntervals() {
         if (isNSEMarketDay()) saveMarketSnapshot().catch(e => console.error('[MarketSnapshot] error:', e.message));
     }, 5*60*1000), 30*1000);
     setTimeout(() => setInterval(flushGateBlockCountsIfDirty, 30*1000), 25*1000);
+    // 9 Oct — per-timeframe vote logger (NIFTY / CRUDE / BITCOIN), 5 min cadence, offset from the snapshot above.
+    setTimeout(() => setInterval(() => { saveMtfVoteSnapshot().catch(e => console.warn('[MtfVote] error:', e.message)); }, 5*60*1000), 90*1000);
     // 15 Sep — NIFTY 52-Week Reversal Trigger. 5min cadence — both
     // get52WeekHighLow() and getHistoricalCandles() are cache-backed (see
     // historicalData.js), so this doesn't hit the DB every cycle; 5min is

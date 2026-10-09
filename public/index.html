@@ -2033,6 +2033,8 @@ html.vn-day .sug-card [style*="color:var(--dim)"] { color: #607080 !important; }
 /* ── Global spacing reset ── */
 .panel { padding:0 !important; }
 .panel > div[style*="padding"] { padding: 0 !important; }
+/* 9 Oct: the rule above also wiped the 12px side gutter of dashboard sections (OI walls, ADX, Momentum) -> they ran edge to edge. Restore the gutter there only. */
+#panel-dashboard > div[style*="padding:0 12px"] { padding-left: 12px !important; padding-right: 12px !important; }
 
 /* ── Price Hero ── */
 .price-section {
@@ -2544,7 +2546,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
 
 
     <!-- Candle Pattern Card — Multi-Timeframe (5m / 15m / 1h / 1m) -->
-    <div class="ind-card" id="candle-card" style="margin-bottom:8px;">
+    <div class="ind-card" id="candle-card" style="margin-bottom:0;grid-column:1/-1;">
       <div class="ind-label" style="display:flex;justify-content:space-between;align-items:center;">
         <span>🕯️ CANDLE PATTERN</span>
         <span id="cp-consensus-badge" style="font-size:11px;padding:2px 6px;border-radius:4px;background:var(--border);color:var(--dim);">--</span>
@@ -2599,7 +2601,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     </div>
 
 
-    <div class="pv-card" style="color:var(--amber)" id="vix-card"><div class="pv-label">VIX</div><div class="pv-val" id="vix-val">--</div><div class="pv-sig" id="vix-sig">AUTO ✅</div></div>
+    <div class="pv-card" style="color:var(--amber);grid-column:1/-1;" id="vix-card"><div class="pv-label">VIX</div><div class="pv-val" id="vix-val">--</div><div class="pv-sig" id="vix-sig">AUTO ✅</div></div>
   </div>
 
 
@@ -2752,22 +2754,22 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
   <div class="ind-label"><span>VWAP</span><span id="vwap-pos" style="font-size:10px;">--</span></div>
   <div class="ind-val" id="vwap-val" style="font-size:15px;">--</div>
   <div class="ind-sub" id="vwap-sub">Fair value</div>
-  <div style="display:flex;justify-content:space-around;margin-top:8px;padding-top:7px;border-top:1px solid var(--border);">
+  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 4px;margin-top:8px;padding-top:7px;border-top:1px solid var(--border);">
     <div style="text-align:center;">
-      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">1 MIN</div>
-      <div style="font-family:'Orbitron',monospace;font-size:13.5px;font-weight:700;" id="vwap-1m-pos">--</div>
+      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;white-space:nowrap;">1 MIN</div>
+      <div style="font-family:'Orbitron',monospace;font-size:11.5px;font-weight:700;white-space:nowrap;" id="vwap-1m-pos">--</div>
     </div>
     <div style="text-align:center;">
-      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">5 MIN</div>
-      <div style="font-family:'Orbitron',monospace;font-size:13.5px;font-weight:700;" id="vwap-5m-pos">--</div>
+      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;white-space:nowrap;">5 MIN</div>
+      <div style="font-family:'Orbitron',monospace;font-size:11.5px;font-weight:700;white-space:nowrap;" id="vwap-5m-pos">--</div>
     </div>
     <div style="text-align:center;">
-      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">15 MIN</div>
-      <div style="font-family:'Orbitron',monospace;font-size:13.5px;font-weight:700;" id="vwap-15m-pos">--</div>
+      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;white-space:nowrap;">15 MIN</div>
+      <div style="font-family:'Orbitron',monospace;font-size:11.5px;font-weight:700;white-space:nowrap;" id="vwap-15m-pos">--</div>
     </div>
     <div style="text-align:center;">
-      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">SIGNAL</div>
-      <div style="font-family:'Orbitron',monospace;font-size:11px;font-weight:700;margin-top:4px;" id="vwap-multi-signal">--</div>
+      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;white-space:nowrap;">SIGNAL</div>
+      <div style="font-family:'Orbitron',monospace;font-size:11.5px;font-weight:700;white-space:nowrap;" id="vwap-multi-signal">--</div>
     </div>
   </div>
 </div>
@@ -2778,22 +2780,22 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     <div style="color:var(--dim);font-size:13px;align-self:center;">/</div>
     <div><div style="font-size:10px;color:var(--dim);">EMA21</div><div class="ind-val" id="ema21-val" style="font-size:14px;">--</div></div>
   </div>
-  <div style="display:flex;justify-content:space-around;margin-top:8px;padding-top:7px;border-top:1px solid var(--border);">
+  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 4px;margin-top:8px;padding-top:7px;border-top:1px solid var(--border);">
     <div style="text-align:center;">
-      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">1 MIN</div>
-      <div style="font-family:'Orbitron',monospace;font-size:13.5px;font-weight:700;" id="ema-1m-cross">--</div>
+      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;white-space:nowrap;">1 MIN</div>
+      <div style="font-family:'Orbitron',monospace;font-size:11.5px;font-weight:700;white-space:nowrap;" id="ema-1m-cross">--</div>
     </div>
     <div style="text-align:center;">
-      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">5 MIN</div>
-      <div style="font-family:'Orbitron',monospace;font-size:13.5px;font-weight:700;" id="ema-5m-cross">--</div>
+      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;white-space:nowrap;">5 MIN</div>
+      <div style="font-family:'Orbitron',monospace;font-size:11.5px;font-weight:700;white-space:nowrap;" id="ema-5m-cross">--</div>
     </div>
     <div style="text-align:center;">
-      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">15 MIN</div>
-      <div style="font-family:'Orbitron',monospace;font-size:13.5px;font-weight:700;" id="ema-15m-cross">--</div>
+      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;white-space:nowrap;">15 MIN</div>
+      <div style="font-family:'Orbitron',monospace;font-size:11.5px;font-weight:700;white-space:nowrap;" id="ema-15m-cross">--</div>
     </div>
     <div style="text-align:center;">
-      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;">SIGNAL</div>
-      <div style="font-family:'Orbitron',monospace;font-size:11px;font-weight:700;margin-top:4px;" id="ema-multi-signal">--</div>
+      <div style="font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:2px;white-space:nowrap;">SIGNAL</div>
+      <div style="font-family:'Orbitron',monospace;font-size:11.5px;font-weight:700;white-space:nowrap;" id="ema-multi-signal">--</div>
     </div>
   </div>
 </div>
@@ -3921,6 +3923,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">CRUDE OIL</div>
     <button class="more-item" onclick="switchTabFromMore('crude')"><span>🛢️</span>CRUDE LIVE</button>
     <button class="more-item" onclick="switchTabFromMore('crudeInsights')"><span>🔍</span>CRUDE INSIGHTS</button>
+    <button class="more-item" onclick="switchTabFromMore('entryExit')"><span>🎯</span>ENTRY/EXIT</button>
 
     <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">BITCOIN</div>
     <button class="more-item" onclick="switchTabFromMore('bitcoin')"><span>₿</span>BITCOIN</button>
@@ -3953,6 +3956,7 @@ function _initDesktopLayout() {
     { id: 'guard',     icon: '🛡️', label: 'GUARD' },
     { id: 'crude',     icon: '🛢️', label: 'CRUDE LIVE' },
     { id: 'crudeInsights', icon: '🔍', label: 'CRUDE INSIGHTS' },
+    { id: 'entryExit', icon: '🎯', label: 'ENTRY/EXIT' },
     { id: 'bitcoin',   icon: '₿', label: 'BITCOIN' },
     { id: 'signalAccuracy', icon: '🎯', label: 'TRACK RECORD' },
   ];
@@ -4147,6 +4151,7 @@ const TAB_LABELS = {
   scanner:   { icon: '🔥', label: 'SCANNER' },
   crude:     { icon: '🛢️', label: 'CRUDE LIVE' },
   crudeInsights: { icon: '🔍', label: 'CRUDE INSIGHTS' },
+  entryExit: { icon: '🎯', label: 'ENTRY/EXIT' },
   bitcoin:   { icon: '₿', label: 'BITCOIN' },
   signalAccuracy: { icon: '🎯', label: 'TRACK RECORD' },
 };
@@ -4232,6 +4237,13 @@ function switchTab(name,btn){
     _crudeInsightsTabTimer = setInterval(fetchCrudeInsights, 60000);
   } else {
     if (_crudeInsightsTabTimer) { clearInterval(_crudeInsightsTabTimer); _crudeInsightsTabTimer = null; }
+  }
+  if(name==='entryExit'){
+    fetchEntryExit();
+    if (_entryExitTabTimer) clearInterval(_entryExitTabTimer);
+    _entryExitTabTimer = setInterval(fetchEntryExit, 60000);
+  } else {
+    if (_entryExitTabTimer) { clearInterval(_entryExitTabTimer); _entryExitTabTimer = null; }
   }
   if(name==='breadth'||name==='global'){
     // Render immediately from cache — no loading flicker
@@ -5615,6 +5627,7 @@ let _crudeTabTimer = null;
 let _bitcoinTabTimer = null;
 let _signalAccuracyTabTimer = null;
 let _crudeInsightsTabTimer = null;
+let _entryExitTabTimer = null;
 let _lastBreadthStocks = null;  // cache stocks[] for SSE merge
 async function fetchBreadthFull() {
   try {
@@ -9896,6 +9909,95 @@ function _statRow(label, val) {
     </div>
   </div>
 </div>
+
+<!-- PANEL: ENTRY/EXIT SCORECARD (9 Oct) ───────────────────── -->
+<div class="panel" id="panel-entryExit">
+  <div style="padding:10px 12px 80px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+      <div style="font-size:12px;font-weight:700;letter-spacing:0.5px;">🎯 ENTRY / EXIT SCORECARD <span style="opacity:0.6;font-weight:400;">(research only, paper)</span></div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <select id="ee-instrument" onchange="fetchEntryExit()" style="background:var(--card,#111);color:inherit;border:1px solid rgba(255,255,255,0.15);border-radius:6px;font-size:11px;padding:3px 6px;">
+          <option value="NIFTY">NIFTY</option><option value="CRUDE">CRUDE</option><option value="BITCOIN">BITCOIN</option>
+        </select>
+        <select id="ee-days" onchange="fetchEntryExit()" style="background:var(--card,#111);color:inherit;border:1px solid rgba(255,255,255,0.15);border-radius:6px;font-size:11px;padding:3px 6px;">
+          <option value="7">7d</option><option value="30">30d</option><option value="60" selected>60d</option><option value="365">All</option>
+        </select>
+        <button onclick="fetchEntryExit()" style="background:transparent;color:inherit;border:1px solid rgba(255,255,255,0.15);border-radius:6px;font-size:11px;padding:3px 8px;cursor:pointer;">⟳</button>
+      </div>
+    </div>
+    <div id="ee-status" style="font-size:10.5px;color:var(--dim);margin-bottom:8px;">Loading...</div>
+    <div id="ee-summary"></div>
+    <div style="font-size:11px;color:var(--dim);letter-spacing:1px;margin:12px 0 4px;">TRADES — NEWEST FIRST (scroll)</div>
+    <div id="ee-recent" style="max-height:55vh;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid rgba(255,255,255,0.08);border-radius:8px;"></div>
+    <div id="ee-tracker" style="margin-top:14px;"></div>
+    <div style="font-size:10px;color:var(--dim);line-height:1.5;margin-top:12px;">
+      Premium path ~5 min samples; before brokerage/slippage; declustered (30 min). Diagnosis is a rule of thumb — check n. ENTRY = rarely reaches +5% or dips first. EXIT = reaches +10% but keeps little. Auto-refresh 60s.
+    </div>
+  </div>
+</div>
+
+<script>
+function _eeEsc(v){ return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function _eeF(v,suf){ return (v===null||v===undefined)?'--':v+(suf||''); }
+function _eeCol(v){ return v>0?'var(--green,#3ddc84)':v<0?'var(--red,#ff5c5c)':'inherit'; }
+function _eeTime(iso){
+  try { return new Date(iso).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false}); }
+  catch(e){ return _eeEsc(iso); }
+}
+function _eeDiagColor(d){ d=String(d||''); return d.startsWith('NO CLEAR')?'var(--green,#3ddc84)':d.startsWith('TOO FEW')?'var(--dim)':'var(--amber,#ffc832)'; }
+function _eeBlock(title,s){
+  return '<div style="border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px;margin-bottom:8px;font-size:11.5px;line-height:1.6;">'
+   +'<div style="display:flex;justify-content:space-between;gap:6px;flex-wrap:wrap;"><b>'+_eeEsc(title)+'</b><span style="color:'+_eeDiagColor(s.diagnosis)+';font-weight:700;">'+_eeEsc(s.diagnosis)+' <span style="opacity:.7;font-weight:400;">n='+s.n+(s.thin?' thin':'')+'</span></span></div>'
+   +'<div><span style="color:var(--dim);">ENTRY</span> +5%: '+_eeF(s.entry.reach5Pct,'%')+' · +10%: '+_eeF(s.entry.reach10Pct,'%')+' · to +5%: '+_eeF(s.entry.medianMinutesTo5,'m')+' · dip first: '+_eeF(s.entry.medianDipBeforeGainPct,'%')+'</div>'
+   +'<div><span style="color:var(--dim);">EXIT</span> peak: '+_eeF(s.exit.avgPeakGainPct,'%')+' · result: <span style="color:'+_eeCol(s.exit.avgResultPct)+'">'+_eeF(s.exit.avgResultPct,'%')+'</span> · kept '+_eeF(s.exit.captureRatio)+' · gave back '+_eeF(s.exit.avgGiveBackPct,'%')+' · +15% but loss: '+s.exit.touched15ButNegative+'</div>'
+   +'</div>';
+}
+async function fetchEntryExit() {
+  const st = document.getElementById('ee-status');
+  try {
+    const inst = (document.getElementById('ee-instrument')||{}).value || 'NIFTY';
+    const days = (document.getElementById('ee-days')||{}).value || '60';
+    const r = await fetch('/api/entry-exit-quality?instrument='+encodeURIComponent(inst)+'&days='+encodeURIComponent(days));
+    if (!r.ok) { if (st) st.textContent = 'Error ' + r.status; return; }
+    const d = await r.json();
+    if (!d.success) { if (st) st.textContent = 'Error: ' + (d.error || 'unknown'); return; }
+    renderEntryExitUI(d);
+  } catch (e) { if (st) st.textContent = 'Fetch failed: ' + e.message; }
+}
+function renderEntryExitUI(d) {
+  const sc = d.scorecard || {};
+  const st = document.getElementById('ee-status');
+  if (st) st.textContent = d.instrument + ' · grid ' + _eeEsc((d.gridUsed||{}).name||'?') + ' · ' + (sc.outcomesUsed||0) + ' of ' + (sc.outcomesBeforeDecluster||0) + ' trades used · updated ' + new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false});
+  const sum = document.getElementById('ee-summary');
+  if (sum) {
+    let h = sc.all ? _eeBlock('ALL TRIGGERS', sc.all) : '';
+    (sc.sources||[]).forEach(s => { h += _eeBlock(s.source||'?', s); });
+    sum.innerHTML = h || '<div style="color:var(--dim);font-size:11px;">No scored trades yet.</div>';
+  }
+  const rec = document.getElementById('ee-recent');
+  if (rec) {
+    const rows = sc.recent || [];
+    if (!rows.length) rec.innerHTML = '<div style="padding:14px;text-align:center;color:var(--dim);font-size:11px;">No trades in this window</div>';
+    else rec.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="position:sticky;top:0;background:var(--bg,#0b0b0b);color:var(--dim);text-align:left;"><th style="padding:5px 6px;">TIME (IST)</th><th>SOURCE</th><th>PEAK</th><th>DIP</th><th>RESULT</th><th>EXIT</th></tr></thead><tbody>'
+      + rows.map(r => '<tr style="border-top:1px solid rgba(255,255,255,0.06);"><td style="padding:5px 6px;white-space:nowrap;">'+_eeTime(r.ts)+'</td><td>'+_eeEsc(r.source)+'</td><td style="color:'+_eeCol(r.mfe)+'">'+_eeF(r.mfe,'%')+'</td><td style="color:'+_eeCol(r.mae)+'">'+_eeF(r.mae,'%')+'</td><td style="color:'+_eeCol(r.result)+';font-weight:700;">'+_eeF(r.result,'%')+(r.touched15ButNegative?' ⚠️':'')+'</td><td style="color:var(--dim);">'+_eeEsc(r.exitReason||'')+'</td></tr>').join('')
+      + '</tbody></table>';
+  }
+  const tk = document.getElementById('ee-tracker');
+  if (tk) {
+    const t = d.tracker;
+    if (!t) tk.innerHTML = '';
+    else {
+      let h = '<div style="font-size:11px;color:var(--dim);letter-spacing:1px;margin-bottom:4px;">MTF TRACKER LEADS (closed) — n='+t.all.n+' · avg '+_eeF(t.all.avgReturnPct,'%')+' · kept '+_eeF(t.all.captureRatio)+' · T/SL/timeout '+t.all.targetHits+'/'+t.all.slHits+'/'+t.all.timeouts+'</div>';
+      (t.byLeadQuality||[]).forEach(q => { h += '<div style="font-size:11px;padding:2px 0;">'+_eeEsc(q.quality)+': n='+q.n+(q.thin?' (thin)':'')+' · avg <span style="color:'+_eeCol(q.avgReturnPct)+'">'+_eeF(q.avgReturnPct,'%')+'</span> · peak '+_eeF(q.avgPeakGainPct,'%')+' · worst dip '+_eeF(q.avgWorstDrawdownPct,'%')+' · kept '+_eeF(q.captureRatio)+'</div>'; });
+      const rr = t.recent || [];
+      if (rr.length) h += '<div style="max-height:40vh;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid rgba(255,255,255,0.08);border-radius:8px;margin-top:6px;"><table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr style="position:sticky;top:0;background:var(--bg,#0b0b0b);color:var(--dim);text-align:left;"><th style="padding:5px 6px;">TIME (IST)</th><th>SIDE</th><th>QUALITY</th><th>PEAK</th><th>RET</th><th>END</th></tr></thead><tbody>'
+        + rr.map(r => '<tr style="border-top:1px solid rgba(255,255,255,0.06);"><td style="padding:5px 6px;white-space:nowrap;">'+_eeTime(r.ts)+'</td><td>'+_eeEsc(String(r.signal||'').replace('BUY ',''))+'</td><td>'+_eeEsc(r.quality)+'</td><td>'+_eeF(r.mfe,'%')+'</td><td style="color:'+_eeCol(r.ret)+';font-weight:700;">'+_eeF(r.ret,'%')+'</td><td style="color:var(--dim);">'+r.outcome+'</td></tr>').join('')
+        + '</tbody></table></div>';
+      tk.innerHTML = h;
+    }
+  }
+}
+</script>
 
 <script>
 async function fetchCrudeInsights() {
