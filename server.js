@@ -115,6 +115,7 @@ const delayLib = require('./src/utils/coachDelayBacktest');   // 8 Oct — would
 const chaseLib = require('./src/utils/mtfChaseStudy');   // 9 Oct — do MTF leads that fire AFTER a big run in their direction do worse than early ones?
 const eeLib = require('./src/utils/entryExitQuality');   // 9 Oct — entry/exit scorecard: is the leak in the ENTRY or the EXIT?
 const voteLib = require('./src/utils/mtfVoteStudy');   // 9 Oct — does waiting for 15m / 1h agreement pay? (mtf_vote_log)
+const planLib = require('./src/utils/triggerPlan');   // 10 Oct — strike / SL / target block on LIVE trigger alerts
 const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
@@ -5435,6 +5436,15 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
             queueDigestItem(instrument, source, direction, card, agree, disagree, liqInfo);
             return;
         }
+        // 10 Oct — this alert is going out LIVE: add the paper plan (ATM strike at fire time + the instrument's Trade-Coach grid).
+        // Display only — own try/catch so a failure here can never block or change the alert. Skipped when the text already has its own SL.
+        try {
+            if (process.env.TRIGGER_PLAN_BLOCK !== 'off') {
+                const lock = lockStrikeAtFire(instrument, direction, _digestPrice(instrument));
+                const planBlock = planLib.buildTriggerPlanBlock({ direction, lock, grid: coachGridFor(instrument), msg: finalMsg });
+                if (planBlock) finalMsg = planLib.insertBeforeFooter(finalMsg, planBlock);
+            }
+        } catch (e) { console.warn('[Trigger Alert] plan block error (alert sent without it):', e.message); }
     } catch (e) {
         console.warn('[Trigger Alert] scoring error, sending plain alert:', e.message);
         finalMsg = msg;
