@@ -116,6 +116,7 @@ const chaseLib = require('./src/utils/mtfChaseStudy');   // 9 Oct — do MTF lea
 const eeLib = require('./src/utils/entryExitQuality');   // 9 Oct — entry/exit scorecard: is the leak in the ENTRY or the EXIT?
 const voteLib = require('./src/utils/mtfVoteStudy');   // 9 Oct — does waiting for 15m / 1h agreement pay? (mtf_vote_log)
 const planLib = require('./src/utils/triggerPlan');   // 10 Oct — strike / SL / target block on LIVE trigger alerts
+const regimeLeadLib = require('./src/utils/mtfLeadRegime');   // 10 Oct — did market state at the time already separate good MTF leads from bad ones?
 const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
@@ -13181,6 +13182,39 @@ app.get('/api/mtf-vote-study', async (req, res) => {
             [instrument, days]);
         const study = voteLib.computeVoteStudy(r.rows, { minN, episodeGapMin: gap });
         res.json({ success: true, instrument, days, ...study });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── MTF lead regime study (10 Oct) ───────────────────────────────────────────
+// Read-only research. /api/mtf-lead-regime?days=60&tol=10&minN=4&quality=Strong%20Confluence&format=text
+// Joins each CLOSED MTF-tracker lead (signal_performance) with the market_snapshot_log row just before it and the hour of Nifty
+// movement leading up to it: ADX on 5m/15m/1h, VIX, last-hour efficiency (one-way vs chop), whether the lead went with or against
+// that hour, time of day. Shows whether good days/leads already looked different at the moment they fired. Nothing here feeds a
+// signal, gate or alert. See src/utils/mtfLeadRegime.js.
+app.get('/api/mtf-lead-regime', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const days = clampInt(req.query.days, 60, 1, 365), tol = clampInt(req.query.tol, 10, 3, 30), minN = clampInt(req.query.minN, 4, 2, 50);
+        const leadsQ = await dbPool.query(`
+            SELECT id, ts, signal, option_type, entry, exit_premium, sl, target, target_hit, sl_hit, max_gain_pct, lead_quality
+            FROM signal_performance
+            WHERE closed = true AND (source = 'mtf' OR (source IS NULL AND lead_quality IS NOT NULL)) AND ts >= NOW() - ($1::int * INTERVAL '1 day')
+            ORDER BY ts ASC LIMIT 5000`, [days]);
+        let snaps = [];
+        if (leadsQ.rows.length) {
+            const first = new Date(leadsQ.rows[0].ts).getTime() - 90 * 60000, last = new Date(leadsQ.rows[leadsQ.rows.length - 1].ts).getTime() + 5 * 60000;
+            const sq = await dbPool.query(`
+                SELECT ts, nifty, rsi, vix, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, health_total, trend_prob, range_prob
+                FROM market_snapshot_log WHERE ts >= $1 AND ts <= $2 ORDER BY ts ASC LIMIT 80000`, [new Date(first), new Date(last)]);
+            snaps = sq.rows;
+        }
+        const quality = req.query.quality ? String(req.query.quality) : undefined;
+        const study = regimeLeadLib.computeLeadRegimeStudy(leadsQ.rows, snaps, { tolMin: tol, minN, qualityOnly: quality });
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(regimeLeadLib.formatLeadRegimeText(study));
+        res.json({ success: true, days, snapshotsRead: snaps.length, ...study });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
