@@ -9267,7 +9267,7 @@ async function closeLinkedPerfRecord(perfId, exitPremium) {
     console.log(`🔗 [Sync] Closed linked signal_performance #${perfId} alongside journal trade close (exit ₹${exitPremium})`);
 }
 
-async function closeTradeAuto(t, exitPremium, skipPerfSync = false) {
+async function closeTradeAuto(t, exitPremium, skipPerfSync = false, opts = {}) {
     // Idempotency guard (2 Sep) — closeTradeAuto() had no protection against
     // being called twice for the same trade. Confirmed live: Trade #193 got
     // closed twice in the same ~30s cycle (two different exitPremium snapshots,
@@ -9284,15 +9284,20 @@ async function closeTradeAuto(t, exitPremium, skipPerfSync = false) {
     t.exitPremium = exitPremium;
     t.pnl = parseFloat(((exitPremium - t.premium) * t.lots * LOT_SIZE).toFixed(0));
     t.status = 'CLOSED';
+    // 10 Oct — an EOD close that had NO real last premium (fell back to the entry price) shows P&L 0. Say so in the notes
+    // instead of letting it pass as a genuine flat result; the Journal also counts P&L 0 as flat, not as a loss.
+    if (opts.unverified && !/EOD close unverified/.test(t.notes || '')) {
+        t.notes = `${t.notes ? t.notes + ' · ' : ''}⚠️ EOD close unverified — no live exit premium was known, P&L 0 is a placeholder`;
+    }
     const ist = getIST();
     t.exitTime = `${String(ist.getHours()).padStart(2, '0')}:${String(ist.getMinutes()).padStart(2, '0')}`;
     if (dbPool) {
         try {
             await dbPool.query(
                 `UPDATE journal_trades
-                 SET exit_premium=$1, exit_time=$2, pnl=$3, status='CLOSED'
+                 SET exit_premium=$1, exit_time=$2, pnl=$3, status='CLOSED', notes=$5
                  WHERE id=$4`,
-                [t.exitPremium, t.exitTime, t.pnl, t.id]
+                [t.exitPremium, t.exitTime, t.pnl, t.id, t.notes || '']
             );
         } catch (e) { console.error('[closeTradeAuto] DB error:', e.message); }
     }
@@ -9407,13 +9412,25 @@ async function _updateOpenTradesMTM() {
         // (only `tradeDay !== todayDay` closed), then had nothing left to
         // evaluate it until the next stray call, hours/a day later.
         const nowMinsJournal = getIST().getHours() * 60 + getIST().getMinutes();
-        if (tradeDay && (tradeDay !== todayDay || nowMinsJournal > 930)) {
-            const eodPremium = t.lastLivePremium ?? t.currentPremium ?? t.premium;
-            console.log(`📔 [EOD] Auto-closing carried-over Trade #${t.id} (${t.type} ${t.strike}, opened ${tradeDay}) — last known premium ₹${eodPremium}`);
-            await closeTradeAuto(t, eodPremium);
+        // 10 Oct — was `> 930`. The Session-End Sweep fires at 15:30:xx (mins === 930), so `> 930` was false on the one
+        // pass that was meant to close open trades, and they stayed OPEN overnight (9 Oct 14:53 CE). `>= 930` = market closed.
+        if (tradeDay && (tradeDay !== todayDay || nowMinsJournal >= 930)) {
+            // today's live premium is a valid close price only for a trade opened TODAY — on a later day it is a different session's price
+            const known = t.lastLivePremium ?? t.currentPremium ?? (tradeDay === todayDay ? livePremium : null);
+            const eodPremium = known ?? t.premium;
+            console.log(`📔 [EOD] Auto-closing carried-over Trade #${t.id} (${t.type} ${t.strike}, opened ${tradeDay}) — ${known != null ? 'last known premium' : 'NO live premium known, using entry'} ₹${eodPremium}`);
+            await closeTradeAuto(t, eodPremium, false, { unverified: known == null });
             continue;
         }
-        if (livePremium) t.lastLivePremium = livePremium;
+        if (livePremium) {
+            t.lastLivePremium = livePremium;
+            // 10 Oct — persist it (at most once a minute per trade) so a redeploy / restart cannot lose the last real premium
+            // and turn the EOD close into a fake +0. Fire-and-forget; a failed write must never affect the monitoring loop.
+            if (dbPool && (!t._lastPremSavedAt || Date.now() - t._lastPremSavedAt >= 60_000)) {
+                t._lastPremSavedAt = Date.now();
+                dbPool.query('UPDATE journal_trades SET last_premium=$1 WHERE id=$2', [livePremium, t.id]).catch(e => console.warn('[Journal] last_premium save error:', e.message));
+            }
+        }
 
         if (!livePremium || !t.premium) continue;
 
@@ -10640,6 +10657,8 @@ async function initDB() {
         // being tracked independently. perf_id lets closeTradeAuto() also
         // close the linked record so this can't happen again.
         await dbPool.query(`ALTER TABLE journal_trades ADD COLUMN IF NOT EXISTS perf_id INTEGER`).catch(()=>{});
+        // 10 Oct — last real premium seen by the monitoring loop, so the EOD close survives a restart (see _updateOpenTradesMTM)
+        await dbPool.query(`ALTER TABLE journal_trades ADD COLUMN IF NOT EXISTS last_premium NUMERIC`).catch(()=>{});
         // FIX (3 Aug): defensive backfill for the `ts` column itself, for DBs
         // created before `ts` was added to the CREATE TABLE above. Without
         // this, pre-existing rows have NULL ts — and the frontend's
@@ -15744,6 +15763,7 @@ async function initializeLiveData() {
                     suggestedEntry: row.suggested_entry != null ? parseFloat(row.suggested_entry) : null,
                     slippage      : row.slippage != null ? parseFloat(row.slippage) : null,
                     slippagePct   : row.slippage_pct != null ? parseFloat(row.slippage_pct) : null,
+                    lastLivePremium: row.last_premium != null && parseFloat(row.last_premium) > 0 ? parseFloat(row.last_premium) : undefined,
                 });
                 if (row.id >= tradeCounter) tradeCounter = row.id + 1;
             }

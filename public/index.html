@@ -7139,6 +7139,7 @@ function getTradeSummaryLocal() {
   const open        = todayTrades.filter(t => t.exit == null);
   const pnl         = realized.reduce((sum, t) => sum + (t.pnl || 0), 0);
   const wins        = realized.filter(t => (t.pnl || 0) > 0).length;
+  const decided     = realized.filter(t => (t.pnl || 0) !== 0).length;   // 10 Oct — P&L 0 (flat / unverified EOD close) is not a win or a loss
   // Slippage: across ALL logged trades (not just today) that have a matched
   // suggestedEntry — small daily sample sizes make a same-day-only average
   // noisy, so this is a running average since tracking started.
@@ -7149,7 +7150,7 @@ function getTradeSummaryLocal() {
   return {
     total: todayTrades.length, open: open.length, realized: realized.length,
     realizedPnl: pnl,
-    winRate: realized.length > 0 ? Math.round((wins / realized.length) * 100) : 0,
+    winRate: decided > 0 ? Math.round((wins / decided) * 100) : 0,
     avgSlippagePct, slippageSampleSize: withSlippage.length
   };
 }
@@ -7208,7 +7209,9 @@ function _renderJournal() {
     const wins    = closed.filter(t => (t.pnl || 0) > 0).length;
     const pnlStr  = closed.length ? (dayPnl >= 0 ? '+₹' : '₹') + dayPnl.toFixed(0) : '';
     const pnlCol  = dayPnl > 0 ? 'var(--green)' : dayPnl < 0 ? 'var(--red)' : 'var(--dim)';
-    const srStr   = closed.length ? wins + 'W/' + (closed.length - wins) + 'L' : trades.length + ' open';
+    const losses  = closed.filter(t => (t.pnl || 0) < 0).length;
+    const flats   = closed.length - wins - losses;   // 10 Oct — P&L exactly 0 is shown as F, no longer counted as a loss
+    const srStr   = closed.length ? wins + 'W/' + losses + 'L' + (flats ? '/' + flats + 'F' : '') : trades.length + ' open';
 
     // Date separator header
     html += '<div style="display:flex;align-items:center;justify-content:space-between;'
