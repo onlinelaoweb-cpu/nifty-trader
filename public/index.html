@@ -932,6 +932,10 @@ html.vn-day .gold-header-text{color:#8b6508;text-shadow:none;opacity:1;}
 .icon-btn.active{border-color:var(--green);color:var(--green);background:rgba(0,255,136,0.08);}
 .header-row2{display:flex;gap:5px;align-items:center;overflow-x:auto;scrollbar-width:none;}
 .header-row2::-webkit-scrollbar{display:none;}
+/* 10 Oct design polish: on phones the header pills wrapped off-screen ("P&" was cut) -> let them wrap */
+@media (max-width: 599px) { .header-row2{flex-wrap:wrap;overflow-x:visible;} }
+/* desktop: signal card was 860px centred while every other card is full width -> align them */
+@media (min-width: 900px) { .signal-card{max-width:none !important;margin:0 0 12px !important;} }
 .hbadge{padding:3px 9px;border-radius:20px;font-size:12px;font-weight:700;letter-spacing:0.8px;border:1px solid;white-space:nowrap;font-family:'Share Tech Mono',monospace;}
 .hbadge.market-open{color:var(--green);border-color:var(--green);background:rgba(0,255,136,0.1);box-shadow:0 0 8px rgba(0,255,136,0.15);}
 .hbadge.market-closed{color:var(--dim);border-color:var(--border);background:rgba(26,58,90,0.3);}

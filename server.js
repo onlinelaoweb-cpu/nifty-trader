@@ -15054,7 +15054,11 @@ app.get('/', (req, res) => {
     // nothing changes until the user actually sets the env var in Railway.
     try {
         let html = fs.readFileSync(__dirname + '/public/index.html', 'utf8');
-        const token = process.env.APP_TOKEN || '';
+        // 10 Oct — the token is NO LONGER written into the public page. The login overlay in index.html
+        // (password = APP_TOKEN, saved as vn_token) is the real gate now; embedding the token made it cosmetic
+        // because anyone could read it via View Source. Set INJECT_APP_TOKEN=on in Railway to restore the old
+        // behaviour (only sensible for a private, un-guessable domain).
+        const token = process.env.INJECT_APP_TOKEN === 'on' ? (process.env.APP_TOKEN || '') : '';
         // Injected at <head> level (not appended later in <body>) so this
         // runs before ANY other script tag — several existing scripts call
         // fetch()/EventSource immediately on page load, so the wrapper must
