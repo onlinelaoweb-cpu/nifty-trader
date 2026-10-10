@@ -13128,12 +13128,43 @@ app.get('/api/coach-delay-backtest', async (req, res) => {
     }
 });
 
+// ── Research-endpoint guard (10 Oct) ────────────────────────────────────────
+// The study endpoints read premium-path tables and replay them in JS. They are cheap today (tens of ms), but a refresh-happy browser tab or a
+// script must never be able to stack heavy queries on the DB pool / event loop. This guard (applied to the 10 Oct study endpoints only):
+//   - serves an identical request from a 60-second cache (successful responses only, bodies <= 400 KB, at most 20 entries),
+//   - rejects an identical request that is still running, and allows at most 2 studies to run at the same time (HTTP 429).
+// No external API is ever called by these endpoints (database only), so this also keeps them far away from any broker rate limit.
+const _studyCache = new Map();          // url -> { ts, type, body }
+const _studyRunning = new Set();        // urls currently computing
+function studyGuard(req, res, next) {
+    const key = req.originalUrl, now = Date.now();
+    const hit = _studyCache.get(key);
+    if (hit && now - hit.ts < 60000) { res.set('X-Study-Cache', 'hit'); res.type(hit.type); return res.send(hit.body); }
+    if (_studyRunning.has(key)) return res.status(429).json({ success: false, error: 'This study is already running — retry in a few seconds.' });
+    if (_studyRunning.size >= 2) return res.status(429).json({ success: false, error: 'Two studies are already running — retry in a few seconds.' });
+    _studyRunning.add(key);
+    const done = () => { _studyRunning.delete(key); };
+    res.on('finish', done); res.on('close', done);
+    const origSend = res.send.bind(res);
+    res.send = (body) => {
+        try {
+            const type = String(res.get('Content-Type') || 'application/json');
+            if (typeof body === 'string' && body.length <= 400000 && res.statusCode === 200 && !body.includes('"success":false')) {
+                if (_studyCache.size >= 20) _studyCache.delete(_studyCache.keys().next().value);
+                _studyCache.set(key, { ts: Date.now(), type, body });
+            }
+        } catch (e) { /* caching is best effort */ }
+        return origSend(body);
+    };
+    next();
+}
+
 // ── Exit-rule study (10 Oct) ────────────────────────────────────────────────
 // Read-only research. /api/exit-rule-study?instrument=NIFTY&source=&days=60&decluster=30&grid=LIVE&minHalfN=30&minSourceN=15&format=text
 // Replays the stored premium paths under 9 exit rules (live grid, late breakeven, book 20-25% then trail, time stop, early cut, combo)
 // on the SAME declustered trades. BASE is checked against simulateTradeCoachCore. Nothing here feeds signals, gates or alerts.
 // See src/utils/exitRuleStudy.js for the method and its limits.
-app.get('/api/exit-rule-study', async (req, res) => {
+app.get('/api/exit-rule-study', studyGuard, async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
         const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
@@ -13141,7 +13172,7 @@ app.get('/api/exit-rule-study', async (req, res) => {
         const params = [instrument];
         let where = `o.coach_result IS NOT NULL AND o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = $1`;
         if (req.query.source) { params.push(String(req.query.source)); where += ` AND o.source = $${params.length}`; }
-        if (req.query.days) { params.push(clampInt(req.query.days, 60, 1, 365)); where += ` AND o.fire_ts >= NOW() - ($${params.length}::int * INTERVAL '1 day')`; }
+        params.push(clampInt(req.query.days, 60, 1, 365)); where += ` AND o.fire_ts >= NOW() - ($${params.length}::int * INTERVAL '1 day')`;   // always bounded (default 60 days)
         const r = await dbPool.query(`
             SELECT o.id, o.source, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
             FROM signal_outcomes o
@@ -13191,7 +13222,7 @@ app.get('/api/exit-rule-study', async (req, res) => {
 // (from the last 5-min market_snapshot_log row, which now stores vwap / fib_dir / fib_l0 / fib_l100 / reaction_zone)? Compares results of
 // "reaction" entries (at VWAP, 38.2-61.8% retrace) with "action" entries (extended). Only NIFTY, only signals fired after the logging began.
 // Nothing here feeds signals, gates or alerts. See src/utils/entryContextStudy.js.
-app.get('/api/entry-context-study', async (req, res) => {
+app.get('/api/entry-context-study', studyGuard, async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
         const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
@@ -13235,7 +13266,7 @@ app.get('/api/entry-context-study', async (req, res) => {
 // Replays the per-trade Trade-Coach results of the declustered trigger outcomes, in time order, under flat lots vs fixed-rupee-risk sizing
 // (plus a daily loss stop and half-size-after-two-losses). Rupee P&L = result% x entry premium x lot size x lots. Paper trading only.
 // Nothing here feeds signals, gates or alerts. See src/utils/sizingStudy.js.
-app.get('/api/sizing-study', async (req, res) => {
+app.get('/api/sizing-study', studyGuard, async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
         const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
