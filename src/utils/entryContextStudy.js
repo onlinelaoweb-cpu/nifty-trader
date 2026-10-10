@@ -89,7 +89,8 @@ function computeEntryContextStudy(trades, snaps, simulate, opts = {}) {
             sweepB: s.sweep !== undefined ? OF.sweepBucket(s.sweep, side) : null,
             vaB: OF.valueAreaBucket(t.entryPrice, s, side),
             rangeB: avgRange && spanNow !== null ? OF.rangeUsedBucket((spanNow / avgRange) * 100) : null,
-            flowB: OF.classifyFlow(A, i, side), absB: OF.classifyAbsorption(A, i, side) });
+            flowB: OF.classifyFlow(A, i, side), absB: OF.classifyAbsorption(A, i, side),
+            gammaB: OF.gammaFlipBucket(t.entryPrice, s.gammaFlip), pinB: OF.maxGammaBucket(t.entryPrice, s.maxGamma) });
     }
     rows.sort((a, b) => a.fireTs - b.fireTs);
 
@@ -120,17 +121,20 @@ function computeEntryContextStudy(trades, snaps, simulate, opts = {}) {
     const byFlow = dyn('flowB', ['CONFIRMED', 'MIXED', 'AGAINST', 'DIVERGENCE']);
     const byAbsorption = dyn('absB', ['ABSORPTION_AT_EXTREME', 'ABSORPTION', 'NONE']);
 
+    const byGammaFlip = dyn('gammaB', ['ABOVE gamma flip (positive-gamma side)', 'AT gamma-flip level (+-0.15%)', 'BELOW gamma flip (negative-gamma side)']);
+    const byMaxGamma = dyn('pinB', ['PINNED: within 0.15% of max-gamma strike', 'near max-gamma strike (0.15-0.4%)', 'away from max-gamma strike (> 0.4%)']);
+
     const verdictFor = b => {
         if (b.n < minN) return 'thin';
         if (b.olderHalfVsOverall === null || b.newerHalfVsOverall === null) return 'one half only';
         return b.olderHalfVsOverall > 0 && b.newerHalfVsOverall > 0 ? 'ABOVE average in both halves' : b.olderHalfVsOverall < 0 && b.newerHalfVsOverall < 0 ? 'below average in both halves' : 'mixed';
     };
-    for (const list of [byVwap, byFib, byZone, reactionVsAction, bySweep, byValueArea, byRangeUsed, byFlow, byAbsorption]) for (const b of list) b.verdict = verdictFor(b);
+    for (const list of [byVwap, byFib, byZone, reactionVsAction, bySweep, byValueArea, byRangeUsed, byFlow, byAbsorption, byGammaFlip, byMaxGamma]) for (const b of list) b.verdict = verdictFor(b);
 
     return {
         tradesUsed: rows.length, tradesConsidered: used.length, skippedNoSnapshot: noSnapshot, skippedNoVwap: noVwap,
         overall: { avgPct: r2(overall.avg), winPct: rows.length ? Math.round(1000 * rows.filter(r => r.result > 0).length / rows.length) / 10 : null },
-        reactionVsAction, byVwap, byFib, byZone, bySweep, byValueArea, byRangeUsed, byFlow, byAbsorption,
+        reactionVsAction, byVwap, byFib, byZone, bySweep, byValueArea, byRangeUsed, byFlow, byAbsorption, byGammaFlip, byMaxGamma,
         note: 'VWAP/impulse come from the last 5-min snapshot before the signal (up to ~7 min old). Only signals fired after the context logging started are usable, so n starts small. A bucket counts only if it is above the overall average in BOTH halves with enough trades; several buckets are compared, so one will look good by chance.',
     };
 }
@@ -154,6 +158,8 @@ function formatEntryContextText(res) {
     if ((res.byRangeUsed || []).length) block('DAY RANGE USED so far vs the average range of the previous days', res.byRangeUsed);
     if ((res.byFlow || []).length) block('FUTURES VOLUME-DELTA PROXY over the last 30 min (bar delta = step volume x close position in bar; NOT a footprint)', res.byFlow);
     if ((res.byAbsorption || []).length) block('ABSORPTION (heavy futures volume, small range) in the last 10 min', res.byAbsorption);
+    if ((res.byGammaFlip || []).length) block('GAMMA REGIME - spot vs the Option-Greeks gamma-flip level (snapshot value, can be ~5 min old)', res.byGammaFlip);
+    if ((res.byMaxGamma || []).length) block('PIN - distance to the max-gamma strike', res.byMaxGamma);
     L.push('');
     L.push(res.note);
     return L.join('\n');

@@ -155,4 +155,22 @@ function rangeUsedBucket(pct) {
     return 'range used > 100% (already stretched)';
 }
 
-module.exports = { lastBarSummary, detectPrevDaySweep, buildContextExtras, annotateBars, priorAvgRange, classifyFlow, classifyAbsorption, valueAreaBucket, sweepBucket, rangeUsedBucket, istDay };
+// Gamma regime from the Option-Greeks dashboard's flip level: above the flip dealers are net long gamma (moves get damped / pinned),
+// below it they are net short gamma (moves get amplified). +-0.15% around the flip is its own bucket because the regime is unclear there.
+function gammaFlipBucket(price, flip) {
+    if (!(price > 0) || !(flip > 0)) return null;
+    const d = ((price - flip) / flip) * 100;
+    if (Math.abs(d) <= 0.15) return 'AT gamma-flip level (+-0.15%)';
+    return d > 0 ? 'ABOVE gamma flip (positive-gamma side)' : 'BELOW gamma flip (negative-gamma side)';
+}
+
+// Distance to the max-gamma strike (where option open interest concentrates gamma - the classic "pin").
+function maxGammaBucket(price, strike) {
+    if (!(price > 0) || !(strike > 0)) return null;
+    const d = Math.abs((price - strike) / strike) * 100;
+    if (d <= 0.15) return 'PINNED: within 0.15% of max-gamma strike';
+    if (d <= 0.4) return 'near max-gamma strike (0.15-0.4%)';
+    return 'away from max-gamma strike (> 0.4%)';
+}
+
+module.exports = { gammaFlipBucket, maxGammaBucket, lastBarSummary, detectPrevDaySweep, buildContextExtras, annotateBars, priorAvgRange, classifyFlow, classifyAbsorption, valueAreaBucket, sweepBucket, rangeUsedBucket, istDay };

@@ -89,3 +89,24 @@ assert.strictEqual(r2.bySweep.length, 0); assert.strictEqual(r2.byFlow.length, 0
 assert.doesNotThrow(() => E.formatEntryContextText(r2));
 
 console.log('orderflowContext tests passed');
+
+// ── gamma slices ──
+(() => {
+    const A2 = require('../src/utils/orderflowContext'), E2 = require('../src/utils/entryContextStudy');
+    assert.strictEqual(A2.gammaFlipBucket(22600, 22500), 'ABOVE gamma flip (positive-gamma side)');
+    assert.strictEqual(A2.gammaFlipBucket(22400, 22500), 'BELOW gamma flip (negative-gamma side)');
+    assert.strictEqual(A2.gammaFlipBucket(22510, 22500), 'AT gamma-flip level (+-0.15%)');
+    assert.strictEqual(A2.gammaFlipBucket(22510, null), null); assert.strictEqual(A2.gammaFlipBucket(0, 22500), null);
+    assert.strictEqual(A2.maxGammaBucket(22510, 22500), 'PINNED: within 0.15% of max-gamma strike');
+    assert.strictEqual(A2.maxGammaBucket(22550, 22500), 'near max-gamma strike (0.15-0.4%)');
+    assert.strictEqual(A2.maxGammaBucket(22700, 22500), 'away from max-gamma strike (> 0.4%)');
+    assert.strictEqual(A2.maxGammaBucket(22700, undefined), null);
+    const T = Date.UTC(2026, 9, 8, 4, 0), sn = [], tr = [];
+    for (let k = 0; k < 200; k++) sn.push({ ms: T + k * 300000, vwap: 22500, zone: 'NEUTRAL', fibDir: null, fibL0: NaN, fibL100: NaN, gammaFlip: 22400, maxGamma: 22700 });
+    for (let n = 0; n < 40; n++) tr.push({ id: n, source: 'X', direction: 'BULLISH', fireTs: T + (n * 4 + 2) * 300000 + 1000, entryPrice: n % 2 ? 22500 : 22300, entryPremium: 100, path: [{ ts: 1, premium: 100 }, { ts: 2, premium: 101 }, { ts: 3, premium: 102 }] });
+    const r = E2.computeEntryContextStudy(tr, sn, () => ({ coachResult: 1 }), { declusterMin: 0, minN: 5 });
+    assert.strictEqual(r.byGammaFlip.length, 2); assert.strictEqual(r.byMaxGamma.length, 1); assert.ok(E2.formatEntryContextText(r).includes('GAMMA REGIME'));
+    const old = E2.computeEntryContextStudy(tr, sn.map(s => ({ ms: s.ms, vwap: s.vwap })), () => ({ coachResult: 1 }), { declusterMin: 0 });
+    assert.strictEqual(old.byGammaFlip.length, 0); assert.strictEqual(old.byMaxGamma.length, 0);
+    console.log('gamma slice tests passed');
+})();

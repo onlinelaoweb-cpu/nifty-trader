@@ -13257,8 +13257,9 @@ app.get('/api/entry-context-study', studyGuard, async (req, res) => {
         }
         let snaps = [];
         try {
-            const s = await dbPool.query(`SELECT ts, nifty, vwap, fib_dir, fib_l0, fib_l100, reaction_zone, poc, vah, val, pdh, day_high, day_low, fut_vol, bar_clv, bar_rng_pct, sweep_lvl FROM market_snapshot_log WHERE vwap IS NOT NULL AND ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY ts ASC LIMIT 60000`, [days + 1]);
+            const s = await dbPool.query(`SELECT ts, nifty, vwap, fib_dir, fib_l0, fib_l100, reaction_zone, poc, vah, val, pdh, day_high, day_low, fut_vol, bar_clv, bar_rng_pct, sweep_lvl, gamma_flip, max_gamma_strike FROM market_snapshot_log WHERE vwap IS NOT NULL AND ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY ts ASC LIMIT 60000`, [days + 1]);
             snaps = s.rows.map(x => ({ ms: new Date(x.ts).getTime(), vwap: Number(x.vwap), fibDir: x.fib_dir || null, fibL0: x.fib_l0 === null ? NaN : Number(x.fib_l0), fibL100: x.fib_l100 === null ? NaN : Number(x.fib_l100), zone: x.reaction_zone || null,
+                gammaFlip: x.gamma_flip === null ? null : Number(x.gamma_flip), maxGamma: x.max_gamma_strike === null ? null : Number(x.max_gamma_strike),
                 nifty: Number(x.nifty), poc: x.poc === null ? null : Number(x.poc), vah: x.vah === null ? null : Number(x.vah), val: x.val === null ? null : Number(x.val),
                 dayHigh: x.day_high === null ? null : Number(x.day_high), dayLow: x.day_low === null ? null : Number(x.day_low),
                 futVol: x.fut_vol === null ? null : Number(x.fut_vol), barClv: x.bar_clv === null ? null : Number(x.bar_clv), barRngPct: x.bar_rng_pct === null ? null : Number(x.bar_rng_pct),
