@@ -119,7 +119,8 @@ const planLib = require('./src/utils/triggerPlan');   // 10 Oct — strike / SL 
 const regimeLeadLib = require('./src/utils/mtfLeadRegime');   // 10 Oct — did market state at the time already separate good MTF leads from bad ones?
 const ctxLib = require('./src/utils/entryContextStudy');   // 10 Oct — does entering on the VWAP / Fibonacci REACTION beat entering on the ACTION? (market_snapshot_log context)
 const sizingLib = require('./src/utils/sizingStudy');   // 10 Oct — flat lots vs fixed-rupee-risk sizing (Murarka: bigger stop -> fewer lots)
-const exitRuleLib = require('./src/utils/exitRuleStudy');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
+const exitRuleLib = require('./src/utils/exitRuleStudy');
+const ofLib = require('./src/utils/orderflowContext');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
 const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
@@ -9689,7 +9690,9 @@ async function initDB() {
         // entering on the "reaction" (near VWAP / 38-62% retrace) really beats entering on the "action". vwap_dist_pct is signed (price above VWAP = +);
         // fib_retrace_pct = how far price has pulled back into the latest impulse leg (0 = at the end of the move, 100 = back at its start).
         for (const col of ['health_total INT', 'trend_prob INT', 'range_prob INT', 'gex_cr NUMERIC', 'gamma_flip INT', 'max_gamma_strike INT',
-                           'vwap NUMERIC', 'vwap_dist_pct NUMERIC', 'fib_retrace_pct NUMERIC', 'fib_dir TEXT', 'reaction_zone TEXT', 'fib_l0 NUMERIC', 'fib_l100 NUMERIC']) {
+                           'vwap NUMERIC', 'vwap_dist_pct NUMERIC', 'fib_retrace_pct NUMERIC', 'fib_dir TEXT', 'reaction_zone TEXT', 'fib_l0 NUMERIC', 'fib_l100 NUMERIC',
+                           // 10 Oct (2) — Blooming Bull ideas: value area, previous-day levels, day range, futures volume + bar shape (volume-delta proxy), PDH/PDL sweep
+                           'poc NUMERIC', 'vah NUMERIC', 'val NUMERIC', 'pdh NUMERIC', 'pdl NUMERIC', 'day_high NUMERIC', 'day_low NUMERIC', 'fut_vol BIGINT', 'bar_clv NUMERIC', 'bar_rng_pct NUMERIC', 'sweep_lvl TEXT']) {
             await dbPool.query(`ALTER TABLE market_snapshot_log ADD COLUMN IF NOT EXISTS ${col}`).catch(e => console.warn('[snapshot] add column failed:', e.message));
         }
         console.log('✅ PostgreSQL market_snapshot_log table ready');
@@ -11035,7 +11038,16 @@ async function saveMarketSnapshot() {
                 ctxVals = [r2n(s.vwap), r2n(gate?.vwapDistPct), r2n(retrace), gate?.fiboInfo?.direction ?? null, gate?.zone ?? null, r2n(fib?.level0), r2n(fib?.level100)];
             }
         } catch (e) { /* context is optional */ }
+        // 10 Oct (2) — value area / prev-day levels / day range / futures volume / bar shape / PDH-PDL sweep (market hours only; failure leaves NULLs)
+        let ofVals = [null, null, null, null, null, null, null, null, null, null, null];
+        try {
+            if (isMarketOpen() && s.nifty > 0) {
+                const x = ofLib.buildContextExtras({ price: s.nifty, dayHigh: s.wsHigh, dayLow: s.wsLow, futVolume: s.wsVolume, poc: s.poc, pdh: s.srLevels?.pdH, pdl: s.srLevels?.pdL, candles: getSessionCandles() });
+                ofVals = [x.poc, x.vah, x.val, x.pdh, x.pdl, x.dayHigh, x.dayLow, x.futVol, x.barClv, x.barRngPct, x.sweep];
+            }
+        } catch (e) { /* optional */ }
         const attempts = [
+            { cols: BASE_COLS + ', health_total, trend_prob, range_prob, gex_cr, gamma_flip, max_gamma_strike, vwap, vwap_dist_pct, fib_retrace_pct, fib_dir, reaction_zone, fib_l0, fib_l100, poc, vah, val, pdh, pdl, day_high, day_low, fut_vol, bar_clv, bar_rng_pct, sweep_lvl', vals: [...baseVals, ...healthVals, ...greeksVals, ...ctxVals, ...ofVals] },
             { cols: BASE_COLS + ', health_total, trend_prob, range_prob, gex_cr, gamma_flip, max_gamma_strike, vwap, vwap_dist_pct, fib_retrace_pct, fib_dir, reaction_zone, fib_l0, fib_l100', vals: [...baseVals, ...healthVals, ...greeksVals, ...ctxVals] },
             { cols: BASE_COLS + ', health_total, trend_prob, range_prob, gex_cr, gamma_flip, max_gamma_strike', vals: [...baseVals, ...healthVals, ...greeksVals] },
             { cols: BASE_COLS + ', health_total, trend_prob, range_prob', vals: [...baseVals, ...healthVals] },
@@ -13245,8 +13257,12 @@ app.get('/api/entry-context-study', studyGuard, async (req, res) => {
         }
         let snaps = [];
         try {
-            const s = await dbPool.query(`SELECT ts, vwap, fib_dir, fib_l0, fib_l100, reaction_zone FROM market_snapshot_log WHERE vwap IS NOT NULL AND ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY ts ASC LIMIT 60000`, [days + 1]);
-            snaps = s.rows.map(x => ({ ms: new Date(x.ts).getTime(), vwap: Number(x.vwap), fibDir: x.fib_dir || null, fibL0: x.fib_l0 === null ? NaN : Number(x.fib_l0), fibL100: x.fib_l100 === null ? NaN : Number(x.fib_l100), zone: x.reaction_zone || null }));
+            const s = await dbPool.query(`SELECT ts, nifty, vwap, fib_dir, fib_l0, fib_l100, reaction_zone, poc, vah, val, pdh, day_high, day_low, fut_vol, bar_clv, bar_rng_pct, sweep_lvl FROM market_snapshot_log WHERE vwap IS NOT NULL AND ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY ts ASC LIMIT 60000`, [days + 1]);
+            snaps = s.rows.map(x => ({ ms: new Date(x.ts).getTime(), vwap: Number(x.vwap), fibDir: x.fib_dir || null, fibL0: x.fib_l0 === null ? NaN : Number(x.fib_l0), fibL100: x.fib_l100 === null ? NaN : Number(x.fib_l100), zone: x.reaction_zone || null,
+                nifty: Number(x.nifty), poc: x.poc === null ? null : Number(x.poc), vah: x.vah === null ? null : Number(x.vah), val: x.val === null ? null : Number(x.val),
+                dayHigh: x.day_high === null ? null : Number(x.day_high), dayLow: x.day_low === null ? null : Number(x.day_low),
+                futVol: x.fut_vol === null ? null : Number(x.fut_vol), barClv: x.bar_clv === null ? null : Number(x.bar_clv), barRngPct: x.bar_rng_pct === null ? null : Number(x.bar_rng_pct),
+                sweep: x.pdh === null ? undefined : (x.sweep_lvl || null) }));   // undefined = no previous-day level known for that row (not "no sweep")
         } catch (e) { return res.json({ success: false, error: 'VWAP context columns not available yet (they are created at startup and filled from the first market session after this deploy): ' + e.message }); }
         const gridName = String(req.query.grid || 'LIVE').toUpperCase();
         const grid = gridName === 'LIVE' ? coachGridFor(instrument) : (COACH_GRID_CANDIDATES[gridName] || coachGridFor(instrument));

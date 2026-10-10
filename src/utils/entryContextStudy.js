@@ -9,6 +9,8 @@
 // can be used; buckets are small at first; a bucket only counts as consistent if it beats the overall average in BOTH halves.
 // Research only — nothing here feeds signals, gates or alerts. PURE.
 
+const OF = require('./orderflowContext');
+
 const mean = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : null;
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const r2 = v => v === null || v === undefined || !Number.isFinite(v) ? null : Math.round(v * 100) / 100;
@@ -64,6 +66,7 @@ function computeEntryContextStudy(trades, snaps, simulate, opts = {}) {
     const usable = (trades || []).filter(t => t && t.entryPremium > 0 && t.entryPrice > 0 && Array.isArray(t.path) && t.path.length >= 3 && Number.isFinite(t.fireTs) && sideOf(t.direction) !== null);
     const used = typeof opts.decluster === 'function' ? opts.decluster(usable, opts.declusterMin ?? 30) : usable;
 
+    const A = OF.annotateBars(S);                       // same indices as S: adds barVol / delta from futures volume steps
     const rows = [];
     let noSnapshot = 0, noVwap = 0;
     for (const t of used) {
@@ -80,7 +83,13 @@ function computeEntryContextStudy(trades, snaps, simulate, opts = {}) {
         else if ((s.fibDir === 'UP' ? 1 : -1) !== side) fibState = 'impulse AGAINST the trade';
         else { retrace = ((t.entryPrice - s.fibL0) / (s.fibL100 - s.fibL0)) * 100; fibState = 'aligned'; }
         const peak = Math.max(...t.path.map(p => ((p.premium - t.entryPremium) / t.entryPremium) * 100));
-        rows.push({ id: t.id, source: t.source || '?', fireTs: t.fireTs, day: new Date(t.fireTs + 330 * 60000).toISOString().slice(0, 10), result: sim.coachResult, peak, alignedVwapPct: aligned, retrace, fibState, zone: s.zone || null });
+        const day = new Date(t.fireTs + 330 * 60000).toISOString().slice(0, 10);
+        const avgRange = OF.priorAvgRange(S, day), spanNow = s.dayHigh > 0 && s.dayLow > 0 ? s.dayHigh - s.dayLow : null;
+        rows.push({ id: t.id, source: t.source || '?', fireTs: t.fireTs, day, result: sim.coachResult, peak, alignedVwapPct: aligned, retrace, fibState, zone: s.zone || null,
+            sweepB: s.sweep !== undefined ? OF.sweepBucket(s.sweep, side) : null,
+            vaB: OF.valueAreaBucket(t.entryPrice, s, side),
+            rangeB: avgRange && spanNow !== null ? OF.rangeUsedBucket((spanNow / avgRange) * 100) : null,
+            flowB: OF.classifyFlow(A, i, side), absB: OF.classifyAbsorption(A, i, side) });
     }
     rows.sort((a, b) => a.fireTs - b.fireTs);
 
@@ -99,17 +108,29 @@ function computeEntryContextStudy(trades, snaps, simulate, opts = {}) {
     const isReaction = r => (r.alignedVwapPct >= -0.15 && r.alignedVwapPct <= 0.15) || (r.retrace !== null && r.retrace >= 38.2 && r.retrace <= 61.8);
     const reactionVsAction = [mk('REACTION entry (at VWAP or 38.2-61.8% retrace)', rows.filter(isReaction)), mk('everything else', rows.filter(r => !isReaction(r)))];
 
+    // dynamic buckets for the order-flow / level slices (only labels that actually occur; rows with no data for a slice are left out of it)
+    const dyn = (key, order) => {
+        const labels = [...new Set(rows.map(r => r[key]).filter(Boolean))];
+        labels.sort((a, b) => (order.indexOf(a) < 0 ? 99 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 99 : order.indexOf(b)) || (a < b ? -1 : 1));
+        return labels.map(l => mk(l, rows.filter(r => r[key] === l)));
+    };
+    const bySweep = dyn('sweepB', ['prev-day level SWEPT & reclaimed, trade WITH the reversal', 'prev-day level swept, trade AGAINST the reversal', 'no sweep in last 15 min']);
+    const byValueArea = dyn('vaB', []);
+    const byRangeUsed = dyn('rangeB', ['range used < 50% of usual', 'range used 50-75%', 'range used 75-100%', 'range used > 100% (already stretched)']);
+    const byFlow = dyn('flowB', ['CONFIRMED', 'MIXED', 'AGAINST', 'DIVERGENCE']);
+    const byAbsorption = dyn('absB', ['ABSORPTION_AT_EXTREME', 'ABSORPTION', 'NONE']);
+
     const verdictFor = b => {
         if (b.n < minN) return 'thin';
         if (b.olderHalfVsOverall === null || b.newerHalfVsOverall === null) return 'one half only';
         return b.olderHalfVsOverall > 0 && b.newerHalfVsOverall > 0 ? 'ABOVE average in both halves' : b.olderHalfVsOverall < 0 && b.newerHalfVsOverall < 0 ? 'below average in both halves' : 'mixed';
     };
-    for (const list of [byVwap, byFib, byZone, reactionVsAction]) for (const b of list) b.verdict = verdictFor(b);
+    for (const list of [byVwap, byFib, byZone, reactionVsAction, bySweep, byValueArea, byRangeUsed, byFlow, byAbsorption]) for (const b of list) b.verdict = verdictFor(b);
 
     return {
         tradesUsed: rows.length, tradesConsidered: used.length, skippedNoSnapshot: noSnapshot, skippedNoVwap: noVwap,
         overall: { avgPct: r2(overall.avg), winPct: rows.length ? Math.round(1000 * rows.filter(r => r.result > 0).length / rows.length) / 10 : null },
-        reactionVsAction, byVwap, byFib, byZone,
+        reactionVsAction, byVwap, byFib, byZone, bySweep, byValueArea, byRangeUsed, byFlow, byAbsorption,
         note: 'VWAP/impulse come from the last 5-min snapshot before the signal (up to ~7 min old). Only signals fired after the context logging started are usable, so n starts small. A bucket counts only if it is above the overall average in BOTH halves with enough trades; several buckets are compared, so one will look good by chance.',
     };
 }
@@ -128,6 +149,11 @@ function formatEntryContextText(res) {
     block('BY DISTANCE FROM VWAP (positive = price already moved in the trade direction)', res.byVwap);
     block('BY FIBONACCI RETRACEMENT of the latest impulse leg (only when the leg is in the trade direction)', res.byFib);
     block('BY APP "Law 3" ZONE LABEL (direction-agnostic)', res.byZone);
+    if ((res.bySweep || []).length) block('PREVIOUS-DAY HIGH/LOW SWEEP (wick beyond the level, then close back inside)', res.bySweep);
+    if ((res.byValueArea || []).length) block('LOCATION vs VALUE AREA (VAH / VAL / POC)', res.byValueArea);
+    if ((res.byRangeUsed || []).length) block('DAY RANGE USED so far vs the average range of the previous days', res.byRangeUsed);
+    if ((res.byFlow || []).length) block('FUTURES VOLUME-DELTA PROXY over the last 30 min (bar delta = step volume x close position in bar; NOT a footprint)', res.byFlow);
+    if ((res.byAbsorption || []).length) block('ABSORPTION (heavy futures volume, small range) in the last 10 min', res.byAbsorption);
     L.push('');
     L.push(res.note);
     return L.join('\n');
