@@ -1490,6 +1490,28 @@ html.vn-day .gold-header-text{color:#8b6508;text-shadow:none;opacity:1;}
 .j-stab.active{background:rgba(0,255,136,0.08);border-color:var(--green);color:var(--green);box-shadow:0 0 12px rgba(0,255,136,0.1);}
 .j-section{display:none;}
 .j-section.active{display:block;}
+.aj-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:4px 0 6px;}
+.aj-title{font-family:'Orbitron',monospace;font-size:12px;font-weight:700;letter-spacing:1.5px;color:var(--green);}
+.aj-sub{display:block;font-family:inherit;font-size:10.5px;font-weight:400;letter-spacing:0;color:var(--dim);margin-top:2px;}
+.aj-ctl{display:flex;gap:6px;}
+.aj-ctl select,.aj-ctl button{background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:5px 8px;font-size:12px;}
+.aj-note{font-size:11.5px;color:var(--dim);margin:2px 0 8px;line-height:1.5;}
+.aj-foot{font-size:10.5px;color:var(--dim);line-height:1.55;margin:12px 0 6px;opacity:.85;}
+.aj-grp{background:var(--bg2);border:1px solid var(--border);border-radius:10px;margin:0 0 8px;overflow:hidden;}
+.aj-grp>summary{list-style:none;cursor:pointer;padding:9px 10px;display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.aj-grp>summary::-webkit-details-marker{display:none;}
+.aj-gname{font-weight:700;font-size:13px;color:var(--bright);}
+.aj-ginst{font-size:10px;color:var(--dim);letter-spacing:1px;margin-right:6px;}
+.aj-muted{font-size:10px;color:var(--amber);border:1px solid var(--amber);border-radius:6px;padding:0 5px;margin-left:6px;}
+.aj-gstats{font-size:11.5px;color:var(--dim);text-align:right;line-height:1.45;white-space:nowrap;}
+.aj-pos{color:var(--green);} .aj-neg{color:var(--red);} .aj-flat{color:var(--dim);}
+.aj-trades{padding:0 8px 8px;}
+.aj-tr{border-top:1px solid var(--border);padding:7px 2px;font-size:12px;}
+.aj-tr1{display:flex;justify-content:space-between;gap:6px;}
+.aj-tr2{font-size:11px;color:var(--dim);margin-top:2px;line-height:1.5;}
+.aj-badge{font-size:10px;border-radius:6px;padding:1px 6px;border:1px solid var(--border);color:var(--dim);margin-left:4px;}
+.aj-badge.open{color:var(--blue);border-color:var(--blue);}
+.aj-more{font-size:11px;color:var(--dim);padding:6px 2px;text-align:center;}
 
 /* ── Guide cards ── */
 .guide-section{margin-bottom:14px;}
@@ -3007,6 +3029,7 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
     <!-- Journal sub-tabs -->
     <div class="j-subtabs">
       <button class="j-stab active" id="jstab-log" onclick="switchJournalTab('log')">📔 TRADE LOG</button>
+      <button class="j-stab" id="jstab-auto" onclick="switchJournalTab('auto')">🤖 AUTO JOURNAL</button>
       <button class="j-stab" id="jstab-guide" onclick="switchJournalTab('guide')">📘 BEGINNER GUIDE</button>
     </div>
 
@@ -3094,6 +3117,21 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
 
 
     </div><!-- end jsec-log -->
+
+    <!-- ── SUB-SECTION: AUTO JOURNAL (10 Oct) — every signal logged automatically as a paper trade, strategy-wise ── -->
+    <div class="j-section" id="jsec-auto">
+      <div class="aj-head">
+        <div class="aj-title">🤖 AUTO JOURNAL <span class="aj-sub">paper trades, logged automatically from every signal</span></div>
+        <div class="aj-ctl">
+          <select id="aj-days" onchange="loadAutoJournal()"><option value="1">Today</option><option value="7">7 days</option><option value="14" selected>14 days</option><option value="30">30 days</option></select>
+          <button onclick="loadAutoJournal()">↻</button>
+        </div>
+      </div>
+      <div class="aj-note" id="aj-note">Loading…</div>
+      <div id="aj-open"></div>
+      <div id="aj-list"></div>
+      <div class="aj-foot">Entry = ATM strike (nearest to the underlying at signal time) at the option-chain premium. Exit = the app's Trade-Coach rules for that instrument: stop → breakeven lock → half book → target, plus a trailing stop on the remaining half and a 90-min time stop. Premiums refresh about once a minute, so exits can overshoot the exact level. No brokerage, slippage or spread is included. These are simulated trades — nothing is ever sent to a broker.</div>
+    </div><!-- end jsec-auto -->
 
     <!-- ── SUB-SECTION: BEGINNER GUIDE ── -->
     <div class="j-section" id="jsec-guide">
@@ -4093,6 +4131,54 @@ function switchJournalTab(tab) {
   document.querySelectorAll('.j-stab').forEach(b => b.classList.remove('active'));
   document.getElementById('jsec-' + tab).classList.add('active');
   document.getElementById('jstab-' + tab).classList.add('active');
+  if (tab === 'auto') { loadAutoJournal(); } else { clearInterval(window._ajTimer); window._ajTimer = null; }
+}
+
+// ── Auto Journal (10 Oct): strategy-wise paper trades logged automatically by the server ──
+function _ajEsc(v) { return String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function _ajCls(v) { return v === null || v === undefined ? 'aj-flat' : v > 0 ? 'aj-pos' : v < 0 ? 'aj-neg' : 'aj-flat'; }
+function _ajPct(v) { return v === null || v === undefined ? '–' : (v > 0 ? '+' : '') + Number(v).toFixed(1) + '%'; }
+function _ajRs(v) { return v === null || v === undefined ? '' : ' · ' + (v > 0 ? '+' : '') + '₹' + Math.round(v).toLocaleString('en-IN'); }
+function _ajTime(ts) { try { return new Date(ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }); } catch (e) { return ''; } }
+const _AJ_REASON = { stop_loss: 'Stop-loss', breakeven_stop: 'Breakeven stop', full_target: 'Target hit', trail_stop: 'Trailing stop', time_exit: 'Time stop', eod_exit: 'End-of-day exit', no_data: 'No price data' };
+function _ajTradeHtml(t) {
+  const open = t.state === 'OPEN', pct = open ? t.livePct : t.realized_pct, rs = open ? t.liveRs : t.realized_rs;
+  const exits = (t.exits || []).map(e => (e.reason === 'half_book' ? 'half booked @ ' : (_AJ_REASON[e.reason] || e.reason) + ' @ ') + e.premium).join(' → ');
+  const status = open ? '<span class="aj-badge open">OPEN</span>' : '<span class="aj-badge">' + _ajEsc(_AJ_REASON[t.exit_reason] || t.exit_reason || 'closed') + '</span>';
+  const lvl = open ? ' · SL ' + _ajEsc(t.stopPrem) + (t.stop_pct > 0 ? ' (locked profit)' : t.stop_pct === 0 ? ' (breakeven)' : '') + ' · target ' + _ajEsc(t.tgtPrem) + (t.halfBooked ? ' · ½ booked' : '') : '';
+  return '<div class="aj-tr"><div class="aj-tr1"><span>' + _ajTime(t.fire_ts) + ' · <b>' + _ajEsc(t.strike) + ' ' + _ajEsc(t.side) + '</b>' + status + (t.muted ? '<span class="aj-badge">muted</span>' : '') + '</span>' +
+    '<span class="' + _ajCls(pct) + '"><b>' + _ajPct(pct) + '</b>' + _ajRs(rs) + '</span></div>' +
+    '<div class="aj-tr2">in ' + _ajEsc(t.entry_premium) + (open ? ' · now ' + _ajEsc(t.last_premium) : '') + (exits ? ' · ' + _ajEsc(exits) : '') + lvl + ' · ' + _ajEsc(t.lots) + ' lots</div></div>';
+}
+async function loadAutoJournal() {
+  const days = (document.getElementById('aj-days') || {}).value || 14;
+  const note = document.getElementById('aj-note'), listEl = document.getElementById('aj-list'), openEl = document.getElementById('aj-open');
+  if (!listEl) return;
+  try {
+    const r = await fetch('/api/auto-journal?days=' + encodeURIComponent(days));
+    const d = await r.json();
+    if (!d.success) { note.textContent = 'Could not load: ' + (d.error || d.msg || 'error'); return; }
+    if (d.enabled === false) { note.textContent = 'Auto Journal is switched off or still starting. ' + (d.msg || ''); listEl.innerHTML = ''; openEl.innerHTML = ''; return; }
+    const all = (d.strategies || []).flatMap(g => g.trades);
+    const nOpen = all.filter(t => t.state === 'OPEN').length;
+    const sk = d.skipped || {};
+    note.textContent = all.length + ' paper trades in ' + d.days + ' day(s) · ' + nOpen + ' open · ' + (d.config ? d.config.lots + ' lots each, trailing ' + (d.config.trailPts ? d.config.trailPts + ' pts' : 'off') : '') +
+      ((sk.noChain || sk.stale || sk.window) ? ' · skipped since boot: ' + (sk.noChain || 0) + ' no option price, ' + (sk.stale || 0) + ' stale, ' + (sk.window || 0) + ' outside hours' : '');
+    const openT = all.filter(t => t.state === 'OPEN').sort((a, b) => new Date(b.fire_ts) - new Date(a.fire_ts));
+    openEl.innerHTML = openT.length ? '<div class="aj-grp" style="padding:6px 8px;"><div class="aj-gname" style="padding:4px 2px;">🔵 OPEN NOW</div>' + openT.map(t => '<div class="aj-ginst" style="margin-top:4px;">' + _ajEsc(t.instrument) + ' · ' + _ajEsc(t.source) + '</div>' + _ajTradeHtml(t)).join('') + '</div>' : '';
+    const openIds = new Set(JSON.parse(listEl.dataset.open || '[]'));
+    listEl.innerHTML = (d.strategies || []).map(g => {
+      const key = g.key, isOpen = openIds.has(key) ? ' open' : '';
+      const shown = g.trades.slice(0, 40), more = g.trades.length - shown.length;
+      return '<details class="aj-grp" data-key="' + _ajEsc(key) + '"' + isOpen + '><summary><span><span class="aj-ginst">' + _ajEsc(g.instrument) + '</span><span class="aj-gname">' + _ajEsc(g.source) + '</span>' + (g.muted ? '<span class="aj-muted">muted</span>' : '') + '</span>' +
+        '<span class="aj-gstats"><span class="' + _ajCls(g.avgPct) + '"><b>' + (g.closed ? _ajPct(g.avgPct) + ' avg' : 'no closed trade') + '</b>' + _ajRs(g.totalRs) + '</span><br>' + g.total + ' trades · ' + g.open + ' open' + (g.winPct !== null ? ' · win ' + g.winPct + '%' : '') + '</span></summary>' +
+        '<div class="aj-trades">' + shown.map(_ajTradeHtml).join('') + (more > 0 ? '<div class="aj-more">+ ' + more + ' older trades</div>' : '') + '</div></details>';
+    }).join('') || '<div class="aj-note">No signals logged yet in this period. Trades appear here automatically during market hours.</div>';
+    listEl.querySelectorAll('details').forEach(el => el.addEventListener('toggle', () => {
+      const ids = [...listEl.querySelectorAll('details[open]')].map(x => x.dataset.key); listEl.dataset.open = JSON.stringify(ids);
+    }));
+  } catch (e) { if (note) note.textContent = 'Could not load Auto Journal (' + e.message + ')'; }
+  if (!window._ajTimer) window._ajTimer = setInterval(() => { const sec = document.getElementById('jsec-auto'); if (sec && sec.classList.contains('active')) loadAutoJournal(); }, 20000);
 }
 
 // ── More menu toggle ──────────────────────────────────────────────────────────

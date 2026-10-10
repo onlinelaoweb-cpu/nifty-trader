@@ -121,6 +121,7 @@ const ctxLib = require('./src/utils/entryContextStudy');   // 10 Oct — does en
 const sizingLib = require('./src/utils/sizingStudy');   // 10 Oct — flat lots vs fixed-rupee-risk sizing (Murarka: bigger stop -> fewer lots)
 const exitRuleLib = require('./src/utils/exitRuleStudy');
 const ofLib = require('./src/utils/orderflowContext');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
+const { createAutoJournal } = require('./src/utils/autoJournal');   // 10 Oct — strategy-wise AUTO paper journal (signal -> ATM paper trade -> coach-managed exit)
 const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
@@ -15243,6 +15244,14 @@ app.delete('/api/event/:id', requireToken, (req,res) => {
 });
 
 // Telegram test
+// ── Auto Journal (10 Oct) — strategy-wise paper trades logged automatically from every signal; read-only for the UI ──
+let _autoJournal = null;
+app.get('/api/auto-journal', requireToken, async (req, res) => {
+    if (!_autoJournal) return res.json({ success: true, enabled: false, started: false, strategies: [], msg: 'starting (about 25s after boot)' });
+    try { res.json({ success: true, ...(await _autoJournal.report({ days: req.query.days })) }); }
+    catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 app.post('/api/telegram/test', requireToken, async (req,res) => {
     if(!isConfigured()) return res.json({success:false,msg:'Not configured — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing'});
     try {
@@ -15395,6 +15404,14 @@ function startPollingIntervals() {
     // ticks, so they simply find nothing to do during closed hours.
     const harvestOutcomesTick = () => harvestSignalOutcomes().catch(e => console.warn('[Signal Outcomes] harvest tick error:', e.message));
     setTimeout(() => { harvestOutcomesTick(); setInterval(harvestOutcomesTick, 5 * 60 * 1000); }, 150 * 1000);
+    // 10 Oct — Auto Journal: every signal -> ATM paper trade, managed by the Trade-Coach grid (AUTO_JOURNAL=off disables)
+    setTimeout(() => {
+        try {
+            _autoJournal = createAutoJournal({ dbPool, sources: OUTCOME_SOURCES, lockStrikeAtFire, getStrikePremium, coachGridFor,
+                mutedHas: key => _mutedStrategies.has(key), lotSizes: { NIFTY: LOT_SIZE, CRUDE: Number(process.env.AUTO_JOURNAL_LOT_CRUDE) || 100, BITCOIN: null }, log: m => console.log(m) });
+            _autoJournal.start().catch(e => console.warn('[AutoJournal] start failed:', e.message));
+        } catch (e) { console.warn('[AutoJournal] creation failed:', e.message); }
+    }, 25 * 1000);
     const evaluateOutcomesTick = () => evaluateSignalOutcomes().catch(e => console.warn('[Signal Outcomes] evaluate tick error:', e.message));
     setTimeout(() => { evaluateOutcomesTick(); setInterval(evaluateOutcomesTick, 5 * 60 * 1000); }, 155 * 1000);
     // 3 Oct — Bitcoin spread outcome evaluation, same 5 min cadence, staggered after evaluate.
