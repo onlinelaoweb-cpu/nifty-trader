@@ -117,6 +117,9 @@ const eeLib = require('./src/utils/entryExitQuality');   // 9 Oct — entry/exit
 const voteLib = require('./src/utils/mtfVoteStudy');   // 9 Oct — does waiting for 15m / 1h agreement pay? (mtf_vote_log)
 const planLib = require('./src/utils/triggerPlan');   // 10 Oct — strike / SL / target block on LIVE trigger alerts
 const regimeLeadLib = require('./src/utils/mtfLeadRegime');   // 10 Oct — did market state at the time already separate good MTF leads from bad ones?
+const ctxLib = require('./src/utils/entryContextStudy');   // 10 Oct — does entering on the VWAP / Fibonacci REACTION beat entering on the ACTION? (market_snapshot_log context)
+const sizingLib = require('./src/utils/sizingStudy');   // 10 Oct — flat lots vs fixed-rupee-risk sizing (Murarka: bigger stop -> fewer lots)
+const exitRuleLib = require('./src/utils/exitRuleStudy');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
 const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
 // 3 Oct — NIFTY "Classic" engine: the original 6-filter rule, tracked in parallel (pure helpers).
@@ -9682,7 +9685,11 @@ async function initDB() {
         // 8 Oct — Insights-tab readings saved with every 5-min snapshot so the regime study can test them against outcomes
         // (Market Health score, live Trend/Range probability, Option-Greeks GEX / Gamma Flip / Max Gamma strike). Older rows stay NULL. Additive only; failure is harmless
         // (saveMarketSnapshot falls back to the original columns).
-        for (const col of ['health_total INT', 'trend_prob INT', 'range_prob INT', 'gex_cr NUMERIC', 'gamma_flip INT', 'max_gamma_strike INT']) {
+        // 10 Oct — VWAP / Fibonacci context (Physics-of-Trading Law 3) saved with every snapshot so /api/entry-context-study can test whether
+        // entering on the "reaction" (near VWAP / 38-62% retrace) really beats entering on the "action". vwap_dist_pct is signed (price above VWAP = +);
+        // fib_retrace_pct = how far price has pulled back into the latest impulse leg (0 = at the end of the move, 100 = back at its start).
+        for (const col of ['health_total INT', 'trend_prob INT', 'range_prob INT', 'gex_cr NUMERIC', 'gamma_flip INT', 'max_gamma_strike INT',
+                           'vwap NUMERIC', 'vwap_dist_pct NUMERIC', 'fib_retrace_pct NUMERIC', 'fib_dir TEXT', 'reaction_zone TEXT', 'fib_l0 NUMERIC', 'fib_l100 NUMERIC']) {
             await dbPool.query(`ALTER TABLE market_snapshot_log ADD COLUMN IF NOT EXISTS ${col}`).catch(e => console.warn('[snapshot] add column failed:', e.message));
         }
         console.log('✅ PostgreSQL market_snapshot_log table ready');
@@ -11016,7 +11023,20 @@ async function saveMarketSnapshot() {
         const g = s.optionGreeks && s.optionGreeks.available ? s.optionGreeks : null;
         const healthVals = [intOrNull(s.marketHealth?.total), intOrNull(s.dayType?.trendProbability), intOrNull(s.dayType?.rangeProbability)];
         const greeksVals = [g ? numOrNull(g.gexCr) : null, g ? intOrNull(g.gammaFlipLevel) : null, g ? intOrNull(g.maxGammaStrike) : null];
+        // 10 Oct — VWAP / Fibonacci context (market hours only; any failure just leaves these NULL)
+        let ctxVals = [null, null, null, null, null, null, null];
+        try {
+            if (isMarketOpen() && s.nifty > 0) {
+                const gate = getReactionZoneGate(s.nifty, s.vwap, getSessionCandles(), null);   // direction is not used by the gate itself
+                const fib = gate && gate.fiboInfo && gate.fiboInfo.fib;
+                const retrace = fib && Number.isFinite(fib.level0) && Number.isFinite(fib.level100) && fib.level100 !== fib.level0
+                    ? ((s.nifty - fib.level0) / (fib.level100 - fib.level0)) * 100 : null;
+                const r2n = v => { const x = numOrNull(v); return x === null ? null : Math.round(x * 100) / 100; };
+                ctxVals = [r2n(s.vwap), r2n(gate?.vwapDistPct), r2n(retrace), gate?.fiboInfo?.direction ?? null, gate?.zone ?? null, r2n(fib?.level0), r2n(fib?.level100)];
+            }
+        } catch (e) { /* context is optional */ }
         const attempts = [
+            { cols: BASE_COLS + ', health_total, trend_prob, range_prob, gex_cr, gamma_flip, max_gamma_strike, vwap, vwap_dist_pct, fib_retrace_pct, fib_dir, reaction_zone, fib_l0, fib_l100', vals: [...baseVals, ...healthVals, ...greeksVals, ...ctxVals] },
             { cols: BASE_COLS + ', health_total, trend_prob, range_prob, gex_cr, gamma_flip, max_gamma_strike', vals: [...baseVals, ...healthVals, ...greeksVals] },
             { cols: BASE_COLS + ', health_total, trend_prob, range_prob', vals: [...baseVals, ...healthVals] },
             { cols: BASE_COLS, vals: baseVals },
@@ -13103,6 +13123,149 @@ app.get('/api/coach-delay-backtest', async (req, res) => {
                 'Path samples are ~5 minutes apart, so a 5-minute delay is one sample; real fills would be closer to the trigger level.',
             ],
         });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── Exit-rule study (10 Oct) ────────────────────────────────────────────────
+// Read-only research. /api/exit-rule-study?instrument=NIFTY&source=&days=60&decluster=30&grid=LIVE&minHalfN=30&minSourceN=15&format=text
+// Replays the stored premium paths under 9 exit rules (live grid, late breakeven, book 20-25% then trail, time stop, early cut, combo)
+// on the SAME declustered trades. BASE is checked against simulateTradeCoachCore. Nothing here feeds signals, gates or alerts.
+// See src/utils/exitRuleStudy.js for the method and its limits.
+app.get('/api/exit-rule-study', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const instrument = String(req.query.instrument || 'NIFTY').toUpperCase();
+        const params = [instrument];
+        let where = `o.coach_result IS NOT NULL AND o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = $1`;
+        if (req.query.source) { params.push(String(req.query.source)); where += ` AND o.source = $${params.length}`; }
+        if (req.query.days) { params.push(clampInt(req.query.days, 60, 1, 365)); where += ` AND o.fire_ts >= NOW() - ($${params.length}::int * INTERVAL '1 day')`; }
+        const r = await dbPool.query(`
+            SELECT o.id, o.source, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
+            FROM signal_outcomes o
+            JOIN signal_outcome_path p ON p.outcome_id = o.id
+            WHERE ${where}
+            ORDER BY o.id, p.sample_ts ASC`, params);
+        const byId = new Map();
+        for (const row of r.rows) {
+            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, entryPremium: Number(row.entry_premium), fireTs: new Date(row.fire_ts).getTime(), path: [] });
+            byId.get(row.id).path.push({ ts: new Date(row.sample_ts).getTime(), premium: Number(row.premium) });
+        }
+        const gridName = String(req.query.grid || 'LIVE').toUpperCase();
+        const grid = gridName === 'LIVE' ? coachGridFor(instrument) : (COACH_GRID_CANDIDATES[gridName] || coachGridFor(instrument));
+        // NIFTY only: gap at open per day (market_snapshot_log: first 09:15-09:30 snapshot vs the previous day's 15:15-15:40 one)
+        let dayGaps = {};
+        if (instrument === 'NIFTY') {
+            try {
+                const g = await dbPool.query(`SELECT ts, nifty FROM market_snapshot_log WHERE nifty > 0 AND ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY ts ASC LIMIT 60000`, [clampInt(req.query.days, 60, 1, 365) + 5]);
+                dayGaps = exitRuleLib.computeDayGaps(g.rows);
+            } catch (e) { console.warn('[ExitRuleStudy] gap lookup failed (study runs without gap slice):', e.message); }
+        }
+        const study = exitRuleLib.computeExitRuleStudy([...byId.values()], grid, {
+            declusterMin: clampInt(req.query.decluster, 30, 0, 240), minHalfN: clampInt(req.query.minHalfN, 30, 5, 500),
+            minSourceN: clampInt(req.query.minSourceN, 15, 3, 200),
+            referenceSim: (e, p, g) => simulateTradeCoachCore(e, p, g),
+            nifty: instrument === 'NIFTY', dayGaps, gapPct: Number(req.query.gap) > 0 ? Number(req.query.gap) : 0.4,
+        });
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(exitRuleLib.formatExitRuleText(study));
+        res.json({
+            success: true, instrument, source: req.query.source || 'ALL', ...study,
+            howToRead: [
+                'Every variant is run on the SAME trades (premium paths of exploratory-trigger outcomes, ~5 min samples for 90 min, declustered). avg/median/winPct = result per trade in % of the entry premium, before brokerage.',
+                'deltaVsBase = variant avg minus BASE avg (BASE = the live Trade-Coach grid, checked against the live simulator in "faithfulness"). A variant only counts if olderHalf.delta AND newerHalf.delta are both positive and each half has enough trades (verdict).',
+                'BOOK20/25 variants book half the position and then trail the rest (stop at cost, then trailGap points below its peak). TIME_45/TIME_60 exit a trade that has not reached the stated peak by that minute. EARLY_CUT_8 exits within 15 min if already -8%.',
+                'perSource shows the same comparison per trigger (only triggers with minSourceN+ trades); byHour shows avg result by the IST time the signal fired. NIFTY also gets byDayType: expiry day (Tuesday) vs other days, and gap days (open vs previous close >= gap%, default 0.4) vs no-gap days. Those slices hold few days, so read them as hints only.',
+                'Path samples are ~5 minutes apart, so real stop/target orders fill closer to their level. 9 variants are tried: one or two will look good by chance. A few days of one market regime is not proof — paper-test any lead before it becomes a rule.',
+            ],
+        });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── Entry-context study (10 Oct) ────────────────────────────────────────────
+// Read-only research. /api/entry-context-study?instrument=NIFTY&source=&days=60&decluster=30&grid=LIVE&minN=15&tol=7&format=text
+// For every trigger outcome: where did the signal's spot price sit relative to VWAP and to the latest impulse leg's Fibonacci retracement
+// (from the last 5-min market_snapshot_log row, which now stores vwap / fib_dir / fib_l0 / fib_l100 / reaction_zone)? Compares results of
+// "reaction" entries (at VWAP, 38.2-61.8% retrace) with "action" entries (extended). Only NIFTY, only signals fired after the logging began.
+// Nothing here feeds signals, gates or alerts. See src/utils/entryContextStudy.js.
+app.get('/api/entry-context-study', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const instrument = String(req.query.instrument || 'NIFTY').toUpperCase();
+        if (instrument !== 'NIFTY') return res.json({ success: false, error: 'entry-context-study supports NIFTY only (VWAP / Fibonacci context is logged for NIFTY)' });
+        const days = clampInt(req.query.days, 60, 1, 365);
+        const params = [instrument, days];
+        let where = `o.coach_result IS NOT NULL AND o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = $1 AND o.fire_ts >= NOW() - ($2::int * INTERVAL '1 day')`;
+        if (req.query.source) { params.push(String(req.query.source)); where += ` AND o.source = $${params.length}`; }
+        const r = await dbPool.query(`
+            SELECT o.id, o.source, o.direction, o.entry_price, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
+            FROM signal_outcomes o
+            JOIN signal_outcome_path p ON p.outcome_id = o.id
+            WHERE ${where}
+            ORDER BY o.id, p.sample_ts ASC`, params);
+        const byId = new Map();
+        for (const row of r.rows) {
+            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, direction: row.direction, entryPrice: Number(row.entry_price), entryPremium: Number(row.entry_premium), fireTs: new Date(row.fire_ts).getTime(), path: [] });
+            byId.get(row.id).path.push({ ts: new Date(row.sample_ts).getTime(), premium: Number(row.premium) });
+        }
+        let snaps = [];
+        try {
+            const s = await dbPool.query(`SELECT ts, vwap, fib_dir, fib_l0, fib_l100, reaction_zone FROM market_snapshot_log WHERE vwap IS NOT NULL AND ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY ts ASC LIMIT 60000`, [days + 1]);
+            snaps = s.rows.map(x => ({ ms: new Date(x.ts).getTime(), vwap: Number(x.vwap), fibDir: x.fib_dir || null, fibL0: x.fib_l0 === null ? NaN : Number(x.fib_l0), fibL100: x.fib_l100 === null ? NaN : Number(x.fib_l100), zone: x.reaction_zone || null }));
+        } catch (e) { return res.json({ success: false, error: 'VWAP context columns not available yet (they are created at startup and filled from the first market session after this deploy): ' + e.message }); }
+        const gridName = String(req.query.grid || 'LIVE').toUpperCase();
+        const grid = gridName === 'LIVE' ? coachGridFor(instrument) : (COACH_GRID_CANDIDATES[gridName] || coachGridFor(instrument));
+        const study = ctxLib.computeEntryContextStudy([...byId.values()], snaps, (e, p) => simulateTradeCoachCore(e, p, grid), {
+            tolMin: clampInt(req.query.tol, 7, 1, 30), declusterMin: clampInt(req.query.decluster, 30, 0, 240), minN: clampInt(req.query.minN, 15, 3, 200), decluster: delayLib.declusterOutcomes,
+        });
+        const out = { gridUsed: grid, snapshotsWithVwap: snaps.length, ...study };
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(ctxLib.formatEntryContextText(study) + `\n(snapshots with VWAP available: ${snaps.length})`);
+        res.json({ success: true, instrument, source: req.query.source || 'ALL', ...out });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── Position-sizing study (10 Oct) ──────────────────────────────────────────
+// Read-only research. /api/sizing-study?instrument=NIFTY&source=&days=60&decluster=30&grid=LIVE&risk=2000&maxLots=10&dayStop=3&format=text
+// Replays the per-trade Trade-Coach results of the declustered trigger outcomes, in time order, under flat lots vs fixed-rupee-risk sizing
+// (plus a daily loss stop and half-size-after-two-losses). Rupee P&L = result% x entry premium x lot size x lots. Paper trading only.
+// Nothing here feeds signals, gates or alerts. See src/utils/sizingStudy.js.
+app.get('/api/sizing-study', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const instrument = String(req.query.instrument || 'NIFTY').toUpperCase();
+        const params = [instrument, clampInt(req.query.days, 60, 1, 365)];
+        let where = `o.coach_result IS NOT NULL AND o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = $1 AND o.fire_ts >= NOW() - ($2::int * INTERVAL '1 day')`;
+        if (req.query.source) { params.push(String(req.query.source)); where += ` AND o.source = $${params.length}`; }
+        const r = await dbPool.query(`
+            SELECT o.id, o.source, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
+            FROM signal_outcomes o
+            JOIN signal_outcome_path p ON p.outcome_id = o.id
+            WHERE ${where}
+            ORDER BY o.id, p.sample_ts ASC`, params);
+        const byId = new Map();
+        for (const row of r.rows) {
+            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, entryPremium: Number(row.entry_premium), fireTs: new Date(row.fire_ts).getTime(), path: [] });
+            byId.get(row.id).path.push({ ts: new Date(row.sample_ts).getTime(), premium: Number(row.premium) });
+        }
+        const gridName = String(req.query.grid || 'LIVE').toUpperCase();
+        const grid = gridName === 'LIVE' ? coachGridFor(instrument) : (COACH_GRID_CANDIDATES[gridName] || coachGridFor(instrument));
+        const used = delayLib.declusterOutcomes([...byId.values()].filter(o => o.path.length >= 3), clampInt(req.query.decluster, 30, 0, 240));
+        const trades = [];
+        for (const o of used) {
+            const sim = simulateTradeCoachCore(o.entryPremium, [...o.path].sort((a, b) => a.ts - b.ts), grid);
+            if (sim) trades.push({ fireTs: o.fireTs, source: o.source, entryPremium: o.entryPremium, resultPct: sim.coachResult });
+        }
+        const lot = instrument === 'NIFTY' ? LOT_SIZE : 1;
+        const study = sizingLib.computeSizingStudy(trades, { riskRs: clampInt(req.query.risk, 2000, 100, 1000000), maxLots: clampInt(req.query.maxLots, 10, 1, 100), dayStopR: clampInt(req.query.dayStop, 3, 1, 20), lotSize: lot, slPct: grid.slPct });
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(sizingLib.formatSizingText(study));
+        res.json({ success: true, instrument, source: req.query.source || 'ALL', gridUsed: grid, ...study });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
