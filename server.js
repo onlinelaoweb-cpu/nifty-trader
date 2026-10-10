@@ -5447,7 +5447,7 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
         try {
             if (process.env.TRIGGER_PLAN_BLOCK !== 'off') {
                 const lock = lockStrikeAtFire(instrument, direction, _digestPrice(instrument));
-                const planBlock = planLib.buildTriggerPlanBlock({ direction, lock, grid: coachGridFor(instrument), msg: finalMsg });
+                const planBlock = planLib.buildTriggerPlanBlock({ direction, lock, grid: coachGridFor(instrument), msg: finalMsg, instrument, trailPts: process.env.AUTO_JOURNAL_TRAIL_PTS === undefined || process.env.AUTO_JOURNAL_TRAIL_PTS === '' ? 10 : Number(process.env.AUTO_JOURNAL_TRAIL_PTS) || 0 });
                 if (planBlock) finalMsg = planLib.insertBeforeFooter(finalMsg, planBlock);
             }
         } catch (e) { console.warn('[Trigger Alert] plan block error (alert sent without it):', e.message); }
