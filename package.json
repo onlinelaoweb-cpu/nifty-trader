@@ -4,7 +4,8 @@
   "description": "AI-powered NIFTY + CRUDEOIL options trading dashboard",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "for f in test/*.test.js; do node \"$f\" || exit 1; done"
   },
   "dependencies": {
     "axios": "^1.7.2",

@@ -5368,6 +5368,18 @@ function buildTrackRecordBlock(card, agree, disagree) {
     return lines.join('\n');
 }
 
+// 10 Oct — Auto Journal hook for the NIFTY Main Engine and MTF alerts (their strikeData already carries the exact strike + entry printed in the Telegram text).
+// Never throws, never blocks the alert. Managed with the same NIFTY Trade-Coach grid as every other source so strategies stay comparable.
+function journalMainAlert(source, signal, strikeData) {
+    try {
+        if (!_autoJournal || !strikeData || !(strikeData.entry > 0) || !(strikeData.strike > 0)) return;
+        const direction = signal === 'BUY CALL' ? 'BULLISH' : signal === 'BUY PUT' ? 'BEARISH' : null;
+        if (!direction) return;
+        _autoJournal.logLiveAlert({ instrument: 'NIFTY', source, direction, lock: { strike: strikeData.strike, premium: strikeData.entry, chainId: null }, grid: coachGridFor('NIFTY'), underlying: marketState.nifty })
+            .catch(e => console.warn('[AutoJournal] log failed:', e.message));
+    } catch (e) { /* never block an alert */ }
+}
+
 // Drop-in replacement for `sendRawMessage(msg)` at every exploratory-trigger
 // alert site. Never loses an alert because of this layer: any error in the
 // decoration/scoring falls back to sending the original message unchanged.
@@ -5376,6 +5388,7 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
     if (!direction) return sendRawMessage(msg);   // undirected / untracked alert — unchanged
     let finalMsg = msg;
     let countPolicyLive = false;   // 7 Oct — set only when a NIFTY alert passes the live-alert policy and actually reaches Telegram
+    let journalCtx = null;         // 10 Oct — set only once every gate has passed (this alert really goes out live)
     try {
         if (!_scorecardLoadedAt) await refreshTriggerScorecard();
         const key = `${instrument}|${source}`;
@@ -5444,9 +5457,13 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
         }
         // 10 Oct — this alert is going out LIVE: add the paper plan (ATM strike at fire time + the instrument's Trade-Coach grid).
         // Display only — own try/catch so a failure here can never block or change the alert. Skipped when the text already has its own SL.
+        // 10 Oct — one strike/premium lookup shared by the plan block AND the Auto Journal, so the journal entry equals the Telegram entry exactly.
+        let _jLock = null;
+        try { _jLock = lockStrikeAtFire(instrument, direction, _digestPrice(instrument)); } catch (e) { _jLock = null; }
+        journalCtx = { instrument, source, direction, lock: _jLock, grid: coachGridFor(instrument), underlying: _digestPrice(instrument) };
         try {
             if (process.env.TRIGGER_PLAN_BLOCK !== 'off') {
-                const lock = lockStrikeAtFire(instrument, direction, _digestPrice(instrument));
+                const lock = _jLock;
                 const planBlock = planLib.buildTriggerPlanBlock({ direction, lock, grid: coachGridFor(instrument), msg: finalMsg, instrument, trailPts: process.env.AUTO_JOURNAL_TRAIL_PTS === undefined || process.env.AUTO_JOURNAL_TRAIL_PTS === '' ? 10 : Number(process.env.AUTO_JOURNAL_TRAIL_PTS) || 0 });
                 if (planBlock) finalMsg = planLib.insertBeforeFooter(finalMsg, planBlock);
             }
@@ -5455,9 +5472,13 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
         console.warn('[Trigger Alert] scoring error, sending plain alert:', e.message);
         finalMsg = msg;
         countPolicyLive = false;
+        journalCtx = null;
     }
     if (countPolicyLive) niftyAlertPolicy.recordLive();
-    return sendRawMessage(finalMsg);
+    const sent = await sendRawMessage(finalMsg);
+    // 10 Oct — Auto Journal gets ONLY alerts that really went out live; its own try/catch so it can never affect the alert
+    if (journalCtx && _autoJournal) { try { _autoJournal.logLiveAlert(journalCtx).catch(e => console.warn('[AutoJournal] log failed:', e.message)); } catch (e) { /* never block an alert */ } }
+    return sent;
 }
 
 // ── Signal Outcomes Tracking (26 Sep) ────────────────────────────────────────
@@ -6587,6 +6608,7 @@ async function checkTelegramAlerts(newSignal) {
         dailySignalCounts.main++; dailySignalCountsDirty = true;
         alertSnapshot.similarSetupStats = await getSimilarSetupStats(newSignal, marketState.dynamicLevels?.zone).catch(e => { console.warn('[SimilarSetup] error:', e.message); return null; });
         await sendSignalAlert(alertSnapshot, prevSignal, strikeDataForAlert, mainAutoLogged);
+        journalMainAlert('Main Engine', newSignal, strikeDataForAlert);
         lastSignalFiredPrice = marketState.nifty || 0;
 
         // ── Scalp Plan alert — same confirmed signal, alternate fast-exit plan ──
@@ -6890,6 +6912,7 @@ async function checkTelegramAlerts(newSignal) {
             }
         } else if (willActuallySend) {
             await sendMTFAlert(mtfAlertSnapshot, mtfStrikeData, mtfAutoLogged);
+            journalMainAlert('MTF', mtfSignalNow, mtfStrikeData);
             lastMTFAlertAt     = Date.now();
             lastMTFAlertSignal = mtfSignalNow;
             // ── Genuine 'sent' counter (10 Aug fix) ──────────────────────────
@@ -9562,7 +9585,8 @@ async function initDB() {
         return;
     }
     try {
-        dbPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+        // 10 Oct audit — fail fast instead of queueing forever when the DB is slow/unreachable; recycle idle connections (defaults were: no connect timeout)
+        dbPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 15000 });
         dbPool.on('error', (err) => console.error('⚠️ DB pool error (idle client):', err.message));
         await dbPool.query(`
             CREATE TABLE IF NOT EXISTS trade_history (
@@ -15244,6 +15268,18 @@ app.delete('/api/event/:id', requireToken, (req,res) => {
 });
 
 // Telegram test
+// ── DB size monitor (10 Oct audit) — read-only. No table has a retention job, so this shows where the Railway volume is growing.
+app.get('/api/db-size', requireToken, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'no database' });
+    try {
+        const db = await dbPool.query(`SELECT pg_database_size(current_database())::bigint AS bytes`);
+        const t = await dbPool.query(`SELECT c.relname AS table, pg_total_relation_size(c.oid)::bigint AS bytes, GREATEST(c.reltuples,0)::bigint AS approx_rows
+            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' ORDER BY 2 DESC LIMIT 25`);
+        const mb = b => Math.round(Number(b) / 1048576 * 10) / 10;
+        res.json({ success: true, databaseMB: mb(db.rows[0].bytes), tables: t.rows.map(r => ({ table: r.table, MB: mb(r.bytes), approxRows: Number(r.approx_rows) })) });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // ── Auto Journal (10 Oct) — strategy-wise paper trades logged automatically from every signal; read-only for the UI ──
 let _autoJournal = null;
 app.get('/api/auto-journal', requireToken, async (req, res) => {
@@ -15404,11 +15440,11 @@ function startPollingIntervals() {
     // ticks, so they simply find nothing to do during closed hours.
     const harvestOutcomesTick = () => harvestSignalOutcomes().catch(e => console.warn('[Signal Outcomes] harvest tick error:', e.message));
     setTimeout(() => { harvestOutcomesTick(); setInterval(harvestOutcomesTick, 5 * 60 * 1000); }, 150 * 1000);
-    // 10 Oct — Auto Journal: every signal -> ATM paper trade, managed by the Trade-Coach grid (AUTO_JOURNAL=off disables)
+    // 10 Oct — Auto Journal: every signal SENT live to Telegram -> paper trade at the alert's own entry, managed by the Trade-Coach grid (AUTO_JOURNAL=off disables)
     setTimeout(() => {
         try {
-            _autoJournal = createAutoJournal({ dbPool, sources: OUTCOME_SOURCES, lockStrikeAtFire, getStrikePremium, coachGridFor,
-                mutedHas: key => _mutedStrategies.has(key), lotSizes: { NIFTY: LOT_SIZE, CRUDE: Number(process.env.AUTO_JOURNAL_LOT_CRUDE) || 100, BITCOIN: null }, log: m => console.log(m) });
+            _autoJournal = createAutoJournal({ dbPool, getStrikePremium,
+                lotSizes: { NIFTY: LOT_SIZE, CRUDE: Number(process.env.AUTO_JOURNAL_LOT_CRUDE) || 100, BITCOIN: null }, log: m => console.log(m) });
             _autoJournal.start().catch(e => console.warn('[AutoJournal] start failed:', e.message));
         } catch (e) { console.warn('[AutoJournal] creation failed:', e.message); }
     }, 25 * 1000);

@@ -53,41 +53,44 @@ const grid = { slPct: -15, breakevenAt: 10, halfBookAt: 15, fullExitAt: 25 };
 (async () => {
     let T = Date.UTC(2026, 9, 12, 5, 0, 0);
     const now = () => T;
-    const tbl = []; let signals = []; let prem = 100, chainOk = true, nid = 0;
+    const tbl = []; let prem = 100, nid = 0;
     const db = { query: async (sql, a) => {
         if (/^\s*CREATE/.test(sql)) return { rows: [] };
-        if (/MAX\(id\)/.test(sql)) return { rows: [{ m: 0 }] };
-        if (/FROM fast_momentum_log/.test(sql)) return { rows: signals.filter(r => r.id > a[0]) };
         if (/INSERT INTO auto_journal_trades/.test(sql)) {
-            if (tbl.find(r => r.source_table === a[0] && r.source_id === a[1])) return { rows: [] };
-            const row = { id: ++nid, source_table: a[0], source_id: a[1], state: 'OPEN', exits: [] }; tbl.push(row); return { rows: [{ id: row.id }] };
+            if (tbl.find(r => r.source_id === a[0])) return { rows: [] };
+            const row = { id: ++nid, source_id: a[0], entry: a[9], state: 'OPEN', exits: [] }; tbl.push(row); return { rows: [{ id: row.id }] };
         }
         if (/UPDATE auto_journal_trades/.test(sql)) { const r = tbl.find(x => x.id === a[0]); Object.assign(r, { state: a[1], coach: JSON.parse(a[2]), last_premium: a[3], stop_pct: a[6], exits: JSON.parse(a[7]), exit_reason: a[9], realized_pct: a[11], realized_rs: a[12] }); return { rows: [] }; }
+        if (/FROM auto_journal_trades WHERE state='OPEN'/.test(sql)) return { rows: [] };
         return { rows: [] };
     } };
-    const sources = [{ table: 'fast_momentum_log', source: 'Fast Momentum', instrument: 'NIFTY', priceExpr: 'nifty', dirExpr: 'direction' }];
     const logs = [];
-    const j = J.createAutoJournal({ dbPool: db, sources, now, log: m => logs.push(m), env: { AUTO_JOURNAL_LOTS: '2', AUTO_JOURNAL_TRAIL_PTS: '10' },
-        lockStrikeAtFire: () => (chainOk ? { strike: 24500, chainId: null, premium: prem } : null), getStrikePremium: () => prem, coachGridFor: () => grid, mutedHas: k => k === 'NIFTY|Fast Momentum' });
-    await j.start(); j.stop();
+    const j = J.createAutoJournal({ dbPool: db, now, log: m => logs.push(m), env: { AUTO_JOURNAL_LOTS: '2', AUTO_JOURNAL_TRAIL_PTS: '10' }, getStrikePremium: () => prem });
+    await j.start(); j._state.timers.forEach(clearInterval);
     const adv = async s => { T += s * 1000; await j.tick(); };
+    const alert = (over = {}) => Object.assign({ instrument: 'NIFTY', source: 'Fast Momentum', direction: 'BULLISH', lock: { strike: 24500, chainId: null, premium: 100 }, grid, underlying: 24480 }, over);
 
-    // old row ignored? (ids <= primed 0 -> nothing primed; new row appears)
-    signals.push({ id: 1, ts: new Date(T - 4000), price: 24480, direction: 'BULLISH' });
-    await j.pollSignals(); assert.strictEqual(tbl.length, 1); assert.strictEqual(j._state.open.size, 1);
-    await j.pollSignals(); assert.strictEqual(tbl.length, 1, 'no duplicate');
+    assert.strictEqual(await j.logLiveAlert(alert()), true); assert.strictEqual(tbl.length, 1); assert.strictEqual(tbl[0].entry, 100, 'entry equals the alert lock premium');
+    assert.strictEqual(await j.logLiveAlert(alert()), false, 'same strategy+direction already open'); assert.strictEqual(j._state.skipped.duplicate, 1);
+    assert.strictEqual(await j.logLiveAlert(alert({ direction: 'BEARISH' })), true, 'opposite direction is a separate trade');
+    assert.strictEqual(await j.logLiveAlert(alert({ source: 'Brahmastra' })), true, 'other strategy is separate');
+    assert.strictEqual(await j.logLiveAlert(alert({ lock: null })), false); assert.strictEqual(j._state.skipped.noChain, 1);
+    assert.strictEqual(await j.logLiveAlert(alert({ direction: 'SIDEWAYS' })), false);
+
     prem = 116; await adv(10); assert.strictEqual(tbl[0].exits.length, 1, 'half booked');
     prem = 122; await adv(10); prem = 110; await adv(10);
     assert.strictEqual(tbl[0].state, 'CLOSED'); assert.strictEqual(tbl[0].exit_reason, 'trail_stop');
-    // 0.5*16 + 0.5*10 = 13
-    assert.strictEqual(tbl[0].realized_pct, 13);
+    assert.strictEqual(tbl[0].realized_pct, 13);              // 0.5*16 + 0.5*10
 
-    // stale signal and missing chain are skipped, not guessed
-    signals.push({ id: 2, ts: new Date(T - 20 * 60000), price: 24480, direction: 'BULLISH' }); await j.pollSignals(); assert.strictEqual(tbl.length, 1);
-    chainOk = false; signals.push({ id: 3, ts: new Date(T - 1000), price: 24480, direction: 'BEARISH' }); await j.pollSignals(); assert.strictEqual(tbl.length, 1); assert.strictEqual(j._state.skipped.noChain, 1);
-    chainOk = true; prem = 100; signals.push({ id: 4, ts: new Date(T - 1000), price: 24480, direction: 'BEARISH' }); await j.pollSignals(); assert.strictEqual(tbl.length, 2);
+    // after it closes, the same strategy can journal again
+    prem = 100; assert.strictEqual(await j.logLiveAlert(alert()), true);
 
-    // square-off closes at the last premium
-    T = Date.UTC(2026, 9, 12, 9, 51, 0); await j.tick(); assert.strictEqual(tbl[1].state, 'CLOSED'); assert.strictEqual(tbl[1].exit_reason, 'eod_exit');
+    // square-off closes at the last premium; alerts after square-off are not journaled
+    T = Date.UTC(2026, 9, 12, 9, 51, 0); await j.tick(); assert.ok(tbl.filter(t => t.state === 'OPEN').length === 0); assert(tbl.some(t => t.exit_reason === 'eod_exit'));
+    assert.strictEqual(await j.logLiveAlert(alert({ source: 'Murarka' })), false); assert.strictEqual(j._state.skipped.late, 1);
+
+    // switched off -> nothing logged
+    const off = J.createAutoJournal({ dbPool: db, now, log: () => {}, env: { AUTO_JOURNAL: 'off' }, getStrikePremium: () => 1 }); await off.start();
+    assert.strictEqual(await off.logLiveAlert(alert()), false);
     console.log('autoJournal tests passed');
 })().catch(e => { console.error(e); process.exit(1); });

@@ -1,13 +1,14 @@
 'use strict';
 // ── Auto Journal (10 Oct 2026) ───────────────────────────────────────────────────────────────────────────────────────────
-// Every signal the app fires (the same *_log trigger tables the Track Record uses) is logged AUTOMATICALLY as a PAPER trade:
-//   entry  = the ATM strike (nearest strike to the underlying price at fire) at the option-chain premium at that moment
+// Every signal that is actually SENT to Telegram as a live alert (it passed auto-mute, the NIFTY alert policy, the digest hold and the Bitcoin
+// liquidity gate) is logged AUTOMATICALLY as a PAPER trade — nothing else is. So the journal holds exactly the signals you were shown:
+//   entry  = the SAME ATM strike and entry premium that the Telegram alert printed (one lookup, shared with the alert)
 //   manage = the app's own Trade-Coach grid for that instrument (SL -> breakeven lock -> half book -> full target) + time stop,
 //            plus an optional TRAILING stop on the remaining half after the half-book (AUTO_JOURNAL_TRAIL_PTS, 0 = off)
 // Nothing here places a real order or touches the manual journal (journal_trades). It is a separate table: auto_journal_trades.
 // HONEST LIMITS (also shown in the UI): premiums come from the app's option chain, which refreshes about once a minute, so a stop/target is
-// executed at the first premium seen beyond the level (it can overshoot); no spread/slippage/brokerage is modelled; a signal that arrives
-// while the chain has no quote for the strike is skipped (and counted), not guessed.
+// executed at the first premium seen beyond the level (it can overshoot); no spread/slippage/brokerage is modelled; an alert for which the chain
+// had no quote is not journaled (and counted), never guessed. A second alert of the same strategy+direction while one is still open is not a new trade.
 
 const num = v => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v))) ? null : Number(v);
 const r2 = v => v === null ? null : Math.round(v * 100) / 100;
@@ -87,18 +88,17 @@ function summarize(rows) {
 }
 
 // ── the engine ──
-function createAutoJournal({ dbPool, sources, lockStrikeAtFire, getStrikePremium, coachGridFor, mutedHas = () => false, now = Date.now, log = () => {}, env = process.env, lotSizes }) {
+function createAutoJournal({ dbPool, getStrikePremium, now = Date.now, log = () => {}, env = process.env, lotSizes }) {
     const cfg = {
         enabled: String(env.AUTO_JOURNAL || 'on').toLowerCase() !== 'off',
         lots: Math.max(1, parseInt(env.AUTO_JOURNAL_LOTS, 10) || 2),                       // 2 so the half-book can really split
         trailPts: env.AUTO_JOURNAL_TRAIL_PTS === undefined || env.AUTO_JOURNAL_TRAIL_PTS === '' ? 10 : Math.max(0, Number(env.AUTO_JOURNAL_TRAIL_PTS) || 0),
         timeStopMin: Number(env.AUTO_JOURNAL_TIME_STOP_MIN) || 90,
         noDataCloseMin: Number(env.AUTO_JOURNAL_NO_DATA_MIN) || 10,
-        maxSignalAgeMin: Number(env.AUTO_JOURNAL_MAX_SIGNAL_AGE_MIN) || 5,
-        pollMs: Number(env.AUTO_JOURNAL_POLL_MS) || 10000, tickMs: Number(env.AUTO_JOURNAL_TICK_MS) || 10000,
+        tickMs: Number(env.AUTO_JOURNAL_TICK_MS) || 10000,
         lotSizes: lotSizes || { NIFTY: 65, CRUDE: 100, BITCOIN: null },
     };
-    const S = { lastIds: new Map(), open: new Map(), timers: [], skipped: { noChain: 0, stale: 0, window: 0 }, started: false, warned: new Set(), ticking: false, polling: false };
+    const S = { open: new Map(), timers: [], skipped: { noChain: 0, duplicate: 0, late: 0 }, started: false, ticking: false, seq: 0 };
 
     async function ensureTable() {
         await dbPool.query(`CREATE TABLE IF NOT EXISTS auto_journal_trades (
@@ -110,13 +110,6 @@ function createAutoJournal({ dbPool, sources, lockStrikeAtFire, getStrikePremium
         await dbPool.query(`CREATE INDEX IF NOT EXISTS auto_journal_state_idx ON auto_journal_trades (state, fire_ts DESC)`);
     }
 
-    const watched = () => sources.filter(s => s.instrument === 'NIFTY' || s.instrument === 'CRUDE' || s.instrument === 'BITCOIN');
-    async function primeIds() {
-        for (const s of watched()) {
-            try { const r = await dbPool.query(`SELECT COALESCE(MAX(id),0)::bigint AS m FROM ${s.table} WHERE ts < NOW() - INTERVAL '3 minutes'`); S.lastIds.set(s.table, Number(r.rows[0].m)); }
-            catch (e) { if (!S.warned.has(s.table)) { S.warned.add(s.table); log(`[AutoJournal] cannot read ${s.table}: ${e.message}`); } }
-        }
-    }
     const save = async (t) => {
         await dbPool.query(`UPDATE auto_journal_trades SET state=$2, coach=$3, last_premium=$4, last_data_ts=$5, peak_pct=$6, stop_pct=$7, exits=$8, events=$9, exit_reason=$10, exit_ts=$11, realized_pct=$12, realized_rs=$13 WHERE id=$1`,
             [t.id, t.state, JSON.stringify(t.coach), t.lastPremium, t.lastDataTs ? new Date(t.lastDataTs) : null, t.coach.peakPct, t.stopPct, JSON.stringify(t.exits), JSON.stringify(t.events.slice(-40)), t.exitReason || null,
@@ -133,45 +126,26 @@ function createAutoJournal({ dbPool, sources, lockStrikeAtFire, getStrikePremium
         S.open.delete(t.id);
     }
 
-    // a new signal row -> paper entry
-    async function onSignal(s, row) {
-        const direction = String(row.direction || '').toUpperCase();
-        if (direction !== 'BULLISH' && direction !== 'BEARISH') return;
-        const tsMs = new Date(row.ts).getTime(), price = num(row.price);
-        if (!(price > 0)) return;
-        if (now() - tsMs > cfg.maxSignalAgeMin * 60000) { S.skipped.stale++; return; }
-        if (!inWindow(s.instrument, tsMs, 'entry')) { S.skipped.window++; return; }
-        const lock = lockStrikeAtFire(s.instrument, direction, price);
-        if (!lock || !(lock.premium > 0)) { S.skipped.noChain++; log(`[AutoJournal] skip ${s.instrument}|${s.source}: no strike/premium in chain`); return; }
-        const grid = coachGridFor(s.instrument), lotSize = cfg.lotSizes[s.instrument] ?? null, muted = !!mutedHas(`${s.instrument}|${s.source}`);
-        const coach = coachInit(lock.premium, grid, cfg.lots);
+    // A LIVE Telegram alert -> paper entry. `lock` is the very object the alert's plan block was built from ({strike, premium, chainId}),
+    // `grid` the same Trade-Coach grid, so the journal entry equals the message to the paisa. Returns true when a trade was opened.
+    async function logLiveAlert({ instrument, source, direction, lock, grid, underlying, tsMs = now() }) {
+        if (!cfg.enabled || !S.started) return false;
+        direction = String(direction || '').toUpperCase();
+        if (direction !== 'BULLISH' && direction !== 'BEARISH') return false;
+        if (!lock || !(Number(lock.premium) > 0) || !(Number(lock.strike) > 0) || !grid) { S.skipped.noChain++; log(`[AutoJournal] not journaled ${instrument}|${source}: no strike/premium for the alert`); return false; }
+        if (pastSquareOff(instrument, now())) { S.skipped.late++; return false; }
+        for (const t of S.open.values()) if (t.instrument === instrument && t.source === source && t.direction === direction) { S.skipped.duplicate++; return false; }
+        const entry = Number(lock.premium), lotSize = cfg.lotSizes[instrument] ?? null, coach = coachInit(entry, grid, cfg.lots), side = direction === 'BULLISH' ? 'CE' : 'PE';
+        const uid = now() * 100 + (++S.seq % 100);
+        const first = { at: new Date(now()).toISOString(), msg: `ENTRY ${lock.strike} ${side} @ ${entry} (same as the Telegram alert, underlying ${underlying ?? '–'}) · SL ${grid.slPct}% · BE +${grid.breakevenAt}% · half +${grid.halfBookAt}% · target +${grid.fullExitAt}%` };
         const ins = await dbPool.query(`INSERT INTO auto_journal_trades (source_table, source_id, instrument, source, direction, side, fire_ts, strike, chain_id, underlying, entry_premium, lots, lot_size, grid, coach, muted, last_premium, last_data_ts, peak_pct, stop_pct, events)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$11,NOW(),0,$17,$18) ON CONFLICT (source_table, source_id) DO NOTHING RETURNING id`,
-            [s.table, row.id, s.instrument, s.source, direction, direction === 'BULLISH' ? 'CE' : 'PE', new Date(tsMs), lock.strike, lock.chainId || null, price, lock.premium, cfg.lots, lotSize, JSON.stringify(grid), JSON.stringify(coach), muted, grid.slPct ?? -20,
-                JSON.stringify([{ at: new Date(now()).toISOString(), msg: `ENTRY ${lock.strike} ${direction === 'BULLISH' ? 'CE' : 'PE'} @ ${lock.premium} (underlying ${price}) · SL ${grid.slPct}% · BE +${grid.breakevenAt}% · half +${grid.halfBookAt}% · target +${grid.fullExitAt}%${muted ? ' · strategy currently auto-muted' : ''}` }])]);
-        if (!ins.rows.length) return;
-        S.open.set(ins.rows[0].id, { id: ins.rows[0].id, instrument: s.instrument, source: s.source, direction, strike: lock.strike, chainId: lock.chainId || null, entry: lock.premium, lots: cfg.lots, lotSize, coach, grid,
-            openedAt: now(), lastPremium: lock.premium, lastDataTs: now(), stopPct: grid.slPct ?? -20, exits: [], events: [], state: 'OPEN' });
-        log(`📔 [AutoJournal] ${s.instrument}|${s.source} ${direction} → ${lock.strike} ${direction === 'BULLISH' ? 'CE' : 'PE'} @ ${lock.premium}`);
-    }
-
-    async function pollSignals() {
-        if (S.polling) return; S.polling = true;
-        try {
-            for (const s of watched()) {
-                if (!S.lastIds.has(s.table)) continue;
-                if (!inWindow(s.instrument, now(), 'entry') && s.instrument !== 'BITCOIN') continue;   // nothing can be entered now -> do not even query
-                let rows;
-                try {
-                    const where = s.whereExtra ? `AND ${s.whereExtra}` : '';
-                    rows = (await dbPool.query(`SELECT id, ts, ${s.priceExpr} AS price, ${s.dirExpr} AS direction FROM ${s.table} WHERE id > $1 ${where} ORDER BY id ASC LIMIT 20`, [S.lastIds.get(s.table)])).rows;
-                } catch (e) { if (!S.warned.has(s.table)) { S.warned.add(s.table); log(`[AutoJournal] poll ${s.table} failed: ${e.message}`); } continue; }
-                for (const r of rows) {
-                    S.lastIds.set(s.table, Math.max(S.lastIds.get(s.table), Number(r.id)));
-                    try { await onSignal(s, r); } catch (e) { log(`[AutoJournal] entry error ${s.table}#${r.id}: ${e.message}`); }
-                }
-            }
-        } finally { S.polling = false; }
+            VALUES ('telegram_live',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,FALSE,$10,NOW(),0,$15,$16) ON CONFLICT (source_table, source_id) DO NOTHING RETURNING id`,
+            [uid, instrument, source, direction, side, new Date(tsMs), lock.strike, lock.chainId || null, underlying ?? null, entry, cfg.lots, lotSize, JSON.stringify(grid), JSON.stringify(coach), grid.slPct ?? -20, JSON.stringify([first])]);
+        if (!ins.rows.length) return false;
+        S.open.set(ins.rows[0].id, { id: ins.rows[0].id, instrument, source, direction, strike: Number(lock.strike), chainId: lock.chainId || null, entry, lots: cfg.lots, lotSize, coach, grid,
+            openedAt: now(), lastPremium: entry, lastDataTs: now(), stopPct: grid.slPct ?? -20, exits: [], events: [first], state: 'OPEN' });
+        log(`📔 [AutoJournal] ${instrument}|${source} ${direction} → ${lock.strike} ${side} @ ${entry}`);
+        return true;
     }
 
     async function tick() {
@@ -218,8 +192,7 @@ function createAutoJournal({ dbPool, sources, lockStrikeAtFire, getStrikePremium
         if (S.started) return;
         if (!cfg.enabled) { log('[AutoJournal] AUTO_JOURNAL=off — not started'); return; }
         if (!dbPool) { log('[AutoJournal] no database — not started'); return; }
-        await ensureTable(); await restoreOpen(); await primeIds();
-        S.timers.push(setInterval(() => { pollSignals().catch(e => log(`[AutoJournal] poll error: ${e.message}`)); }, cfg.pollMs));
+        await ensureTable(); await restoreOpen();
         S.timers.push(setInterval(() => { tick().catch(e => log(`[AutoJournal] tick error: ${e.message}`)); }, cfg.tickMs));
         S.started = true; log(`📔 [AutoJournal] started — ${cfg.lots} lots/trade, trail ${cfg.trailPts} pts after half-book, time stop ${cfg.timeStopMin} min`);
     }
@@ -244,7 +217,7 @@ function createAutoJournal({ dbPool, sources, lockStrikeAtFire, getStrikePremium
         return { enabled: cfg.enabled, started: S.started, config: { lots: cfg.lots, trailPts: cfg.trailPts, timeStopMin: cfg.timeStopMin }, skipped: S.skipped, days: d, strategies: summarize(rows) };
     }
 
-    return { cfg, start, stop, report, pollSignals, tick, _state: S };
+    return { cfg, start, stop, report, logLiveAlert, tick, _state: S };
 }
 
 module.exports = { createAutoJournal, coachInit, coachStep, effectiveStopPct, pnlOf, summarize, inWindow, pastSquareOff, WINDOWS };
