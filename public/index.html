@@ -161,7 +161,9 @@ html.vn-bw #vn-splash,html.vn-bw #vn-login{filter:none;}
 ═══════════════════════════════════════════════════ */
 html.vn-day{
   --bg0:#f0f2f5;--bg1:#ffffff;--bg2:#e8ecf0;--bg3:#dde2e8;
-  --border:#c0ccd8;--dim:#607080;--text:#1a2530;--bright:#000000;
+  --border:#c0ccd8;--dim:#4a5b6c;--text:#1a2530;--bright:#000000;
+  /* 11 Oct — neon night colours are unreadable on white (contrast 1.1–2.5); darker day variants keep every value legible */
+  --green:#0a8a4a;--red:#c4122f;--amber:#9a5b00;--blue:#0062b0;--purple:#6a3fc4;--accent:#6a3fc4;
   /* Light-mode elevation: soft bottom shadow + tight top highlight */
   --card-shadow:0 1px 0 rgba(255,255,255,0.9) inset, 0 2px 8px rgba(0,0,0,0.1), 0 8px 24px rgba(0,0,0,0.08);
   --elev1:0 1px 0 rgba(255,255,255,0.8) inset, 0 2px 6px rgba(0,0,0,0.08), 0 4px 16px rgba(0,0,0,0.06);
@@ -171,6 +173,7 @@ html.vn-day{
   --glow-red:0 0 12px rgba(220,30,60,0.2);
   --glow-amber:0 0 12px rgba(200,140,0,0.15);
 }
+html.vn-day [style*="color:#00ff88"],html.vn-day [style*="color: #00ff88"]{color:#0a8a4a !important;}
 /* Day body — clean white gradient */
 html.vn-day body{
   background:
