@@ -180,7 +180,7 @@ function createAutoJournal({ dbPool, getStrikePremium, now = Date.now, log = () 
     }
 
     async function restoreOpen() {
-        const r = await dbPool.query(`SELECT * FROM auto_journal_trades WHERE state='OPEN'`);
+        const r = await dbPool.query(`SELECT * FROM auto_journal_trades WHERE state='OPEN' AND source_table='telegram_live'`);
         for (const row of r.rows) {
             S.open.set(row.id, { id: row.id, instrument: row.instrument, source: row.source, direction: row.direction, strike: Number(row.strike), chainId: row.chain_id, entry: Number(row.entry_premium), lots: row.lots, lotSize: row.lot_size,
                 coach: row.coach, grid: row.grid, openedAt: new Date(row.fire_ts).getTime(), lastPremium: Number(row.last_premium) || Number(row.entry_premium), lastDataTs: now(), stopPct: Number(row.stop_pct), exits: row.exits || [], events: row.events || [], state: 'OPEN' });
@@ -203,7 +203,7 @@ function createAutoJournal({ dbPool, getStrikePremium, now = Date.now, log = () 
         if (!dbPool) return { enabled: cfg.enabled, started: S.started, strategies: [] };
         const d = Math.min(90, Math.max(1, parseInt(days, 10) || 14));
         const r = await dbPool.query(`SELECT id, instrument, source, direction, side, fire_ts, strike, underlying, entry_premium, lots, lot_size, state, muted, last_premium, peak_pct, stop_pct, exits, events, exit_reason, exit_ts, realized_pct, realized_rs, coach
-            FROM auto_journal_trades WHERE fire_ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY fire_ts DESC LIMIT 3000`, [d]);
+            FROM auto_journal_trades WHERE source_table='telegram_live' AND fire_ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY fire_ts DESC LIMIT 3000`, [d]);
         const rows = r.rows.map(x => {
             const open = x.state === 'OPEN', entry = Number(x.entry_premium), last = Number(x.last_premium);
             const exits = x.exits || [];
