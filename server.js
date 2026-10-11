@@ -100,6 +100,7 @@ const { volumeRatioFromCandles } = require('./src/utils/btcVolume');
 const btcSpreadStudyLib = require('./src/utils/btcSpreadStudy');
 const sweepLib = require('./src/utils/sweepStudy');
 const btcRegimeLib = require('./src/utils/btcSpreadRegime');
+const rangeFadeLib = require('./src/utils/rangeFadeStudy');
 // 3 Oct — weekend / thin-liquidity gate for Bitcoin option alerts (pure helpers).
 const { assessBitcoinLiquidity, liquidityLine, isBitcoinWeekendThin, thresholds: btcLiquidityThresholds } = require('./src/utils/btcLiquidity');
 // 3 Oct — defined-risk spread tracking for Bitcoin signals (pure helpers).
@@ -13205,6 +13206,26 @@ app.get('/api/btc-spread-regime-study', studyGuard, async (req, res) => {
         const study = btcRegimeLib.runBtcSpreadRegime(r.rows);
         if (String(req.query.format || '') === 'text') return res.type('text/plain').send(btcRegimeLib.formatBtcSpreadRegimeText(study));
         res.json({ success: true, days, ...study });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── Sideways range-fade study (11 Oct) — read-only, see src/utils/rangeFadeStudy.js ──
+// /api/range-fade-study?format=text : on sideways stretches, does buying the bottom / selling the top of the range pay? NIFTY, CRUDE (WTI) and BTC, 5m bars (~60 days) from Yahoo. Underlying only.
+// Rules are fixed in the lib (not tuned). ?refresh=1 re-downloads; otherwise bars are cached 30 min.
+const _rangeFadeCache = {};
+app.get('/api/range-fade-study', studyGuard, async (req, res) => {
+    try {
+        const syms = [['NIFTY', '^NSEI'], ['CRUDE', 'CL=F'], ['BTC', 'BTC-USD']], results = [];
+        for (const [name, sym] of syms) {
+            let c = _rangeFadeCache[name];
+            if (!c || req.query.refresh === '1' || Date.now() - c.ts > 30 * 60 * 1000) {
+                const bars = await rangeFadeLib.fetchYahooBars(sym, axios);
+                if (bars && bars.length) c = _rangeFadeCache[name] = { ts: Date.now(), bars }; else if (!c) { results.push({ instrument: name, error: 'Yahoo returned no 5m bars (try again in a minute)' }); continue; }
+            }
+            results.push(rangeFadeLib.runRangeFadeStudy(c.bars, name));
+        }
+        if (String(req.query.format || '') === 'text') return res.type('text/plain').send(rangeFadeLib.formatRangeFadeText(results));
+        res.json({ success: true, rules: rangeFadeLib.P, results });
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
