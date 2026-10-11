@@ -117,6 +117,8 @@ const eeLib = require('./src/utils/entryExitQuality');   // 9 Oct — entry/exit
 const voteLib = require('./src/utils/mtfVoteStudy');   // 9 Oct — does waiting for 15m / 1h agreement pay? (mtf_vote_log)
 const planLib = require('./src/utils/triggerPlan');   // 10 Oct — strike / SL / target block on LIVE trigger alerts
 const regimeLeadLib = require('./src/utils/mtfLeadRegime');   // 10 Oct — did market state at the time already separate good MTF leads from bad ones?
+const renkoLib = require('./src/utils/renkoStudy');   // 11 Oct — Renko research (daily study + Auto Journal comparison, read-only)
+const { renkoAlignedFor } = require('./src/api/renko');
 const zoneLib = require('./src/utils/zoneStudy');   // 11 Oct — supply/demand zone research (daily candles, read-only)
 const ctxLib = require('./src/utils/entryContextStudy');   // 10 Oct — does entering on the VWAP / Fibonacci REACTION beat entering on the ACTION? (market_snapshot_log context)
 const sizingLib = require('./src/utils/sizingStudy');   // 10 Oct — flat lots vs fixed-rupee-risk sizing (Murarka: bigger stop -> fewer lots)
@@ -5371,12 +5373,21 @@ function buildTrackRecordBlock(card, agree, disagree) {
 
 // 10 Oct — Auto Journal hook for the NIFTY Main Engine and MTF alerts (their strikeData already carries the exact strike + entry printed in the Telegram text).
 // Never throws, never blocks the alert. Managed with the same NIFTY Trade-Coach grid as every other source so strategies stay comparable.
+// 11 Oct — research context saved with each Auto Journal trade (NIFTY only: Renko is computed on the NIFTY 1m buffer). Read-only.
+function renkoCtxFor(instrument, direction) {
+    try {
+        const rk = instrument === 'NIFTY' ? marketState.renko : null;
+        if (!rk || !rk.trend) return null;
+        return { renko: { trend: rk.trend, brickSize: rk.brickSize ?? null, flips: rk.flips ?? null, atr: rk.atr ?? null, aligned: renkoAlignedFor(rk.trend, direction === 'BULLISH') } };
+    } catch (e) { return null; }
+}
+
 function journalMainAlert(source, signal, strikeData) {
     try {
         if (!_autoJournal || !strikeData || !(strikeData.entry > 0) || !(strikeData.strike > 0)) return;
         const direction = signal === 'BUY CALL' ? 'BULLISH' : signal === 'BUY PUT' ? 'BEARISH' : null;
         if (!direction) return;
-        _autoJournal.logLiveAlert({ instrument: 'NIFTY', source, direction, lock: { strike: strikeData.strike, premium: strikeData.entry, chainId: null }, grid: coachGridFor('NIFTY'), underlying: marketState.nifty })
+        _autoJournal.logLiveAlert({ instrument: 'NIFTY', source, direction, lock: { strike: strikeData.strike, premium: strikeData.entry, chainId: null }, grid: coachGridFor('NIFTY'), underlying: marketState.nifty, ctx: renkoCtxFor('NIFTY', direction) })
             .catch(e => console.warn('[AutoJournal] log failed:', e.message));
     } catch (e) { /* never block an alert */ }
 }
@@ -5461,7 +5472,7 @@ async function sendTriggerAlert(instrument, source, rawDirection, msg) {
         // 10 Oct — one strike/premium lookup shared by the plan block AND the Auto Journal, so the journal entry equals the Telegram entry exactly.
         let _jLock = null;
         try { _jLock = lockStrikeAtFire(instrument, direction, _digestPrice(instrument)); } catch (e) { _jLock = null; }
-        journalCtx = { instrument, source, direction, lock: _jLock, grid: coachGridFor(instrument), underlying: _digestPrice(instrument) };
+        journalCtx = { instrument, source, direction, lock: _jLock, grid: coachGridFor(instrument), underlying: _digestPrice(instrument), ctx: renkoCtxFor(instrument, direction) };
         try {
             if (process.env.TRIGGER_PLAN_BLOCK !== 'off') {
                 const lock = _jLock;
@@ -13159,6 +13170,32 @@ app.get('/api/zone-study', studyGuard, async (req, res) => {
         const study = zoneLib.runZoneStudy(r.rows);
         if (String(req.query.format || '') === 'text') return res.type('text/plain').send(zoneLib.formatText(study));
         res.json({ success: true, years, ...study });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── Renko study (11 Oct) — read-only research, see src/utils/renkoStudy.js ──
+// /api/renko-study?years=5&format=text  : does the Renko trend state say anything about the next 1/3/5 days (daily NIFTY candles)?
+// /api/renko-journal-study?days=60&format=text : Auto Journal paper trades that passed vs failed the Renko gate at fire time (needs a few weeks of data).
+app.get('/api/renko-study', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const years = Math.max(1, Math.min(6, parseInt(req.query.years, 10) || 5));
+        const r = await dbPool.query(`SELECT to_char(date, 'YYYY-MM-DD') AS date, open, high, low, close FROM nifty_daily_history
+            WHERE date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date - ($1::int * 366) ORDER BY date ASC LIMIT 3000`, [years]);
+        const study = renkoLib.runRenkoStudy(r.rows);
+        if (String(req.query.format || '') === 'text') return res.type('text/plain').send(renkoLib.formatRenkoText(study));
+        res.json({ success: true, years, ...study });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+app.get('/api/renko-journal-study', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const days = Math.max(1, Math.min(180, parseInt(req.query.days, 10) || 60));
+        const r = await dbPool.query(`SELECT source, direction, realized_pct, ctx FROM auto_journal_trades
+            WHERE source_table='telegram_live' AND instrument='NIFTY' AND state='CLOSED' AND ctx IS NOT NULL AND fire_ts >= NOW() - ($1::int * INTERVAL '1 day') LIMIT 5000`, [days]);
+        const study = renkoLib.summarizeByRenko(r.rows);
+        if (String(req.query.format || '') === 'text') return res.type('text/plain').send(renkoLib.formatJournalText(study));
+        res.json({ success: true, days, ...study });
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 

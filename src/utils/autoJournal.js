@@ -108,6 +108,8 @@ function createAutoJournal({ dbPool, getStrikePremium, now = Date.now, log = () 
             peak_pct NUMERIC, stop_pct NUMERIC, exits JSONB DEFAULT '[]', events JSONB DEFAULT '[]', exit_reason TEXT, exit_ts TIMESTAMPTZ, realized_pct NUMERIC, realized_rs NUMERIC,
             UNIQUE (source_table, source_id))`);
         await dbPool.query(`CREATE INDEX IF NOT EXISTS auto_journal_state_idx ON auto_journal_trades (state, fire_ts DESC)`);
+        // 11 Oct — research context captured at fire time (e.g. Renko state). Best-effort: never blocks journaling.
+        await dbPool.query(`ALTER TABLE auto_journal_trades ADD COLUMN IF NOT EXISTS ctx JSONB`).catch(e => log(`[AutoJournal] ctx column: ${e.message}`));
     }
 
     const save = async (t) => {
@@ -128,7 +130,7 @@ function createAutoJournal({ dbPool, getStrikePremium, now = Date.now, log = () 
 
     // A LIVE Telegram alert -> paper entry. `lock` is the very object the alert's plan block was built from ({strike, premium, chainId}),
     // `grid` the same Trade-Coach grid, so the journal entry equals the message to the paisa. Returns true when a trade was opened.
-    async function logLiveAlert({ instrument, source, direction, lock, grid, underlying, tsMs = now() }) {
+    async function logLiveAlert({ instrument, source, direction, lock, grid, underlying, ctx = null, tsMs = now() }) {
         if (!cfg.enabled || !S.started) return false;
         direction = String(direction || '').toUpperCase();
         if (direction !== 'BULLISH' && direction !== 'BEARISH') return false;
@@ -142,6 +144,7 @@ function createAutoJournal({ dbPool, getStrikePremium, now = Date.now, log = () 
             VALUES ('telegram_live',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,FALSE,$10,NOW(),0,$15,$16) ON CONFLICT (source_table, source_id) DO NOTHING RETURNING id`,
             [uid, instrument, source, direction, side, new Date(tsMs), lock.strike, lock.chainId || null, underlying ?? null, entry, cfg.lots, lotSize, JSON.stringify(grid), JSON.stringify(coach), grid.slPct ?? -20, JSON.stringify([first])]);
         if (!ins.rows.length) return false;
+        if (ctx) dbPool.query(`UPDATE auto_journal_trades SET ctx=$2 WHERE id=$1`, [ins.rows[0].id, JSON.stringify(ctx)]).catch(e => log(`[AutoJournal] ctx save failed: ${e.message}`));
         S.open.set(ins.rows[0].id, { id: ins.rows[0].id, instrument, source, direction, strike: Number(lock.strike), chainId: lock.chainId || null, entry, lots: cfg.lots, lotSize, coach, grid,
             openedAt: now(), lastPremium: entry, lastDataTs: now(), stopPct: grid.slPct ?? -20, exits: [], events: [first], state: 'OPEN' });
         log(`📔 [AutoJournal] ${instrument}|${source} ${direction} → ${lock.strike} ${side} @ ${entry}`);

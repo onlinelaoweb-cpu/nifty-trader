@@ -60,6 +60,7 @@ const grid = { slPct: -15, breakevenAt: 10, halfBookAt: 15, fullExitAt: 25 };
             if (tbl.find(r => r.source_id === a[0])) return { rows: [] };
             const row = { id: ++nid, source_id: a[0], entry: a[9], state: 'OPEN', exits: [] }; tbl.push(row); return { rows: [{ id: row.id }] };
         }
+        if (/SET ctx=/.test(sql)) { const r = tbl.find(x => x.id === a[0]); if (r) r.ctx = JSON.parse(a[1]); return { rows: [] }; }
         if (/UPDATE auto_journal_trades/.test(sql)) { const r = tbl.find(x => x.id === a[0]); Object.assign(r, { state: a[1], coach: JSON.parse(a[2]), last_premium: a[3], stop_pct: a[6], exits: JSON.parse(a[7]), exit_reason: a[9], realized_pct: a[11], realized_rs: a[12] }); return { rows: [] }; }
         if (/FROM auto_journal_trades WHERE state='OPEN'/.test(sql)) return { rows: [] };
         return { rows: [] };
@@ -83,7 +84,8 @@ const grid = { slPct: -15, breakevenAt: 10, halfBookAt: 15, fullExitAt: 25 };
     assert.strictEqual(tbl[0].realized_pct, 13);              // 0.5*16 + 0.5*10
 
     // after it closes, the same strategy can journal again
-    prem = 100; assert.strictEqual(await j.logLiveAlert(alert()), true);
+    prem = 100; assert.strictEqual(await j.logLiveAlert(alert({ ctx: { renko: { trend: 'BULLISH', aligned: true } } })), true);
+    await new Promise(r => setImmediate(r)); assert.strictEqual(tbl[tbl.length - 1].ctx.renko.trend, 'BULLISH', 'research ctx is saved with the trade');
 
     // square-off closes at the last premium; alerts after square-off are not journaled
     T = Date.UTC(2026, 9, 12, 9, 51, 0); await j.tick(); assert.ok(tbl.filter(t => t.state === 'OPEN').length === 0); assert(tbl.some(t => t.exit_reason === 'eod_exit'));

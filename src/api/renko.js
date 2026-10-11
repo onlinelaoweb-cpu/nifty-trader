@@ -126,4 +126,10 @@ function getRenkoAnalysis(candles) {
     };
 }
 
-module.exports = { getRenkoAnalysis, calcATR, buildBricks };
+// Same rule the quality gate uses (server.js `renkoAligned`): unknown/insufficient passes; MIXED and NOISY block; a trend against the signal blocks.
+function renkoAlignedFor(trend, bullish) {
+    if (!trend || trend === 'INSUFFICIENT') return true;
+    return trend !== 'MIXED' && trend !== 'NOISY' && !(bullish && trend === 'BEARISH') && !(!bullish && trend === 'BULLISH');
+}
+
+module.exports = { getRenkoAnalysis, calcATR, buildBricks, classifyBricks, renkoAlignedFor };
