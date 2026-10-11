@@ -2265,6 +2265,40 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
 .pulse-extra{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
 .pe-chip{font-size:12px;font-weight:700;font-family:'Share Tech Mono',monospace;padding:4px 9px;border-radius:99px;border:1px solid var(--border);background:var(--bg3);}
 .pulse-detail{margin-top:8px;font-size:12px;color:var(--dim);line-height:1.5;min-height:18px;}
+
+/* ── Insights redesign (11 Oct) ── */
+.ix-wrap{padding:10px 12px 80px;}
+.ix-title{font-family:'Orbitron',monospace;font-size:14.5px;letter-spacing:1px;color:var(--accent);margin-bottom:12px;}
+.ix-title span{font-family:'Rajdhani',sans-serif;font-size:11.5px;letter-spacing:0;color:var(--dim);margin-left:4px;}
+.ix-sec{font-size:11px;letter-spacing:2.5px;color:var(--dim);margin:16px 2px 8px;font-family:'Orbitron',monospace;}
+.ix-hero{background:linear-gradient(150deg,var(--bg2),var(--card-end));border:1px solid var(--border);border-radius:var(--card-radius,12px);padding:14px;box-shadow:var(--card-shadow);}
+.ix-hero.go{border-color:var(--green);} .ix-hero.stop{border-color:var(--red);} .ix-hero.mid{border-color:var(--amber);}
+.ix-hero-status{font-family:'Orbitron',monospace;font-size:17px;font-weight:700;letter-spacing:.5px;color:var(--amber);}
+.ix-hero-sub{font-size:13px;color:var(--dim);margin:4px 0 12px;line-height:1.5;}
+.ix-chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.ix-chip{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:8px 9px;min-width:0;}
+.ix-chip-l{font-size:9.5px;letter-spacing:1.3px;color:var(--dim);font-family:'Orbitron',monospace;}
+.ix-chip-v{font-size:22px;font-weight:700;color:var(--dim);margin-top:2px;font-family:'Share Tech Mono',monospace;}
+.ix-chip-s{font-size:11.5px;color:var(--dim);margin-top:2px;line-height:1.3;}
+.ix-sl{font-size:11px;color:var(--dim);font-weight:400;}
+.ix-bar{height:4px;border-radius:2px;background:var(--border);margin-top:3px;overflow:hidden;} .ix-bar i{display:block;height:100%;background:var(--amber);transition:width .4s;}
+.ix-why{margin-top:10px;background:rgba(255,187,0,0.08);border:1px solid var(--amber);border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.6;color:var(--text);}
+.ix-why-t{font-size:11px;color:var(--amber);letter-spacing:1px;margin-bottom:4px;font-weight:700;}
+.ix-plan{margin-top:10px;font-size:13px;color:var(--text);line-height:1.5;}
+.ix-health{margin-top:8px;display:flex;gap:6px;font-size:11.5px;color:var(--dim);border:1px solid var(--border);border-radius:8px;padding:5px 8px;}
+.ix-card{background:linear-gradient(150deg,var(--bg2),var(--card-end));border:1px solid var(--border);border-radius:var(--card-radius,12px);padding:11px 12px;margin-bottom:8px;box-shadow:var(--card-shadow);min-width:0;}
+.ix-card-h{font-size:12px;letter-spacing:.5px;color:var(--text);font-weight:700;margin-bottom:7px;}
+.ix-card-h small{font-size:10px;color:var(--dim);font-weight:400;letter-spacing:0;}
+.ix-txt{font-size:13px;color:var(--text);line-height:1.5;} .ix-sub{font-size:12px;color:var(--dim);line-height:1.5;}
+.ix-grid2{display:grid;grid-template-columns:1fr;gap:0;}
+@media(min-width:560px){.ix-grid2{grid-template-columns:1fr 1fr;gap:8px;}}
+.ix-perf{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center;}
+.ix-perf-v{font-size:17px;font-weight:700;color:var(--text);margin-top:2px;font-family:'Share Tech Mono',monospace;}
+.ix-take{margin-top:10px;padding:9px 11px;border-left:3px solid var(--accent);background:var(--bg3);border-radius:6px;font-size:12.5px;line-height:1.55;color:var(--text);}
+.ix-btn{font-size:12px;padding:2px 9px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--dim);cursor:pointer;}
+.ix-det{background:var(--bg2);border:1px solid var(--border);border-radius:var(--card-radius,12px);margin:14px 0 10px;}
+.ix-det>summary{cursor:pointer;padding:12px;font-size:12px;letter-spacing:1px;color:var(--accent);font-weight:700;list-style:none;}
+.ix-det-body{padding:0 10px 6px;}
 </style>
 <style id="vn-theme-indigo">
 /* 11 Oct — Indigo theme (same palette as the AI Helpdesk demo). Colour tokens only: layout, fonts and signal meaning are unchanged. */
@@ -5537,8 +5571,30 @@ function updateSectorHeatmap(sectors) {
 }
 
 // ─── BTST / STBT RENDERER ────────────────────────────────
+
+// ─── INSIGHTS HERO (11 Oct) ───
+function renderInsightsHero(s) {
+  const st = document.getElementById('ins-hero-status'); if (!st) return;
+  const sub = document.getElementById('ins-hero-sub'), hero = document.getElementById('ix-hero');
+  const tq = s.tradeQuality, mh = s.marketHealth, nt = s.noTrade;
+  const sig = s.signal || 'WAIT';
+  const stEl = document.getElementById('status-txt');
+  const closed = !!stEl && stEl.textContent !== 'LIVE';
+  let text, cls, color, note;
+  if (closed) { text = '🌙 MARKET BAND'; cls = ''; color = 'var(--dim)'; note = 'Neeche jo dikh raha hai woh aakhri reading hai — live trade ke liye market khulne (09:15) ka wait karo.'; }
+  else if (nt && nt.active) { text = '⛔ ABHI TRADE NAHI'; cls = 'stop'; color = 'var(--red)'; note = 'Niche wajah likhi hai — jab tak woh hatt na jaye, entry mat lo.'; }
+  else if (sig !== 'WAIT' && tq && (tq.grade === 'A+' || tq.grade === 'A')) { text = '✅ SETUP READY — ' + sig; cls = 'go'; color = 'var(--green)'; note = 'Grade ' + tq.grade + ' · ' + (tq.sizeHint || '') + '. Entry se pehle Market Pulse ke tiles dekh lo.'; }
+  else if (sig !== 'WAIT') { text = '🟡 SETUP BANA — ' + sig; cls = 'mid'; color = 'var(--amber)'; note = 'Grade ' + ((tq && tq.grade) || '-') + ' — chhota size ya skip. ' + ((tq && tq.sizeHint) || ''); }
+  else { text = '⏸ WAIT — clean setup nahi'; cls = ''; color = 'var(--amber)'; note = 'Signal abhi WAIT pe hai. Market health ' + (mh ? mh.total + '/100 (' + mh.label + ')' : '--') + '.'; }
+  st.textContent = text; st.style.color = color;
+  if (sub) sub.textContent = note;
+  if (hero) { hero.classList.remove('go', 'stop', 'mid'); if (cls) hero.classList.add(cls); }
+  const bar = document.getElementById('ins-mh-bar');
+  if (bar && mh) { bar.style.width = Math.max(0, Math.min(100, mh.total)) + '%'; bar.style.background = mh.total >= 80 ? 'var(--green)' : mh.total >= 60 ? 'var(--green)' : mh.total >= 40 ? 'var(--amber)' : 'var(--red)'; }
+}
 // ─── AI INSIGHTS TAB ──────────────────────────────────────────────────────
 function updateInsightsUI(s) {
+  try { renderInsightsHero(s); } catch (e) { console.warn('[insHero]', e.message); }
   try {
     // Trade Quality
     const tq = s.tradeQuality;
@@ -5655,9 +5711,9 @@ function updateInsightsUI(s) {
       if (probLabel) probLabel.innerHTML = (pe.label || 'Awaiting data...') + ageTag(pe.generatedAt);
       if (probBar) {
         probBar.innerHTML = `
-          <div style="width:${pe.bullish}%;background:var(--green);display:flex;align-items:center;justify-content:center;font-size:10px;color:#000;font-weight:600;">${pe.bullish>=10?pe.bullish+'%':''}</div>
-          <div style="width:${pe.sideways}%;background:var(--amber);display:flex;align-items:center;justify-content:center;font-size:10px;color:#000;font-weight:600;">${pe.sideways>=10?pe.sideways+'%':''}</div>
-          <div style="width:${pe.bearish}%;background:var(--red);display:flex;align-items:center;justify-content:center;font-size:10px;color:#000;font-weight:600;">${pe.bearish>=10?pe.bearish+'%':''}</div>
+          <div style="width:${pe.bullish}%;background:var(--green);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;text-shadow:0 0 3px rgba(0,0,0,.7);font-weight:700;">${pe.bullish>=10?pe.bullish+'%':''}</div>
+          <div style="width:${pe.sideways}%;background:var(--amber);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;text-shadow:0 0 3px rgba(0,0,0,.7);font-weight:700;">${pe.sideways>=10?pe.sideways+'%':''}</div>
+          <div style="width:${pe.bearish}%;background:var(--red);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;text-shadow:0 0 3px rgba(0,0,0,.7);font-weight:700;">${pe.bearish>=10?pe.bearish+'%':''}</div>
         `;
       }
     }
@@ -5883,6 +5939,18 @@ async function fetchSignalPerformance() {
     if (tEl) tEl.innerHTML = fmt(d.summary?.today) + (fmtStrict(d.summary?.today) ? `<div style="font-size:10px;color:var(--dim);font-weight:400;">${fmtStrict(d.summary?.today)}</div>` : '');
     if (wEl) wEl.innerHTML = fmt(d.summary?.weekly) + (fmtStrict(d.summary?.weekly) ? `<div style="font-size:10px;color:var(--dim);font-weight:400;">${fmtStrict(d.summary?.weekly)}</div>` : '');
     if (mEl) mEl.innerHTML = fmt(d.summary?.monthly) + (fmtStrict(d.summary?.monthly) ? `<div style="font-size:10px;color:var(--dim);font-weight:400;">${fmtStrict(d.summary?.monthly)}</div>` : '');
+
+    // plain-language takeaway from the same numbers
+    const tkEl = document.getElementById('ins-takeaway');
+    if (tkEl) {
+      const m = d.summary?.monthly, w = d.summary?.weekly;
+      if (m && m.total >= 10) {
+        let t = 'Pichle 30 din (' + m.total + ' signals): disha ' + m.directionalAccuracy + '% baar sahi nikli, par poora target sirf ' + m.accuracy + '% mein mila aur ' + m.slRate + '% mein SL laga.';
+        if (m.directionalAccuracy >= 70 && m.accuracy < 20) t += ' Matlab move aata hai par tikta nahi — kamayi tabhi hai jab profit time pe book/trail ho.';
+        if (w && w.total >= 5 && m.realAccuracy != null && w.realAccuracy != null) t += ' Is hafte ka real accuracy ' + w.realAccuracy + '% hai (30 din: ' + m.realAccuracy + '%) — ' + (w.realAccuracy > m.realAccuracy + 3 ? 'sudhar dikh raha hai.' : w.realAccuracy < m.realAccuracy - 3 ? 'pehle se kamzor.' : 'lagbhag same.');
+        tkEl.textContent = t; tkEl.style.display = 'block';
+      } else tkEl.style.display = 'none';
+    }
 
     const openEl = document.getElementById('ins-perf-open');
     if (openEl) {
@@ -8686,20 +8754,93 @@ function renderVolumeScannerUI(d) {
 </script>
 
 <div class="panel" id="panel-insights">
-  <div style="padding:10px 12px 80px;">
+  <div class="ix-wrap">
 
+    <div class="ix-title">🧠 INSIGHTS <span>— market kya keh raha hai, aur app kitna bharosemand hai</span></div>
 
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <div style="font-family:'Orbitron',monospace;font-size:14.5px;letter-spacing:1px;color:var(--accent);">🧠 AI INSIGHTS</div>
+    <!-- 1. HERO: abhi kya karein? -->
+    <div class="ix-hero" id="ix-hero">
+      <div class="ix-hero-status" id="ins-hero-status">Collecting data…</div>
+      <div class="ix-hero-sub" id="ins-hero-sub">--</div>
+      <div class="ix-chips">
+        <div class="ix-chip"><div class="ix-chip-l">TRADE QUALITY</div><div class="ix-chip-v" id="ins-tq-grade">—</div><div class="ix-chip-s" id="ins-tq-hint">No trade</div></div>
+        <div class="ix-chip"><div class="ix-chip-l">MARKET HEALTH</div><div class="ix-chip-v" id="ins-mh-score">—</div><div class="ix-bar"><i id="ins-mh-bar" style="width:0%"></i></div><div class="ix-chip-s" id="ins-mh-label">Awaiting data</div></div>
+        <div class="ix-chip"><div class="ix-chip-l">DAY TYPE</div><div class="ix-chip-v"><span id="ins-trend-pct" style="color:var(--green)">—%</span><span class="ix-sl"> trend</span></div><div class="ix-chip-s"><span id="ins-range-pct" style="color:var(--amber);font-weight:700">—%</span> range</div></div>
+      </div>
+      <div id="ins-notrade-wrap" class="ix-why" style="display:none;"><div class="ix-why-t">⛔ NO TRADE — WHY</div><div id="ins-notrade-reasons"></div></div>
+      <div class="ix-plan"><b>Plan:</b> <span id="ins-daytype-label">Awaiting data...</span></div>
+      <div id="ins-datahealth-wrap" class="ix-health"><span>🩺</span><span id="ins-datahealth-label">Awaiting first check...</span></div>
     </div>
 
-
-    <!-- Combined PCR (12 Sep) — Nifty+BankNifty+Sensex+Top10-stocks blended -->
-    <div style="border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px;margin-bottom:12px;">
-      <div style="font-size:11px;color:var(--dim);margin-bottom:6px;">⚖️ COMBINED PCR <span style="opacity:0.6;">(exploratory — equal-weighted avg)</span></div>
-      <div id="combined-pcr-body" style="font-size:11.5px;line-height:1.6;">Loading...</div>
+    <!-- 2. Market ka mijaaz -->
+    <div class="ix-sec">MARKET KA MIJAAZ</div>
+    <div class="ix-card" id="ins-prob-wrap">
+      <div class="ix-card-h">📊 Disha ka andaza <small>(illustrative split)</small></div>
+      <div id="ins-prob-bar" style="display:flex;height:22px;border-radius:6px;overflow:hidden;margin-bottom:6px;"></div>
+      <div id="ins-prob-label" class="ix-txt">Awaiting data...</div>
+    </div>
+    <div class="ix-card" id="ins-regime-wrap">
+      <div class="ix-card-h">🗺️ Regime <small>(saare gates ka nichod)</small></div>
+      <div id="ins-regime-label" class="ix-txt" style="margin-bottom:4px;">Awaiting data...</div>
+      <div id="ins-regime-detail" class="ix-sub"></div>
     </div>
 
+    <!-- 3. Levels & context -->
+    <div class="ix-sec">LEVELS &amp; CONTEXT</div>
+    <div class="ix-card" id="ins-dynlevels-wrap">
+      <div class="ix-card-h">📐 Dynamic levels <small>(ATR bands H1–H3 / L1–L3)</small></div>
+      <div id="ins-dynlevels-label" class="ix-txt" style="margin-bottom:8px;">Awaiting data...</div>
+      <div id="ins-dynlevels-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12.5px;font-family:'Share Tech Mono',monospace;"></div>
+    </div>
+    <div class="ix-grid2">
+      <div class="ix-card" id="ins-gap-wrap"><div class="ix-card-h">🌅 Opening gap</div><div id="ins-gap-label" class="ix-txt">Awaiting data...</div></div>
+      <div class="ix-card" id="ins-trapzone-wrap"><div class="ix-card-h">⚠️ Trap zone</div><div id="ins-trapzone-label" class="ix-txt">Awaiting data...</div></div>
+      <div class="ix-card" id="ins-eventcd-wrap"><div class="ix-card-h">⏳ Next event</div><div id="ins-eventcd-label" class="ix-txt">Awaiting data...</div></div>
+      <div class="ix-card" id="ins-news-wrap"><div class="ix-card-h">📰 News sentiment <small>(gate input)</small></div><div id="ins-news-label" class="ix-txt">Awaiting first fetch...</div></div>
+    </div>
+
+    <!-- 4. Report card -->
+    <div class="ix-sec">APP KA REPORT CARD</div>
+    <div class="ix-card">
+      <div class="ix-card-h" style="display:flex;justify-content:space-between;align-items:center;"><span>📊 Signal performance</span><button class="ix-btn" onclick="fetchSignalPerformance()">↺</button></div>
+      <div class="ix-perf">
+        <div><div class="ix-chip-l">TODAY</div><div id="ins-acc-today" class="ix-perf-v">—</div></div>
+        <div><div class="ix-chip-l">7 DAYS</div><div id="ins-acc-weekly" class="ix-perf-v">—</div></div>
+        <div><div class="ix-chip-l">30 DAYS</div><div id="ins-acc-monthly" class="ix-perf-v">—</div></div>
+      </div>
+      <div class="ix-take" id="ins-takeaway" style="display:none"></div>
+      <div id="ins-confhist-wrap" style="margin-top:10px;">
+        <div class="ix-txt" id="ins-confhist-label">Awaiting data...</div>
+        <div class="ix-sub" id="ins-confhist-regime"></div>
+      </div>
+      <div id="ins-perf-open" style="max-height:220px;overflow-y:auto;margin-top:8px;"><div class="ix-sub" style="text-align:center;padding:.4rem 0;">No open signals being tracked</div></div>
+    </div>
+    <div class="ix-grid2">
+      <div class="ix-card"><div class="ix-card-h">🎯 Lead quality vs result <small>(30d)</small></div><div id="ins-lead-quality-breakdown" class="ix-sub">Not enough closed MTF-tracker trades yet</div></div>
+      <div class="ix-card"><div class="ix-card-h">⚠️ Exit warning check <small>(30d)</small></div><div id="ins-exit-warning-stats" class="ix-sub">Not enough closed trades yet</div></div>
+    </div>
+
+    <!-- 5. Structure (collapsed) -->
+    <details class="ix-det">
+      <summary>🔬 ADVANCED — structure, confluence &amp; greeks</summary>
+      <div class="ix-det-body">
+        <div class="ix-card" id="ins-boschoch-wrap"><div class="ix-card-h">🧱 BOS / CHOCH <small>(structure break)</small></div><div id="ins-boschoch-label" class="ix-txt">Awaiting data...</div></div>
+        <div class="ix-card" id="ins-conviction-wrap"><div class="ix-card-h">🎯 Trend conviction</div><div id="ins-conviction-label" class="ix-txt" style="margin-bottom:6px;">Not active</div><div id="ins-conviction-conds" class="ix-sub"></div></div>
+        <div class="ix-card"><div class="ix-card-h">🔗 Sequence check <small>(MTF→PCR→Delta→ORB→VWAP→Value Area)</small></div><div id="ins-seq-steps" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div><div id="ins-seq-result" class="ix-txt" style="font-weight:600;">—</div></div>
+        <div class="ix-card"><div class="ix-card-h">⚖️ Contradiction score</div>
+          <div style="display:flex;gap:14px;margin-bottom:6px;">
+            <div style="flex:1;"><div style="font-size:11px;color:var(--green);">Bullish</div><div id="ins-contra-bull" style="font-size:18px;font-weight:700;color:var(--green);">0%</div><div id="ins-contra-bull-factors" class="ix-sub"></div></div>
+            <div style="flex:1;"><div style="font-size:11px;color:var(--red);">Bearish</div><div id="ins-contra-bear" style="font-size:18px;font-weight:700;color:var(--red);">0%</div><div id="ins-contra-bear-factors" class="ix-sub"></div></div>
+          </div><div id="ins-contra-result" class="ix-txt" style="font-weight:600;">—</div></div>
+        <div class="ix-card"><div class="ix-card-h">🔍 Confidence breakdown</div><div id="ins-conf-items" class="ix-txt" style="line-height:1.8;">No active signal</div><div id="ins-conf-final" style="font-size:14px;font-weight:700;color:var(--accent);margin-top:6px;"></div></div>
+        <div class="ix-card" id="ins-greeks-wrap"><div class="ix-card-h">🧪 Option greeks <small>(explanatory only)</small></div><div id="ins-greeks-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;margin-bottom:6px;"></div><div id="ins-greeks-regime" class="ix-sub">Awaiting data...</div></div>
+      </div>
+    </details>
+
+  </div>
+</div>
+
+<!-- Combined PCR feeds the COMBINED tile on the Live tab (card removed from Insights 11 Oct) -->
     <script>
     async function fetchCombinedPCR() {
       const body = document.getElementById('combined-pcr-body');
@@ -8729,256 +8870,6 @@ function renderVolumeScannerUI(d) {
     fetchCombinedPCR();
     setInterval(fetchCombinedPCR, 60000);
     </script>
-
-    <script>
-    // 20 Sep — this card is NIFTY-only by design. Stock-level triggers
-    // (Stock Momentum, 52W Reversal) have their own dedicated Momentum
-    // Events Log table in the SCANNER tab (fetchMomentumEventsLog above) —
-    // showing them here too would duplicate/mix stock-level and index-level
-    // signals in one place.
-    // 20 Sep — grouped by source (not one flat time-merged list) so each
-    // trigger type's own entries stay together — Fast Momentum's own
-    // timeline doesn't interleave with S/R Bounce's, etc.
-    function renderTriggerRow(r) {
-      const bull = r.direction === 'BULLISH';
-      const isNeutral = r.direction == null;
-      const color = isNeutral ? 'var(--amber)' : (bull ? 'var(--green)' : 'var(--red)');
-      const tint  = isNeutral ? 'rgba(255,180,0,0.07)' : (bull ? 'rgba(0,200,120,0.07)' : 'rgba(255,70,70,0.07)');
-      const time = new Date(r.ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-      return `
-        <div style="display:flex;align-items:center;gap:9px;padding:6px 9px;margin-bottom:4px;background:${tint};border-left:3px solid ${color};border-radius:6px;">
-          <div style="flex:1;min-width:0;">
-            <span style="color:${color};font-weight:700;font-size:12px;letter-spacing:0.3px;">${r.direction || 'DIVERGENCE'}</span>
-            <div style="font-size:11.5px;color:var(--text);margin-top:1px;">${r.label}</div>
-          </div>
-          <div style="font-size:10px;color:var(--dim);white-space:nowrap;align-self:flex-start;">${time}</div>
-        </div>`;
-    }
-    </script>
-
-    <!-- Trade Quality + Market Health row -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-      <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;">
-        <div style="font-size:11.5px;color:var(--dim);letter-spacing:1px;margin-bottom:6px;">TRADE QUALITY</div>
-        <div id="ins-tq-grade" style="font-size:26px;font-weight:700;color:var(--dim);">—</div>
-        <div id="ins-tq-hint" style="font-size:12.5px;color:var(--dim);margin-top:2px;">No trade</div>
-      </div>
-      <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;">
-        <div style="font-size:11.5px;color:var(--dim);letter-spacing:1px;margin-bottom:6px;">MARKET HEALTH</div>
-        <div id="ins-mh-score" style="font-size:26px;font-weight:700;color:var(--dim);">—</div>
-        <div id="ins-mh-label" style="font-size:12.5px;color:var(--dim);margin-top:2px;">Awaiting data</div>
-      </div>
-    </div>
-
-    <!-- No Trade digest -->
-    <div id="ins-notrade-wrap" style="display:none;background:rgba(255,187,0,0.08);border:1px solid var(--amber);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--amber);letter-spacing:1px;margin-bottom:6px;">⛔ NO TRADE — WHY</div>
-      <div id="ins-notrade-reasons" style="font-size:13px;color:var(--text);line-height:1.6;"></div>
-    </div>
-
-    <!-- Trend Day vs Range Day -->
-    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--blue);letter-spacing:1px;margin-bottom:8px;font-weight:600;">📅 TODAY'S MARKET — TREND vs RANGE</div>
-      <div style="display:flex;gap:14px;margin-bottom:8px;">
-        <div style="flex:1;">
-          <div style="font-size:11px;color:var(--dim);">Trend Probability</div>
-          <div id="ins-trend-pct" style="font-size:20px;font-weight:700;color:var(--green);">—%</div>
-        </div>
-        <div style="flex:1;">
-          <div style="font-size:11px;color:var(--dim);">Range Probability</div>
-          <div id="ins-range-pct" style="font-size:20px;font-weight:700;color:var(--amber);">—%</div>
-        </div>
-      </div>
-      <div id="ins-daytype-label" style="font-size:13px;color:var(--text);">Awaiting data...</div>
-    </div>
-
-    <!-- Advanced Data — Group 1: structural/gap context (22 Jul audit: "too
-    many numbers... highlight only 4-5 decision variables, collapse the rest") -->
-    <details open style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;">
-      <summary style="cursor:pointer;padding:12px;font-size:12px;color:var(--blue);letter-spacing:1px;list-style:none;font-weight:600;">▾ ADVANCED: STRUCTURE &amp; GAP CONTEXT</summary>
-      <div style="padding:0 12px 12px;">
-
-    <!-- Trap Zone -->
-    <div id="ins-trapzone-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin-bottom:6px;">⚠️ TRAP ZONE</div>
-      <div id="ins-trapzone-label" style="font-size:13px;color:var(--text);">Awaiting data...</div>
-    </div>
-
-    <!-- Dynamic Levels (Punch-style H1-H3/L1-L3 ATR bands) -->
-    <div id="ins-dynlevels-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--purple);letter-spacing:1px;margin-bottom:8px;font-weight:600;">📐 DYNAMIC LEVELS (H1-H3 / L1-L3) <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(ATR bands — light confidence nudge, not a hard gate)</span></div>
-      <div id="ins-dynlevels-label" style="font-size:13px;color:var(--text);margin-bottom:8px;">Awaiting data...</div>
-      <div id="ins-dynlevels-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;"></div>
-    </div>
-
-    <!-- Premarket/Opening Gap (prev close vs today's open, via Fyers) -->
-    <div id="ins-gap-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;">
-      <div style="font-size:12px;color:var(--amber);letter-spacing:1px;margin-bottom:8px;font-weight:600;">🌅 OPENING GAP <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(today's open vs prev close — +3% confidence nudge only)</span></div>
-      <div id="ins-gap-label" style="font-size:13px;color:var(--text);">Awaiting data...</div>
-    </div>
-
-      </div>
-    </details>
-
-    <!-- Probability Engine -->
-    <div id="ins-prob-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--green);letter-spacing:1px;margin-bottom:8px;font-weight:600;">📊 PROBABILITY ENGINE <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(illustrative split, not a separate model)</span></div>
-      <div id="ins-prob-bar" style="display:flex;height:22px;border-radius:6px;overflow:hidden;margin-bottom:6px;"></div>
-      <div id="ins-prob-label" style="font-size:12px;color:var(--text);">Awaiting data...</div>
-    </div>
-
-    <!-- Advanced Data — Group 2: diagnostics/context modifiers (Data Health,
-    Event Countdown, Confidence History, News, BOS/CHOCH, Option Greeks) -->
-    <details open style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;">
-      <summary style="cursor:pointer;padding:12px;font-size:12px;color:var(--purple);letter-spacing:1px;list-style:none;font-weight:600;">▾ ADVANCED: DIAGNOSTICS &amp; CONTEXT MODIFIERS</summary>
-      <div style="padding:0 12px 12px;">
-
-    <!-- Data Health / Self-Diagnosis -->
-    <div id="ins-datahealth-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--blue);letter-spacing:1px;margin-bottom:8px;font-weight:600;">🩺 DATA HEALTH</div>
-      <div id="ins-datahealth-label" style="font-size:13px;color:var(--text);">Awaiting first check...</div>
-    </div>
-
-    <!-- Economic Event Countdown -->
-    <div id="ins-eventcd-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--purple);letter-spacing:1px;margin-bottom:8px;font-weight:600;">⏳ EVENT COUNTDOWN</div>
-      <div id="ins-eventcd-label" style="font-size:13px;color:var(--text);">Awaiting data...</div>
-    </div>
-
-    <!-- Confidence History (rolling last-30-signals) -->
-    <div id="ins-confhist-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--amber);letter-spacing:1px;margin-bottom:8px;font-weight:600;">📈 CONFIDENCE HISTORY <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(last 30 closed signals)</span></div>
-      <div id="ins-confhist-label" style="font-size:13px;color:var(--text);margin-bottom:6px;">Awaiting data...</div>
-      <div id="ins-confhist-regime" style="font-size:12px;color:var(--dim);"></div>
-    </div>
-
-    <!-- News Sentiment Engine -->
-    <div id="ins-news-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--green);letter-spacing:1px;margin-bottom:8px;font-weight:600;">📰 NEWS SENTIMENT <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(confidence modifier only, never a trigger)</span></div>
-      <div id="ins-news-label" style="font-size:13px;color:var(--text);">Awaiting first fetch...</div>
-    </div>
-
-    <!-- BOS / CHOCH — Smart Money Concepts structure break -->
-    <div id="ins-boschoch-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--blue);letter-spacing:1px;margin-bottom:8px;font-weight:600;">🧱 BOS / CHOCH <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(structure break — trend continuation vs early reversal warning)</span></div>
-      <div id="ins-boschoch-label" style="font-size:13px;color:var(--text);">Awaiting data...</div>
-    </div>
-
-    <!-- Option Greeks Dashboard -->
-    <div id="ins-greeks-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;">
-      <div style="font-size:12px;color:var(--purple);letter-spacing:1px;margin-bottom:8px;font-weight:600;">🔬 OPTION GREEKS <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(explanatory only — not a signal input)</span></div>
-      <div id="ins-greeks-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;margin-bottom:6px;"></div>
-      <div id="ins-greeks-regime" style="font-size:12px;color:var(--dim);">Awaiting data...</div>
-    </div>
-
-      </div>
-    </details>
-
-    <!-- Market Regime Classifier -->
-    <div id="ins-regime-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--amber);letter-spacing:1px;margin-bottom:8px;font-weight:600;">🗺️ MARKET REGIME <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(consolidates existing gates — not a new rule set)</span></div>
-      <div id="ins-regime-label" style="font-size:13px;color:var(--text);margin-bottom:6px;">Awaiting data...</div>
-      <div id="ins-regime-detail" style="font-size:12px;color:var(--dim);"></div>
-    </div>
-
-    <!-- Advanced Data — Group 3: confluence internals (Trend Conviction,
-    Renko, Sequence Check, Contradiction Score) -->
-    <details open style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;">
-      <summary style="cursor:pointer;padding:12px;font-size:12px;color:var(--amber);letter-spacing:1px;list-style:none;font-weight:600;">▾ ADVANCED: CONFLUENCE INTERNALS</summary>
-      <div style="padding:0 12px 12px;">
-
-    <!-- Trend Conviction Mode -->
-    <div id="ins-conviction-wrap" style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--green);letter-spacing:1px;margin-bottom:8px;font-weight:600;">🎯 TREND CONVICTION MODE</div>
-      <div id="ins-conviction-label" style="font-size:13px;color:var(--text);margin-bottom:6px;">Not active — no strongly one-sided structural stack yet</div>
-      <div id="ins-conviction-conds" style="font-size:11.5px;color:var(--dim);"></div>
-    </div>
-
-    <!-- Renko Trend Filter (informational only — does not gate signals) -->
-    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--blue);letter-spacing:1px;margin-bottom:8px;font-weight:600;">🧱 RENKO TREND FILTER <span style="font-size:9.5px;color:var(--dim);letter-spacing:0;">(informational — not a gate yet)</span></div>
-      <div id="ins-renko-label" style="font-size:13px;color:var(--text);margin-bottom:6px;">—</div>
-      <div id="ins-renko-bricks" style="font-size:16px;letter-spacing:2px;"></div>
-    </div>
-
-    <!-- Sequence Check -->
-    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--purple);letter-spacing:1px;margin-bottom:8px;font-weight:600;">🔗 SEQUENCE CHECK (MTF→PCR→Delta→ORB→VWAP→Value Area)</div>
-      <div id="ins-seq-steps" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
-      <div id="ins-seq-result" style="font-size:13px;font-weight:600;">—</div>
-    </div>
-
-    <!-- Contradiction Score -->
-    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;">
-      <div style="font-size:12px;color:var(--amber);letter-spacing:1px;margin-bottom:8px;font-weight:600;">⚖️ CONTRADICTION SCORE</div>
-      <div style="display:flex;gap:14px;margin-bottom:6px;">
-        <div style="flex:1;">
-          <div style="font-size:11px;color:var(--green);">Bullish</div>
-          <div id="ins-contra-bull" style="font-size:18px;font-weight:700;color:var(--green);">0%</div>
-          <div id="ins-contra-bull-factors" style="font-size:11.5px;color:var(--dim);"></div>
-        </div>
-        <div style="flex:1;">
-          <div style="font-size:11px;color:var(--red);">Bearish</div>
-          <div id="ins-contra-bear" style="font-size:18px;font-weight:700;color:var(--red);">0%</div>
-          <div id="ins-contra-bear-factors" style="font-size:11.5px;color:var(--dim);"></div>
-        </div>
-      </div>
-      <div id="ins-contra-result" style="font-size:13px;color:var(--text);font-weight:600;">—</div>
-    </div>
-
-      </div>
-    </details>
-
-    <!-- Confidence Breakdown -->
-    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="font-size:12px;color:var(--green);letter-spacing:1px;margin-bottom:8px;font-weight:600;">🔍 CONFIDENCE BREAKDOWN</div>
-      <div id="ins-conf-items" style="font-size:13px;color:var(--text);line-height:1.8;">No active signal</div>
-      <div id="ins-conf-final" style="font-size:14px;font-weight:700;color:var(--accent);margin-top:6px;"></div>
-    </div>
-
-    <!-- Signal Performance -->
-    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-        <div style="font-size:12px;color:var(--dim);letter-spacing:1px;">📊 SIGNAL PERFORMANCE</div>
-        <button onclick="fetchSignalPerformance()" style="font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--dim);cursor:pointer;">↺ Refresh</button>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;">
-        <div style="text-align:center;">
-          <div style="font-size:10.5px;color:var(--dim);">Today</div>
-          <div id="ins-acc-today" style="font-size:16px;font-weight:700;color:var(--text);">—</div>
-        </div>
-        <div style="text-align:center;">
-          <div style="font-size:10.5px;color:var(--dim);">7 Days</div>
-          <div id="ins-acc-weekly" style="font-size:16px;font-weight:700;color:var(--text);">—</div>
-        </div>
-        <div style="text-align:center;">
-          <div style="font-size:10.5px;color:var(--dim);">30 Days</div>
-          <div id="ins-acc-monthly" style="font-size:16px;font-weight:700;color:var(--text);">—</div>
-        </div>
-      </div>
-      <div id="ins-perf-open" style="max-height:260px;overflow-y:auto;">
-        <div style="text-align:center;color:var(--dim);font-size:12.5px;padding:0.5rem 0;">No open signals being tracked</div>
-      </div>
-    </div>
-
-    <!-- Advanced Data — Group 4: 30-day audit stats -->
-    <details open style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;">
-      <summary style="cursor:pointer;padding:12px;font-size:12px;color:var(--green);letter-spacing:1px;list-style:none;font-weight:600;">▾ ADVANCED: LEAD QUALITY &amp; EXIT WARNING AUDIT (30-DAY)</summary>
-      <div style="padding:0 12px 12px;">
-
-    <!-- Lead Quality x Outcome + Exit Warning validation (30-day) -->
-    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:12px;">
-      <div style="font-size:12px;color:var(--blue);letter-spacing:1px;margin-bottom:8px;font-weight:600;">🎯 LEAD QUALITY vs OUTCOME <span style="font-size:9.5px;font-weight:400;">(30-day)</span></div>
-      <div id="ins-lead-quality-breakdown" style="font-size:12.5px;color:var(--dim);">Not enough closed MTF-tracker trades yet</div>
-      <div style="font-size:12px;color:var(--dim);letter-spacing:1px;margin:12px 0 8px;">⚠️ EXIT WARNING VALIDATION <span style="font-size:9.5px;font-weight:400;">(30-day)</span></div>
-      <div id="ins-exit-warning-stats" style="font-size:12.5px;color:var(--dim);">Not enough closed trades yet</div>
-    </div>
-
-      </div>
-    </details>
-
-  </div>
-</div>
 
 
 <script src="/js/nifty-contribution.js" defer></script>
