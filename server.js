@@ -98,6 +98,7 @@ const {
 const { fetchDeltaTicker, getNearestBTCExpiry, fetchDeltaOptionChain, fetchDeltaHistoricalCandles } = require('./src/api/deltaExchange');
 const { volumeRatioFromCandles } = require('./src/utils/btcVolume');
 const btcSpreadStudyLib = require('./src/utils/btcSpreadStudy');
+const sweepLib = require('./src/utils/sweepStudy');
 // 3 Oct — weekend / thin-liquidity gate for Bitcoin option alerts (pure helpers).
 const { assessBitcoinLiquidity, liquidityLine, isBitcoinWeekendThin, thresholds: btcLiquidityThresholds } = require('./src/utils/btcLiquidity');
 // 3 Oct — defined-risk spread tracking for Bitcoin signals (pure helpers).
@@ -13173,6 +13174,20 @@ app.get('/api/zone-study', studyGuard, async (req, res) => {
             WHERE date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date - ($1::int * 366) ORDER BY date ASC LIMIT 3000`, [years]);
         const study = zoneLib.runZoneStudy(r.rows);
         if (String(req.query.format || '') === 'text') return res.type('text/plain').send(zoneLib.formatText(study));
+        res.json({ success: true, years, ...study });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── Liquidity sweep study (11 Oct) — read-only, see src/utils/sweepStudy.js ──
+// /api/sweep-study?years=5&format=text : after a stop-hunt-and-reclaim day (undercut prior N-day low, close back above), do the next 1/3/5 days beat the baseline? Daily NIFTY.
+app.get('/api/sweep-study', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const years = Math.max(1, Math.min(6, parseInt(req.query.years, 10) || 5));
+        const r = await dbPool.query(`SELECT to_char(date, 'YYYY-MM-DD') AS date, open, high, low, close FROM nifty_daily_history
+            WHERE date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date - ($1::int * 366) ORDER BY date ASC LIMIT 3000`, [years]);
+        const study = sweepLib.runSweepStudy(r.rows);
+        if (String(req.query.format || '') === 'text') return res.type('text/plain').send(sweepLib.formatSweepText(study));
         res.json({ success: true, years, ...study });
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
