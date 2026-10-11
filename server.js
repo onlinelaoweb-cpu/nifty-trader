@@ -96,6 +96,8 @@ const {
 } = require('./src/api/nseData');
 // 25 Sep — Delta Exchange India client, for the new Bitcoin-options feature.
 const { fetchDeltaTicker, getNearestBTCExpiry, fetchDeltaOptionChain, fetchDeltaHistoricalCandles } = require('./src/api/deltaExchange');
+const { volumeRatioFromCandles } = require('./src/utils/btcVolume');
+const btcSpreadStudyLib = require('./src/utils/btcSpreadStudy');
 // 3 Oct — weekend / thin-liquidity gate for Bitcoin option alerts (pure helpers).
 const { assessBitcoinLiquidity, liquidityLine, isBitcoinWeekendThin, thresholds: btcLiquidityThresholds } = require('./src/utils/btcLiquidity');
 // 3 Oct — defined-risk spread tracking for Bitcoin signals (pure helpers).
@@ -8317,7 +8319,6 @@ const BITCOIN_VOL_CONFIRM_COOLDOWN_MIN    = 15;
 async function checkBitcoinVolumeConfirmationTrigger() {
     if (!isConfigured() || !isBitcoinWindowOpen()) return;
     try {
-        if (bitcoinVolumeBaselineSamples.length < 5) return;
         const candles = marketState.bitcoin?.candles1m;
         if (!candles || candles.length < 15) return;
         const candles5m = aggregateCandles(candles, 5);
@@ -8326,10 +8327,13 @@ async function checkBitcoinVolumeConfirmationTrigger() {
         const bosEvent = bos.event;
         if (bosEvent !== 'BOS_BULLISH' && bosEvent !== 'BOS_BEARISH') return;
 
-        const volume = bitcoinVolumeBaselineSamples[bitcoinVolumeBaselineSamples.length - 1];
-        const avgVolume = bitcoinVolumeBaselineSamples.reduce((s, v) => s + v, 0) / bitcoinVolumeBaselineSamples.length;
-        if (avgVolume <= 0 || volume <= 0) return;
-        const ratio = volume / avgVolume;
+        // 11 Oct fix — Delta's ticker volume is a rolling 24h total, so the old "latest vs recent polls" ratio was
+        // always ~1.00x (every break WEAK). Now: last completed 5m candle's own volume vs the 20 candles before it.
+        const nowSec = Math.floor(Date.now() / 1000);
+        const raw5 = await fetchDeltaHistoricalCandles('BTCUSD', '5m', nowSec - 150 * 60, nowSec);
+        const vr = volumeRatioFromCandles(raw5, nowSec, 300);
+        if (!vr) return;
+        const { volume, avgVolume, ratio } = vr;
         const result = ratio >= BITCOIN_VOL_CONFIRM_RATIO_THRESHOLD ? 'CONFIRMED' : 'WEAK';
 
         const dedupKey = `${bosEvent}_${result}`;
@@ -8347,7 +8351,7 @@ async function checkBitcoinVolumeConfirmationTrigger() {
 BTC $${bitcoin?.toFixed(1)} — ${direction.toLowerCase()} structure break, volume ${ratio.toFixed(2)}x recent average
 ${isConfirmed ? '✅ Volume backs this move — Dow Theory\'s "genuine trend" pattern.' : '⚠️ Break came on thin volume — historically a weaker, more suspect move.'}
 ━━━━━━━━━━━━━━━━━━
-⚠️ <b>EXPLORATORY — NOT the Bitcoin Main Engine confirmed.</b> Volume from Delta's own ticker. No historical track record yet.
+⚠️ <b>EXPLORATORY — NOT the Bitcoin Main Engine confirmed.</b> Volume = last completed 5m candle vs the 20 before it (Delta candles). No historical track record yet.
 <i>Vardaan AI — Bitcoin Volume Confirmation Trigger (exploratory)</i>
 `.trim();
         if (isConfirmed) await sendTriggerAlert('BITCOIN', 'Volume Confirm', direction, msg);
@@ -13170,6 +13174,21 @@ app.get('/api/zone-study', studyGuard, async (req, res) => {
         const study = zoneLib.runZoneStudy(r.rows);
         if (String(req.query.format || '') === 'text') return res.type('text/plain').send(zoneLib.formatText(study));
         res.json({ success: true, years, ...study });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── BTC spread study (11 Oct) — read-only, see src/utils/btcSpreadStudy.js ──
+// /api/btc-spread-study?days=60&format=text : do the tracked Bitcoin spreads (executable bid/ask) make money? Weekend vs weekday, by source, day-level t-stat.
+app.get('/api/btc-spread-study', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 60));
+        const r = await dbPool.query(`SELECT source, direction, fire_ts, spread_pct_move, spread_result, premium_pct_move FROM signal_outcomes
+            WHERE instrument = 'BITCOIN' AND spread_pct_move IS NOT NULL AND spread_result IS NOT NULL AND spread_result <> 'NO_DATA'
+              AND fire_ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY fire_ts ASC LIMIT 20000`, [days]);
+        const study = btcSpreadStudyLib.runBtcSpreadStudy(r.rows);
+        if (String(req.query.format || '') === 'text') return res.type('text/plain').send(btcSpreadStudyLib.formatBtcSpreadText(study));
+        res.json({ success: true, days, ...study });
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
