@@ -5380,11 +5380,37 @@ function buildTrackRecordBlock(card, agree, disagree) {
 // Never throws, never blocks the alert. Managed with the same NIFTY Trade-Coach grid as every other source so strategies stay comparable.
 // 11 Oct — research context saved with each Auto Journal trade (NIFTY only: Renko is computed on the NIFTY 1m buffer). Read-only.
 function renkoCtxFor(instrument, direction) {
+    // Research context saved with every NIFTY Auto Journal trade. Each part is independent and read-only; a failure in one never drops the other.
+    const ctx = {};
     try {
         const rk = instrument === 'NIFTY' ? marketState.renko : null;
-        if (!rk || !rk.trend) return null;
-        return { renko: { trend: rk.trend, brickSize: rk.brickSize ?? null, flips: rk.flips ?? null, atr: rk.atr ?? null, aligned: renkoAlignedFor(rk.trend, direction === 'BULLISH') } };
-    } catch (e) { return null; }
+        if (rk && rk.trend) ctx.renko = { trend: rk.trend, brickSize: rk.brickSize ?? null, flips: rk.flips ?? null, atr: rk.atr ?? null, aligned: renkoAlignedFor(rk.trend, direction === 'BULLISH') };
+    } catch (e) { /* ignore */ }
+    try {
+        // 12 Oct — PCR at alert time, for the unified audit (does PCR>1 vs <1 change expectancy?). Values come from the NSE/Fyers option-chain snapshot already in memory; no extra API call.
+        if (instrument === 'NIFTY') {
+            const pc = getPCRState(), em = getEarlyMomState();
+            const num = v => (typeof v === 'number' && isFinite(v)) ? v : null;
+            const ceD = num(em.intraCEoiChange), peD = num(em.intraPEoiChange);
+            const clCe = num(em.clusterCEoiChange), clPe = num(em.clusterPEoiChange);
+            const ageSec = pc.fetchedAt ? Math.round((Date.now() - new Date(pc.fetchedAt).getTime()) / 1000) : null;
+            if (num(pc.pcr) !== null || ceD !== null) {
+                ctx.oi = {
+                    pcr: num(pc.pcr),                     // total put OI / total call OI (whole chain)
+                    atmPcr: num(pc.atmPcr),               // ATM strike only
+                    ceOi: num(pc.totalCEoi), peOi: num(pc.totalPEoi),
+                    ceOiChg: ceD, peOiChg: peD,           // today's change in OI, whole chain (NSE-native)
+                    pcrChgOi: (ceD > 0 && peD !== null) ? Math.round((peD / ceD) * 1000) / 1000 : null,   // change-in-OI PCR (needs call OI change > 0)
+                    clusterPcrChgOi: (clCe > 0 && clPe !== null) ? Math.round((clPe / clCe) * 1000) / 1000 : null,   // ATM +/-100pt only
+                    maxPain: num(pc.maxPain),
+                    src: pc.source || null, idx: pc.fromIndex || null,
+                    ageSec,
+                    stale: ageSec === null ? null : ageSec > 300,
+                };
+            }
+        }
+    } catch (e) { /* ignore */ }
+    return Object.keys(ctx).length ? ctx : null;
 }
 
 function journalMainAlert(source, signal, strikeData) {
