@@ -117,6 +117,7 @@ const eeLib = require('./src/utils/entryExitQuality');   // 9 Oct — entry/exit
 const voteLib = require('./src/utils/mtfVoteStudy');   // 9 Oct — does waiting for 15m / 1h agreement pay? (mtf_vote_log)
 const planLib = require('./src/utils/triggerPlan');   // 10 Oct — strike / SL / target block on LIVE trigger alerts
 const regimeLeadLib = require('./src/utils/mtfLeadRegime');   // 10 Oct — did market state at the time already separate good MTF leads from bad ones?
+const zoneLib = require('./src/utils/zoneStudy');   // 11 Oct — supply/demand zone research (daily candles, read-only)
 const ctxLib = require('./src/utils/entryContextStudy');   // 10 Oct — does entering on the VWAP / Fibonacci REACTION beat entering on the ACTION? (market_snapshot_log context)
 const sizingLib = require('./src/utils/sizingStudy');   // 10 Oct — flat lots vs fixed-rupee-risk sizing (Murarka: bigger stop -> fewer lots)
 const exitRuleLib = require('./src/utils/exitRuleStudy');
@@ -13308,6 +13309,22 @@ app.get('/api/entry-context-study', studyGuard, async (req, res) => {
 // Replays the per-trade Trade-Coach results of the declustered trigger outcomes, in time order, under flat lots vs fixed-rupee-risk sizing
 // (plus a daily loss stop and half-size-after-two-losses). Rupee P&L = result% x entry premium x lot size x lots. Paper trading only.
 // Nothing here feeds signals, gates or alerts. See src/utils/sizingStudy.js.
+// ── Supply / Demand zone study (11 Oct) ─────────────────────────────────────
+// Read-only research on the stored daily NIFTY candles (nifty_daily_history). /api/zone-study?years=5&format=text
+// Does price react more at a fresh demand/supply zone (quiet base before a strong impulse) than at a placebo level of the same
+// width 1–1.5 ATR away? Nothing here feeds signals, gates, alerts or the UI. See src/utils/zoneStudy.js.
+app.get('/api/zone-study', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const years = Math.max(1, Math.min(6, parseInt(req.query.years, 10) || 5));
+        const r = await dbPool.query(`SELECT to_char(date, 'YYYY-MM-DD') AS date, open, high, low, close FROM nifty_daily_history
+            WHERE date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date - ($1::int * 366) ORDER BY date ASC LIMIT 3000`, [years]);
+        const study = zoneLib.runZoneStudy(r.rows);
+        if (String(req.query.format || '') === 'text') return res.type('text/plain').send(zoneLib.formatText(study));
+        res.json({ success: true, years, ...study });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 app.get('/api/sizing-study', studyGuard, async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
