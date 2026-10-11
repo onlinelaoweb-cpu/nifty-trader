@@ -99,6 +99,7 @@ const { fetchDeltaTicker, getNearestBTCExpiry, fetchDeltaOptionChain, fetchDelta
 const { volumeRatioFromCandles } = require('./src/utils/btcVolume');
 const btcSpreadStudyLib = require('./src/utils/btcSpreadStudy');
 const sweepLib = require('./src/utils/sweepStudy');
+const btcRegimeLib = require('./src/utils/btcSpreadRegime');
 // 3 Oct — weekend / thin-liquidity gate for Bitcoin option alerts (pure helpers).
 const { assessBitcoinLiquidity, liquidityLine, isBitcoinWeekendThin, thresholds: btcLiquidityThresholds } = require('./src/utils/btcLiquidity');
 // 3 Oct — defined-risk spread tracking for Bitcoin signals (pure helpers).
@@ -13189,6 +13190,21 @@ app.get('/api/sweep-study', studyGuard, async (req, res) => {
         const study = sweepLib.runSweepStudy(r.rows);
         if (String(req.query.format || '') === 'text') return res.type('text/plain').send(sweepLib.formatSweepText(study));
         res.json({ success: true, years, ...study });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── BTC spread x volatility study (11 Oct) — read-only, see src/utils/btcSpreadRegime.js ──
+// /api/btc-spread-regime-study?days=60&format=text : do the tracked BTC spreads lose only on sideways days? Also: how far must BTC move to break even.
+app.get('/api/btc-spread-regime-study', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 60));
+        const r = await dbPool.query(`SELECT direction, fire_ts, entry_price, eval_price, spread_pct_move, spread_result FROM signal_outcomes
+            WHERE instrument = 'BITCOIN' AND spread_pct_move IS NOT NULL AND spread_result IS NOT NULL AND spread_result <> 'NO_DATA'
+              AND entry_price IS NOT NULL AND eval_price IS NOT NULL AND fire_ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY fire_ts ASC LIMIT 20000`, [days]);
+        const study = btcRegimeLib.runBtcSpreadRegime(r.rows);
+        if (String(req.query.format || '') === 'text') return res.type('text/plain').send(btcRegimeLib.formatBtcSpreadRegimeText(study));
+        res.json({ success: true, days, ...study });
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
