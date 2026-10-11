@@ -6622,15 +6622,6 @@ async function checkTelegramAlerts(newSignal) {
                 if (scalpPlan) await sendScalpAlert(alertSnapshot, strikeDataForAlert, scalpPlan);
             } catch (e) { console.warn('[Scalp] alert error:', e.message); }
         }
-
-        // ── Trigger AI suggestion on fresh signal (costs 1 API call here only) ──
-        if (marketState.qualityGate.passed && strikeDataForAlert) {
-            try {
-                const winRate = await getWinRateFromHistory(strikeDataForAlert.type);
-                await getAITradeSuggestion(marketState, strikeDataForAlert, winRate);
-                console.log(`🤖 AI suggestion triggered by fresh signal: ${newSignal}`);
-            } catch(e) { console.error('AI on signal trigger:', e.message); }
-        }
     }
     // MTF alert cooldown: 60 min between same-direction alerts.
     // Also gated to actual market hours (9:15–15:30) only — prevents pre-market
@@ -11905,33 +11896,6 @@ async function getRecentSignalHistory() {
     }
 }
 
-async function getWinRateFromHistory(signalType) {
-    if (!dbPool) return null;
-
-    try {
-        // FIX: ORDER BY + LIMIT inside a plain aggregate is silently ignored by Postgres —
-        // it still counts ALL matching rows. Use a subquery to select the 50 most recent
-        // completed trades first, then aggregate over that bounded result set.
-        const r = await dbPool.query(
-            `SELECT COUNT(*) AS total,
-                    SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins
-             FROM (
-               SELECT outcome FROM trade_history
-               WHERE signal_type=$1 AND outcome IN ('WIN','LOSS')
-               ORDER BY ts DESC
-               LIMIT 50
-             ) recent`,
-            [signalType]
-        );
-        const row = r.rows[0];
-        if (!row || parseInt(row.total) === 0) return null;
-        return Math.round((parseInt(row.wins) / parseInt(row.total)) * 100);
-    } catch (e) {
-        return null;
-    }
-}
-
-
 // ── Days to Next Weekly Expiry (Nifty = every Tuesday) ───────────────────────
 // Returns fractional days remaining until next Tuesday 15:30 IST.
 // Used in pickStrikeAndPremium() so BS estimates use real DTE instead of hardcoded 3 days.
@@ -12257,133 +12221,6 @@ async function computePerformanceAnalytics(windowDays = 30) {
 // that's what the binary Exit Warning / Partial Profit alerts are already for.
 // computeDecayedConfidence() and bsEstimate() — moved to
 // src/utils/pureCalc.js (13 Sep refactor, Phase 2), imported above.
-
-// ── AI Trade Suggestion via Claude API ────────────────────────────────────────
-// Only called when a FRESH signal fires (BUY CALL or BUY PUT transition).
-// The cached result is served to the frontend on every /api/trade-suggestion poll.
-// This means at most 3-5 API calls per trading day — cost under ₹5/day.
-let lastAISuggestion    = null;
-let lastAISuggestionSignal = null;  // the signal string that triggered last AI call
-
-async function getAITradeSuggestion(state, strikeData, winRate) {
-    if (!process.env.ANTHROPIC_API_KEY) return null;
-
-    // Only call AI when signal has CHANGED to a new direction OR Nifty has moved
-    // enough to warrant a fresh strike pick (>100 points from last call level).
-    // FIX: old code cached on state.signal only — ignored price level entirely,
-    // serving a stale 24050 CE suggestion when Nifty had moved to 24400.
-    const niftyBracket = Math.round((state.nifty || 0) / 100) * 100;
-    const currentSignal = state.signal + '_' + niftyBracket;  // direction + 100pt level
-    if (lastAISuggestion && lastAISuggestionSignal === currentSignal) {
-        return lastAISuggestion;  // return cached — no API call
-    }
-
-    try {
-        const winRateLine = winRate !== null ? `Past similar setups win rate: ${winRate}%` : 'Not enough past trade data yet.';
-
-        const prompt = `You are a Nifty 50 options trading assistant for an Indian retail option BUYER.
-
-Current market snapshot:
-- Nifty: ${state.nifty}
-- Signal: ${state.signal} (confidence: ${state.confidence}%)
-- RSI (1m): ${state.rsi}
-- VIX: ${state.vix} (${state.vixSignal})
-- PCR: ${state.pcr} (${state.pcrSignal})
-- ATM PCR: ${state.atmPcr}
-- ADX: ${state.adx ? state.adx.adx : 'N/A'}
-- MTF aligned: ${state.mtf.aligned} (${state.mtf.bullCount}/3 bull, ${state.mtf.bearCount}/3 bear)
-- OI Buildup: ${state.oiBuildup.signal} — ${state.oiBuildup.label}
-- Early Momentum score: ${state.earlyMom.score} — ${state.earlyMom.label}
-- Entry window: ${state.entryWindow.label}
-- Quality gate passed: ${state.qualityGate.passed}
-- Suggested strike: ${strikeData ? strikeData.type + ' ' + strikeData.strike + ' @ ₹' + strikeData.entry : 'N/A'}
-- ${winRateLine}
-
-Based on ALL the above, give a concise trade suggestion. Keep reasoning to 2 sentences max.
-Reply ONLY in this exact JSON format (no extra text, no markdown):
-{"action":"BUY CE or BUY PE or WAIT","strike":24300,"entry":85,"sl":64,"target":128,"reasoning":"Two sentences max explaining why.","confidence":"HIGH or MEDIUM or LOW"}`;
-
-        const res = await axios.post('https://api.anthropic.com/v1/messages', {
-            model: 'claude-sonnet-5',
-            max_tokens: 300,
-            messages: [{ role: 'user', content: prompt }]
-        }, {
-            headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': process.env.ANTHROPIC_API_KEY,
-                'anthropic-version': '2023-06-01'
-            },
-            timeout: 15000
-        });
-
-        const text = res.data?.content?.[0]?.text || '';
-        const cleaned = text.replace(/```json|```/g, '').trim();
-        const parsed = JSON.parse(cleaned);
-        parsed.generatedAt = new Date().toISOString();
-
-        lastAISuggestion       = parsed;
-        lastAISuggestionSignal = currentSignal;  // FIX: key includes price bracket so cache invalidates on 100pt moves
-
-        // Save to DB for training
-        if (parsed.action !== 'WAIT' && strikeData) {
-            await saveTradeToHistory({
-                type: strikeData.type, strike: strikeData.strike,
-                entry: strikeData.entry, sl: strikeData.sl, target: strikeData.target,
-                niftyLevel: state.nifty, rsi: state.rsi, vix: state.vix,
-                pcr: state.pcr, mtfSignal: state.mtf.signal,
-                adx: state.adx?.adx, confidence: state.confidence
-            });
-            console.log(`💾 Trade saved to DB: ${strikeData.type} ${strikeData.strike}`);
-        }
-
-        console.log(`🤖 AI suggestion: ${parsed.action} | Strike: ${parsed.strike} | Entry: ₹${parsed.entry}`);
-        return parsed;
-
-    } catch (e) {
-        console.error('AI suggestion error:', e.message, '| status:', e.response?.status, '| body:', JSON.stringify(e.response?.data)?.slice(0, 500));
-        return null;
-    }
-}
-
-// ── /api/trade-suggestion endpoint ────────────────────────────────────────────
-// Called by the dashboard every 30 seconds when quality gate is passed.
-// Returns: { type, strike, entry, sl, target, reasoning, confidence, winRate }
-
-
-app.get('/api/trade-suggestion', async (req, res) => {
-    // Returns cached AI suggestion instantly. If gate just passed and no cached suggestion
-    // exists yet (e.g. fresh page load, server restart), triggers AI call inline ONCE.
-    try {
-        const pcrState   = getPCRState();
-        const strikeData = marketState.qualityGate.passed && marketState.signal !== 'WAIT'
-            ? pickStrikeAndPremium(marketState.signal, marketState.nifty, marketState.vix, pcrState, marketState)
-            : null;
-        if (strikeData) strikeData.coach = buildTradeCoach(strikeData, coachGridFor('NIFTY'));
-        const winRate = strikeData ? await getWinRateFromHistory(strikeData.type) : null;
-
-        // If gate is passed but no AI suggestion cached yet, trigger one now
-        let suggestion = lastAISuggestion;
-        if (!suggestion && marketState.qualityGate.passed && marketState.signal !== 'WAIT' && strikeData) {
-            try {
-                suggestion = await getAITradeSuggestion(marketState, strikeData, winRate);
-            } catch(e) { console.warn('Inline AI trigger:', e.message); }
-        }
-
-        res.json({
-            qualityGatePassed : marketState.qualityGate.passed,
-            signal            : marketState.signal,
-            confidence        : marketState.confidence,
-            strikeData        : strikeData,
-            aiSuggestion      : suggestion,
-            winRate           : winRate,
-            entryWindow       : marketState.entryWindow,
-            nifty             : marketState.nifty
-        });
-    } catch (e) {
-        console.error('trade-suggestion route:', e.message);
-        res.json({ qualityGatePassed: false, signal: 'WAIT', error: e.message });
-    }
-});
 
 // Update trade outcome in DB (call when you manually exit a trade)
 app.post('/api/trade-history/outcome', requireToken, async (req, res) => {

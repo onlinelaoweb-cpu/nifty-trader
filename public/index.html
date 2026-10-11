@@ -2237,6 +2237,32 @@ html.vn-day .bottom-tabs  { background: rgba(240,242,245,0.98) !important; borde
 html.vn-day #more-menu    { background: rgba(240,242,245,0.98) !important; border-top: 1px solid rgba(0,0,0,0.08) !important; }
 html.vn-day .more-item    { border-color: rgba(0,0,0,0.1) !important; }
 html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0.04) 0%, transparent 100%) !important; }
+
+/* ── Market Pulse (11 Oct) ── */
+.pulse-wrap{padding:0 12px;margin-bottom:8px;}
+.pulse-card{background:linear-gradient(150deg,var(--bg2),var(--card-end));border:1px solid var(--border);border-radius:var(--card-radius,12px);padding:12px;box-shadow:var(--card-shadow);}
+.pulse-card.bull{border-color:var(--green);} .pulse-card.bear{border-color:var(--red);}
+.pulse-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;}
+.pulse-verdict{font-family:'Orbitron',monospace;font-size:15px;font-weight:700;letter-spacing:.5px;color:var(--amber);}
+.pulse-count{font-family:'Share Tech Mono',monospace;font-size:13px;color:var(--dim);white-space:nowrap;}
+.pulse-tally{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--bg3);}
+.pulse-tally>div{transition:width .4s;} .pt-bull{background:var(--green);} .pt-neu{background:var(--border);} .pt-bear{background:var(--red);}
+.pulse-tally-lab{display:flex;justify-content:space-between;font-size:11px;letter-spacing:1px;margin:4px 0 8px;font-family:'Share Tech Mono',monospace;}
+.pulse-sum{font-size:13.5px;line-height:1.5;color:var(--text);margin-bottom:10px;}
+.pulse-lvl{margin-bottom:10px;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;}
+.pl-row{display:flex;align-items:center;gap:8px;font-family:'Share Tech Mono',monospace;font-size:13px;font-weight:700;}
+.pl-s{color:var(--green);} .pl-r{color:var(--red);}
+.pl-track{flex:1;height:6px;border-radius:3px;position:relative;background:linear-gradient(90deg,var(--green),var(--border) 50%,var(--red));}
+.pl-dot{position:absolute;top:-4px;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:var(--accent,var(--blue));border:2px solid var(--bg2);box-shadow:0 0 6px var(--accent,var(--blue));transition:left .4s;}
+.pl-sub{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-top:5px;font-family:'Share Tech Mono',monospace;}
+.pulse-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;}
+@media(min-width:560px){.pulse-grid{grid-template-columns:repeat(4,1fr);}}
+.pt{background:var(--bg3);border:1px solid var(--border);border-left:3px solid var(--dim);border-radius:8px;padding:6px 8px;cursor:pointer;min-width:0;}
+.pt.bull{border-left-color:var(--green);} .pt.bear{border-left-color:var(--red);} .pt.neu{border-left-color:var(--amber);} .pt.sel{outline:1px solid var(--accent,var(--blue));}
+.pt-l{font-size:10px;letter-spacing:1.5px;color:var(--dim);font-family:'Orbitron',monospace;}
+.pt-v{font-size:13px;font-weight:700;font-family:'Share Tech Mono',monospace;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pt.bull .pt-v{color:var(--green);} .pt.bear .pt-v{color:var(--red);} .pt.neu .pt-v{color:var(--amber);} .pt.wait .pt-v{color:var(--dim);}
+.pulse-detail{margin-top:8px;font-size:12px;color:var(--dim);line-height:1.5;min-height:18px;}
 </style>
 <style id="vn-theme-indigo">
 /* 11 Oct — Indigo theme (same palette as the AI Helpdesk demo). Colour tokens only: layout, fonts and signal meaning are unchanged. */
@@ -2364,6 +2390,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
         <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;font-family:'Orbitron',monospace;">ATM</div>
         <div id="atm-strike-display-hero" style="font-family:'Orbitron',monospace;font-size:16px;font-weight:700;color:var(--amber);">--</div>
         <div style="font-size:10px;color:var(--dim);margin-top:2px;font-family:'Share Tech Mono',monospace;" id="dte-display-hero">-- DTE</div>
+        <div class="status-pill" style="margin-top:5px;justify-content:flex-end;"><div class="dot-off" id="status-dot"></div><span id="status-txt">WAITING</span></div>
       </div>
     </div>
     <!-- Compact live metrics row -->
@@ -2405,22 +2432,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <span id="entry-window-badge" style="display:none;font-size:12px;font-family:'Orbitron',monospace;letter-spacing:1px;font-weight:700;padding:3px 12px;border-radius:99px;border:1px solid;"></span>
   </div>
 
-  <!-- ═══ AI TRADE SUGGESTION CARD ═══ -->
-  <div class="sec-label">🤖 AI TRADE SUGGESTION</div>
   <div class="suggest-wrap">
-    <div class="suggest-card wait" id="suggest-card">
-      <div class="suggest-header">
-        <div class="suggest-title">⚡ SUGGESTED TRADE</div>
-        <div style="display:flex;align-items:center;gap:7px;">
-          <span class="suggest-countdown" id="suggest-countdown">--</span>
-          <button class="suggest-refresh" onclick="fetchTradeSuggestion()">↺ REFRESH</button>
-        </div>
-      </div>
-      <div id="suggest-body">
-        <div class="suggest-nogate">Quality gate not passed yet — waiting for all conditions to align...</div>
-      </div>
-    </div>
-
     <!-- BTST / STBT Card — DISABLED (1 Aug 2026, see evaluateBTST() in server.js).
     Backend no longer sets marketState.btst (always null), so renderBTST() below
     always takes the "no data" branch and this card stays hidden (.btst-wrap has
@@ -2437,22 +2449,26 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     </div>
   </div>
 
-    <div class="strike-banner" style="flex-wrap:wrap;gap:4px;">
-    <div>
-      <div class="strike-left">🎯 STRIKE ZONE</div>
-      <div class="strike-val" id="strike-range">ATM ±200</div>
+  <!-- 11 Oct: Strike Zone banner removed (ATM + DTE are in the price header). Hidden stubs keep old JS writes harmless. -->
+  <div style="display:none"><span id="strike-range"></span><span id="atm-strike-display"></span><span id="dte-display"></span></div>
+
+  <!-- ═══ MARKET PULSE (11 Oct) — one-look summary of what the market is saying ═══ -->
+  <div class="sec-label">MARKET PULSE</div>
+  <div class="pulse-wrap"><div class="pulse-card" id="pulse-card">
+    <div class="pulse-head">
+      <div class="pulse-verdict" id="pulse-verdict">Collecting data…</div>
+      <div class="pulse-count" id="pulse-count">--</div>
     </div>
-    <!-- FIX: ATM strike + DTE displayed prominently for option buyer -->
-    <div style="text-align:center;">
-      <div class="strike-left">ATM STRIKE</div>
-      <div class="strike-val" id="atm-strike-display" style="color:var(--amber);">--</div>
+    <div class="pulse-tally"><div class="pt-bull" id="pt-bull" style="width:0%"></div><div class="pt-neu" id="pt-neu" style="width:100%"></div><div class="pt-bear" id="pt-bear" style="width:0%"></div></div>
+    <div class="pulse-tally-lab"><span style="color:var(--green)">BULL <b id="pt-bull-n">0</b></span><span style="color:var(--dim)">NEUTRAL <b id="pt-neu-n">0</b></span><span style="color:var(--red)">BEAR <b id="pt-bear-n">0</b></span></div>
+    <div class="pulse-sum" id="pulse-sum">Waiting for market data…</div>
+    <div class="pulse-lvl" id="pulse-lvl" style="display:none">
+      <div class="pl-row"><span class="pl-s" id="pl-sup">--</span><div class="pl-track"><div class="pl-dot" id="pl-dot" style="left:50%"></div></div><span class="pl-r" id="pl-res">--</span></div>
+      <div class="pl-sub"><span id="pl-sup-d">--</span><span id="pl-mid">--</span><span id="pl-res-d">--</span></div>
     </div>
-    <div style="text-align:center;">
-      <div class="strike-left">DTE</div>
-      <div class="strike-val" id="dte-display" style="color:var(--purple);">-- d</div>
-    </div>
-    <div class="status-pill"><div class="dot-off" id="status-dot"></div><span id="status-txt">WAITING</span></div>
-  </div>
+    <div class="pulse-grid" id="pulse-grid"></div>
+    <div class="pulse-detail" id="pulse-detail">Kisi tile pe tap karo — poori detail yahan dikhegi</div>
+  </div></div>
 
   <!-- S/R LEVELS -->
   <div class="sec-label">KEY LEVELS (AUTO)</div>
@@ -2497,25 +2513,12 @@ html.vn-day .checklist-header{background:#F5F7FF;}
         </div>
       </div>
 
-      <!-- FIX: Call Wall / Put Wall from live option chain OI — most important levels for option buyer -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0 4px;">
-        <div style="background:rgba(255,34,68,0.07);border:1px solid rgba(255,34,68,0.3);border-radius:8px;padding:7px 10px;text-align:center;">
-          <div style="font-size:10px;color:var(--dim);letter-spacing:2px;margin-bottom:2px;">📞 CALL WALL (CE OI)</div>
-          <div id="call-wall-val" style="font-family:'Share Tech Mono',monospace;font-size:15px;font-weight:700;color:var(--red);">--</div>
-          <div id="call-wall-dist" style="font-size:11px;color:var(--dim);margin-top:1px;">-- pts away</div>
-        </div>
-        <div style="background:rgba(0,255,136,0.06);border:1px solid rgba(0,255,136,0.25);border-radius:8px;padding:7px 10px;text-align:center;">
-          <div style="font-size:10px;color:var(--dim);letter-spacing:2px;margin-bottom:2px;">📝 PUT WALL (PE OI)</div>
-          <div id="put-wall-val" style="font-family:'Share Tech Mono',monospace;font-size:15px;font-weight:700;color:var(--green);">--</div>
-          <div id="put-wall-dist" style="font-size:11px;color:var(--dim);margin-top:1px;">-- pts away</div>
-        </div>
-      </div>
       <div id="sr-levels-list"></div>
     </div>
   </div>
 
   <!-- PRE-MARKET CHECKLIST -->
-  <div class="checklist-card">
+  <div class="checklist-card" id="checklist-engine" style="display:none">
     <div class="checklist-header" onclick="toggleChecklist()">
       <div class="checklist-title">📋 PRE-MARKET CHECKLIST</div>
       <div style="display:flex;align-items:center;gap:8px;">
@@ -2550,20 +2553,6 @@ html.vn-day .checklist-header{background:#F5F7FF;}
           <div class="cl-verd-scorelab">AUTO SCORE</div>
         </div>
       </div>
-    </div>
-  </div>
-
-  <!-- MTF -->
-  <div class="sec-label">MULTI-TIMEFRAME</div>
-  <div class="mtf-header">
-    <div class="mtf-title-row">
-      <div class="mtf-title">⚡ MTF</div>
-      <div class="mtf-align-badge wait" id="mtf-badge">WAIT</div>
-    </div>
-    <div class="mtf-grid">
-      <div class="mtf-card" id="mtf-5m"><div class="mtf-tf">5 MIN <span id="mtf-5m-warming" style="display:none;font-size:11px;color:var(--amber);background:rgba(255,170,0,0.12);border:1px solid var(--amber);border-radius:4px;padding:1px 5px;letter-spacing:.5px;" title="">WARMING</span></div><div class="mtf-sig sig-neut" id="mtf-5m-sig">NEUTRAL</div><div class="mtf-stats"><div>RSI:<span class="mtf-rsi" id="mtf-5m-rsi">--</span></div><div>EMA:<span class="mtf-rsi" id="mtf-5m-ema">--</span></div><div>VWAP:<span class="mtf-rsi" id="mtf-5m-vwap">--</span></div></div></div>
-      <div class="mtf-card" id="mtf-15m"><div class="mtf-tf">15 MIN</div><div class="mtf-sig sig-neut" id="mtf-15m-sig">NEUTRAL</div><div class="mtf-stats"><div>RSI:<span class="mtf-rsi" id="mtf-15m-rsi">--</span></div><div>EMA:<span class="mtf-rsi" id="mtf-15m-ema">--</span></div><div>VWAP:<span class="mtf-rsi" id="mtf-15m-vwap">--</span></div></div></div>
-      <div class="mtf-card" id="mtf-1h"><div class="mtf-tf">1 HR</div><div class="mtf-sig sig-neut" id="mtf-1h-sig">NEUTRAL</div><div class="mtf-stats"><div>RSI:<span class="mtf-rsi" id="mtf-1h-rsi">--</span></div><div>EMA:<span class="mtf-rsi" id="mtf-1h-ema">--</span></div><div>VWAP:<span class="mtf-rsi" id="mtf-1h-vwap">--</span></div></div></div>
     </div>
   </div>
 
@@ -2861,7 +2850,6 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     </div>
   </div>
 </div>
-    <div class="ind-card" style="border-left:2px solid var(--amber);grid-column:1/-1;"><div class="ind-label"><span>VIX STATUS</span></div><div class="ind-val" id="vix-note-val" style="font-size:13.5px;color:var(--amber);">--</div><div class="ind-sub" id="vix-note-sub">--</div></div>
   </div>
 
   <!-- ADX TREND STRENGTH — full width row -->
@@ -2999,31 +2987,6 @@ html.vn-day .checklist-header{background:#F5F7FF;}
 
   <div class="reasons-wrap"><div class="reasons-card"><div class="reasons-title">SIGNAL REASONING</div><div id="reasons"><div class="reason-row">Waiting for market data...</div></div></div></div>
 
-  <!-- ═══ MOMENTUM BREAKDOWN CARD ═══ -->
-  <div style="padding:0 12px;margin-bottom:7px;" id="mom-wrap">
-    <div class="mom-card" id="mom-card">
-      <div class="mom-header">
-        <div class="mom-title">🔥 MOMENTUM DETECTOR</div>
-        <div class="mom-badge" id="mom-badge">WATCHING</div>
-      </div>
-      <div class="mom-signal" id="mom-signal">Monitoring price velocity...</div>
-      <div class="mom-bars" id="mom-bars">
-        <div class="mom-bar-row"><span class="mom-bar-label">VELOCITY</span><div class="mom-bar-track"><div class="mom-bar-fill" id="mom-vel-bar" style="width:0%"></div></div><span class="mom-bar-val" id="mom-vel-val">--</span></div>
-        <div class="mom-bar-row"><span class="mom-bar-label">BODY</span><div class="mom-bar-track"><div class="mom-bar-fill" id="mom-body-bar" style="width:0%"></div></div><span class="mom-bar-val" id="mom-body-val">--</span></div>
-        <div class="mom-bar-row"><span class="mom-bar-label">VOLUME</span><div class="mom-bar-track"><div class="mom-bar-fill" id="mom-vol-bar" style="width:0%"></div></div><span class="mom-bar-val" id="mom-vol-val">--</span></div>
-        <div class="mom-bar-row"><span class="mom-bar-label">5M SLOPE</span><div class="mom-bar-track"><div class="mom-bar-fill" id="mom-5m-bar" style="width:0%"></div></div><span class="mom-bar-val" id="mom-5m-val">--</span></div>
-      </div>
-      <div class="mom-strength" id="mom-strength">
-        <span class="mom-dot inactive" id="mom-dot-1"></span>
-        <span class="mom-dot inactive" id="mom-dot-2"></span>
-        <span class="mom-dot inactive" id="mom-dot-3"></span>
-        <span class="mom-dot inactive" id="mom-dot-4"></span>
-        <span class="mom-dot inactive" id="mom-dot-5"></span>
-        <span class="mom-strength-label" id="mom-strength-label">Strength: 0/5</span>
-      </div>
-    </div>
-  </div>
-
   <!-- ═══ SMART MONEY BIAS CARD ═══ -->
   <div style="padding:0 12px;margin-bottom:7px;">
     <div class="sec-label">🏦 SMART MONEY BIAS</div>
@@ -3044,15 +3007,11 @@ html.vn-day .checklist-header{background:#F5F7FF;}
       <div id="sm-label" style="font-size:12px;color:var(--text);font-family:'Share Tech Mono',monospace;margin-bottom:9px;text-align:center;letter-spacing:0.5px;">⚖️ Neutral — No clear institutional bias</div>
       <div class="sm-components" id="sm-components">
         <div class="sm-comp-row"><div class="sm-comp-icon neut">🔄</div><span class="sm-comp-label">OI BUILD</span><span class="sm-comp-value">Awaiting data</span><span class="sm-comp-pts" style="color:var(--dim);">--</span></div>
-        <div class="sm-comp-row"><div class="sm-comp-icon neut">🏦</div><span class="sm-comp-label">FII FLOW</span><span class="sm-comp-value">Awaiting data</span><span class="sm-comp-pts" style="color:var(--dim);">--</span></div>
-        <div class="sm-comp-row"><div class="sm-comp-icon neut">🏠</div><span class="sm-comp-label">DII FLOW</span><span class="sm-comp-value">Awaiting data</span><span class="sm-comp-pts" style="color:var(--dim);">--</span></div>
-        <div class="sm-comp-row"><div class="sm-comp-icon neut">📊</div><span class="sm-comp-label">PCR LVL</span><span class="sm-comp-value">Awaiting data</span><span class="sm-comp-pts" style="color:var(--dim);">--</span></div>
         <div class="sm-comp-row"><div class="sm-comp-icon neut">💰</div><span class="sm-comp-label">ATM FLOW</span><span class="sm-comp-value">Awaiting data</span><span class="sm-comp-pts" style="color:var(--dim);">--</span></div>
       </div>
     </div>
   </div>
 
-  <div class="tg-wrap"><button class="tg-btn" onclick="testTG(this)">📱 TEST TELEGRAM</button><div id="tg-msg"></div></div>
   <div class="footer"><div class="dot-off" id="foot-dot"></div><span id="footer-txt">Waiting...</span></div>
 </div>
 
@@ -3615,6 +3574,10 @@ html.vn-day .checklist-header{background:#F5F7FF;}
 <!-- ═══════════════════════════════════ -->
 <div class="panel" id="panel-tools">
   <div class="tools-wrap">
+    <div class="tool-card">
+      <div class="tool-title">📱 TELEGRAM</div>
+  <div class="tg-wrap"><button class="tg-btn" onclick="testTG(this)">📱 TEST TELEGRAM</button><div id="tg-msg"></div></div>
+    </div>
 
     <!-- Option Premium + Greeks -->
     <div class="tool-card">
@@ -3669,7 +3632,6 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <!-- Position Sizing -->
     <div class="tool-card">
       <div class="tool-title">📐 POSITION SIZING</div>
-      <button class="tool-btn" style="margin-bottom:10px;background:rgba(0,170,255,0.12);border:1px solid var(--blue);color:var(--blue);" onclick="useLiveSignalForSizing()">⚡ Use Live Signal</button>
       <div class="tool-grid">
         <div class="tool-field"><label>CAPITAL (₹)</label><input class="tool-input" id="ps-capital" type="number" placeholder="100000" step="1000" oninput="calcPositionSize()"/></div>
         <div class="tool-field"><label>RISK % PER TRADE</label><input class="tool-input" id="ps-risk" type="number" placeholder="2" step="0.5" min="0.5" max="10" oninput="calcPositionSize()"/></div>
@@ -4281,7 +4243,6 @@ let _pollFallbackActive = false;  // true when 3s emergency fallback poll is run
 let LOT_SIZE = 65;  // default; overwritten on first /api/signal response
 let _soundOn = false;
 let _prevSignal = null;   // tracks last rendered signal for sound change detection
-let _prevSignalForSuggest = null; // tracks signal for auto-suggest refresh
 let _lastKnownNifty = 0;   // persists last live price across market-closed cycles
 let _lastKnownChange = null;
 let _lastKnownChangePct = null;
@@ -4386,7 +4347,6 @@ setTimeout(dismissSplash, 9000);
   document.addEventListener(ev, dismissSplash, { once: true, passive: true })
 );
 
-let _suggestTimer = null;  // FIX: store handle so it can be cleared and not leak
 // ── SSE connection — instant push from server ────────────────────────────────
 function startSSE() {
   if (_sseConn) { _sseConn.close(); _sseConn = null; }
@@ -4540,14 +4500,6 @@ function startPolling() {
   // Always keep a slow poll as safety net (30s) — catches missed SSE events
   if (_pollTimer) clearInterval(_pollTimer);
   _pollTimer = setInterval(fetchSignal, 30000);
-  // Poll AI suggestion every 2 min — but only if signal is non-WAIT (gate passed)
-  // FIX: guard against duplicate interval accumulation on hot-reload / resume
-  if (_suggestTimer) clearInterval(_suggestTimer);
-  _suggestTimer = setInterval(() => {
-    if (document.getElementById('suggest-body') && _lastState && _lastState.signal && _lastState.signal !== 'WAIT') {
-      fetchTradeSuggestion();
-    }
-  }, 2 * 60 * 1000);
 }
 startPolling();
 
@@ -4673,19 +4625,6 @@ function renderDashboard(s) {
     csEl.className = 'conf-strength ' + (sig === 'BUY CALL' ? 'bull' : 'bear');
     csEl.style.display = 'inline-block';
   } else if (csEl) { csEl.style.display = 'none'; }
-  // Auto-refresh AI suggestion when:
-  //   a) signal changes to a non-WAIT direction (new setup appeared)
-  //   b) FIRST poll ever and signal is already non-WAIT (page loaded after signal fired)
-  if (_prevSignalForSuggest !== sig && sig !== 'WAIT') {
-    _prevSignalForSuggest = sig;
-    setTimeout(fetchTradeSuggestion, 500);
-  } else if (_prevSignalForSuggest === null && sig !== 'WAIT') {
-    // First render — gate already passed, trigger once so card shows immediately
-    _prevSignalForSuggest = sig;
-    setTimeout(fetchTradeSuggestion, 1000);
-  } else {
-    _prevSignalForSuggest = sig;
-  }
   const tick65 = document.getElementById('conf-tick65');
   if (tick65) tick65.style.color = conf >= 65 ? 'var(--green)' : 'var(--dim)';
 
@@ -4881,8 +4820,6 @@ function renderDashboard(s) {
   if (s.vix != null) {
     document.getElementById('vix-val').textContent = s.vix.toFixed(2);
     document.getElementById('vix-sig').textContent = s.vixSignal || 'AUTO ✅';
-    document.getElementById('vix-note-val').textContent = s.vix.toFixed(2) + (s.vixChange != null ? ' (' + (s.vixChange >= 0 ? '+' : '') + s.vixChange.toFixed(2) + ')' : '');
-    document.getElementById('vix-note-sub').textContent = s.vixNote || '--';
     const vixCard = document.getElementById('vix-card');
     if (vixCard) { if (s.vix > 20) vixCard.classList.add('pv-card-alert'); else vixCard.classList.remove('pv-card-alert'); }
   }
@@ -4938,8 +4875,8 @@ function renderDashboard(s) {
   const mtf = s.mtf;
   if (mtf) {
     const badge = document.getElementById('mtf-badge');
-    badge.textContent = mtf.signal || 'WAIT';
-    badge.className = 'mtf-align-badge ' + (mtf.signal === 'BUY CALL' ? 'bull' : mtf.signal === 'BUY PUT' ? 'bear' : 'wait');
+    if (badge) { badge.textContent = mtf.signal || 'WAIT';
+    badge.className = 'mtf-align-badge ' + (mtf.signal === 'BUY CALL' ? 'bull' : mtf.signal === 'BUY PUT' ? 'bear' : 'wait'); }
 
     // Show/hide the 5m warmup notice
     const warming5m = document.getElementById('mtf-5m-warming');
@@ -5029,20 +4966,7 @@ function renderDashboard(s) {
     dteEl.style.color = dte != null && dte < 1 ? 'var(--red)' : dte != null && dte < 2 ? 'var(--amber)' : 'var(--purple)';
   }
 
-  // FIX: Call Wall / Put Wall — from live option chain OI (most important levels)
   const cur = s.nifty > 0 ? s.nifty : _lastKnownNifty;
-  const callWallEl = document.getElementById('call-wall-val');
-  const callWallDist = document.getElementById('call-wall-dist');
-  const putWallEl  = document.getElementById('put-wall-val');
-  const putWallDist = document.getElementById('put-wall-dist');
-  if (s.oiBuildup) {
-    const cw = s.oiBuildup.maxCEoiStrike;
-    const pw = s.oiBuildup.maxPEoiStrike;
-    if (callWallEl) callWallEl.textContent = cw || '--';
-    if (callWallDist && cw && cur > 0) callWallDist.textContent = Math.abs(cur - cw).toFixed(0) + ' pts away';
-    if (putWallEl)  putWallEl.textContent  = pw || '--';
-    if (putWallDist && pw && cur > 0)  putWallDist.textContent  = Math.abs(cur - pw).toFixed(0) + ' pts away';
-  }
 
   // Status dot + entry window label
   // During market hours, show LIVE as long as we have a price (WS→Yahoo fallback
@@ -5626,91 +5550,6 @@ function updateSectorHeatmap(sectors) {
   }).join('');
 }
 
-// ─── TRADE SUGGESTION ────────────────────────────────────
-// ── Suggest countdown timer ───────────────────────────────
-let _suggestCountdownTimer = null;
-let _suggestFetchedAt = null;
-const SUGGEST_INTERVAL_S = 120; // matches 2-min auto-refresh
-function _startSuggestCountdown() {
-  _suggestFetchedAt = Date.now();
-  if (_suggestCountdownTimer) clearInterval(_suggestCountdownTimer);
-  const cdEl = document.getElementById('suggest-countdown');
-  _suggestCountdownTimer = setInterval(() => {
-    if (!cdEl) return;
-    const elapsed = Math.floor((Date.now() - _suggestFetchedAt) / 1000);
-    const remaining = SUGGEST_INTERVAL_S - elapsed;
-    if (remaining <= 0) {
-      cdEl.textContent = 'stale';
-      cdEl.classList.add('stale');
-    } else {
-      cdEl.textContent = 'refresh in ' + remaining + 's';
-      cdEl.classList.remove('stale');
-    }
-  }, 1000);
-}
-
-async function fetchTradeSuggestion() {
-  const body = document.getElementById('suggest-body');
-  const card = document.getElementById('suggest-card');
-  if (body) body.innerHTML = '<div class="suggest-nogate">🔄 Fetching AI suggestion...</div>';
-  try {
-    const r = await fetch('/api/trade-suggestion');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const d = await r.json();
-    // Server returns { aiSuggestion:{action,strike,entry,sl,target,reasoning,confidence}, strikeData, qualityGatePassed, ... }
-    const ai = d.aiSuggestion;
-    if (!d || d.error || !ai || !ai.action) {
-      body.innerHTML = `<div class="suggest-nogate">${d?.reason || 'Quality gate not passed yet — waiting for all conditions to align...'}</div>`;
-      if (card) card.className = 'suggest-card wait';
-      return;
-    }
-    const strike     = ai.strike  || d.strikeData?.strike;
-    const entry      = ai.entry   || d.strikeData?.entry;
-    const sl         = ai.sl      || d.strikeData?.sl;
-    const target     = ai.target  || d.strikeData?.target;
-    const bep        = d.strikeData?.bep;
-    // Cache the last suggestion so addTrade() can attach it as suggestedEntry
-    // when the trader logs a fill for this exact strike+type — this is what
-    // makes Slippage tracking possible without changing the manual Journal
-    // form itself. Cleared implicitly by being overwritten on the next fetch;
-    // if the trader logs a trade for a DIFFERENT strike/type than the last
-    // suggestion, addTrade() below simply won't attach it (no false match).
-    if (ai.action && ai.action !== 'WAIT' && strike && entry) {
-        window._lastAISuggestion = { type: (ai.action.includes('CALL') ? 'CE' : 'PE'), strike, entry, sl, target };
-    }
-    const confidence = ai.confidence || d.confidence || '';
-    const reasoning  = ai.reasoning  || ai.rationale || '';  // server uses 'reasoning'
-    const coach      = d.strikeData?.coach;
-    const coachHtml  = coach ? `
-      <div class="suggest-coach" style="margin-top:10px;padding:10px;border-radius:8px;background:rgba(255,255,255,0.03);border:1px solid var(--border);">
-        <div style="font-size:11.5px;letter-spacing:1px;color:var(--accent);margin-bottom:6px;">🧑‍🏫 AI TRADE COACH</div>
-        <div style="font-size:13px;color:var(--text);margin-bottom:3px;">✅ Ideal Entry: <b>${coach.idealEntryLabel}</b></div>
-        <div style="font-size:13px;color:var(--amber);margin-bottom:3px;">⚠️ ${coach.chaseWarning}</div>
-        <div style="font-size:12px;color:var(--dim);margin-bottom:6px;">${coach.ifMissed}</div>
-        <div style="display:flex;flex-direction:column;gap:2px;font-size:12.5px;color:var(--dim);">
-          <span>📈 +${coach.plan[0].atPct}% (₹${coach.plan[0].premium}) → ${coach.plan[0].action}</span>
-          <span>📈 +${coach.plan[1].atPct}% (₹${coach.plan[1].premium}) → ${coach.plan[1].action}</span>
-          <span>📈 +${coach.plan[2].atPct}% (₹${coach.plan[2].premium}) → ${coach.plan[2].action}</span>
-        </div>
-      </div>` : '';
-    if (card) card.className = 'suggest-card ' + (ai.action.includes('CALL') ? 'bull' : ai.action.includes('PUT') ? 'bear' : 'wait');
-    body.innerHTML = `
-      <div class="suggest-action" style="color:${ai.action.includes('CALL') ? 'var(--green)' : ai.action.includes('PUT') ? 'var(--red)' : 'var(--amber)'}">${ai.action}</div>
-      ${strike ? `<div class="suggest-detail">Strike: <b>${strike}</b> | Entry: <b>₹${entry || '--'}</b></div>` : ''}
-      ${sl ? `<div class="suggest-detail">SL: ₹${sl} | Target: ₹${target || '--'}</div>` : ''}
-      ${bep ? `<div class="suggest-detail" style="color:var(--dim);">⚖️ Break-Even: Nifty ${bep} by expiry</div>` : ''}
-      ${d.strikeData?.lowLiquidity ? `<div class="suggest-detail" style="color:var(--amber);">⚠️ Low liquidity: OI ${Math.round((d.strikeData.strikeOI||0)/1000)}K, Vol ${Math.round((d.strikeData.strikeVolume||0)/1000)}K — check spread before entry</div>` : ''}
-      ${d.strikeData?.positionSizeNote ? `<div class="suggest-detail" style="color:var(--amber);">📏 ${d.strikeData.positionSizeNote}</div>` : ''}
-      ${reasoning ? `<div class="suggest-rationale">${reasoning}</div>` : ''}
-      ${confidence ? `<div class="suggest-conf">Confidence: ${confidence}</div>` : ''}
-      ${coachHtml}
-    `;
-    _startSuggestCountdown();
-  } catch (e) {
-    if (body) body.innerHTML = `<div class="suggest-nogate">⚠️ Error fetching suggestion: ${e.message}</div>`;
-  }
-}
-
 // ─── BTST / STBT RENDERER ────────────────────────────────
 // ─── AI INSIGHTS TAB ──────────────────────────────────────────────────────
 function updateInsightsUI(s) {
@@ -6231,7 +6070,8 @@ function renderSmartMoney(sm) {
   if (compEl && sm.components && sm.components.length) {
     const icons = ['🔄','🏦','🏠','📊','💰'];
     const labels = ['OI BUILD','FII FLOW','DII FLOW','PCR LVL','ATM FLOW'];
-    compEl.innerHTML = sm.components.map((c, i) => {
+    // 11 Oct: FII / DII / PCR rows hidden (shown elsewhere) — indices 1,2,3
+    compEl.innerHTML = sm.components.map((c, i) => ({c, i})).filter(x => x.i === 0 || x.i === 4 || x.i > 4).map(({c, i}) => {
       const iC = c.bull === true ? 'bull' : c.bull === false ? 'bear' : 'neut';
       const ptColor = c.pts > 0 ? 'var(--green)' : c.pts < 0 ? 'var(--red)' : 'var(--dim)';
       const ptText  = c.pts > 0 ? '+' + c.pts : c.pts < 0 ? String(c.pts) : '--';
@@ -7069,8 +6909,7 @@ async function addTrade() {
   // Slippage tracking: only attach suggestedEntry if it matches this exact
   // strike+type — otherwise we'd be comparing the fill against an unrelated
   // suggestion (e.g. trader logging a different strike than what was last shown).
-  const lastSugg = window._lastAISuggestion;
-  const suggestedEntry = (lastSugg && lastSugg.type === type && lastSugg.strike === strike) ? lastSugg.entry : null;
+  const suggestedEntry = null; // AI suggestion removed (11 Oct) — slippage vs suggestion no longer tracked
 
   // Optimistic local add for instant feedback
   const tempId   = Date.now();
@@ -7327,7 +7166,9 @@ function updateChecklistAuto(s) {
   const bulletScore = []; // +1 bull, -1 bear, 0 neutral
 
   // Helper: set item state
+  window._clItems = window._clItems || {};
   function setItem(id, state, valText, valColor) {
+    window._clItems[id] = { state, text: valText, color: valColor };
     const el = document.getElementById(id);
     const valEl = document.getElementById(id + '-val');
     if (!el) return;
@@ -7567,9 +7408,113 @@ function updateChecklistAuto(s) {
     if (verdEl) { verdEl.className = 'cl-verdict ' + cls; }
     if (mainEl) { mainEl.textContent = verdict; mainEl.style.color = color; }
     if (scoreEl) { scoreEl.textContent = bullVotes + '/' + total; scoreEl.style.color = color; }
-  }
+    window._clVerdict = { verdict, cls, color, bullVotes, bearVotes, total };
+  } else { window._clVerdict = null; }
 
   _updateCLProgress();
+  try { renderPulse(s, bulletScore); } catch (e) { console.warn('[renderPulse] failed:', e.message); }
+}
+
+// ─── MARKET PULSE (11 Oct) — one-look summary built from the same data as the old pre-market checklist ───
+const _PULSE_TILES = [
+  ['cl-global','GLOBAL'], ['cl-gift','GIFT NIFTY'], ['cl-bn','BANK NIFTY'], ['cl-fii','FII + DII'],
+  ['cl-pcr','PCR'], ['cl-em','OPTION FLOW'], ['cl-mtf','TREND (MTF)'], ['cl-adx','ADX'],
+  ['cl-vix','VIX'], ['cl-events','EVENTS'], ['x-sm','SMART MONEY'], ['x-mom','PRICE MOMENTUM']
+];
+function _pulseShort(id, s, it) {
+  const sg = n => (n >= 0 ? '+' : '') + n;
+  switch (id) {
+    case 'cl-global': return s.global?.bias || '--';
+    case 'cl-gift': { const c = s.global?.asia?.giftNifty?.change; return c == null ? '--' : sg(Math.round(c)) + ' pts'; }
+    case 'cl-bn': { const l = s.global?.bankNiftyLeadSignal; if (l && l.label) return l.label; const c = s.global?.sectors?.bankNifty?.changePct; return c == null ? '--' : sg(c.toFixed(2)) + '%'; }
+    case 'cl-fii': { if (!s.fii && !s.dii) return '--'; const n = (s.fii?.net || 0) + (s.dii?.net || 0); return sg(Math.round(n)) + ' Cr'; }
+    case 'cl-pcr': return s.pcr == null ? '--' : s.pcr.toFixed(2) + (s.pcr > 1.1 ? ' BULL' : s.pcr < 0.8 ? ' BEAR' : ' NEUT');
+    case 'cl-em': return s.earlyMom && s.earlyMom.score != null ? sg(s.earlyMom.score) + ' / 9' : '--';
+    case 'cl-mtf': return s.mtf && s.mtf.signal ? (s.mtf.signal === 'BUY CALL' ? 'UP' : s.mtf.signal === 'BUY PUT' ? 'DOWN' : 'MIXED') + (s.mtf.aligned ? ' ✓' : '') : '--';
+    case 'cl-adx': return s.adx && s.adx.adx != null ? s.adx.adx.toFixed(0) + (s.adx.adx >= 25 ? ' TREND' : s.adx.adx >= 20 ? ' WEAK' : ' CHOP') : '--';
+    case 'cl-vix': return s.vix == null ? '--' : s.vix.toFixed(1) + (s.vix < 20 ? ' CALM' : s.vix < 25 ? ' HIGH' : ' DANGER');
+    case 'cl-events': { const m = /^(\d+) HIGH/.exec(it?.text || ''); return it && it.state !== 'wait' ? (m ? m[1] + ' TODAY' : 'NONE') : '--'; }
+  }
+  return '--';
+}
+function renderPulse(s, bulletScore) {
+  const grid = document.getElementById('pulse-grid');
+  if (!grid) return;
+  const items = window._clItems || {};
+  const isWaiting = it => !it || /^(Waiting|Checking|⏳)/.test(it.text || '');
+  const tiles = _PULSE_TILES.map(([id, label]) => {
+    let cls = 'wait', val = '--', full = 'Data abhi aa raha hai…';
+    if (id === 'x-sm') {
+      const b = s.smartMoney?.bias || '';
+      if (b) { cls = b.includes('BULL') ? 'bull' : b.includes('BEAR') ? 'bear' : 'neu'; val = b.replace('STRONGLY_', 'STRONG ').replace('_', ' '); full = 'Institutional bias: ' + (s.smartMoney.label || b); }
+    } else if (id === 'x-mom') {
+      const m = s.momentum;
+      if (m && m.signal && m.signal !== 'NONE' && m.canTrade) { cls = m.signal === 'BREAKDOWN' ? 'bear' : 'bull'; val = m.signal + ' ' + (m.strength || 0) + '/5'; full = 'Price momentum: ' + (m.reason || m.signal); }
+      else if (m && m.ready) { cls = 'neu'; val = 'QUIET'; full = 'Price velocity threshold se neeche — koi momentum burst nahi'; }
+    } else {
+      const it = items[id];
+      if (!isWaiting(it)) {
+        cls = it.state === 'pass' ? 'bull' : it.state === 'fail' ? 'bear' : 'neu';
+        val = _pulseShort(id, s, it); full = it.text;
+      }
+    }
+    return { id, label, cls, val, full };
+  });
+  window._pulseTiles = tiles;
+  grid.innerHTML = tiles.map((t, i) => '<div class="pt ' + t.cls + '" data-i="' + i + '" onclick="pulseTap(' + i + ')"><div class="pt-l">' + t.label + '</div><div class="pt-v">' + t.val + '</div></div>').join('');
+
+  // tally (from the verdict engine's own scores + smart money / momentum tiles)
+  const bull = tiles.filter(t => t.cls === 'bull').length, bear = tiles.filter(t => t.cls === 'bear').length;
+  const live = tiles.filter(t => t.cls !== 'wait').length, neu = live - bull - bear;
+  const pct = n => live ? (100 * n / live) : 0;
+  const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+  const w = (id, v) => { const e = document.getElementById(id); if (e) e.style.width = v + '%'; };
+  w('pt-bull', pct(bull)); w('pt-bear', pct(bear)); w('pt-neu', live ? pct(neu) : 100);
+  set('pt-bull-n', bull); set('pt-bear-n', bear); set('pt-neu-n', neu);
+
+  // headline
+  const V = window._clVerdict;
+  const card = document.getElementById('pulse-card');
+  const vEl = document.getElementById('pulse-verdict');
+  if (vEl) { vEl.textContent = V ? V.verdict : (live ? (bull > bear + 1 ? '🟢 Bullish lean' : bear > bull + 1 ? '🔴 Bearish lean' : '⚪ Mixed') + ' (partial data)' : 'Collecting data…'); vEl.style.color = V ? V.color : 'var(--amber)'; }
+  if (card) { card.classList.remove('bull', 'bear'); if (V && V.cls === 'bull') card.classList.add('bull'); else if (V && V.cls === 'bear') card.classList.add('bear'); }
+  set('pulse-count', 'APP: ' + (s.signal || 'WAIT') + ' · ' + (s.confidence || 0) + '%');
+
+  // plain-language summary
+  const names = cls => { const a = tiles.filter(t => t.cls === cls).map(t => t.label.toLowerCase()); return a.length > 4 ? a.length + ' indicators (' + a.slice(0, 3).join(', ') + '…)' : a.join(', '); };
+  const parts = [];
+  if (live) {
+    if (bull) parts.push('<b style="color:var(--green)">Saath:</b> ' + names('bull'));
+    if (bear) parts.push('<b style="color:var(--red)">Khilaf:</b> ' + names('bear'));
+    if (neu) parts.push('<b style="color:var(--amber)">Neutral:</b> ' + names('neu'));
+  }
+  const cautions = [];
+  if (s.vix != null && s.vix >= 20) cautions.push('VIX ' + s.vix.toFixed(1) + ' high');
+  if (s.adx && s.adx.adx != null && s.adx.adx < 20) cautions.push('market choppy (ADX ' + s.adx.adx.toFixed(0) + ')');
+  const ev = items['cl-events']; if (ev && ev.state === 'fail') cautions.push('high-impact event aaj');
+  if ((s.confidence || 0) < 50) cautions.push('app confidence kam');
+  let sum = parts.join(' &nbsp;·&nbsp; ');
+  if (cautions.length) sum += (sum ? '<br>' : '') + '⚠️ <span style="color:var(--amber)">' + cautions.join(' · ') + '</span>';
+  const sEl = document.getElementById('pulse-sum'); if (sEl) sEl.innerHTML = sum || 'Waiting for market data…';
+
+  // price vs nearest support / resistance
+  const lvl = document.getElementById('pulse-lvl');
+  const sup = s.srLevels?.nearSup, res = s.srLevels?.nearRes;
+  const cur = s.nifty > 0 ? s.nifty : (typeof _lastKnownNifty !== 'undefined' ? _lastKnownNifty : 0);
+  if (lvl && sup && res && cur > 0 && res.price > sup.price) {
+    lvl.style.display = 'block';
+    const pos = Math.max(2, Math.min(98, 100 * (cur - sup.price) / (res.price - sup.price)));
+    set('pl-sup', sup.price); set('pl-res', res.price);
+    const dot = document.getElementById('pl-dot'); if (dot) dot.style.left = pos + '%';
+    set('pl-sup-d', Math.abs(cur - sup.price).toFixed(0) + ' pts niche'); set('pl-res-d', Math.abs(res.price - cur).toFixed(0) + ' pts upar');
+    set('pl-mid', pos < 30 ? 'support ke paas' : pos > 70 ? 'resistance ke paas' : 'beech mein');
+  } else if (lvl) lvl.style.display = 'none';
+}
+function pulseTap(i) {
+  const t = (window._pulseTiles || [])[i]; const d = document.getElementById('pulse-detail');
+  if (!t || !d) return;
+  d.textContent = t.label + ' → ' + t.full;
+  document.querySelectorAll('#pulse-grid .pt').forEach(e => e.classList.toggle('sel', Number(e.dataset.i) === i));
 }
 function resetChecklist() {
   document.querySelectorAll('.cl-item:not([data-auto])').forEach(el => el.classList.remove('checked'));
@@ -7667,17 +7612,6 @@ function calcTheta() {
 //    server.js combineSignals()/updatePrice()). This applies that same
 //    multiplier so the "suggested" number matches what the app itself
 //    already recommends sizing down to on a weaker setup.
-function useLiveSignalForSizing() {
-  const sug = window._lastAISuggestion;
-  if (!sug || !sug.entry) {
-    alert('No live AI suggestion available right now — wait for a signal to fire, or fill in manually.');
-    return;
-  }
-  document.getElementById('ps-entry').value = sug.entry;
-  if (sug.sl) document.getElementById('ps-sl').value = sug.sl;
-  calcPositionSize();
-}
-
 function calcPositionSize() {
   const cap = parseFloat(document.getElementById('ps-capital').value);
   const riskPct = parseFloat(document.getElementById('ps-risk').value);
@@ -7961,9 +7895,6 @@ function _doLogin() {
         errEl.textContent = '';
         // Start polling if not already running
         if (typeof startPolling === 'function') startPolling();
-        if (typeof fetchTradeSuggestion === 'function' && document.getElementById('suggest-body')) {
-          setTimeout(fetchTradeSuggestion, 800);
-        }
       } else {
         _loginError('Wrong password');
         input.value = '';
