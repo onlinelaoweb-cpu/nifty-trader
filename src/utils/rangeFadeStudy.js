@@ -88,16 +88,22 @@ function formatRangeFadeText(results) {
     return o.join('\n');
 }
 
-async function fetchYahooBars(symbol, axios, range = '60d', interval = '5m') {
-    const hosts = ['query1', 'query2'];
-    for (const h of hosts) {
+// Returns { bars, error }. Rotates host + browser-like headers, tries a couple of ranges (Yahoo is picky about 5m history limits).
+async function fetchYahooBars(symbol, axios, interval = '5m', ranges = ['58d', '30d', '5d']) {
+    const UA = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'];
+    let lastError = 'no response', k = 0;
+    for (const range of ranges) for (const h of ['query1', 'query2']) {
         try {
             const res = await axios.get(`https://${h}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`, { params: { interval, range }, timeout: 20000,
-                headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', Accept: 'application/json' } });
-            const r = res.data?.chart?.result?.[0], q = r?.indicators?.quote?.[0]; if (!r || !q) continue;
-            return r.timestamp.map((t, i) => ({ t, o: q.open[i], h: q.high[i], l: q.low[i], c: q.close[i] })).filter(b => [b.o, b.h, b.l, b.c].every(Number.isFinite));
-        } catch (e) { /* try next host */ }
+                headers: { 'User-Agent': UA[k++ % UA.length], Accept: 'application/json, text/plain, */*', 'Accept-Language': 'en-US,en;q=0.9', Referer: 'https://finance.yahoo.com/', Origin: 'https://finance.yahoo.com' } });
+            const r = res.data?.chart?.result?.[0], q = r?.indicators?.quote?.[0];
+            if (!r || !q || !r.timestamp) { lastError = res.data?.chart?.error?.description || 'empty chart result'; continue; }
+            const bars = r.timestamp.map((t, i) => ({ t, o: q.open[i], h: q.high[i], l: q.low[i], c: q.close[i] })).filter(b => [b.o, b.h, b.l, b.c].every(Number.isFinite));
+            if (bars.length > 200) return { bars, error: null, range };
+            lastError = `only ${bars.length} bars for range ${range}`;
+        } catch (e) { lastError = `${h} ${range}: ${e.response?.status || e.code || e.message}`; }
     }
-    return null;
+    return { bars: null, error: lastError };
 }
 module.exports = { runRangeFadeStudy, formatRangeFadeText, fetchYahooBars, simulate, P, HURDLE_PCT };

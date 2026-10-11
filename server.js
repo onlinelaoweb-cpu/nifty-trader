@@ -13210,18 +13210,29 @@ app.get('/api/btc-spread-regime-study', studyGuard, async (req, res) => {
 });
 
 // ── Sideways range-fade study (11 Oct) — read-only, see src/utils/rangeFadeStudy.js ──
-// /api/range-fade-study?format=text : on sideways stretches, does buying the bottom / selling the top of the range pay? NIFTY, CRUDE (WTI) and BTC, 5m bars (~60 days) from Yahoo. Underlying only.
+// /api/range-fade-study?format=text : on sideways stretches, does buying the bottom / selling the top of the range pay? NIFTY, CRUDE (WTI) and BTC, 5m bars (Yahoo for NIFTY/CRUDE, Delta for BTC). Underlying only.
 // Rules are fixed in the lib (not tuned). ?refresh=1 re-downloads; otherwise bars are cached 30 min.
 const _rangeFadeCache = {};
+async function _rangeFadeBtcBars() {   // BTC 5m from Delta (the app's own source), 40 days in 5-day chunks
+    const nowSec = Math.floor(Date.now() / 1000), all = [];
+    for (let d = 40; d > 0; d -= 5) {
+        const c = await fetchDeltaHistoricalCandles('BTCUSD', '5m', nowSec - d * 86400, nowSec - Math.max(0, d - 5) * 86400);
+        if (c && c.length) for (const x of c) { const t = Number(x.time) > 1e12 ? Math.floor(Number(x.time) / 1000) : Number(x.time); all.push({ t, o: x.open, h: x.high, l: x.low, c: x.close }); }
+    }
+    const seen = new Set(); return all.filter(b => Number.isFinite(b.t) && !seen.has(b.t) && seen.add(b.t)).sort((a, b) => a.t - b.t);
+}
 app.get('/api/range-fade-study', studyGuard, async (req, res) => {
     try {
-        const syms = [['NIFTY', '^NSEI'], ['CRUDE', 'CL=F'], ['BTC', 'BTC-USD']], results = [];
+        const syms = [['NIFTY', '^NSEI'], ['CRUDE', 'CL=F'], ['BTC', null]], results = [];
         for (const [name, sym] of syms) {
-            let c = _rangeFadeCache[name];
+            let c = _rangeFadeCache[name], err = null;
             if (!c || req.query.refresh === '1' || Date.now() - c.ts > 30 * 60 * 1000) {
-                const bars = await rangeFadeLib.fetchYahooBars(sym, axios);
-                if (bars && bars.length) c = _rangeFadeCache[name] = { ts: Date.now(), bars }; else if (!c) { results.push({ instrument: name, error: 'Yahoo returned no 5m bars (try again in a minute)' }); continue; }
+                let bars = null;
+                if (sym) { const r = await rangeFadeLib.fetchYahooBars(sym, axios); bars = r.bars; err = r.error; }
+                else { try { bars = await _rangeFadeBtcBars(); if (!bars.length) err = 'Delta returned no 5m candles'; } catch (e) { err = e.message; } }
+                if (bars && bars.length) c = _rangeFadeCache[name] = { ts: Date.now(), bars };
             }
+            if (!c) { results.push({ instrument: name, error: err || 'no data' }); continue; }
             results.push(rangeFadeLib.runRangeFadeStudy(c.bars, name));
         }
         if (String(req.query.format || '') === 'text') return res.type('text/plain').send(rangeFadeLib.formatRangeFadeText(results));
