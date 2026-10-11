@@ -2262,6 +2262,8 @@ html.vn-day .price-section{ background: linear-gradient(180deg, rgba(0,180,100,0
 .pt-l{font-size:10px;letter-spacing:1.5px;color:var(--dim);font-family:'Orbitron',monospace;}
 .pt-v{font-size:13px;font-weight:700;font-family:'Share Tech Mono',monospace;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .pt.bull .pt-v{color:var(--green);} .pt.bear .pt-v{color:var(--red);} .pt.neu .pt-v{color:var(--amber);} .pt.wait .pt-v{color:var(--dim);}
+.pulse-extra{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
+.pe-chip{font-size:12px;font-weight:700;font-family:'Share Tech Mono',monospace;padding:4px 9px;border-radius:99px;border:1px solid var(--border);background:var(--bg3);}
 .pulse-detail{margin-top:8px;font-size:12px;color:var(--dim);line-height:1.5;min-height:18px;}
 </style>
 <style id="vn-theme-indigo">
@@ -2462,6 +2464,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <div class="pulse-tally"><div class="pt-bull" id="pt-bull" style="width:0%"></div><div class="pt-neu" id="pt-neu" style="width:100%"></div><div class="pt-bear" id="pt-bear" style="width:0%"></div></div>
     <div class="pulse-tally-lab"><span style="color:var(--green)">BULL <b id="pt-bull-n">0</b></span><span style="color:var(--dim)">NEUTRAL <b id="pt-neu-n">0</b></span><span style="color:var(--red)">BEAR <b id="pt-bear-n">0</b></span></div>
     <div class="pulse-sum" id="pulse-sum">Waiting for market data…</div>
+    <div class="pulse-extra" id="pulse-extra" style="display:none"></div>
     <div class="pulse-lvl" id="pulse-lvl" style="display:none">
       <div class="pl-row"><span class="pl-s" id="pl-sup">--</span><div class="pl-track"><div class="pl-dot" id="pl-dot" style="left:50%"></div></div><span class="pl-r" id="pl-res">--</span></div>
       <div class="pl-sub"><span id="pl-sup-d">--</span><span id="pl-mid">--</span><span id="pl-res-d">--</span></div>
@@ -2493,23 +2496,6 @@ html.vn-day .checklist-header{background:#F5F7FF;}
           <div class="sr-near-label">NEAREST SUPPORT</div>
           <div class="sr-near-val" id="near-sup" style="color:var(--green);">--</div>
           <div class="sr-near-dist" id="near-sup-dist">-- points away</div>
-        </div>
-      </div>
-
-      <!-- Price Action Signal at Level -->
-      <div id="pa-signal-box" style="margin-top:8px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;font-size:13px;text-align:center;">
-        <span style="color:var(--dim)">No active PA signal</span>
-      </div>
-
-      <!-- Entry Quality Score -->
-      <div id="entry-quality-box" style="margin-top:6px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:11px;color:var(--dim);letter-spacing:1px;text-transform:uppercase;">Entry Quality</span>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <div id="eq-bar-wrap" style="width:80px;height:6px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden;">
-            <div id="eq-bar" style="height:100%;width:0%;background:var(--green);border-radius:3px;transition:width 0.4s;"></div>
-          </div>
-          <span id="eq-score" style="font-family:'Share Tech Mono',monospace;font-size:15px;font-weight:700;color:var(--dim);">--</span>
-          <span id="eq-grade" style="font-size:13px;font-weight:700;color:var(--dim);">-</span>
         </div>
       </div>
 
@@ -7426,7 +7412,7 @@ function _pulseShort(id, s, it) {
   switch (id) {
     case 'cl-global': return s.global?.bias || '--';
     case 'cl-gift': { const c = s.global?.asia?.giftNifty?.change; return c == null ? '--' : sg(Math.round(c)) + ' pts'; }
-    case 'cl-bn': { const l = s.global?.bankNiftyLeadSignal; if (l && l.label) return l.label; const c = s.global?.sectors?.bankNifty?.changePct; return c == null ? '--' : sg(c.toFixed(2)) + '%'; }
+    case 'cl-bn': { const l = s.global?.bankNiftyLeadSignal; if (l && l.label) return String(l.label).replace(/_/g, ' '); const c = s.global?.sectors?.bankNifty?.changePct; return c == null ? '--' : sg(c.toFixed(2)) + '%'; }
     case 'cl-fii': { if (!s.fii && !s.dii) return '--'; const n = (s.fii?.net || 0) + (s.dii?.net || 0); return sg(Math.round(n)) + ' Cr'; }
     case 'cl-pcr': return s.pcr == null ? '--' : s.pcr.toFixed(2) + (s.pcr > 1.1 ? ' BULL' : s.pcr < 0.8 ? ' BEAR' : ' NEUT');
     case 'cl-em': return s.earlyMom && s.earlyMom.score != null ? sg(s.earlyMom.score) + ' / 9' : '--';
@@ -7478,7 +7464,10 @@ function renderPulse(s, bulletScore) {
   const vEl = document.getElementById('pulse-verdict');
   if (vEl) { vEl.textContent = V ? V.verdict : (live ? (bull > bear + 1 ? '🟢 Bullish lean' : bear > bull + 1 ? '🔴 Bearish lean' : '⚪ Mixed') + ' (partial data)' : 'Collecting data…'); vEl.style.color = V ? V.color : 'var(--amber)'; }
   if (card) { card.classList.remove('bull', 'bear'); if (V && V.cls === 'bull') card.classList.add('bull'); else if (V && V.cls === 'bear') card.classList.add('bear'); }
-  set('pulse-count', 'APP: ' + (s.signal || 'WAIT') + ' · ' + (s.confidence || 0) + '%');
+  const _st = document.getElementById('status-txt');
+  const closed = !!_st && _st.textContent !== 'LIVE';
+  if (closed && vEl) { const base = V ? V.verdict.replace(/ — Low Confidence \(\d+%\) · Wait/, '').replace(/^⚡ CONFLICT.*/, '⚡ Global vs Institutional conflict') : vEl.textContent; vEl.textContent = '🌙 Market band — ' + base.replace(/^[^A-Za-z]+/, ''); vEl.style.color = 'var(--dim)'; }
+  set('pulse-count', closed ? 'MARKET CLOSED' : 'APP: ' + (s.signal || 'WAIT') + ' · ' + (s.confidence || 0) + '%');
 
   // plain-language summary
   const names = cls => { const a = tiles.filter(t => t.cls === cls).map(t => t.label.toLowerCase()); return a.length > 4 ? a.length + ' indicators (' + a.slice(0, 3).join(', ') + '…)' : a.join(', '); };
@@ -7496,6 +7485,23 @@ function renderPulse(s, bulletScore) {
   let sum = parts.join(' &nbsp;·&nbsp; ');
   if (cautions.length) sum += (sum ? '<br>' : '') + '⚠️ <span style="color:var(--amber)">' + cautions.join(' · ') + '</span>';
   const sEl = document.getElementById('pulse-sum'); if (sEl) sEl.innerHTML = sum || 'Waiting for market data…';
+
+  // Entry Quality (only when a signal is live) + price-action event at a level
+  const ex = document.getElementById('pulse-extra');
+  if (ex) {
+    const chips = [];
+    const eq = s.entryQuality;
+    if (eq && eq.score > 0 && s.signal && s.signal !== 'WAIT') {
+      const c = eq.score >= 65 ? 'var(--green)' : eq.score >= 40 ? 'var(--amber)' : 'var(--red)';
+      chips.push('<span class="pe-chip" style="color:' + c + ';border-color:' + c + '">ENTRY QUALITY ' + eq.score + '/100 · ' + (eq.grade || '-') + '</span>');
+    }
+    const pa = s.paSignal;
+    if (pa) {
+      const L = { SUPPORT_BOUNCE:['🔄 Support se bounce','var(--green)'], SUPPORT_BREAK:['💥 Support toota','var(--red)'], RESISTANCE_REJECT:['🔄 Resistance se rejection','var(--red)'], RESISTANCE_BREAK:['🚀 Resistance breakout','var(--green)'] }[pa.type] || [pa.type,'var(--amber)'];
+      chips.push('<span class="pe-chip" style="color:' + L[1] + ';border-color:' + L[1] + '">' + L[0] + (pa.level && pa.level.price ? ' @ ' + pa.level.price : '') + '</span>');
+    }
+    ex.innerHTML = chips.join(''); ex.style.display = chips.length ? 'flex' : 'none';
+  }
 
   // price vs nearest support / resistance
   const lvl = document.getElementById('pulse-lvl');
