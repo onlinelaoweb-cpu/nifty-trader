@@ -123,6 +123,7 @@ const voteLib = require('./src/utils/mtfVoteStudy');   // 9 Oct — does waiting
 const planLib = require('./src/utils/triggerPlan');   // 10 Oct — strike / SL / target block on LIVE trigger alerts
 const regimeLeadLib = require('./src/utils/mtfLeadRegime');   // 10 Oct — did market state at the time already separate good MTF leads from bad ones?
 const renkoLib = require('./src/utils/renkoStudy');   // 11 Oct — Renko research (daily study + Auto Journal comparison, read-only)
+const jdayLib = require('./src/utils/journalDayStudy');   // 12 Oct — what did the market look like around each Auto Journal trade of one day (read-only, descriptive)
 const { renkoAlignedFor } = require('./src/api/renko');
 const zoneLib = require('./src/utils/zoneStudy');   // 11 Oct — supply/demand zone research (daily candles, read-only)
 const ctxLib = require('./src/utils/entryContextStudy');   // 10 Oct — does entering on the VWAP / Fibonacci REACTION beat entering on the ACTION? (market_snapshot_log context)
@@ -1838,7 +1839,8 @@ function combineSignals(indicators) {
 
     if (adxVal !== null) {
         if      (adxVal >= 40)             reasons.push(`🔥 ADX ${adxVal} — Explosive trend (wider SL advised)`);
-        else if (adxVal >= adxFloor1m + 5) reasons.push(`📈 ADX ${adxVal} — Strong trend confirmed ✅`);
+        else if (adxVal >= 25)             reasons.push(`📈 ADX ${adxVal} — Strong trend confirmed ✅`);
+        else if (adxVal >= adxFloor1m + 5) reasons.push(`📈 ADX ${adxVal} — Trend building (gate open, below 25)`);
         else if (adxVal >= adxFloor1m)     reasons.push(`⚠️ ADX ${adxVal} — Trend forming (weak, confidence capped 60%)`);
         // below floor handled in gate reason below
     }
@@ -13307,6 +13309,24 @@ app.get('/api/renko-journal-study', studyGuard, async (req, res) => {
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// /api/journal-day-study?date=YYYY-MM-DD&format=text : for ONE day's Auto Journal paper trades, how the market looked at entry (winners vs losers) and what it did AFTER each exit.
+// Read-only and descriptive (5-min market_snapshot_log). Default date = today (IST).
+app.get('/api/journal-day-study', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const istToday = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? String(req.query.date) : istToday;
+        const win = `>= ($1::date::timestamp AT TIME ZONE 'Asia/Kolkata') AND %COL% < (($1::date + 1)::timestamp AT TIME ZONE 'Asia/Kolkata')`;
+        const t = await dbPool.query(`SELECT id, source, direction, side, strike, fire_ts, exit_ts, state, entry_premium, underlying, realized_pct, exit_reason
+            FROM auto_journal_trades WHERE source_table='telegram_live' AND instrument='NIFTY' AND fire_ts ${win.replace('%COL%', 'fire_ts')} ORDER BY fire_ts ASC LIMIT 200`, [date]);
+        const m = await dbPool.query(`SELECT ts, nifty, day_high, day_low, vwap_dist_pct, mtf_signal, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, pcr, signal
+            FROM market_snapshot_log WHERE ts ${win.replace('%COL%', 'ts')} AND nifty > 0 ORDER BY ts ASC LIMIT 400`, [date]);
+        const study = jdayLib.runJournalDayStudy(t.rows, m.rows);
+        if (String(req.query.format || '') === 'text') return res.type('text/plain').send(jdayLib.formatJournalDayText(study, date));
+        res.json({ success: true, date, ...study });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 app.get('/api/sizing-study', studyGuard, async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
@@ -15285,6 +15305,30 @@ app.get('/api/auto-journal', requireToken, async (req, res) => {
     if (!_autoJournal) return res.json({ success: true, enabled: false, started: false, strategies: [], msg: 'starting (about 25s after boot)' });
     try { res.json({ success: true, ...(await _autoJournal.report({ days: req.query.days })) }); }
     catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// 12 Oct — read-only: last Auto Journal rows with the research context (ctx.renko / ctx.oi) saved at fire time. Use it to confirm PCR / change-in-OI is really being stored.
+// /api/auto-journal-ctx?n=10&format=text
+app.get('/api/auto-journal-ctx', requireToken, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const n = Math.max(1, Math.min(100, parseInt(req.query.n, 10) || 10));
+        const r = await dbPool.query(`SELECT id, fire_ts, instrument, source, direction, state, strike, entry_premium, realized_pct, ctx
+            FROM auto_journal_trades ORDER BY fire_ts DESC NULLS LAST, id DESC LIMIT $1`, [n]);
+        const rows = r.rows.map(x => ({ ...x, hasRenko: !!(x.ctx && x.ctx.renko), hasOi: !!(x.ctx && x.ctx.oi) }));
+        if (String(req.query.format || '').toLowerCase() === 'text') {
+            const f = v => (v === null || v === undefined) ? '-' : v;
+            const lines = [`AUTO JOURNAL ctx — last ${rows.length} rows (renko ${rows.filter(x => x.hasRenko).length}, oi ${rows.filter(x => x.hasOi).length})`, ''];
+            for (const x of rows) {
+                const o = (x.ctx && x.ctx.oi) || null, k = (x.ctx && x.ctx.renko) || null;
+                lines.push(`#${x.id} ${x.fire_ts ? new Date(x.fire_ts).toISOString() : '-'} ${x.instrument}|${x.source} ${x.direction} ${f(x.strike)} @ ${f(x.entry_premium)} ${x.state}${x.realized_pct !== null && x.realized_pct !== undefined ? ' ' + Number(x.realized_pct).toFixed(1) + '%' : ''}`);
+                lines.push(`   renko: ${k ? `trend ${k.trend}, aligned ${k.aligned}, brick ${f(k.brickSize)}` : 'none'}`);
+                lines.push(`   oi: ${o ? `pcr ${f(o.pcr)}, atmPcr ${f(o.atmPcr)}, pcrChgOi ${f(o.pcrChgOi)}, clusterPcrChgOi ${f(o.clusterPcrChgOi)}, ceOiChg ${f(o.ceOiChg)}, peOiChg ${f(o.peOiChg)}, maxPain ${f(o.maxPain)}, src ${f(o.src)}, age ${f(o.ageSec)}s${o.stale ? ' STALE' : ''}` : 'none'}`);
+            }
+            return res.type('text/plain').send(lines.join('\n'));
+        }
+        res.json({ success: true, n: rows.length, rows });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.post('/api/telegram/test', requireToken, async (req,res) => {

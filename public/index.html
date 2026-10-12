@@ -3345,6 +3345,8 @@ html.vn-day .checklist-header{background:#F5F7FF;}
 <!-- ═══════════════════════════════════ -->
 <div class="panel" id="panel-breadth">
   <div class="breadth-wrap">
+    <!-- BREADTH PULSE (12 Oct) — one plain-language read of this whole tab; filled by /js/breadth-pulse.js; display only -->
+    <div id="bp-card"></div>
     <div class="ad-hero">
       <div class="ad-title">📊 ADVANCE / DECLINE — TOP 20 NIFTY</div>
       <div class="ad-numbers">
@@ -3519,6 +3521,8 @@ html.vn-day .checklist-header{background:#F5F7FF;}
 <!-- ═══════════════════════════════════ -->
 <div class="panel" id="panel-global">
   <div class="global-wrap">
+    <!-- GLOBAL PULSE (12 Oct) — one plain-language read of this whole tab; filled by /js/global-pulse.js; display only -->
+    <div id="gp-card"></div>
     <!-- Global Score Badge -->
     <div class="global-score-badge">
       <div>
@@ -3594,6 +3598,8 @@ html.vn-day .checklist-header{background:#F5F7FF;}
 <!-- ═══════════════════════════════════ -->
 <div class="panel" id="panel-tools">
   <div class="tools-wrap">
+    <!-- TRADE PLANNER (12 Oct) — capital -> lots, SL/target levels; filled by /js/tools-pulse.js; display only -->
+    <div id="tp-card"></div>
     <div class="tool-card">
       <div class="tool-title">📱 TELEGRAM</div>
   <div class="tg-wrap"><button class="tg-btn" onclick="testTG(this)">📱 TEST TELEGRAM</button><div id="tg-msg"></div></div>
@@ -3731,7 +3737,6 @@ html.vn-day .checklist-header{background:#F5F7FF;}
 
     <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">CRUDE OIL</div>
     <button class="more-item" onclick="switchTabFromMore('crude')"><span>🛢️</span>CRUDE LIVE</button>
-    <button class="more-item" onclick="switchTabFromMore('crudeInsights')"><span>🔍</span>CRUDE INSIGHTS</button>
 
     <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">BITCOIN</div>
     <button class="more-item" onclick="switchTabFromMore('bitcoin')"><span>₿</span>BITCOIN</button>
@@ -3759,7 +3764,6 @@ function _initDesktopLayout() {
     { id: 'scanner',   icon: '🔥', label: 'SCANNER' },
     { id: 'tools',     icon: '🔧', label: 'TOOLS' },
     { id: 'crude',     icon: '🛢️', label: 'CRUDE LIVE' },
-    { id: 'crudeInsights', icon: '🔍', label: 'CRUDE INSIGHTS' },
     { id: 'bitcoin',   icon: '₿', label: 'BITCOIN' },
     { id: 'signalAccuracy', icon: '🎯', label: 'TRACK RECORD' },
   ];
@@ -3997,7 +4001,6 @@ const TAB_LABELS = {
   global:    { icon: '🌍', label: 'GLOBAL' },
   scanner:   { icon: '🔥', label: 'SCANNER' },
   crude:     { icon: '🛢️', label: 'CRUDE LIVE' },
-  crudeInsights: { icon: '🔍', label: 'CRUDE INSIGHTS' },
   bitcoin:   { icon: '₿', label: 'BITCOIN' },
   signalAccuracy: { icon: '🎯', label: 'TRACK RECORD' },
 };
@@ -4068,13 +4071,6 @@ function switchTab(name,btn){
     _signalAccuracyTabTimer = setInterval(() => { fetchEngineTrackRecord(); fetchSignalAccuracy(); fetchExhaustionReversalAccuracy(); }, 30000);
   } else {
     if (_signalAccuracyTabTimer) { clearInterval(_signalAccuracyTabTimer); _signalAccuracyTabTimer = null; }
-  }
-  if(name==='crudeInsights'){
-    fetchCrudeInsights();
-    if (_crudeInsightsTabTimer) clearInterval(_crudeInsightsTabTimer);
-    _crudeInsightsTabTimer = setInterval(fetchCrudeInsights, 60000);
-  } else {
-    if (_crudeInsightsTabTimer) { clearInterval(_crudeInsightsTabTimer); _crudeInsightsTabTimer = null; }
   }
   if(name==='breadth'||name==='global'){
     // Render immediately from cache — no loading flicker
@@ -5063,9 +5059,10 @@ function renderDashboard(s) {
 
   // SR Levels
   if (s.srLevels) {
-    const res = s.srLevels.nearRes;
-    const sup = s.srLevels.nearSup;
     const cur = s.nifty > 0 ? s.nifty : _lastKnownNifty;  // use last known price when market closed
+    const _lsr = liveSR(s, cur);
+    const res = _lsr.res;
+    const sup = _lsr.sup;
     if (res) {
       document.getElementById('near-res').textContent = res.price;
       document.getElementById('near-res-dist').textContent = cur > 0 ? Math.abs(cur - res.price).toFixed(0) + ' points away' : '-- points away';
@@ -5259,6 +5256,9 @@ function renderDashboard(s) {
 
   // Breadth UI — always update so data is fresh when user switches to tab
   if (s.breadth) updateBreadthUI(s.breadth);
+  try { if (window.BreadthPulse) window.BreadthPulse.render(s); } catch (e) { console.warn('[BreadthPulse]', e.message); }
+  try { if (window.GlobalPulse) window.GlobalPulse.render(s); } catch (e) { console.warn('[GlobalPulse]', e.message); }
+  try { if (window.ToolsPulse) window.ToolsPulse.render(s); } catch (e) { console.warn('[ToolsPulse]', e.message); }
   // Global UI — only re-render when data actually changes (sector heatmap is DOM-heavy)
   if (s.global) {
     const globalFP = (s.global.globalBias || '') + '|' + (s.global.updatedAt || '');
@@ -5347,7 +5347,6 @@ let _scannerTabTimer = null;
 let _crudeTabTimer = null;
 let _bitcoinTabTimer = null;
 let _signalAccuracyTabTimer = null;
-let _crudeInsightsTabTimer = null;
 let _lastBreadthStocks = null;  // cache stocks[] for SSE merge
 async function fetchBreadthFull() {
   try {
@@ -5507,12 +5506,16 @@ function updateGlobalUI(g) {
   const usdData = g.currency?.usdinr;
   const usdEl = document.getElementById('usdinr-alert');
   const usdTextEl = document.getElementById('usdinr-alert-text');
-  const USD_INR_ALERT_THRESHOLD = 87;
+  // 12 Oct FIX: this used to fire whenever USD/INR was above a fixed level (87). The rupee now trades near 96, so the banner
+  // was ALWAYS on - even on a day the rupee strengthened (USD/INR -1.09%). It now follows today's MOVE, the same rule the
+  // server uses for its own rupee-weakness reason (USD/INR up more than 0.5% on the day).
+  const USD_INR_ALERT_PCT = 0.5;
   if (usdEl && usdData?.price != null) {
-    const triggered = usdData.price > USD_INR_ALERT_THRESHOLD;
+    const mv = Number(usdData.changePct);
+    const triggered = Number.isFinite(mv) && mv > USD_INR_ALERT_PCT;
     usdEl.classList.toggle('show', triggered);
     if (triggered && usdTextEl) {
-      usdTextEl.textContent = `USD/INR ₹${usdData.price} (>${USD_INR_ALERT_THRESHOLD}) — Rupee weakness detected! FII selling pressure likely.`;
+      usdTextEl.textContent = `USD/INR ₹${usdData.price} (+${mv.toFixed(2)}% aaj) — Rupee kamzor ho raha hai! FII selling ka dabav ho sakta hai.`;
     }
   }
 
@@ -7509,6 +7512,8 @@ function renderPulse(s, bulletScore) {
       const it = items[id];
       if (!isWaiting(it)) {
         cls = it.state === 'pass' ? 'bull' : it.state === 'fail' ? 'bear' : 'neu';
+        // MTF 'pass' only means "all TFs agree" - the direction decides the colour (aligned DOWN is bearish)
+        if (id === 'cl-mtf' && it.state === 'pass') cls = (s.mtf && s.mtf.signal === 'BUY PUT') ? 'bear' : 'bull';
         val = _pulseShort(id, s, it); full = it.text;
       }
     }
@@ -7573,16 +7578,33 @@ function renderPulse(s, bulletScore) {
 
   // price vs nearest support / resistance
   const lvl = document.getElementById('pulse-lvl');
-  const sup = s.srLevels?.nearSup, res = s.srLevels?.nearRes;
   const cur = s.nifty > 0 ? s.nifty : (typeof _lastKnownNifty !== 'undefined' ? _lastKnownNifty : 0);
+  const _lsr = liveSR(s, cur);
+  const sup = _lsr.sup, res = _lsr.res;
   if (lvl && sup && res && cur > 0 && res.price > sup.price) {
     lvl.style.display = 'block';
     const pos = Math.max(2, Math.min(98, 100 * (cur - sup.price) / (res.price - sup.price)));
     set('pl-sup', sup.price); set('pl-res', res.price);
     const dot = document.getElementById('pl-dot'); if (dot) dot.style.left = pos + '%';
-    set('pl-sup-d', Math.abs(cur - sup.price).toFixed(0) + ' pts niche'); set('pl-res-d', Math.abs(res.price - cur).toFixed(0) + ' pts upar');
+    set('pl-sup-d', (cur - sup.price).toFixed(0) + ' pts niche'); set('pl-res-d', (res.price - cur).toFixed(0) + ' pts upar');
     set('pl-mid', pos < 30 ? 'support ke paas' : pos > 70 ? 'resistance ke paas' : 'beech mein');
   } else if (lvl) lvl.style.display = 'none';
+}
+// Nearest support/resistance recomputed from the CURRENT price. The server's nearSup/nearRes
+// are fixed at the last refresh, so after price crosses a stored level they go stale (a level can
+// even sit on the wrong side). Uses the full level list when present; falls back to the stored pair.
+function liveSR(s, cur) {
+  const lv = s && s.srLevels && Array.isArray(s.srLevels.levels) ? s.srLevels.levels : null;
+  if (lv && lv.length && cur > 0) {
+    let sup = null, res = null;
+    for (const l of lv) {
+      if (!l || !(l.price > 0)) continue;
+      if (l.price < cur && (!sup || l.price > sup.price)) sup = l;
+      else if (l.price > cur && (!res || l.price < res.price)) res = l;
+    }
+    return { sup, res };
+  }
+  return { sup: s && s.srLevels ? s.srLevels.nearSup : null, res: s && s.srLevels ? s.srLevels.nearRes : null };
 }
 function pulseTap(i) {
   const t = (window._pulseTiles || [])[i]; const d = document.getElementById('pulse-detail');
@@ -7859,6 +7881,10 @@ function renderCalendarEvents(events) {
   }
   const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
   const todayStr = `${ist.getFullYear()}-${String(ist.getMonth()+1).padStart(2,'0')}-${String(ist.getDate()).padStart(2,'0')}`;
+  // 12 Oct FIX: events came in server order, so a Dec event could sit above tomorrow's CPI. Sort by date, then time.
+  events = [...events].sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.time || '').localeCompare(String(b.time || '')));
+  const tmr = new Date(ist); tmr.setDate(tmr.getDate() + 1);
+  const tomorrowStr = `${tmr.getFullYear()}-${String(tmr.getMonth()+1).padStart(2,'0')}-${String(tmr.getDate()).padStart(2,'0')}`;
   const grouped = {};
   for (const ev of events) {
     if (!grouped[ev.date]) grouped[ev.date] = [];
@@ -7868,7 +7894,7 @@ function renderCalendarEvents(events) {
   for (const [date, evs] of Object.entries(grouped)) {
     const isToday = date === todayStr;
     const d = new Date(date + 'T00:00:00+05:30');
-    const label = isToday ? '📍 TODAY' : d.toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short' });
+    const label = isToday ? '📍 TODAY' : (date === tomorrowStr ? '⏭️ KAL · ' : '') + d.toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short' });
     html += `<div class="cal-date-sep">${label}</div>`;
     for (const ev of evs) {
       const flag = ev.country === 'IN' ? '🇮🇳' : ev.country === 'US' ? '🇺🇸' : ev.country === 'EU' ? '🇪🇺' : ev.country === 'JP' ? '🇯🇵' : '🌍';
@@ -8005,109 +8031,6 @@ window.addEventListener('load', () => {
 
 </script>
 
-<!-- PANEL: CRUDE INSIGHTS ───────────────────────────────── -->
-<div class="panel" id="panel-crudeInsights">
-  <div style="padding:10px 12px 80px;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-      <div style="font-family:'Orbitron',monospace;font-size:14.5px;letter-spacing:1px;color:var(--accent);">🔍 CRUDE INSIGHTS</div>
-      <span id="ci-status" style="font-size:10.5px;color:var(--dim);font-family:monospace;"></span>
-    </div>
-    <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:10px;">
-      Crude's signal engine is newer and simpler than NIFTY's — no PCR-walls, Renko, BOS/CHOCH, or Trend Conviction yet, just RSI/EMA/ADX (3m basis) + 1m/5m context + PCR. This shows what actually exists: fired-signal history, not placeholder sections.
-    </div>
-
-    <!-- 10 Oct — Crude Exploratory Triggers card removed from this tab (triggers are still logged/tracked on the server; see Track Record and Auto Journal). -->
-
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:14px;">
-      <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 4px;text-align:center;">
-        <div style="font-size:9.5px;color:var(--dim);">Signals Today</div>
-        <div id="ci-today-count" style="font-size:18px;font-weight:700;color:var(--accent);">--</div>
-      </div>
-      <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 4px;text-align:center;">
-        <div style="font-size:9.5px;color:var(--dim);">Avg Confidence</div>
-        <div id="ci-avg-conf" style="font-size:18px;font-weight:700;">--</div>
-      </div>
-      <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 4px;text-align:center;">
-        <div style="font-size:9.5px;color:var(--dim);">CALL / PUT</div>
-        <div id="ci-call-put" style="font-size:18px;font-weight:700;">--</div>
-      </div>
-    </div>
-
-    <div style="font-size:10.5px;color:var(--dim);margin-bottom:6px;">SIGNAL HISTORY (last 30 days, fired signals only)</div>
-    <div style="overflow-x:auto;">
-      <table style="width:100%;border-collapse:collapse;font-size:11.5px;">
-        <thead>
-          <tr style="border-bottom:1px solid rgba(255,255,255,0.1);color:var(--dim);text-align:left;">
-            <th style="padding:6px 4px;">Time</th>
-            <th style="padding:6px 4px;">Signal</th>
-            <th style="padding:6px 4px;text-align:right;">Conf</th>
-            <th style="padding:6px 4px;text-align:right;">Price</th>
-            <th style="padding:6px 4px;text-align:right;">PCR</th>
-          </tr>
-        </thead>
-        <tbody id="ci-tbody">
-          <tr><td colspan="5" style="padding:16px 4px;text-align:center;color:var(--dim);">Loading...</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div style="font-size:9.5px;color:var(--dim);opacity:0.7;margin-top:10px;">
-      Not wired to live trades — this is descriptive history of what the engine WOULD have signaled, for building a track record before trusting it live.
-    </div>
-  </div>
-</div>
-
-
-<script>
-async function fetchCrudeInsights() {
-  try {
-    const r = await fetch('/api/crude-signal-log?limit=30');
-    if (!r.ok) return;
-    const d = await r.json();
-    renderCrudeInsightsUI(d);
-  } catch (e) { console.warn('[CrudeInsights] fetch error:', e.message); }
-}
-function renderCrudeInsightsUI(d) {
-  const rows = d.rows || [];
-  const statusEl = document.getElementById('ci-status');
-  if (statusEl) statusEl.textContent = d.count + ' logged';
-
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const todayRows = rows.filter(r => (r.ts || '').startsWith(todayStr));
-  const todayCountEl = document.getElementById('ci-today-count');
-  if (todayCountEl) todayCountEl.textContent = todayRows.length;
-
-  const avgConfEl = document.getElementById('ci-avg-conf');
-  if (avgConfEl) {
-    avgConfEl.textContent = rows.length
-      ? Math.round(rows.reduce((s, r) => s + (r.confidence || 0), 0) / rows.length) + '%'
-      : '--';
-  }
-
-  const callCount = rows.filter(r => r.signal === 'BUY CALL').length;
-  const putCount  = rows.filter(r => r.signal === 'BUY PUT').length;
-  const callPutEl = document.getElementById('ci-call-put');
-  if (callPutEl) callPutEl.textContent = `${callCount} / ${putCount}`;
-
-  const tbody = document.getElementById('ci-tbody');
-  if (!tbody) return;
-  if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="padding:16px 4px;text-align:center;color:var(--dim);">No signals logged yet</td></tr>';
-    return;
-  }
-  tbody.innerHTML = rows.map(r => {
-    const sigColor = r.signal === 'BUY CALL' ? 'var(--green)' : r.signal === 'BUY PUT' ? 'var(--red)' : 'var(--dim)';
-    const time = r.ts ? new Date(r.ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '--';
-    return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
-      <td style="padding:6px 4px;color:var(--dim);">${time}</td>
-      <td style="padding:6px 4px;font-weight:600;color:${sigColor};">${r.signal}</td>
-      <td style="padding:6px 4px;text-align:right;">${r.confidence}%</td>
-      <td style="padding:6px 4px;text-align:right;">${r.price ? Number(r.price).toFixed(0) : '--'}</td>
-      <td style="padding:6px 4px;text-align:right;">${r.pcr ? Number(r.pcr).toFixed(2) : '--'}</td>
-    </tr>`;
-  }).join('');
-}
-</script>
-
 <!-- PANEL: CRUDE LIVE ─────────────────────────────────── -->
 <div class="panel" id="panel-crude">
   <div style="padding:10px 12px 80px;">
@@ -8118,6 +8041,9 @@ function renderCrudeInsightsUI(d) {
     <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:10px;">
       Evening session (5:30 PM – 11:55 PM). Own signal engine, separate from NIFTY — RSI/EMA/ADX + 1m/5m MTF + PCR. Not wired to live trades yet.
     </div>
+
+    <!-- CRUDE PULSE (12 Oct) — plain-language read of this tab; /js/commodity-pulse.js; display only -->
+    <div id="crp-card"></div>
 
     <div id="crude-price-block" style="text-align:center;padding:14px 0;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:10px;">
       <div id="crude-price" style="font-family:'Orbitron',monospace;font-size:32px;font-weight:700;color:var(--fg);">--</div>
@@ -8164,12 +8090,39 @@ function renderCrudeInsightsUI(d) {
       <div style="font-size:10.5px;color:var(--dim);margin-top:4px;">Confidence: <span id="crude-confidence">0</span>%</div>
     </div>
 
+    <!-- 12 Oct — merged from the old Crude Insights tab: today's signal count / avg confidence / CALL-PUT split (the long signal-history table was dropped) -->
+    <div id="crude-sigstats" style="display:flex;gap:6px;margin-bottom:10px;">
+      <div style="flex:1;background:rgba(255,255,255,0.03);border-radius:8px;padding:8px 4px;text-align:center;"><div style="font-size:9.5px;color:var(--dim);">Signals Aaj</div><div id="crude-st-count" style="font-size:15px;font-weight:700;color:var(--accent);">--</div></div>
+      <div style="flex:1;background:rgba(255,255,255,0.03);border-radius:8px;padding:8px 4px;text-align:center;"><div style="font-size:9.5px;color:var(--dim);">Avg Confidence</div><div id="crude-st-conf" style="font-size:15px;font-weight:700;">--</div></div>
+      <div style="flex:1;background:rgba(255,255,255,0.03);border-radius:8px;padding:8px 4px;text-align:center;"><div style="font-size:9.5px;color:var(--dim);">CALL / PUT</div><div id="crude-st-cp" style="font-size:15px;font-weight:700;">--</div></div>
+    </div>
+
     <div style="font-size:10.5px;color:var(--dim);margin-bottom:6px;">REASONS</div>
     <div id="crude-reasons" style="font-size:11.5px;line-height:1.6;color:var(--fg);opacity:0.85;">Loading...</div>
   </div>
 </div>
 
 <script>
+// Today's fired-signal stats (merged from the old Crude Insights tab). Reads the same /api/crude-signal-log, at most once a minute;
+// "today" is the IST calendar day. Display only — a failure here never touches the live crude card.
+let _crudeStatsAt = 0;
+async function fetchCrudeSigStats() {
+  if (Date.now() - _crudeStatsAt < 60000) return;
+  _crudeStatsAt = Date.now();
+  try {
+    const r = await fetch('/api/crude-signal-log?limit=30');
+    if (!r.ok) return;
+    const d = await r.json();
+    const rows = Array.isArray(d.rows) ? d.rows : [];
+    const istDay = t => { const x = new Date(t); return isNaN(x) ? '' : x.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); };
+    const today = istDay(Date.now());
+    const tr = rows.filter(x => x.ts && istDay(x.ts) === today);
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('crude-st-count', tr.length);
+    set('crude-st-conf', tr.length ? Math.round(tr.reduce((s, x) => s + (Number(x.confidence) || 0), 0) / tr.length) + '%' : '--');
+    set('crude-st-cp', tr.filter(x => x.signal === 'BUY CALL').length + ' / ' + tr.filter(x => x.signal === 'BUY PUT').length);
+  } catch (e) { _crudeStatsAt = 0; console.warn('[CrudeStats] fetch error:', e.message); }
+}
 async function fetchCrudeLive() {
   try {
     const r = await fetch('/api/crude-live');
@@ -8230,6 +8183,8 @@ function renderCrudeLiveUI(d) {
     const reasons = sig.reasons || [];
     reasonsEl.innerHTML = reasons.length ? reasons.map(r => `<div>• ${r}</div>`).join('') : '<div style="color:var(--dim);">No reasons yet — waiting for enough candles.</div>';
   }
+  fetchCrudeSigStats();
+  try { if (window.CommodityPulse) window.CommodityPulse.render('crude', d); } catch (e) { console.warn('[CrudePulse]', e.message); }
 }
 </script>
 
@@ -8243,6 +8198,9 @@ function renderCrudeLiveUI(d) {
     <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:10px;">
       Mon-Fri 11:59PM-8:55AM + full-time Sat/Sun (Delta Exchange India, BTC options). Own signal engine, separate from NIFTY/Crude — RSI/EMA/ADX + 1m/5m MTF + PCR. Not wired to live trades yet.
     </div>
+
+    <!-- BITCOIN PULSE (12 Oct) — plain-language read of this tab; /js/commodity-pulse.js; display only -->
+    <div id="btp-card"></div>
 
     <div id="bitcoin-price-block" style="text-align:center;padding:14px 0;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:10px;">
       <div id="bitcoin-price" style="font-family:'Orbitron',monospace;font-size:32px;font-weight:700;color:var(--fg);">--</div>
@@ -8345,6 +8303,7 @@ function renderBitcoinLiveUI(d) {
     const reasons = sig.reasons || [];
     reasonsEl.innerHTML = reasons.length ? reasons.map(r => `<div>• ${r}</div>`).join('') : '<div style="color:var(--dim);">No reasons yet — waiting for enough candles.</div>';
   }
+  try { if (window.CommodityPulse) window.CommodityPulse.render('bitcoin', d); } catch (e) { console.warn('[BitcoinPulse]', e.message); }
 }
 </script>
 
@@ -8614,6 +8573,9 @@ async function fetchSignalAccuracy() {
       <span id="scanner-status" style="font-size:10.5px;color:var(--dim);font-family:monospace;"></span>
     </div>
 
+    <!-- SCANNER PULSE (12 Oct) — plain-language read of the volume list + tap-to-filter; /js/scanner-pulse.js; display only -->
+    <div id="sp-card"></div>
+
     <!-- 16 Sep — Momentum Events Log. Replaces the per-stock Telegram alerts
          (Volume Scanner / Stock Momentum / 52W Reversal) that were flooding
          chat alongside NIFTY's own messages — same detection + DB logging,
@@ -8730,7 +8692,14 @@ function renderVolumeScannerUI(d) {
   }
   const tbody = document.getElementById('scanner-tbody');
   if (!tbody) return;
-  const rows = d.results || [];
+  window._lastScannerD = d;
+  const allRows = d.results || [];
+  let rows = allRows;
+  try { if (window.ScannerPulse) rows = window.ScannerPulse.apply(d); } catch (e) { console.warn('[ScannerPulse]', e.message); }
+  if (!rows.length && allRows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="padding:16px 4px;text-align:center;color:var(--dim);">Is filter mein koi stock nahi — upar wale tile ko dobara tap karke filter hatao</td></tr>';
+    return;
+  }
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="5" style="padding:16px 4px;text-align:center;color:var(--dim);">No unusual volume right now</td></tr>';
     return;
@@ -8873,5 +8842,10 @@ function renderVolumeScannerUI(d) {
 
 
 <script src="/js/nifty-contribution.js" defer></script>
+<script src="/js/breadth-pulse.js" defer></script>
+<script src="/js/global-pulse.js" defer></script>
+<script src="/js/scanner-pulse.js" defer></script>
+<script src="/js/tools-pulse.js" defer></script>
+<script src="/js/commodity-pulse.js" defer></script>
 </body>
 </html>
