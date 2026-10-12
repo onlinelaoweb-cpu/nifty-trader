@@ -8317,6 +8317,9 @@ function renderBitcoinLiveUI(d) {
     <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:12px;">
       Real accuracy of every NIFTY + Crude + Bitcoin exploratory trigger — did price actually move the predicted direction by 0.15%+ within 30min of the fire. WIN/LOSS/FLAT, not just "fired". Recent fires also show real option-premium win-rate (10%+ move), plus a Trade-Coach simulation: this app's own exit rules, replayed against the actual premium path — per-instrument grids chosen by an out-of-sample backtest (NIFTY: SL -15%, breakeven +10%, half-book +15%, exit +25% · Bitcoin: SL -30%, breakeven +20%, half-book +30%, exit +40% · Crude: SL -20%, breakeven +20%, half-book +30%, exit +40%) — 90min after each fire, showing what a disciplined trader following the coaching would have actually made. Low sample counts are not statistically reliable yet — treat as early signal, not verdict.
     </div>
+    <!-- TRACK RECORD PULSE (13 Oct) — "can this be luck?" read of every source; /js/track-pulse.js; display only -->
+    <div id="tp2-card"></div>
+
     <!-- 4 Oct — ENGINE TRACK RECORD: Main Engine / MTF Tracker / Classic side by side.
          Data: /api/engine-track-record (read-only; reads tables the app already fills). -->
     <div style="border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px 10px 8px;margin-bottom:16px;">
@@ -8393,6 +8396,7 @@ async function fetchEngineTrackRecord() {
   try {
     const r = await fetch('/api/engine-track-record?days=' + _etrDays).then(r => r.json());
     if (!r.success) { body.textContent = 'Failed to load: ' + (r.error || 'unknown error'); return; }
+    try { if (window.TrackPulse) window.TrackPulse.update({ etr: r }); } catch (e) { console.warn('[TrackPulse]', e.message); }
     const col = p => p == null ? 'var(--dim)' : p >= 55 ? 'var(--green)' : p < 45 ? 'var(--red)' : 'var(--amber)';
     const sgn = v => v == null ? '--' : (v > 0 ? '+' : '') + v + '%';
     const pcol = v => v == null ? 'var(--dim)' : v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--amber)';
@@ -8479,6 +8483,7 @@ async function fetchSignalAccuracy() {
     if (statusEl) statusEl.textContent = new Date().toLocaleTimeString();
 
     const rows = r.rows || [];
+    try { if (window.TrackPulse) window.TrackPulse.update({ sa: rows }); } catch (e) { console.warn('[TrackPulse]', e.message); }
     if (!rows.length) {
       body.innerHTML = '<div style="color:var(--dim);font-size:12px;">No fires harvested yet — triggers need to fire first, then wait 30min for evaluation.</div>';
       return;
@@ -8847,5 +8852,6 @@ function renderVolumeScannerUI(d) {
 <script src="/js/scanner-pulse.js" defer></script>
 <script src="/js/tools-pulse.js" defer></script>
 <script src="/js/commodity-pulse.js" defer></script>
+<script src="/js/track-pulse.js" defer></script>
 </body>
 </html>
