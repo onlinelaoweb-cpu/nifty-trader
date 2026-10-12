@@ -54,4 +54,43 @@ assert.ok(/READ WITH CARE/.test(txt) && /WINNERS/.test(txt) && /LOSERS/.test(txt
 assert.ok(/No Auto Journal trades/.test(J.formatJournalDayText(J.runJournalDayStudy([], []), '2026-10-11')));
 // missing snapshots must not throw
 const st2 = J.runJournalDayStudy(trades, []); assert.strictEqual(st2.trades.length, 4); assert.strictEqual(st2.trades[0].maePts, null);
+
+// ── multi-day ──────────────────────────────────────────────────────────────────────────────────────────────────────
+const atD = (day, hh, mm) => new Date(Date.UTC(2026, 9, day, hh, mm) - 330 * 60000).toISOString();
+function mkSnaps(day, start, step, mtf) {
+    const out = []; let q = start;
+    for (let m = 9 * 60 + 20; m <= 15 * 60; m += 5) { q += step; out.push({ ts: atD(day, Math.floor(m / 60), m % 60), nifty: q, day_high: start + 20, day_low: start - 200, vwap_dist_pct: 0, mtf_signal: mtf, mtf_5m_adx: 22, mtf_15m_adx: 25, mtf_1h_adx: 20, pcr: 0.9, signal: 'WAIT' }); }
+    return out;
+}
+const snapsM = [...mkSnaps(9, 22600, -2, 'BUY PUT'), ...mkSnaps(12, 22400, 0.0, 'BUY PUT'), ...mkSnaps(13, 22400, 2, 'BUY CALL')];   // down day, flat day, up day
+const mt = (id, day, hh, mm, dir, side, strike, res, reason, exitH, exitM) => ({ id, source: 'MTF', direction: dir, side, strike, fire_ts: atD(day, hh, mm), exit_ts: atD(day, exitH, exitM), state: 'CLOSED', entry_premium: 90, underlying: 22400, realized_pct: res, exit_reason: reason });
+const tm = [
+    mt(1, 9, 10, 0, 'BEARISH', 'PE', 22400, -16, 'stop_loss', 10, 30),     // with the down day
+    mt(2, 9, 10, 20, 'BEARISH', 'PE', 22400, 20, 'full_target', 11, 0),    // same bet (cluster) as #1
+    mt(3, 9, 12, 0, 'BULLISH', 'CE', 22600, -15, 'stop_loss', 12, 40),     // against the down day, opposite to BUY PUT
+    mt(4, 12, 11, 0, 'BEARISH', 'PE', 22400, 10, 'trail_stop', 12, 0),     // flat day
+    mt(5, 13, 11, 0, 'BULLISH', 'CE', 22400, 12, 'trail_stop', 12, 0),     // with the up day
+    mt(6, 13, 13, 0, 'BEARISH', 'PE', 22300, -17, 'stop_loss', 13, 40),    // against the up day, opposite to BUY CALL
+];
+const ms = J.runJournalMultiDay(tm, snapsM);
+assert.strictEqual(ms.days.length, 3);
+assert.deepStrictEqual(ms.days.map(d => d.dayType), ['DOWN', 'FLAT', 'UP']);
+assert.strictEqual(ms.trades.length, 6);
+// clusters are per day: #1 and #2 are one bet; #4 and #5 never merge across days even with equal strike/direction
+assert.strictEqual(ms.trades.find(t => t.id === 1).cluster, ms.trades.find(t => t.id === 2).cluster);
+assert.notStrictEqual(ms.trades.find(t => t.id === 4).cluster, ms.trades.find(t => t.id === 1).cluster);
+assert.strictEqual(ms.pooled.n, 6); assert.strictEqual(ms.pooled.clusters, 5);
+assert.strictEqual(ms.slices.dayDirection.withDay.n, 3); assert.strictEqual(ms.slices.dayDirection.againstDay.n, 2); assert.strictEqual(ms.slices.dayDirection.flatDay.n, 1);
+assert.strictEqual(ms.slices.counterMtf.counter.n, 2); assert.strictEqual(ms.slices.counterMtf.other.n, 4);
+assert.strictEqual(ms.slices.counterMtf.counter.wins, 0);
+assert.strictEqual(ms.slices.wobbleStops.stops, 3);
+assert.ok(ms.pooled.thin, 'six trades is thin');
+// per-bet averaging: bet {1,2} = (-16+20)/2 = +2 -> counted as one winning bet
+assert.strictEqual(ms.days[0].clusters, 2); assert.strictEqual(ms.days[0].clusterWins, 1);
+const mtx = J.formatJournalMultiDayText(ms, '2026-10-09', '2026-10-13');
+assert.ok(/MULTI-DAY/.test(mtx) && /AUDIT QUESTIONS/.test(mtx) && /thin/.test(mtx) && /NOT included/.test(mtx) && /DOWN/.test(mtx) && /UP/.test(mtx));
+// empty / no snapshots never throw
+assert.ok(/No Auto Journal/.test(J.formatJournalMultiDayText(J.runJournalMultiDay([], []), 'a', 'b')));
+assert.strictEqual(J.runJournalMultiDay(tm, []).trades.length, 6);
+assert.strictEqual(J.istDateOf(new Date(atD(9, 0, 10)).getTime()), '2026-10-09');
 console.log('journalDayStudy tests passed');

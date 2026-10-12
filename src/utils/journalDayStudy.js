@@ -138,4 +138,71 @@ function formatJournalDayText(study, date) {
     return L.join('\n');
 }
 
-module.exports = { runJournalDayStudy, formatJournalDayText, normalizeTrades, normalizeSnaps, assignClusters, analyzeTrade, summarize, snapAtOrBefore, snapAtOrAfter, istMinutesOfDay, istClock, bucketOf, median };
+
+// ── Multi-day view (13 Oct) ────────────────────────────────────────────────────────────────────────────────────────
+// Same read-only per-trade analysis, run for several IST days and pooled, plus a few fixed slices that match the questions written down
+// for the unified audit (late entries, MTF-opposite entries, trades with / against the day's direction, "wobble" stops).
+// Descriptive only: results are premium % as journaled (no brokerage / STT / slippage), small groups are flagged "thin".
+function istDateOf(ts) { return new Date(ts + 330 * 60000).toISOString().slice(0, 10); }
+function grp(a) {
+    const closed = a.filter(r => r.state === 'CLOSED' && r.resultPct !== null);
+    const byCl = new Map();
+    for (const r of closed) { const c = byCl.get(r.cluster) || []; c.push(r.resultPct); byCl.set(r.cluster, c); }
+    const clAvg = [...byCl.values()].map(v => v.reduce((x, y) => x + y, 0) / v.length);
+    const sum = closed.reduce((x, r) => x + r.resultPct, 0);
+    return {
+        n: closed.length, wins: closed.filter(r => r.resultPct > 0).length, avgPct: closed.length ? r1(sum / closed.length) : null,
+        clusters: byCl.size, clusterWins: clAvg.filter(v => v > 0).length, clusterAvgPct: clAvg.length ? r1(clAvg.reduce((x, y) => x + y, 0) / clAvg.length) : null,
+        thin: closed.length < 10 || byCl.size < 5,
+    };
+}
+function isCounterMtf(r) { return (r.direction === 'BULLISH' && r.mtfAtEntry === 'BUY PUT') || (r.direction === 'BEARISH' && r.mtfAtEntry === 'BUY CALL'); }
+function runJournalMultiDay(tradeRows, snapRows) {
+    const trades = normalizeTrades(tradeRows), snaps = normalizeSnaps(snapRows);
+    const days = [...new Set([...trades.map(t => istDateOf(t.fireTs)), ...snaps.map(x => istDateOf(x.ts))])].sort();
+    const perDay = [], all = [];
+    days.forEach((d, i) => {
+        const dt = assignClusters(trades.filter(t => istDateOf(t.fireTs) === d)), ds = snaps.filter(x => istDateOf(x.ts) === d);
+        const first = ds.length ? ds[0].nifty : null, last = ds.length ? ds[ds.length - 1].nifty : null;
+        const movePct = first && last ? r2((last - first) / first * 100) : null;
+        const dayType = movePct === null ? null : movePct <= -0.3 ? 'DOWN' : movePct >= 0.3 ? 'UP' : 'FLAT';
+        const rows = dt.map(t => { const r = analyzeTrade(t, ds); r.cluster = i * 1000 + t.cluster; r.date = d; r.dayType = dayType;
+            r.withDay = dayType === 'FLAT' || dayType === null ? null : ((r.direction === 'BEARISH') === (dayType === 'DOWN')); return r; });
+        all.push(...rows);
+        if (rows.length) perDay.push({ date: d, movePct, dayType, snapshots: ds.length, ...grp(rows) });
+    });
+    const closed = all.filter(r => r.state === 'CLOSED' && r.resultPct !== null);
+    const stops = closed.filter(r => /^stop/i.test(r.exitReason || ''));
+    const withAfter = stops.filter(r => r.afterPts[60] !== null && r.afterPts[60] !== undefined);
+    const slices = {
+        late95: { late: grp(closed.filter(r => r.rangeDoneAtEntry !== null && r.rangeDoneAtEntry >= 0.95)), notLate: grp(closed.filter(r => r.rangeDoneAtEntry !== null && r.rangeDoneAtEntry < 0.95)) },
+        counterMtf: { counter: grp(closed.filter(isCounterMtf)), other: grp(closed.filter(r => !isCounterMtf(r))) },
+        dayDirection: { withDay: grp(closed.filter(r => r.withDay === true)), againstDay: grp(closed.filter(r => r.withDay === false)), flatDay: grp(closed.filter(r => r.withDay === null)) },
+        wobbleStops: { stops: stops.length, haveAfter60: withAfter.length, resumed60: withAfter.filter(r => r.afterPts[60] > 0).length, medAfter60: median(withAfter.map(r => r.afterPts[60])) },
+    };
+    return { days: perDay, trades: all, summary: summarize(all), pooled: grp(all), slices };
+}
+function formatJournalMultiDayText(st, from, to) {
+    const L = [`JOURNAL MULTI-DAY STUDY — ${from} to ${to}`, '(read-only, descriptive. Premium % as journaled: brokerage, STT, slippage NOT included. Same strike+direction within ' + CLUSTER_GAP_MIN + ' min = one bet. Nothing here changes any rule.)', ''];
+    if (!st.trades.length) { L.push('No Auto Journal Nifty trades in this window.'); return L.join('\n'); }
+    const g = x => `n${x.n} wins ${x.wins} avg ${f(x.avgPct)}% | ${x.clusters} bets, ${x.clusterWins} won, avg/bet ${f(x.clusterAvgPct)}%${x.thin ? '  (thin — too few to read)' : ''}`;
+    L.push('date        day move  type  trades  bets  wins  avg%   (avg per bet)');
+    for (const d of st.days) L.push([d.date, (d.movePct === null ? '--' : (d.movePct > 0 ? '+' : '') + d.movePct.toFixed(2) + '%').padStart(8), String(d.dayType || '--').padEnd(5), String(d.n).padStart(6), String(d.clusters).padStart(5), String(d.wins).padStart(5), f(d.avgPct).padStart(6), ('(' + f(d.clusterAvgPct) + ')').padStart(9)].join('  '));
+    L.push('', 'ALL DAYS POOLED: ' + g(st.pooled), '');
+    const s = st.summary, row = (name, x) => `  ${name.padEnd(7)} n${x.n} (${x.clusters} bets) | MFE ${f(x.medMfe)} MAE ${f(x.medMae)} | rangeDone ${x.medRangeDone === null ? '--' : Math.round(x.medRangeDone * 100) + '%'} | adx5 ${f(x.medAdx5)} | after60 ${f(x.medAfter60)} | resumed our way after 60m: ${x.resumed60}/${x.haveAfter60}`;
+    L.push(row('WINNERS', s.wins), row('LOSERS', s.losses), '');
+    L.push('By time of day:'); for (const [k, b] of Object.entries(s.byBucket)) L.push(`  ${k.padEnd(13)} n${b.n} wins ${b.wins} avg ${f(b.avgPct)}%`);
+    L.push('', 'By source:'); for (const [k, b] of Object.entries(s.bySource)) L.push(`  ${k.padEnd(13)} n${b.n} wins ${b.wins} avg ${f(b.avgPct)}%`);
+    const sl = st.slices;
+    L.push('', 'AUDIT QUESTIONS (fixed in advance):',
+        '  Late entry (95%+ of the day\'s range already travelled):', '    late     ' + g(sl.late95.late), '    not late ' + g(sl.late95.notLate),
+        '  Entry opposite to the 5m MTF signal at that moment:', '    opposite ' + g(sl.counterMtf.counter), '    other    ' + g(sl.counterMtf.other),
+        '  Trade direction vs the day\'s direction (day move >= 0.3% either way):', '    with day    ' + g(sl.dayDirection.withDay), '    against day ' + g(sl.dayDirection.againstDay), '    flat day    ' + g(sl.dayDirection.flatDay),
+        `  Stop-losses: ${sl.wobbleStops.stops}; with 60-min-after data ${sl.wobbleStops.haveAfter60}; market went our way again after 60 min in ${sl.wobbleStops.resumed60} (median ${f(sl.wobbleStops.medAfter60)} pts).`,
+        '    (a high share here only says stops were early on THESE days; it does not say a wider stop pays — that needs the exit-rule study with costs.)');
+    L.push('', 'READ WITH CARE: ' + st.days.length + ' day(s), 5-minute spot data, and several slices looked at at once — some will look good by luck. Anything "thin" is noise.',
+        'Only a pattern that holds on most days, in both halves of the period, and after costs counts. Use this to decide what to test, not as a rule.');
+    return L.join('\n');
+}
+
+module.exports = { runJournalMultiDay, formatJournalMultiDayText, istDateOf, grp, isCounterMtf, runJournalDayStudy, formatJournalDayText, normalizeTrades, normalizeSnaps, assignClusters, analyzeTrade, summarize, snapAtOrBefore, snapAtOrAfter, istMinutesOfDay, istClock, bucketOf, median };

@@ -13309,18 +13309,26 @@ app.get('/api/renko-journal-study', studyGuard, async (req, res) => {
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// /api/journal-day-study?date=YYYY-MM-DD&format=text : for ONE day's Auto Journal paper trades, how the market looked at entry (winners vs losers) and what it did AFTER each exit.
+// /api/journal-day-study?date=YYYY-MM-DD&days=N&format=text : for ONE day (or N days pooled)'s Auto Journal paper trades, how the market looked at entry (winners vs losers) and what it did AFTER each exit.
 // Read-only and descriptive (5-min market_snapshot_log). Default date = today (IST).
 app.get('/api/journal-day-study', studyGuard, async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
         const istToday = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
         const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? String(req.query.date) : istToday;
-        const win = `>= ($1::date::timestamp AT TIME ZONE 'Asia/Kolkata') AND %COL% < (($1::date + 1)::timestamp AT TIME ZONE 'Asia/Kolkata')`;
+        // 13 Oct: &days=N (1-30) looks back N IST days ending at `date` and pools them (per-day table + the fixed audit slices).
+        const nDays = Math.max(1, Math.min(30, parseInt(req.query.days, 10) || 1));
+        const win = `>= (($1::date - ($2::int - 1))::timestamp AT TIME ZONE 'Asia/Kolkata') AND %COL% < (($1::date + 1)::timestamp AT TIME ZONE 'Asia/Kolkata')`;
         const t = await dbPool.query(`SELECT id, source, direction, side, strike, fire_ts, exit_ts, state, entry_premium, underlying, realized_pct, exit_reason
-            FROM auto_journal_trades WHERE source_table='telegram_live' AND instrument='NIFTY' AND fire_ts ${win.replace('%COL%', 'fire_ts')} ORDER BY fire_ts ASC LIMIT 200`, [date]);
+            FROM auto_journal_trades WHERE source_table='telegram_live' AND instrument='NIFTY' AND fire_ts ${win.replace('%COL%', 'fire_ts')} ORDER BY fire_ts ASC LIMIT ${nDays > 1 ? 3000 : 200}`, [date, nDays]);
         const m = await dbPool.query(`SELECT ts, nifty, day_high, day_low, vwap_dist_pct, mtf_signal, mtf_5m_adx, mtf_15m_adx, mtf_1h_adx, pcr, signal
-            FROM market_snapshot_log WHERE ts ${win.replace('%COL%', 'ts')} AND nifty > 0 ORDER BY ts ASC LIMIT 400`, [date]);
+            FROM market_snapshot_log WHERE ts ${win.replace('%COL%', 'ts')} AND nifty > 0 ORDER BY ts ASC LIMIT ${nDays > 1 ? 4000 : 400}`, [date, nDays]);
+        if (nDays > 1) {
+            const mst = jdayLib.runJournalMultiDay(t.rows, m.rows);
+            const from = new Date(new Date(date + 'T00:00:00Z').getTime() - (nDays - 1) * 86400000).toISOString().slice(0, 10);
+            if (String(req.query.format || '') === 'text') return res.type('text/plain').send(jdayLib.formatJournalMultiDayText(mst, from, date));
+            return res.json({ success: true, from, to: date, days: nDays, ...mst });
+        }
         const study = jdayLib.runJournalDayStudy(t.rows, m.rows);
         if (String(req.query.format || '') === 'text') return res.type('text/plain').send(jdayLib.formatJournalDayText(study, date));
         res.json({ success: true, date, ...study });
