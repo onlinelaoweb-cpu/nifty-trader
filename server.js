@@ -129,6 +129,7 @@ const zoneLib = require('./src/utils/zoneStudy');   // 11 Oct — supply/demand 
 const ctxLib = require('./src/utils/entryContextStudy');   // 10 Oct — does entering on the VWAP / Fibonacci REACTION beat entering on the ACTION? (market_snapshot_log context)
 const sizingLib = require('./src/utils/sizingStudy');   // 10 Oct — flat lots vs fixed-rupee-risk sizing (Murarka: bigger stop -> fewer lots)
 const exitRuleLib = require('./src/utils/exitRuleStudy');
+const hourStudyLib = require('./src/utils/hourStudy');   // 14 Oct — hour-of-day study with costs + older/newer-half check (read-only)
 const ofLib = require('./src/utils/orderflowContext');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
 const { createAutoJournal } = require('./src/utils/autoJournal');   // 10 Oct — strategy-wise AUTO paper journal (signal -> ATM paper trade -> coach-managed exit)
 const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
@@ -13166,6 +13167,35 @@ app.get('/api/exit-rule-study', studyGuard, async (req, res) => {
                 'Path samples are ~5 minutes apart, so real stop/target orders fill closer to their level. 9 variants are tried: one or two will look good by chance. A few days of one market regime is not proof — paper-test any lead before it becomes a rule.',
             ],
         });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── Hour-of-day study (14 Oct) ───────────────────────────────────────────────
+// Read-only research. /api/hour-study?instrument=NIFTY&source=&days=60&decluster=30&expiry=all|only|exclude&slip=1&charge=0.07&brokerage=40&qty=130&minN=20&format=text
+// Trade-Coach simulated results (signal_outcomes.coach_result) by the IST hour the signal fired, AFTER costs, with an older/newer-half check.
+// Database only (no external API). Nothing here feeds signals, gates or alerts. See src/utils/hourStudy.js.
+app.get('/api/hour-study', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const clampNum = (v, d, lo, hi) => { const x = Number(v); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const instrument = String(req.query.instrument || 'NIFTY').toUpperCase();
+        const days = clampInt(req.query.days, 60, 1, 365);
+        const params = [instrument, days];
+        let where = `coach_result IS NOT NULL AND entry_premium > 0 AND entry_strike IS NOT NULL AND instrument = $1 AND fire_ts >= NOW() - ($2::int * INTERVAL '1 day')`;
+        if (req.query.source) { params.push(String(req.query.source)); where += ` AND source = $${params.length}`; }
+        const r = await dbPool.query(`SELECT id, source, fire_ts, coach_result, entry_premium FROM signal_outcomes WHERE ${where} ORDER BY fire_ts ASC LIMIT 20000`, params);
+        const expiry = ['only', 'exclude'].includes(String(req.query.expiry || '').toLowerCase()) ? String(req.query.expiry).toLowerCase() : 'all';
+        const study = hourStudyLib.computeHourStudy(r.rows, {
+            declusterMin: clampInt(req.query.decluster, 30, 0, 240), minN: clampInt(req.query.minN, 20, 5, 500), expiry,
+            slipPts: clampNum(req.query.slip, 1, 0, 20), chargePct: clampNum(req.query.charge, 0.07, 0, 2),
+            brokerage: clampNum(req.query.brokerage, 40, 0, 500), qty: clampInt(req.query.qty, 130, 1, 5000),
+        });
+        const meta = { instrument, source: req.query.source || 'ALL', days };
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(hourStudyLib.formatHourText(study, meta));
+        res.json({ success: true, ...meta, rowsRead: r.rows.length, ...study });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
