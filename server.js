@@ -1318,12 +1318,24 @@ async function fetchNewsHeadlines() {
     }
 }
 
+// 13 Oct — cost guard. Before: a Claude call every 20 min around the clock (~72/day), even for unchanged headlines, and some
+// replies came back empty but were still billed. Now: (1) nothing runs outside the NSE news window (09:00–15:35, trading
+// days) — the last reading is simply kept; (2) if the headlines are identical to the last scored set (scored OK *or* failed),
+// the last result is reused with no new call; (3) the reply is read from the first real text block (a "thinking" block first
+// used to give an empty string) and, if still unusable, the log now says why. Signal logic is untouched.
+const _newsGate = require('./src/utils/newsGate');
+const _newsLast = { key: null, result: null };
 async function computeNewsSentiment() {
     if (!process.env.NEWSAPI_KEY)     return { available: false, label: 'News Sentiment — NEWSAPI_KEY not set' };
     if (!process.env.ANTHROPIC_API_KEY) return { available: false, label: 'News Sentiment — ANTHROPIC_API_KEY not set' };
 
+    if (_newsGate.decide({ marketDay: isNSEMarketDay(), key: '', lastKey: '' }) === 'closed') return marketState.newsSentiment;
+
     const headlines = await fetchNewsHeadlines();
     if (headlines.length === 0) return { available: false, label: 'News Sentiment — no headlines fetched this cycle' };
+
+    const newsKey = _newsGate.headlinesKey(headlines);
+    if (_newsGate.decide({ marketDay: true, key: newsKey, lastKey: _newsLast.key }) === 'same' && _newsLast.result) return _newsLast.result;
 
     try {
         const prompt = `You are scoring Indian stock market (Nifty 50) news sentiment for a trading app.
@@ -1343,7 +1355,7 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
 
         const res = await axios.post('https://api.anthropic.com/v1/messages', {
             model: 'claude-sonnet-5',
-            max_tokens: 200,
+            max_tokens: 400,   // 13 Oct: was 200 — headroom so an internal reasoning block cannot eat the whole budget and leave no JSON
             messages: [{ role: 'user', content: prompt }]
         }, {
             headers: {
@@ -1354,7 +1366,7 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
             timeout: 15000
         });
 
-        const text = res.data?.content?.[0]?.text || '';
+        const text = _newsGate.pickText(res.data);
         // FIX (10 Sep) — confirmed live: "Unexpected end of JSON input" with
         // status:undefined/body:undefined — the HTTP call succeeded (no
         // status code to report), so the failure was in parsing `text`
@@ -1366,12 +1378,15 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
         // time instead of another "undefined/undefined".
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {
-            console.warn('[NewsSentiment] No JSON object found in response. Raw text:', text.slice(0, 300) || '(empty)');
-            return { available: false, label: 'News Sentiment — empty/malformed response from model' };
+            console.warn('[NewsSentiment] No JSON object found in response. Raw text:', text.slice(0, 300) || '(empty)', '|', _newsGate.describeReply(res.data));
+            // the same headlines are not billed again; the next NEW set of headlines tries again
+            const failed = { available: false, label: 'News Sentiment — empty/malformed response from model' };
+            _newsLast.key = newsKey; _newsLast.result = failed;
+            return failed;
         }
         const parsed = JSON.parse(jsonMatch[0]);
 
-        return {
+        const okResult = {
             available: true,
             score: parsed.score,
             sentimentLabel: parsed.label,
@@ -1381,6 +1396,8 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
             label: `📰 News: ${parsed.label} (${parsed.score > 0 ? '+' : ''}${parsed.score}) — ${parsed.reason}`,
             generatedAt: new Date().toISOString(),
         };
+        _newsLast.key = newsKey; _newsLast.result = okResult;
+        return okResult;
     } catch (e) {
         console.warn('[NewsSentiment] scoring error:', e.message, '| status:', e.response?.status, '| body:', JSON.stringify(e.response?.data)?.slice(0, 500));
         return { available: false, label: 'News Sentiment — scoring error' };
@@ -7905,7 +7922,18 @@ async function refreshMTF() {
         catch(e) { console.error('[MTF signal trigger]', e.message); }
     }
 }
+// 13 Oct — after-hours cost/noise trim. During NSE hours (09:00–15:35 on trading days) global cues refresh every 2 min as before
+// (BankNifty lead feeds the Nifty signal). Outside those hours (nights, weekends, holidays) they only feed the display + the
+// global_cues_log history, so the 2-min timer now actually fetches only about every 10 min (fewer Yahoo calls / 429s / log lines).
+// The history table therefore has ~10-min rows after hours instead of ~2-min rows; nothing is deleted.
+let _lastGlobalFetchAt = 0;
+const GLOBAL_OFFHOURS_MIN_GAP_MS = 9.5 * 60 * 1000;
+async function refreshGlobalTick() {
+    if (!isNSEMarketDay() && Date.now() - _lastGlobalFetchAt < GLOBAL_OFFHOURS_MIN_GAP_MS) return;
+    return refreshGlobal();
+}
 async function refreshGlobal() {
+    _lastGlobalFetchAt = Date.now();
     try {
         const g=await fetchGlobalCues();
         if(g) {
@@ -12502,6 +12530,12 @@ function requireToken(req, res, next) {
 let _lastMTMRun = 0;
 // Login probe — frontend uses this to verify password without exposing data
 app.get('/api/auth/check', requireToken, (req, res) => res.json({ ok: true }));
+// 13 Oct — Go-Live Checklist content for the Tools tab. Behind the global /api token guard (and requireToken),
+// never a public static file, because the Security gate lists real gaps of this app.
+app.get('/api/go-live-checklist', requireToken, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(require('./src/data/goLiveChecklist'));
+});
 
 app.get('/api/signal',  (req,res) => {
     const now = Date.now();
@@ -15478,7 +15512,7 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(refreshMarketData, 3*60*1000), 0);
     setTimeout(() => setInterval(pollYahooPrice,    60*1000),   15*1000); // 1-min price fix
     setTimeout(() => setInterval(refreshMTF,            2*60*1000), 30*1000);   // FIX: 5min→2min — RSI meters stay fresh
-    setTimeout(() => setInterval(refreshGlobal,         2*60*1000), 60*1000);   // FIX: 5min→2min — BankNifty lead actually leads
+    setTimeout(() => setInterval(refreshGlobalTick,     2*60*1000), 60*1000);   // FIX: 5min→2min — BankNifty lead actually leads (13 Oct: after-hours gated to ~10 min inside refreshGlobalTick)
     // Bitcoin (25 Sep) — 60s cadence. isBitcoinWindowOpen() inside
     // refreshBitcoin() itself gates when this actually does anything.
     setTimeout(() => setInterval(refreshBitcoin,        60*1000), 65*1000);
@@ -15877,10 +15911,16 @@ function startPollingIntervals() {
         try { marketState.signalHistory = await getRecentSignalHistory(); }
         catch (e) { console.warn('[SignalHistory] refresh error:', e.message); }
     }, 5*60*1000), 30*1000);   // Confidence History card — DB query, 5min cadence is plenty
-    setTimeout(() => setInterval(async () => {
-        try { marketState.newsSentiment = await computeNewsSentiment(); }
-        catch (e) { console.warn('[NewsSentiment] refresh error:', e.message); }
-    }, 20*60*1000), 40*1000);   // NewsAPI free tier = 100/day; 20min cadence ≈ 19 calls/day, safe margin
+    // 13 Oct: also runs once ~40 s after boot (only does anything inside the NSE news window, see computeNewsSentiment) so a
+    // morning restart does not wait 20 min for its first reading. Cadence unchanged; NewsAPI free tier = 100/day.
+    setTimeout(() => {
+        const _newsTick = async () => {
+            try { marketState.newsSentiment = await computeNewsSentiment(); }
+            catch (e) { console.warn('[NewsSentiment] refresh error:', e.message); }
+        };
+        _newsTick();
+        setInterval(_newsTick, 20*60*1000);
+    }, 40*1000);
     setTimeout(() => setInterval(syncFIIToMarketState, 20*60*1000), 5*1000);    // FIX: sync FII always, even after market close
     setTimeout(() => setInterval(fetchCalendarEvents, 60*60*1000), 180*1000); // refresh calendar hourly
 

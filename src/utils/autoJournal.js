@@ -206,7 +206,9 @@ function createAutoJournal({ dbPool, getStrikePremium, now = Date.now, log = () 
         if (!dbPool) return { enabled: cfg.enabled, started: S.started, strategies: [] };
         const d = Math.min(90, Math.max(1, parseInt(days, 10) || 14));
         const r = await dbPool.query(`SELECT id, instrument, source, direction, side, fire_ts, strike, underlying, entry_premium, lots, lot_size, state, muted, last_premium, peak_pct, stop_pct, exits, events, exit_reason, exit_ts, realized_pct, realized_rs, coach
-            FROM auto_journal_trades WHERE source_table='telegram_live' AND fire_ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY fire_ts DESC LIMIT 3000`, [d]);
+            FROM auto_journal_trades WHERE source_table='telegram_live' AND fire_ts >= (((NOW() AT TIME ZONE 'Asia/Kolkata')::date - ($1::int - 1))::timestamp AT TIME ZONE 'Asia/Kolkata') ORDER BY fire_ts DESC LIMIT 3000`, [d]);
+        // 13 Oct fix: the window starts at 00:00 IST of the (d-1)-th day back, so "Today" (d=1) is today's IST calendar day,
+        // not the rolling last 24 hours (which pulled in yesterday's trades every morning).
         const rows = r.rows.map(x => {
             const open = x.state === 'OPEN', entry = Number(x.entry_premium), last = Number(x.last_premium);
             const exits = x.exits || [];

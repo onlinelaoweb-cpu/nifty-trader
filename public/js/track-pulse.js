@@ -6,7 +6,7 @@
  * How a source is graded (cautious on purpose — a track record is measured, not proven):
  *   ⚪ too little data    fewer than 10 resolved fires
  *   🟢 good signs         30+ fires, the direction win-rate's 95% range sits fully above 50% AND the Trade-Coach average is positive
- *   🔴 losing             30+ fires and the Trade-Coach average is negative (or the 95% range sits fully below 50%)
+ *   🔴 losing             30+ fires and the Trade-Coach average is -1.5% or worse (or the 95% range sits fully below 50%)
  *   🟡 undecided          everything else (10+ fires but the range still includes a coin-flip, or the signs disagree)
  * The 95% range is the Wilson interval for the direction win-rate: with n=20 and 60% wins the real rate could still be ~39–78%.
  * Many sources are graded at once, so one or two will look "good" by pure chance — treat 🟢 as "worth a closer look", never as proof.
@@ -20,6 +20,7 @@
   function sg(v, d) { if (v === null) return '--'; var x = Math.round(v * (d || 10)) / (d || 10); return (x > 0 ? '+' : '') + x + '%'; }
 
   var MIN_N = 10, SOLID_N = 30, Z = 1.96;
+  var BAD_AVG = 1.5;   // a Trade-Coach average only counts as 'losing' at -1.5% or worse (a -0.5% average is inside the noise of a few hundred option trades)
 
   // Wilson 95% interval for a win-rate (wins out of nn). Returns [lo, hi] as fractions, or null.
   function wilson(wins, nn) {
@@ -35,7 +36,7 @@
     var g;
     if (nDir < MIN_N) g = { k: 'few', icon: '⚪', label: 'bahut kam data' };
     else if (nDir >= SOLID_N && ca !== null && ca > 0 && ci && ci[0] > 0.5) g = { k: 'good', icon: '🟢', label: 'achhe sanket' };
-    else if (nDir >= SOLID_N && ((ca !== null && ca < 0) || (ci && ci[1] < 0.5))) g = { k: 'bad', icon: '🔴', label: 'ghate mein' };
+    else if (nDir >= SOLID_N && ((ca !== null && ca <= -BAD_AVG) || (ci && ci[1] < 0.5))) g = { k: 'bad', icon: '🔴', label: 'ghate mein' };
     else g = { k: 'mid', icon: '🟡', label: 'tay nahi' };
     g.ci = ci; g.n = nDir; g.winPct = nDir ? Math.round(x.wins / nDir * 100) : null; g.coachAvg = ca; g.coachN = x.coachN || 0; g.name = x.name;
     return g;

@@ -2461,6 +2461,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
       <div class="conf-ticks"><span>0</span><span>25</span><span style="color:var(--amber)">50</span><span id="conf-tick65" style="color:var(--dim)">65</span><span>100</span></div>
       <div id="signal-streak" style="display:none;margin-top:5px;font-size:12px;font-family:'Orbitron',monospace;letter-spacing:1px;text-align:center;"></div>
     </div>
+    <div id="ws-card" style="display:none"></div>
   </div>
 
   <!-- Entry window badge -->
@@ -3600,6 +3601,8 @@ html.vn-day .checklist-header{background:#F5F7FF;}
   <div class="tools-wrap">
     <!-- TRADE PLANNER (12 Oct) — capital -> lots, SL/target levels; filled by /js/tools-pulse.js; display only -->
     <div id="tp-card"></div>
+    <!-- GO-LIVE CHECKLIST (13 Oct) — loaded from token-protected /api/go-live-checklist by /js/golive-card.js; display only -->
+    <div id="gl-card"></div>
     <div class="tool-card">
       <div class="tool-title">📱 TELEGRAM</div>
   <div class="tg-wrap"><button class="tg-btn" onclick="testTG(this)">📱 TEST TELEGRAM</button><div id="tg-msg"></div></div>
@@ -4643,6 +4646,7 @@ function renderDashboard(s) {
   } else if (csEl) { csEl.style.display = 'none'; }
   const tick65 = document.getElementById('conf-tick65');
   if (tick65) tick65.style.color = conf >= 65 ? 'var(--green)' : 'var(--dim)';
+  try { if (window.WaitStrip) window.WaitStrip.render(s); } catch (e) { console.warn('[WaitStrip] render failed:', e.message); }
 
   // RSI
   if (s.rsi != null) {
@@ -5259,6 +5263,7 @@ function renderDashboard(s) {
   try { if (window.BreadthPulse) window.BreadthPulse.render(s); } catch (e) { console.warn('[BreadthPulse]', e.message); }
   try { if (window.GlobalPulse) window.GlobalPulse.render(s); } catch (e) { console.warn('[GlobalPulse]', e.message); }
   try { if (window.ToolsPulse) window.ToolsPulse.render(s); } catch (e) { console.warn('[ToolsPulse]', e.message); }
+  try { if (window.GoLive) window.GoLive.render(); } catch (e) { console.warn('[GoLive]', e.message); }
   // Global UI — only re-render when data actually changes (sector heatmap is DOM-heavy)
   if (s.global) {
     const globalFP = (s.global.globalBias || '') + '|' + (s.global.updatedAt || '');
@@ -7449,10 +7454,10 @@ function updateChecklistAuto(s) {
       cls = 'wait'; color = 'var(--amber)';
     } else if (conf < 50 && netScore >= 4) {
       // Score looks bullish but app confidence is low — warn trader
-      verdict = '🟡 BULL SIGNAL — Low Confidence (' + conf + '%) · Wait';
+      verdict = '🟡 Market mood: BULL (engine WAIT par)';   // 13 Oct: was "BULL SIGNAL" — a mood, not a signal
       cls = 'side'; color = 'var(--amber)';
     } else if (conf < 50 && netScore <= -4) {
-      verdict = '🟡 BEAR SIGNAL — Low Confidence (' + conf + '%) · Wait';
+      verdict = '🟡 Market mood: BEAR (engine WAIT par)';
       cls = 'side'; color = 'var(--amber)';
     } else if (netScore >= 6) { verdict = `🟢 Strong Bull (${bullVotes}/${total})`;    cls = 'bull'; color = 'var(--green)'; }
     else if (netScore <= -6)   { verdict = `🔴 Strong Bear (${bearVotes}/${total})`;   cls = 'bear'; color = 'var(--red)'; }
@@ -7539,8 +7544,8 @@ function renderPulse(s, bulletScore) {
   if (card) { card.classList.remove('bull', 'bear'); if (V && V.cls === 'bull') card.classList.add('bull'); else if (V && V.cls === 'bear') card.classList.add('bear'); }
   const _st = document.getElementById('status-txt');
   const closed = !!_st && _st.textContent !== 'LIVE';
-  if (closed && vEl) { const base = V ? V.verdict.replace(/ — Low Confidence \(\d+%\) · Wait/, '').replace(/^⚡ CONFLICT.*/, '⚡ Global vs Institutional conflict') : vEl.textContent; vEl.textContent = '🌙 Market band — ' + base.replace(/^[^A-Za-z]+/, ''); vEl.style.color = 'var(--dim)'; }
-  set('pulse-count', closed ? 'MARKET CLOSED' : 'APP: ' + (s.signal || 'WAIT') + ' · ' + (s.confidence || 0) + '%');
+  if (closed && vEl) { const base = V ? V.verdict.replace(/ \(engine WAIT par\)/, '').replace(/^⚡ CONFLICT.*/, '⚡ Global vs Institutional conflict') : vEl.textContent; vEl.textContent = '🌙 Market band — ' + base.replace(/^[^A-Za-z]+/, ''); vEl.style.color = 'var(--dim)'; }
+  set('pulse-count', closed ? 'MARKET CLOSED' : 'ENGINE: ' + (s.signal || 'WAIT') + ((s.signal && s.signal !== 'WAIT') ? ' · ' + (s.confidence || 0) + '%' : ''));   // 13 Oct: the WAIT % now lives only in the WAIT strip
 
   // plain-language summary
   const names = cls => { const a = tiles.filter(t => t.cls === cls).map(t => t.label.toLowerCase()); return a.length > 4 ? a.length + ' indicators (' + a.slice(0, 3).join(', ') + '…)' : a.join(', '); };
@@ -7554,7 +7559,7 @@ function renderPulse(s, bulletScore) {
   if (s.vix != null && s.vix >= 20) cautions.push('VIX ' + s.vix.toFixed(1) + ' high');
   if (s.adx && s.adx.adx != null && s.adx.adx < 20) cautions.push('market choppy (ADX ' + s.adx.adx.toFixed(0) + ')');
   const ev = items['cl-events']; if (ev && ev.state === 'fail') cautions.push('high-impact event aaj');
-  if ((s.confidence || 0) < 50) cautions.push('app confidence kam');
+  // (13 Oct) 'app confidence kam' removed — the WAIT strip under the signal box already says why the engine is waiting
   let sum = parts.join(' &nbsp;·&nbsp; ');
   if (cautions.length) sum += (sum ? '<br>' : '') + '⚠️ <span style="color:var(--amber)">' + cautions.join(' · ') + '</span>';
   const sEl = document.getElementById('pulse-sum'); if (sEl) sEl.innerHTML = sum || 'Waiting for market data…';
@@ -8851,7 +8856,9 @@ function renderVolumeScannerUI(d) {
 <script src="/js/global-pulse.js" defer></script>
 <script src="/js/scanner-pulse.js" defer></script>
 <script src="/js/tools-pulse.js" defer></script>
+<script src="/js/golive-card.js" defer></script>
 <script src="/js/commodity-pulse.js" defer></script>
 <script src="/js/track-pulse.js" defer></script>
+<script src="/js/wait-strip.js" defer></script>
 </body>
 </html>

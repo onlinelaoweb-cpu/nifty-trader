@@ -15,6 +15,9 @@ assert.strictEqual(TP.grade({ name: 'a', wins: 5, nDir: 9, coachAvg: 20 }).k, 'f
 assert.strictEqual(TP.grade({ name: 'b', wins: 20, nDir: 40, coachAvg: 5 }).k, 'mid');                      // 50% win -> range includes 50%
 assert.strictEqual(TP.grade({ name: 'c', wins: 70, nDir: 100, coachAvg: 3 }).k, 'good');                    // clear above 50% and Coach avg positive
 assert.strictEqual(TP.grade({ name: 'd', wins: 70, nDir: 100, coachAvg: -2 }).k, 'bad');                    // direction ok but money-losing -> not good
+assert.strictEqual(TP.grade({ name: 'h', wins: 70, nDir: 138, coachAvg: -0.8 }).k, 'mid');                  // a tiny negative average is noise, not 'losing'
+assert.strictEqual(TP.grade({ name: 'i', wins: 55, nDir: 131, coachAvg: -1.0 }).k, 'mid');
+assert.strictEqual(TP.grade({ name: 'j', wins: 60, nDir: 120, coachAvg: -1.5 }).k, 'bad');                  // -1.5% or worse counts
 assert.strictEqual(TP.grade({ name: 'e', wins: 12, nDir: 40, coachAvg: null }).k, 'bad');                   // 30% win, range fully below 50%
 assert.strictEqual(TP.grade({ name: 'f', wins: 14, nDir: 20, coachAvg: 4 }).k, 'mid');                      // 20 fires is never "good"
 assert.strictEqual(TP.grade({ name: 'g', wins: 70, nDir: 100, coachAvg: null }).k, 'mid');                  // no Coach figure -> cannot be good
