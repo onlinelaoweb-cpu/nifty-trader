@@ -65,4 +65,14 @@ assert.strictEqual(computeHourStudy([]).overall.n, 0); assert.strictEqual(comput
 const txt = formatHourText(computeHourStudy(rows, { minN: 5, minHalfN: 3 }), { instrument: 'NIFTY', days: 60 });
 assert.ok(/HOUR-OF-DAY STUDY/.test(txt) && /14:30\+/.test(txt) && /luck alone/.test(txt));
 assert.ok(typeof formatHourText(computeHourStudy([])) === 'string');
+// cheap-premium entries are excluded (not allowed to drown the average) and net is floored at -100
+r = computeHourStudy([
+    { id: 1, source: 'A', fire_ts: at('2026-10-13', 15, 0), coach_result: 5, entry_premium: 2 },
+    { id: 2, source: 'B', fire_ts: at('2026-10-13', 15, 0), coach_result: 5, entry_premium: 40 },
+]);
+assert.strictEqual(r.lowPremium, 1); assert.strictEqual(r.overall.n, 1); assert.ok(r.overall.avgNet > -2 && r.overall.avgNet < 0, 'gross 5 minus ~5.9 cost on a 40-pt premium');
+r = computeHourStudy([{ id: 1, source: 'A', fire_ts: at('2026-10-13', 15, 0), coach_result: -100, entry_premium: 12 }], { minPremium: 1 });
+assert.strictEqual(r.overall.avgNet, -100, 'net never below -100');
+r = computeHourStudy([{ id: 1, source: 'A', fire_ts: at('2026-10-13', 15, 0), coach_result: 5, entry_premium: 2 }], { minPremium: 0 });
+assert.strictEqual(r.overall.n, 1, 'minPremium 0 keeps everything');
 console.log('hourStudy OK');

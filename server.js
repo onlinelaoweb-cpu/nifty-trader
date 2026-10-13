@@ -13173,7 +13173,7 @@ app.get('/api/exit-rule-study', studyGuard, async (req, res) => {
 });
 
 // ── Hour-of-day study (14 Oct) ───────────────────────────────────────────────
-// Read-only research. /api/hour-study?instrument=NIFTY&source=&days=60&decluster=30&expiry=all|only|exclude&slip=1&charge=0.07&brokerage=40&qty=130&minN=20&format=text
+// Read-only research. /api/hour-study?instrument=NIFTY&source=&days=60&decluster=30&expiry=all|only|exclude&slip=1&charge=0.07&brokerage=40&qty=130&minPrem=10&minN=20&format=text
 // Trade-Coach simulated results (signal_outcomes.coach_result) by the IST hour the signal fired, AFTER costs, with an older/newer-half check.
 // Database only (no external API). Nothing here feeds signals, gates or alerts. See src/utils/hourStudy.js.
 app.get('/api/hour-study', studyGuard, async (req, res) => {
@@ -13192,6 +13192,7 @@ app.get('/api/hour-study', studyGuard, async (req, res) => {
             declusterMin: clampInt(req.query.decluster, 30, 0, 240), minN: clampInt(req.query.minN, 20, 5, 500), expiry,
             slipPts: clampNum(req.query.slip, 1, 0, 20), chargePct: clampNum(req.query.charge, 0.07, 0, 2),
             brokerage: clampNum(req.query.brokerage, 40, 0, 500), qty: clampInt(req.query.qty, 130, 1, 5000),
+            minPremium: clampNum(req.query.minPrem, 10, 0, 500),
         });
         const meta = { instrument, source: req.query.source || 'ALL', days };
         if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(hourStudyLib.formatHourText(study, meta));

@@ -46,24 +46,27 @@ function summarize(items) {
 }
 
 // rows: [{id, source, fire_ts, coach_result, entry_premium}]
-// opts: { declusterMin=30, minN=20, minDays=4, minHalfN=8, slipPts=1, chargePct=0.07, brokerage=40, qty=130, expiry:'all'|'only'|'exclude' (Tuesday) }
+// opts: { declusterMin=30, minN=20, minDays=4, minHalfN=8, slipPts=1, chargePct=0.07, brokerage=40, qty=130, minPremium=10, expiry:'all'|'only'|'exclude' (Tuesday) }
+// minPremium: entries cheaper than this (premium points) are left out. A fixed 1-pt slippage + brokerage on a 2-pt option is a 100%+ "cost",
+// which says nothing about the hour and drowns the average (first live run: 14:30+ showed net -67% vs gross +1.5%). Net is also floored at -100%.
 function computeHourStudy(rows, opts = {}) {
     const o = {
         declusterMin: opts.declusterMin ?? 30, minN: opts.minN ?? 20, minDays: opts.minDays ?? 4, minHalfN: opts.minHalfN ?? 8,
-        slipPts: opts.slipPts ?? 1, chargePct: opts.chargePct ?? 0.07, brokerage: opts.brokerage ?? 40, qty: opts.qty ?? 130,
+        slipPts: opts.slipPts ?? 1, chargePct: opts.chargePct ?? 0.07, brokerage: opts.brokerage ?? 40, qty: opts.qty ?? 130, minPremium: opts.minPremium ?? 10,
         expiry: opts.expiry || 'all',
     };
-    const data = []; let skipped = 0;
+    const data = []; let skipped = 0, lowPremium = 0;
     for (const r of rows || []) {
         const ts = typeof r.fire_ts === 'number' ? r.fire_ts : Date.parse(r.fire_ts);
         const res = num(r.coach_result), ep = num(r.entry_premium);
         if (!Number.isFinite(ts) || res === null || ep === null || !(ep > 0)) { skipped++; continue; }
+        if (ep < o.minPremium) { lowPremium++; continue; }
         const p = istParts(ts), b = bucketOf(p.min);
         if (!b) { skipped++; continue; }                                    // before 09:15 / after midnight: ignore
         if (o.expiry === 'only' && p.dow !== 2) continue;
         if (o.expiry === 'exclude' && p.dow === 2) continue;
         const gross = clampPct(res), c = costPct(ep, o);
-        data.push({ id: r.id, src: String(r.source || '?'), ts, day: p.day, bucket: b.label, gross, net: gross - c, cost: c });
+        data.push({ id: r.id, src: String(r.source || '?'), ts, day: p.day, bucket: b.label, gross, net: Math.max(-100, gross - c), cost: c });
     }
     data.sort((a, b) => a.ts - b.ts || (a.id ?? 0) - (b.id ?? 0));
     // de-cluster per source
@@ -91,7 +94,7 @@ function computeHourStudy(rows, opts = {}) {
     });
     const qualifying = hours.filter(h => h.qualifies).length;
     return {
-        params: o, cutDay: cut || null, daysCovered: allDays.length, dropped, skipped, overall, hours,
+        params: o, cutDay: cut || null, daysCovered: allDays.length, dropped, skipped, lowPremium, overall, hours,
         passed: hours.filter(h => h.holds).length, qualifying, expectedByLuckAlone: r1(qualifying * 0.25),
     };
 }
@@ -101,7 +104,7 @@ function formatHourText(res, meta = {}) {
     const L = [];
     L.push(`HOUR-OF-DAY STUDY — ${meta.instrument || 'NIFTY'} | source ${meta.source || 'ALL'} | last ${meta.days ?? '?'} days | days with data ${res.daysCovered}`);
     L.push('(read-only. Result = Trade-Coach simulated trade, % of entry premium. NET = after costs. Nothing here changes any rule.)');
-    L.push(`Costs per round trip: ${res.params.slipPts} pt slippage each side + ${res.params.chargePct}% charges each side + ₹${res.params.brokerage} brokerage over ${res.params.qty} units. De-cluster ${res.params.declusterMin} min per source. Expiry day (Tue): ${res.params.expiry}.`);
+    L.push(`Costs per round trip: ${res.params.slipPts} pt slippage each side + ${res.params.chargePct}% charges each side + ₹${res.params.brokerage} brokerage over ${res.params.qty} units. De-cluster ${res.params.declusterMin} min per source. Expiry day (Tue): ${res.params.expiry}. Entries under ${res.params.minPremium} pts premium left out (${res.lowPremium ?? 0} rows); net floored at -100%.`);
     L.push(`Older/newer half cut at ${res.cutDay || '-'} (days before = older).`);
     L.push('');
     L.push(`ALL HOURS: n${res.overall.n} days ${res.overall.days} | gross ${f(res.overall.avgGross)}% net ${f(res.overall.avgNet)}% | win(net) ${res.overall.winPctNet ?? '-'}%`);
