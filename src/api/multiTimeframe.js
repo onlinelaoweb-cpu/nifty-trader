@@ -405,7 +405,9 @@ function calcIndicators(candles, tfLabel, vix = null) {
                  :              'NEUTRAL';
     const score  = parseFloat(pct.toFixed(0));
 
-    return { rsi, ema9, ema21, vwap, adx: adxVal, close, signal, score, barCount: candles.length };
+    // 14 Oct — which candles fed the ADX: today's session only (>=30 bars) or earlier days too. Display/diagnostic only, no rule reads it.
+    const adxBasis = adxVal === null ? null : (sessionC.length >= 30 ? 'session' : 'multi-day');
+    return { rsi, ema9, ema21, vwap, adx: adxVal, adxBasis, close, signal, score, barCount: candles.length };
 }
 
 // ── Main entry point ─────────────────────────────────────────────────────────
@@ -517,6 +519,7 @@ async function analyzeMultiTimeframe(vix = null) {
     const tf5m  = calcIndicators(c5m,  '5m',  vix);
     const tf15m = calcIndicators(c15m, '15m', vix);
     const tf1h  = calcIndicators(c1h,  '1h',  vix);
+    try { _captureAdxDebug({ '5m': c5m, '15m': c15m, '1h': c1h }, { '5m': tf5m, '15m': tf15m, '1h': tf1h }); } catch (_) { /* diagnostics only */ }
 
     // ── Step 4: Build MTF composite signal ───────────────────────────────────
     // INSUFFICIENT TFs are excluded from voting — they don't count as NEUTRAL
@@ -689,4 +692,38 @@ async function analyzeMultiTimeframe(vix = null) {
     };
 }
 
-module.exports = { analyzeMultiTimeframe };
+// ── ADX diagnostics (14 Oct 2026, read-only) ────────────────────────────────────────────────────────────────────────────
+// Why: on a 100-point range day the app's 5m ADX read ~50 while a TradingView 5m chart (ADX 14,14) read ~16 at the same minute; the 15m ADX
+// matched. This keeps the LAST candles the engine actually used so /api/mtf-adx-debug can recompute ADX three ways and show data quality
+// (bar count, today's bars, time gaps, flat bars). Nothing here feeds a signal, gate or alert.
+let _adxDebug = null;
+function _captureAdxDebug(candlesByTf, tfByLabel) {
+    const out = { at: new Date().toISOString(), tfs: {} };
+    for (const label of Object.keys(candlesByTf)) {
+        const c = candlesByTf[label] || [];
+        const sess = todaySessionCandles(c);
+        const a = x => { const r = calculateADX(x); return r ? r.adx : null; };
+        const stepMin = label === '5m' ? 5 : label === '15m' ? 15 : 60;
+        let gaps = 0, flat = 0;
+        for (let i = 0; i < c.length; i++) {
+            if (c[i].high != null && c[i].high === c[i].low) flat++;
+            if (i > 0) {
+                const t0 = c[i - 1].ts || c[i - 1].time, t1 = c[i].ts || c[i].time;
+                if (t0 && t1 && Math.abs((t1 - t0) / 60000 - stepMin) > 0.5) gaps++;
+            }
+        }
+        out.tfs[label] = {
+            bars: c.length, todayBars: sess.length, gapsVsExpectedStep: gaps, flatBars: flat,
+            adxUsedByEngine: tfByLabel[label] ? tfByLabel[label].adx : null,
+            adxBasis: tfByLabel[label] ? tfByLabel[label].adxBasis : null,
+            adxAllBars: a(c),
+            adxTodayOnly: sess.length >= 30 ? a(sess) : null,
+            adxLast60Bars: c.length >= 60 ? a(c.slice(-60)) : null,
+            lastBars: c.slice(-24).map(x => ({ ts: x.ts || x.time, o: x.open, h: x.high, l: x.low, c: x.close })),
+        };
+    }
+    _adxDebug = out;
+}
+function getAdxDebug() { return _adxDebug; }
+
+module.exports = { analyzeMultiTimeframe, getAdxDebug };

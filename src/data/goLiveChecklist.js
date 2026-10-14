@@ -3,7 +3,7 @@
 // never as a public static file (the Security gate names real gaps in this app). Text mirrors the Claude Doc.
 // `backtick` spans are rendered as <code>. Not legal advice; Gate 2 items must be confirmed with Fyers / SEBI / a lawyer.
 module.exports = {
-  updated: '2026-10-13',
+  updated: '2026-10-14',
   intro: 'Abhi live trading ka samay nahi hai: paanch gates mein se ek bhi poora nahi hua. App paper trading par hi rahega jab tak paanchon tick na ho jaayein. Gates ek ke baad ek hain, koi skip nahi. Ek bhi fail ho toh wapas paper par.',
   disclaimer: 'Main vakeel nahi hoon aur SEBI ke niyam badalte rehte hain. Gate 2 ka har item apne broker (Fyers) ki compliance page ya SEBI/NSE ke circular se khud match karna.',
   gates: [
@@ -17,7 +17,12 @@ module.exports = {
       'Split-half: pehla aadha aur doosra aadha, dono alag-alag positive.',
       'Koi ek din kul profit ke 30% se zyada nahi (ek trending din se jeet nahi).',
       '18 Oct ka unified audit pura, crude alag Nifty se.',
-      'Paper mein worst day aur max drawdown likh lo. Yahi Gate 4 ki loss limit ka aadhaar banega.' ] },
+      'Paper mein worst day aur max drawdown likh lo. Yahi Gate 4 ki loss limit ka aadhaar banega.',
+      '18 Oct ka pre-registered sawal (14 Oct ko, data dekhne se pehle likha): kya range-day mein fire hui MTF aur Brahmastra leads trend-day ki leads se kharab hain? Ek hi primary test, koi doosra cut primary nahi.',
+      'Data: 13 Oct tak ki leads (signal_outcomes, 30-min declustered, costs ke saath). 14 Oct is sawal ki wajah hai, isliye test mein nahi; wo naye dino ke saath alag confirmation set mein jaayega.',
+      'Cut: fire ke waqt range probability 70% ya zyada (market_snapshot_log se) = range-day, baaki = trend-day. Ye threshold ab fix hai, data dekh ke nahi badlega.',
+      'Pass tabhi: har bucket mein kam se kam 20 declustered leads, range-day ka average net return trend-day se kam se kam 5 percentage points kharab, aur dono split-halves mein wahi disha. Warna "koi saboot nahi", koi rule nahi badlega.',
+      'Pass hua toh bhi sirf agle 10 trading din ke liye paper mein filter test hoga, live rule nahi. ADX, last-hour efficiency aur trend probability wale cut exploratory hain, unse koi rule nahi.' ] },
     { id: 'g2', title: 'Gate 2 · SEBI aur broker', note: 'Static IP ka niyam Railway ke saath sabse bada practical roadblock hai. Points ek broker-blog se hain, SEBI ke asli circular se nahi; har item broker se confirm karo.', items: [
       'Fyers se confirm: retail API algo ke niyam (static IP, OAuth + 2FA, roz session band, algo-ID tagging) tumhare account par kaise lagu hain.',
       'Static IP: Railway par static outbound IP milta hai ya nahi, aur kharcha kitna. Extra kharcha tay karne se pehle tumhari approval.',
@@ -25,7 +30,14 @@ module.exports = {
       'Sirf apne (aur dependent family ke) account ke liye. Kisi dost ya doosre ka paisa ya account nahi.',
       'Signals doosron ko (Telegram group, YouTube): jab tak SEBI Research Analyst / Investment Adviser ka sawal saaf na ho, koi buy/sell call nahi.',
       'Daily login flow OAuth + 2FA ke saath chale.',
-      'F&O ki kamai ka tax aur record: CA se confirm (audit, ITR form).' ] },
+      'F&O ki kamai ka tax aur record: CA se confirm (audit, ITR form).',
+      'Stoxkart ka "Client Direct API" form (14 Oct): kam se kam 2 aur max 4 static IP dene hote hain, admin approve karta hai. Fyers mein bhi static IP ka niyam hai.',
+      'Railway par static outbound IP sirf Pro plan par (paid upgrade, pehle tumhari approval). 3 IP milte hain, teeno whitelist karne padenge; region badalne par IP badal jaate hain.',
+      'Railway ke static IP dedicated hone ki guarantee nahi (shared ho sakte hain). Stoxkart aur Fyers se likhit mein poochho ki shared cloud IP chalega ya nahi.',
+      'Stoxkart form mein "Algo Type: No strategy registration required / non-registered strategy" hai. Likhit mein confirm karo ki ye apne code, apne account ke self-use par lagu hota hai.',
+      'Roz login: Stoxkart ka login request-token + 2FA (OTP/TOTP) par chalta hai. Fyers jaisa roz ka login maan kar chalo; access token kitne ghante chalta hai, docs mein nahi mila, poochho.',
+      'Fyers aur Stoxkart ko bheje emails ke jawab aane tak koi API app, IP ya plan ka kharcha nahi. Jawab aane par dono ko Gate 2 ke hisaab se ek table mein compare karo.',
+      'Stoxkart ke Vyom Algo marketplace par "Enable Live Trading" par Accept nahi dabana jab tak khud live jaane ka faisla na ho (Accept se subscribed strategies seedha asli orders daalti hain).' ] },
     { id: 'g3', title: 'Gate 3 · Security', note: 'Live orders ke saath ek leaked token ya ek galat push seedha paisa hai. Zyada tar kaam muft hain.', items: [
       '`APP_TOKEN` lamba aur random (32+ characters). Order wale kaam ke liye token URL mein nahi, sirf header mein.',
       'Token compare constant-time ho. Order wale routes par `APP_TOKEN` na ho toh app band rahe, khula nahi.',

@@ -2875,12 +2875,12 @@ html.vn-day .checklist-header{background:#F5F7FF;}
 
   <!-- ADX TREND STRENGTH — full width row -->
   <div style="padding:0 12px;margin-bottom:7px;">
-    <div class="ind-card" id="adx-card" style="border-left:2px solid var(--amber);">
+    <div class="ind-card" id="adx-card" style="border-left:2px solid var(--amber);min-width:0;overflow:hidden;">
       <div class="ind-label">
         <span>ADX (14) — 1 MIN — TREND STRENGTH</span>
         <span id="adx-zone" style="font-size:10px;font-weight:700;">--</span>
       </div>
-      <div style="display:flex;align-items:baseline;gap:14px;margin-top:3px;">
+      <div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;margin-top:3px;">
         <div>
           <div style="font-size:10px;color:var(--dim);">ADX (1m)</div>
           <div class="ind-val" id="adx-val" style="font-size:22px;">--</div>
@@ -2897,9 +2897,9 @@ html.vn-day .checklist-header{background:#F5F7FF;}
           <div style="font-size:10px;color:var(--dim);" title="Compare against a TradingView-style chart on the matching timeframe — not against ADX(1m) above.">MTF ADX</div>
           <div id="adx-mtf-compare" style="font-size:12px;font-family:'Share Tech Mono',monospace;color:var(--text);white-space:nowrap;">5m -- · 15m -- · 1h --</div>
         </div>
-        <div style="flex:1;text-align:right;">
+        <div style="flex:1 1 100%;display:flex;justify-content:space-between;align-items:baseline;gap:8px;border-top:1px solid var(--border);padding-top:5px;min-width:0;">
           <div style="font-size:10px;color:var(--dim);">GATE</div>
-          <div id="adx-trend-label" style="font-family:'Orbitron',monospace;font-size:11px;font-weight:700;letter-spacing:1px;color:var(--amber);">LOADING</div>
+          <div id="adx-trend-label" style="font-family:'Orbitron',monospace;font-size:11px;font-weight:700;letter-spacing:1px;color:var(--amber);text-align:right;min-width:0;">LOADING</div>
         </div>
       </div>
       <div style="height:4px;background:var(--border);border-radius:2px;margin-top:7px;overflow:hidden;">
@@ -3939,7 +3939,7 @@ async function loadAutoJournal() {
       const key = g.key, isOpen = openIds.has(key) ? ' open' : '';
       const shown = g.trades.slice(0, 40), more = g.trades.length - shown.length;
       return '<details class="aj-grp" data-key="' + _ajEsc(key) + '"' + isOpen + '><summary><span><span class="aj-ginst">' + _ajEsc(g.instrument) + '</span><span class="aj-gname">' + _ajEsc(g.source) + '</span>' + (g.muted ? '<span class="aj-muted">muted</span>' : '') + '</span>' +
-        '<span class="aj-gstats"><span class="' + _ajCls(g.avgPct) + '"><b>' + (g.closed ? _ajPct(g.avgPct) + ' avg' : 'no closed trade') + '</b>' + _ajRs(g.totalRs) + '</span><br>' + g.total + ' trades · ' + g.open + ' open' + (g.winPct !== null ? ' · win ' + g.winPct + '%' : '') + '</span></summary>' +
+        '<span class="aj-gstats"><span class="' + _ajCls(g.avgPct) + '"><b>' + (g.closed ? _ajPct(g.avgPct) + ' avg' : 'no closed trade') + '</b></span><span class="' + _ajCls(g.totalRs) + '">' + _ajRs(g.totalRs) + '</span><br>' + g.total + ' trades · ' + g.open + ' open' + (g.winPct !== null ? ' · win ' + g.winPct + '%' : '') + '</span></summary>' +
         '<div class="aj-trades">' + shown.map(_ajTradeHtml).join('') + (more > 0 ? '<div class="aj-more">+ ' + more + ' older trades</div>' : '') + '</div></details>';
     }).join('') || '<div class="aj-note">No live Telegram signals yet in this period. A trade appears here the moment a qualifying signal is sent.</div>';
     listEl.querySelectorAll('details').forEach(el => el.addEventListener('toggle', () => {
@@ -4876,8 +4876,13 @@ function renderDashboard(s) {
     bar.style.background = adx < 20 ? 'var(--red)' : adx < 25 ? 'var(--amber)' : adx < 40 ? 'var(--green)' : 'var(--blue)';
     const label = adx < 20 ? 'CHOPPY' : adx < 25 ? 'WEAK TREND' : adx < 40 ? 'TRENDING' : 'EXPLOSIVE';
     document.getElementById('adx-zone').textContent = label;
-    document.getElementById('adx-trend-label').textContent = adx >= 20 ? 'ADX GATE OPEN ✅' : 'ADX GATE CLOSED ⛔';
-    document.getElementById('adx-card').style.borderLeft = adx >= 20 ? '2px solid var(--green)' : '2px solid var(--red)';
+    // 14 Oct — use the engine's real gate (VIX-dynamic floor, short-TF breakout waiver) instead of a hardcoded 20
+    const _gFloor = s.adxGate?.floor ?? 20, _gWaived = !!s.adxGate?.waived;
+    const _gOpen  = adx >= _gFloor || _gWaived;
+    document.getElementById('adx-trend-label').textContent = _gOpen
+      ? (_gWaived ? 'GATE OPEN ✅ (5m/15m ADX waiver)' : 'GATE OPEN ✅ (floor ' + _gFloor + ')')
+      : 'GATE CLOSED ⛔ (floor ' + _gFloor + ')';
+    document.getElementById('adx-card').style.borderLeft = _gOpen ? '2px solid var(--green)' : '2px solid var(--red)';
   } else {
     // Pre-market / closed — reset to waiting state
     document.getElementById('adx-val').textContent = '--';
@@ -5238,7 +5243,7 @@ function renderDashboard(s) {
   const pnlEl = document.getElementById('header-pnl');
   const tradesEl = document.getElementById('header-trades');
   if (pnlEl) {
-    pnlEl.textContent = 'P&L: ₹' + summary.realizedPnl.toFixed(0);
+    pnlEl.textContent = 'Manual P&L: ₹' + summary.realizedPnl.toFixed(0);   // 14 Oct — the manual Journal tab only (Auto Journal is separate)
     pnlEl.className = 'hbadge ' + (summary.realizedPnl > 0 ? 'pnl-pos' : summary.realizedPnl < 0 ? 'pnl-neg' : 'pnl-zero');
   }
   if (tradesEl) tradesEl.textContent = summary.total + ' Trade' + (summary.total !== 1 ? 's' : '');
@@ -5967,8 +5972,8 @@ async function fetchSignalPerformance() {
           const color = o.signal === 'BUY CALL' ? 'var(--green)' : 'var(--red)';
           const gainColor = o.gainPct > 0 ? 'var(--green)' : o.gainPct < 0 ? 'var(--red)' : 'var(--dim)';
           return `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
-            <div style="color:${color};font-weight:600;">${o.signal} ${o.strike}${o.type} <span style="color:${gainColor};font-weight:600;">(${o.gainPct > 0 ? '+' : ''}${o.gainPct}%)</span></div>
-            <div style="color:var(--dim);">Entry: ₹${o.entry} | High: ₹${o.high} | Target: ₹${o.target} | ${o.elapsedMin} min elapsed</div>
+            <div style="color:${color};font-weight:600;">${o.signal} ${o.strike}${o.type} <span style="color:${gainColor};font-weight:600;">(peak ${o.gainPct > 0 ? '+' : ''}${o.gainPct}%)</span>${o.nowPct != null ? ` <span style="color:${o.nowPct > 0 ? 'var(--green)' : o.nowPct < 0 ? 'var(--red)' : 'var(--dim)'};font-weight:600;">now ${o.nowPct > 0 ? '+' : ''}${o.nowPct}%</span>` : ''}</div>
+            <div style="color:var(--dim);">Entry: ₹${o.entry} | High: ₹${o.high}${o.nowPrem != null ? ' | Now: ₹' + o.nowPrem : ''} | Target: ₹${o.target} | ${o.elapsedMin} min elapsed</div>
           </div>`;
         }).join('');
       } else {
@@ -6713,7 +6718,14 @@ function updateFIIDIIDisplay(fii, dii) {
   const updEl = document.getElementById('fii-updated-at');
   const updatedAt = fii?.updatedAt || dii?.updatedAt;
   if (updEl && updatedAt) {
-    updEl.textContent = 'NSE \u00b7 ' + new Date(updatedAt).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'});
+    // 14 Oct — FII/DII is END-OF-DAY data (NSE publishes after ~18:00 IST). The time shown used to be only when the app fetched it, which looked
+    // like a live number. Now: the data's own date if we have it, else "previous session" when it was fetched before 18:00 IST.
+    const _ud = new Date(updatedAt);
+    const _t  = _ud.toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit', timeZone:'Asia/Kolkata'});
+    const _istHour = parseInt(_ud.toLocaleString('en-GB', {hour:'2-digit', hour12:false, timeZone:'Asia/Kolkata'}), 10);
+    const _dataDate = fii?.date || dii?.date || null;
+    const _what = _dataDate ? ('data: ' + _dataDate) : (_istHour < 18 ? 'pichle session ka data' : 'us din ka data');
+    updEl.textContent = 'NSE \u00b7 ' + _what + ' \u00b7 fetched ' + _t + ' (end-of-day, live nahi)';
   }
 }
 

@@ -217,11 +217,16 @@ async function sendSignalAlert(state, prevSignal, strikeData = null, autoLogged 
         const sizeNote = strikeData.positionSizeNote
             ? `\n📏 Size note: ${strikeData.positionSizeNote}`
             : '';
+        // 14 Oct — Target/SL now follow the Trade-Coach grid (same levels the Auto Journal uses); old structural -25%/+50% only as fallback
+        const cg = strikeData.coach;
+        const useCoachLv = cg && cg.slPremium != null && cg.targetPremium != null;
+        const lvTarget = useCoachLv ? `₹${cg.targetPremium} (+${cg.targetPct}% | +₹${Math.round((cg.targetPremium - strikeData.entry) * LOT)}/lot)` : `₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)`;
+        const lvSl     = useCoachLv ? `₹${cg.slPremium} (${cg.slPct}% | -₹${Math.round((strikeData.entry - cg.slPremium) * LOT)}/lot)` : `₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)`;
         strikeBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
 📥 Entry : ₹${strikeData.entry}${stalenessNote}
-🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
-🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)
-📊 R:R   : 1:2${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep} (Nifty needs ${strikeData.type === 'CE' ? 'to reach' : 'to fall to'} this by expiry to break even)` : ''}${thetaNote}${nextWeekNote}${liquidityNote}${sizeNote}`;
+🎯 Target: ${lvTarget}
+🛑 SL    : ${lvSl}
+📊 R:R   : ${useCoachLv ? `1:${(cg.targetPct / Math.abs(cg.slPct)).toFixed(1)}` : '1:2'}${strikeData.slSource?.startsWith('fibo') ? '\n📐 SL basis: swing structure (Physics Law-3)' : ''}${strikeData.bep ? `\n⚖️ BEP    : ${strikeData.bep} (Nifty needs ${strikeData.type === 'CE' ? 'to reach' : 'to fall to'} this by expiry to break even)` : ''}${thetaNote}${nextWeekNote}${liquidityNote}${sizeNote}`;
 
         // ── AI Trade Coach block — entry-zone + staged profit plan ───────────
         const coach = strikeData.coach;
@@ -468,10 +473,15 @@ async function sendMTFAlert(state, strikeData = null, autoLogged = false) {
             ? `\n📏 Size note: ${strikeData.positionSizeNote}`
             : '';
 
+        // 14 Oct — Target/SL follow the Trade-Coach grid (what the Auto Journal uses); old structural -25%/+50% only as fallback
+        const cg2 = coach;
+        const useCoachLv2 = cg2 && cg2.slPremium != null && cg2.targetPremium != null;
+        const lvTarget2 = useCoachLv2 ? `₹${cg2.targetPremium} (+${cg2.targetPct}% | +₹${Math.round((cg2.targetPremium - strikeData.entry) * LOT)}/lot)` : `₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)`;
+        const lvSl2     = useCoachLv2 ? `₹${cg2.slPremium} (${cg2.slPct}% | -₹${Math.round((strikeData.entry - cg2.slPremium) * LOT)}/lot)` : `₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)`;
         levelsBlock = `💰 <b>${strikeData.strike} ${strikeData.type}</b>
 📥 Entry : ₹${strikeData.entry}${stalenessNote2}
-🎯 Target: ₹${strikeData.target} (+${tgtPct}% | +₹${tgtGain}/lot)
-🛑 SL    : ₹${strikeData.sl} (-${slPct}% | -₹${slLoss}/lot)${liquidityNote2}${sizeNote2}`;
+🎯 Target: ${lvTarget2}
+🛑 SL    : ${lvSl2}${liquidityNote2}${sizeNote2}`;
 
         // 10 Oct — percentages now come from the Coach grid actually in force (NIFTY QUICK_SCALP 10/15/25), not a hardcoded 20/30/40
         const coachBlock = coach
@@ -506,12 +516,16 @@ async function sendMTFAlert(state, strikeData = null, autoLogged = false) {
             ? `📊 Volume: ${state.volumeRVOL.rvol}x average${state.volumeRVOL.rvol >= 2.0 ? ' — spike ⚡' : ''}`
             : '';
 
+        // 14 Oct — ADX built from earlier days' candles (today's session still < 30 bars) is marked with * so a "trending" ADX on a range day is not misread
+        const adxTxt = tf => (tf?.adx != null) ? tf.adx.toFixed(1) + (tf.adxBasis === 'multi-day' ? '*' : '') : '--';
+        const adxMultiNote = [state.mtf.tf5m, state.mtf.tf15m, state.mtf.tf1h].some(tf => tf?.adxBasis === 'multi-day')
+            ? `\n* ADX includes earlier days (today has <30 candles) — can look "trending" on a range day` : '';
         detailsBlock = `\n🔍 <b>Why this fired</b>
-5m: ${state.mtf.tf5m?.signal || '--'} (ADX ${state.mtf.tf5m?.adx != null ? state.mtf.tf5m.adx.toFixed(1) : '--'}) · 15m: ${state.mtf.tf15m?.signal || '--'} (ADX ${state.mtf.tf15m?.adx != null ? state.mtf.tf15m.adx.toFixed(1) : '--'}) · 1H: ${state.mtf.tf1h?.signal || '--'} (ADX ${state.mtf.tf1h?.adx != null ? state.mtf.tf1h.adx.toFixed(1) : '--'})
+5m: ${state.mtf.tf5m?.signal || '--'} (ADX ${adxTxt(state.mtf.tf5m)}) · 15m: ${state.mtf.tf15m?.signal || '--'} (ADX ${adxTxt(state.mtf.tf15m)}) · 1H: ${state.mtf.tf1h?.signal || '--'} (ADX ${adxTxt(state.mtf.tf1h)})${adxMultiNote}
 ${pocLine}
 ${deltaLine}
 ${rvolLine}
-📊 R:R 1:2${strikeData.slSource?.startsWith('fibo') ? ' (SL basis: swing structure)' : ''}${strikeData.bep ? ` | BEP: ${strikeData.bep}` : ''}${strikeData.thetaHurdle ? ` | Θ ~₹${strikeData.thetaHurdle.thetaPerHr}/hr (${strikeData.thetaHurdle.ptsPerHr} pts/hr to cover)${strikeData.thetaHurdle.heavy ? ' ⚠️ theta-heavy' : ''}` : ''}
+📊 R:R 1:${useCoachLv2 ? (cg2.targetPct / Math.abs(cg2.slPct)).toFixed(1) : '2'}${!useCoachLv2 && strikeData.slSource?.startsWith('fibo') ? ' (SL basis: swing structure)' : ''}${strikeData.bep ? ` | BEP: ${strikeData.bep}` : ''}${strikeData.thetaHurdle ? ` | Θ ~₹${strikeData.thetaHurdle.thetaPerHr}/hr (${strikeData.thetaHurdle.ptsPerHr} pts/hr to cover)${strikeData.thetaHurdle.heavy ? ' ⚠️ theta-heavy' : ''}` : ''}
 ${lqLine}${state.momentumDecayWarning ? `\n${state.momentumDecayWarning}` : ''}`;
     }
 

@@ -442,6 +442,12 @@ function buildTradeCoach(strikeData, grid) {
             { atPct: g.halfBookAt,  premium: at(g.halfBookAt),  action: 'Book 50% of the position' },
             { atPct: g.fullExitAt,  premium: at(g.fullExitAt),  action: 'Exit remaining — full booking' },
         ],
+        // 14 Oct — the grid's own stop and final target, so the Telegram card can print the SAME levels the Auto Journal / Track Record
+        // actually use (QUICK_SCALP: SL -15%, exit +25%). Before this the card showed the structural SL/target (-25%/+50%) only.
+        slPct          : Number.isFinite(g.slPct) ? g.slPct : null,
+        slPremium      : Number.isFinite(g.slPct) ? at(g.slPct) : null,
+        targetPct      : g.fullExitAt,
+        targetPremium  : at(g.fullExitAt),
         gridName: g.name || 'STANDARD',
         riskPerLot: parseFloat(risk.toFixed(2)),
         note: 'Entry-zone guidance for a fresh trade. Once logged in the Journal, the R-multiple trailing-SL system takes over for actual exit alerts.',

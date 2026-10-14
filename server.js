@@ -46,7 +46,7 @@ const { processIndicators,
         calcMomentumBreakdown,
         computePOC, computeDelta }                    = require('./src/api/indicators');
 const { fetchMarketData }           = require('./src/api/marketData');
-const { analyzeMultiTimeframe }     = require('./src/api/multiTimeframe');
+const { analyzeMultiTimeframe, getAdxDebug } = require('./src/api/multiTimeframe');
 const { fetchGlobalCues, fetchIntradayBars } = require('./src/api/globalCues');
 const { fetchAdvanceDecline,
         injectAngelSession }        = require('./src/api/breadth');
@@ -1850,6 +1850,8 @@ function combineSignals(indicators) {
 
     // adxTooWeak: block when ADX < dynamic floor UNLESS short-TF breakout fires
     const adxTooWeak  = adxVal !== null && adxVal < adxFloor1m && !shortTfBreakout;
+    // 14 Oct — expose the REAL gate (VIX-dynamic floor + short-TF breakout waiver) so the ADX card shows the same open/closed the engine uses
+    marketState.adxGate = { floor: adxFloor1m, waived: !!(shortTfBreakout && adxVal !== null && adxVal < adxFloor1m) };
 
     if (shortTfBreakout && adxVal !== null && adxVal < adxFloor1m) {
         reasons.push(`⚡ Breakout exception: 5m ADX ${adx5m?.toFixed(1)} + 15m ADX ${adx15m?.toFixed(1)} strong — ADX lag waived`);
@@ -8973,10 +8975,10 @@ async function refreshPCR() {
         // nseData fetches FII/DII every 15 min on its own; we read it here.
         const fiiState = getFIIState();
         if (fiiState.fiiNet !== null) {
-            marketState.fii = { buy: fiiState.fiiBuy, sell: fiiState.fiiSell, net: fiiState.fiiNet, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
+            marketState.fii = { buy: fiiState.fiiBuy, sell: fiiState.fiiSell, net: fiiState.fiiNet, date: fiiState.date || null, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
         }
         if (fiiState.diiNet !== null) {
-            marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
+            marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet, date: fiiState.date || null, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
         }
         // BUG3 FIX: Refresh Smart Money Bias whenever OI/FII data updates (not only on price ticks)
         marketState.smartMoney = computeSmartMoneyBias(marketState);
@@ -9114,10 +9116,10 @@ function syncFIIToMarketState() {
     try {
         const fiiState = getFIIState();
         if (fiiState.fiiNet !== null) {
-            marketState.fii = { buy: fiiState.fiiBuy, sell: fiiState.fiiSell, net: fiiState.fiiNet, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
+            marketState.fii = { buy: fiiState.fiiBuy, sell: fiiState.fiiSell, net: fiiState.fiiNet, date: fiiState.date || null, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
         }
         if (fiiState.diiNet !== null) {
-            marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
+            marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet, date: fiiState.date || null, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
         }
         if (fiiState.fiiNet !== null || fiiState.diiNet !== null) {
             marketState.smartMoney = computeSmartMoneyBias(marketState);
@@ -11666,6 +11668,9 @@ async function updateSignalPerformance() {
         drawdownPct: r.entry > 0 ? Math.round(((r.low - r.entry) / r.entry) * 1000) / 10 : 0,
         entryConfidence: r.entryConfidence,
         currentConfidence: computeDecayedConfidence(r.entryConfidence, r.entryDelta, r.entryRSI, marketState.delta?.deltaPct, marketState.rsi, r.signal),
+        // 14 Oct — live premium + % vs entry, so the UI can show "now" next to the peak (gainPct is the PEAK, not the current P&L)
+        nowPrem: r.lastLive ?? null,
+        nowPct: (r.entry > 0 && r.lastLive) ? Math.round(((r.lastLive - r.entry) / r.entry) * 1000) / 10 : null,
         elapsedMin: Math.round((Date.now() - r.startTs) / 60000),
         source: r.source ?? null,        // 4 Oct: which engine fired this ('main' | 'mtf') — used by the Track Record engine card
         respRatio: r.respRatio ?? null,   // Delta Response Check: actual ÷ expected premium gain (null until enough Nifty movement)
@@ -13176,6 +13181,31 @@ app.get('/api/exit-rule-study', studyGuard, async (req, res) => {
 // Read-only research. /api/hour-study?instrument=NIFTY&source=&days=60&decluster=30&expiry=all|only|exclude&slip=1&charge=0.07&brokerage=40&qty=130&minPrem=10&minN=20&format=text
 // Trade-Coach simulated results (signal_outcomes.coach_result) by the IST hour the signal fired, AFTER costs, with an older/newer-half check.
 // Database only (no external API). Nothing here feeds signals, gates or alerts. See src/utils/hourStudy.js.
+// 14 Oct — read-only ADX diagnostics: the candles the MTF engine used last cycle + ADX recomputed three ways, to compare with a chart (e.g. TradingView ADX 14,14).
+// Add &format=text for a copy-paste friendly view. Nothing here feeds a signal, gate or alert.
+app.get('/api/mtf-adx-debug', requireToken, (req, res) => {
+    const d = getAdxDebug();
+    if (!d) return res.json({ ok: false, note: 'No MTF cycle has run yet since this deploy — wait ~2 minutes during market hours and retry.' });
+    if (String(req.query.format || '') !== 'text') return res.json({ ok: true, ...d, oneMinAdx: marketState.adx || null });
+    const L = [];
+    L.push('MTF ADX DEBUG  (engine snapshot at ' + d.at + ')');
+    // 1-minute ADX the main engine shows right now (compare with a 1m chart's ADX 14,14 taken at the same minute)
+    L.push('1m ADX now (engine): ' + (marketState.adx && marketState.adx.adx != null ? `${marketState.adx.adx} (DI+ ${marketState.adx.diPlus} / DI- ${marketState.adx.diMinus})` : 'not ready') + '  | server time ' + new Date().toISOString());
+    for (const [tf, v] of Object.entries(d.tfs)) {
+        L.push('');
+        L.push(`[${tf}]  bars ${v.bars} | today's bars ${v.todayBars} | time-gaps ${v.gapsVsExpectedStep} | flat bars ${v.flatBars}`);
+        L.push(`  ADX used by engine ${v.adxUsedByEngine} (${v.adxBasis}) | all bars ${v.adxAllBars} | today only ${v.adxTodayOnly} | last 60 bars ${v.adxLast60Bars}`);
+        if (tf === '5m') {
+            L.push('  last bars (IST time  O  H  L  C):');
+            for (const b of v.lastBars) {
+                const t = b.ts ? new Date(b.ts + 5.5 * 3600000).toISOString().slice(5, 16).replace('T', ' ') : '?';
+                L.push(`   ${t}  ${b.o}  ${b.h}  ${b.l}  ${b.c}`);
+            }
+        }
+    }
+    res.type('text/plain').send(L.join('\n'));
+});
+
 app.get('/api/hour-study', studyGuard, async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
