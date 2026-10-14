@@ -8709,7 +8709,8 @@ function renderVolumeScannerUI(d) {
   const statusEl = document.getElementById('scanner-status');
   if (statusEl) {
     const s = d.status || {};
-    statusEl.textContent = s.baselineDate ? ('Baseline: ' + s.baselineDate + ' · ' + s.stocksTracked + ' tracked')
+    statusEl.textContent = s.disabled ? 'Scanner band hai (API bachane ke liye)'
+                          : s.baselineDate ? ('Baseline: ' + s.baselineDate + ' · ' + s.stocksTracked + ' tracked')
                           : s.baselineRunning ? 'Computing baselines...' : 'Waiting for baseline...';
   }
   const tbody = document.getElementById('scanner-tbody');
@@ -8720,6 +8721,10 @@ function renderVolumeScannerUI(d) {
   try { if (window.ScannerPulse) rows = window.ScannerPulse.apply(d); } catch (e) { console.warn('[ScannerPulse]', e.message); }
   if (!rows.length && allRows.length) {
     tbody.innerHTML = '<tr><td colspan="5" style="padding:16px 4px;text-align:center;color:var(--dim);">Is filter mein koi stock nahi — upar wale tile ko dobara tap karke filter hatao</td></tr>';
+    return;
+  }
+  if (!rows.length && d.status && d.status.disabled) {
+    tbody.innerHTML = '<tr><td colspan="5" style="padding:16px 4px;text-align:center;color:var(--dim);">Stock scanner abhi band hai (Fyers/Angel API bachane ke liye). Chalu karne ke liye Railway Variable <b>STOCK_SCANNER_ENABLED=true</b> set karo.</td></tr>';
     return;
   }
   if (!rows.length) {

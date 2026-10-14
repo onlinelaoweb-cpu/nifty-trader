@@ -41,6 +41,19 @@
 'use strict';
 const axios = require('axios');
 const { setAtmIv } = require('../utils/ivSource');
+
+// 15 Oct — READ-ONLY Fyers call counter (see utils/fyersUsage.js). The interceptors only observe: they never change, delay or retry a request,
+// and any error inside them is swallowed so a Fyers call can never fail because of the counter.
+const fyersUsage = require('../utils/fyersUsage').createFyersUsage();
+try {
+    axios.interceptors.request.use(cfg => { try { fyersUsage.record(cfg && cfg.url); } catch (e) { /* ignore */ } return cfg; });
+    axios.interceptors.response.use(r => r, err => {
+        try { if (err && err.response && err.response.status === 429) fyersUsage.record429(err.config && err.config.url); } catch (e) { /* ignore */ }
+        return Promise.reject(err);
+    });
+} catch (e) { /* counter is optional */ }
+function getFyersUsage() { return fyersUsage.snapshot(); }
+function getFyersUsageLine() { return fyersUsage.summaryLine(); }
 let _telegram = null;
 try { _telegram = require('./telegram'); } catch (e) { /* optional — nseData can run without it in tests */ }
 
@@ -2748,6 +2761,8 @@ module.exports = {
     probeFyersGreeks,
     getFyersGreeksProbe,
     refreshFyersAtmIv,
+    getFyersUsage,        // 15 Oct — read-only Fyers call counter
+    getFyersUsageLine,
 
     // Snapshots (for /debug routes)
     getPCRState,

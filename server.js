@@ -93,6 +93,7 @@ const {
     getCurrentFyersFutSymbol,                     // correct NSE:NIFTY{YY}{MMM}FUT symbol (NIFTY-I is invalid on Fyers)
     fetchFyersIntradayHistory,                     // 20 Sep: BankNifty candles for Index Confirmation trigger
     probeFyersGreeks, getFyersGreeksProbe, refreshFyersAtmIv,         // 3 Oct: read-only experiment — does Fyers' option chain return Greeks?
+    getFyersUsage, getFyersUsageLine,                                 // 15 Oct: read-only Fyers call counter
 } = require('./src/api/nseData');
 // 25 Sep — Delta Exchange India client, for the new Bitcoin-options feature.
 const { fetchDeltaTicker, getNearestBTCExpiry, fetchDeltaOptionChain, fetchDeltaHistoricalCandles } = require('./src/api/deltaExchange');
@@ -13183,6 +13184,12 @@ app.get('/api/exit-rule-study', studyGuard, async (req, res) => {
 // Database only (no external API). Nothing here feeds signals, gates or alerts. See src/utils/hourStudy.js.
 // 14 Oct — read-only ADX diagnostics: the candles the MTF engine used last cycle + ADX recomputed three ways, to compare with a chart (e.g. TradingView ADX 14,14).
 // Add &format=text for a copy-paste friendly view. Nothing here feeds a signal, gate or alert.
+// 15 Oct — read-only Fyers API usage (what this app sent today vs Fyers Standard Data-API limits 5/sec, 50/min, 5,000/day).
+app.get('/api/fyers-usage', requireToken, (req, res) => {
+    try { res.json({ ok: true, ...getFyersUsage() }); }
+    catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 app.get('/api/mtf-adx-debug', requireToken, (req, res) => {
     const d = getAdxDebug();
     if (!d) return res.json({ ok: false, note: 'No MTF cycle has run yet since this deploy — wait ~2 minutes during market hours and retry.' });
@@ -14297,7 +14304,7 @@ app.get('/api/volume-scanner', (req, res) => {
     const minRatio = parseFloat(req.query.minRatio) || 2;
     const sortBy   = req.query.sortBy === 'burst' ? 'burst' : 'ratio';
     res.json({
-        status : getVolumeScannerStatus(),
+        status : { ...getVolumeScannerStatus(), disabled: globalThis.__stockScannerEnabled === false },
         results: getVolumeScannerSnapshot(minRatio, sortBy),
     });
 });
@@ -15904,13 +15911,21 @@ function startPollingIntervals() {
     // deploy/restart left the Scanner tab empty for 5+ minutes with nothing
     // populated yet. Now runs once immediately (still after Angel login has
     // had a moment to settle), then every 5 min after that.
+    // 15 Oct — the stock scanner (and the stock momentum / 52w-reversal triggers that read it) is OFF unless Railway variable
+    // STOCK_SCANNER_ENABLED=true. Reason: the user does not trade stocks and wants to save Fyers/Angel API calls (Fyers Standard Data-API
+    // limit is now 5,000/day, 50/min). Turning it back on = set the variable to true and redeploy. Nothing else reads the scanner.
+    const STOCK_SCANNER_ENABLED = String(process.env.STOCK_SCANNER_ENABLED || '').trim().toLowerCase() === 'true';
+    globalThis.__stockScannerEnabled = STOCK_SCANNER_ENABLED;
+    console.log(STOCK_SCANNER_ENABLED ? '🔥 [VolScan] stock scanner ENABLED (STOCK_SCANNER_ENABLED=true)' : '🔥 [VolScan] stock scanner DISABLED — set Railway variable STOCK_SCANNER_ENABLED=true to turn it on');
+    // 15 Oct — Fyers usage summary line in the log, every 30 min (so history survives restarts) — log only, no behaviour.
+    setTimeout(() => setInterval(() => { try { if (isNSEMarketDay() && isMarketOpen()) console.log(getFyersUsageLine()); } catch (e) { /* ignore */ } }, 30*60*1000), 60*1000);
     const volBaselineTick = async () => {
         try {
             const stocks = await getFnOStockList();
             if (stocks.length) await refreshVolumeBaselines(stocks);
         } catch (e) { console.warn('[VolScan] Baseline interval error:', e.message); }
     };
-    setTimeout(() => { volBaselineTick(); setInterval(volBaselineTick, 5*60*1000); }, 15*1000);
+    if (STOCK_SCANNER_ENABLED) setTimeout(() => { volBaselineTick(); setInterval(volBaselineTick, 5*60*1000); }, 15*1000);
     const volLiveTick = async () => {
         if (!isMarketOpen()) return;
         try {
@@ -15950,7 +15965,7 @@ function startPollingIntervals() {
             }
         } catch (e) { console.warn('[VolScan] Live volume interval error:', e.message); }
     };
-    setTimeout(() => { volLiveTick(); setInterval(volLiveTick, 90*1000); }, 25*1000);
+    if (STOCK_SCANNER_ENABLED) setTimeout(() => { volLiveTick(); setInterval(volLiveTick, 90*1000); }, 25*1000);
     // Flush dailySignalCounts to DB only when dirty, at most every 30s — bounds
     // DB writes regardless of tick frequency (mtfWeak alone can increment
     // thousands of times/day) while keeping restart data-loss to under 30s.
