@@ -1865,6 +1865,50 @@ async function fetchFyersQuotesBulk(symbols) {
     }
 }
 
+// ── Fyers multi-symbol quote with full OHLC (15 Oct) — ONE /data/quotes call for several symbols, so refreshFyersVolume
+// (futures volume + index OHLC) costs 1 API call instead of 2. Returns { 'NSE:SYMBOL': {ltp,volume,open,high,low,close} } for every
+// symbol Fyers answered; a symbol that is missing is simply absent (the caller falls back to the single-symbol call for it).
+// Same parsing as fetchFyersQuote. Never throws.
+async function fetchFyersQuotesMulti(symbols) {
+    const out = {};
+    if (!FYERS_ACCESS_TOKEN || !FYERS_APP_ID) return out;
+    if (!Array.isArray(symbols) || symbols.length === 0) return out;
+    try {
+        const res = await axios.get(
+            'https://api-t1.fyers.in/data/quotes',
+            {
+                params: { symbols: symbols.join(',') },
+                headers: {
+                    'Authorization': `${FYERS_APP_ID}:${FYERS_ACCESS_TOKEN}`,
+                    'Content-Type' : 'application/json',
+                },
+                timeout: 8_000,
+            }
+        );
+        const d = res.data;
+        if (typeof d === 'string' || !d || d.s !== 'ok' || !Array.isArray(d.d)) {
+            console.warn(`[Fyers Multi Quote] Bad response: s=${d?.s} | code=${d?.code}`);
+            return out;
+        }
+        for (const item of d.d) {
+            const v = item && item.v;
+            if (!item || !item.n || !v || !v.lp) continue;
+            out[item.n] = {
+                ltp    : parseFloat(v.lp)               || 0,
+                volume : parseInt(v.volume, 10)         || 0,
+                open   : parseFloat(v.open_price)       || 0,
+                high   : parseFloat(v.high_price)       || 0,
+                low    : parseFloat(v.low_price)        || 0,
+                close  : parseFloat(v.prev_close_price) || 0,
+            };
+        }
+        return out;
+    } catch (e) {
+        console.warn(`[Fyers Multi Quote] error: ${e.response?.status || e.message}`);
+        return out;
+    }
+}
+
 // ── Fyers historical daily volume (6 Sep) — volume-scanner baseline
 // fallback for when Angel's historical API is down. Takes a Fyers-format
 // symbol, returns an array of daily volumes (oldest→newest), same shape as
@@ -2750,6 +2794,7 @@ module.exports = {
     // Real volume/OHLC for the index (Angel WS Mode 2 sends 0 for index tokens)
     fetchFyersQuote,
     fetchFyersQuotesBulk,
+    fetchFyersQuotesMulti,
     fetchFyersStockHistory,
     fetchFyersIntradayHistory,
     getCurrentFyersFutSymbol,

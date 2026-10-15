@@ -79,6 +79,22 @@ assert.doesNotThrow(() => WS.compute({ signal: 'WAIT', entryWindow: ewTrade, rea
 assert.doesNotThrow(() => WS.compute({ signal: 'WAIT', entryWindow: ewTrade, qualityGate: { adxTrend: null } }));
 assert.strictEqual(WS.compute({ signal: 'WAIT', entryWindow: ewTrade, qualityGate: { adxTrend: null } }).gates.length, 1, 'unknown (null) gates are not drawn; time gate still is');
 
+// 15 Oct — momentum-gate-blocked wording (the 11:55 screenshot: bullish score, last candle a Doji)
+r = WS.compute(base({ reason: ['Mixed signals', '⏳ Bullish score but momentum gate blocked (last candle not bullish)'] }));
+assert.strictEqual(r.tone, 'soon');
+assert.ok(/upar ki taraf/.test(r.why) && /pichhli 1-minute candle hari/.test(r.why), r.why);
+r = WS.compute(base({ reason: ['⏳ Bearish score but momentum gate blocked (last candle not bearish, price not below VWAP, EMA9 ≥ EMA21)'] }));
+assert.ok(/neeche ki taraf/.test(r.why) && /VWAP ke neeche nahi/.test(r.why) && /EMA21 ke neeche nahi/.test(r.why), r.why);
+
+// 15 Oct — real vote split replaces the fixed 30% when the server sends it
+r = WS.compute(base({ confidence: 30, voteTally: { bull: 7, bear: 5, bullPct: 58, needPct: 65 } }));
+assert.ok(r.vote && r.vote.lead === 'BULL' && r.vote.leadPct === 58 && r.vote.bull === 7 && r.vote.bear === 5 && r.vote.need === 65);
+r = WS.compute(base({ voteTally: { bull: 2, bear: 6, bullPct: 25, needPct: 65 } }));
+assert.ok(r.vote.lead === 'BEAR' && r.vote.leadPct === 75);
+assert.strictEqual(WS.compute(base()).vote, null, 'no tally -> old bar');
+assert.strictEqual(WS.compute(base({ voteTally: { bull: 0, bear: 0, bullPct: null } })).vote, null);
+assert.doesNotThrow(() => WS.compute(base({ voteTally: 'junk' })));
+
 // render() is safe in Node (no DOM)
 assert.doesNotThrow(() => WS.render(base()));
 

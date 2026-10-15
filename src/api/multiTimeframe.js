@@ -73,6 +73,22 @@ function resample(candles1m, periodMins) {
     return out;
 }
 
+// ── Keep only 09:15–15:30 IST 1m bars (drops pre-open junk) ──────────────────
+// Returns the input unchanged if it is not an array, any bar lacks a usable timestamp, or fewer than 15 bars survive.
+function filterSessionBars1m(candles1m) {
+    if (!Array.isArray(candles1m) || candles1m.length === 0) return candles1m;
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const kept = [];
+    for (const c of candles1m) {
+        const ts = c && (c.ts || c.time);
+        if (!ts || !isFinite(ts)) return candles1m;           // cannot judge -> old behaviour
+        const d = new Date(ts + IST_OFFSET_MS);
+        const m = d.getUTCHours() * 60 + d.getUTCMinutes();
+        if (m >= 555 && m <= 930) kept.push(c);
+    }
+    return kept.length >= 15 ? kept : candles1m;
+}
+
 // ── Filter to today's IST session ────────────────────────────────────────────
 function todaySessionCandles(candles) {
     const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -420,7 +436,12 @@ async function analyzeMultiTimeframe(vix = null) {
     //   5m  → up to 30 bars  (was 12)
     //   15m → up to 10 bars  (was  4)
     //   1h  → up to 2 bars   (was  1)
-    const mem1m = getCandleHistory(true);
+    // 15 Oct 2026 — ADX fix: the raw buffer also holds pre-open junk 1m bars (08:55–09:10, e.g. a bogus 09:00 bar with
+    // low 22343.6) because indicators.addTick has no time gating. Those inflated the 5m ADX (app ~35 vs TradingView ~21–25).
+    // Keep only 09:15–15:30 IST bars here. Safety: if a bar has no timestamp, or the filter leaves <15 bars, use the
+    // unfiltered buffer exactly as before. Only this function's input changes; indicators.js and all rules are untouched.
+    const rawMem1m = getCandleHistory(true);
+    const mem1m = filterSessionBars1m(rawMem1m);
 
     let c5m, c15m, c1h;
 
@@ -726,4 +747,4 @@ function _captureAdxDebug(candlesByTf, tfByLabel) {
 }
 function getAdxDebug() { return _adxDebug; }
 
-module.exports = { analyzeMultiTimeframe, getAdxDebug };
+module.exports = { analyzeMultiTimeframe, getAdxDebug, filterSessionBars1m };

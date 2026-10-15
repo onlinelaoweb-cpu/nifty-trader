@@ -19,6 +19,20 @@
 
   // Each rule: test on the engine's raw reason text -> plain-language why / unlock. First match wins (reasons are checked in priority order).
   var RULES = [
+    // 15 Oct — score already leans one way but the last-candle / VWAP / EMA momentum gate says "not yet" (indicators.js)
+    { re: /(Bullish|Bearish) score but momentum gate blocked \(([^)]*)\)/i, f: function (m) {
+        var up = /bullish/i.test(m[1]);
+        var parts = String(m[2]).split(',').map(function (p) { return p.trim(); }).filter(Boolean).map(function (p) {
+          if (/last candle not bullish/i.test(p)) return 'pichhli 1-minute candle hari (mazboot body wali) nahi hai';
+          if (/last candle not bearish/i.test(p)) return 'pichhli 1-minute candle laal (mazboot body wali) nahi hai';
+          if (/not above VWAP/i.test(p)) return 'bhav VWAP ke upar nahi hai';
+          if (/not below VWAP/i.test(p)) return 'bhav VWAP ke neeche nahi hai';
+          if (/EMA9\s*[≤<]=?\s*EMA21/i.test(p)) return 'EMA9 abhi EMA21 ke upar nahi hai';
+          if (/EMA9\s*[≥>]=?\s*EMA21/i.test(p)) return 'EMA9 abhi EMA21 ke neeche nahi hai';
+          return p;
+        });
+        return { tone: 'soon', why: 'Score ' + (up ? 'upar' : 'neeche') + ' ki taraf hai, par abhi ek cheez saath nahi de rahi: ' + parts.join('; ') + '.',
+                 unlock: 'Jaise hi ye theek hoga (aksar agli 1–2 candle mein) signal ban sakta hai.' }; } },
     { re: /Trend Lock:.*?(\d+)\s*min left/i, f: function (m) { return { tone: 'soon', why: 'Direction palti hai, par abhi pakki nahi hui.', unlock: 'Lagbhag ' + m[1] + ' minute mein pata chalega ki palat sachchi hai ya nahi.' }; } },
     { re: /Trend Lock/i, f: function () { return { tone: 'soon', why: 'Direction palti hai, par abhi pakki nahi hui.', unlock: 'Kuch minute mein pata chalega ki palat sachchi hai ya nahi.' }; } },
     { re: /Signal confirming/i, f: function () { return { tone: 'soon', why: 'Signal ban raha hai, bas doosri baar confirm hona baaki hai.', unlock: 'Agle 1–2 refresh mein (kuch second).' }; } },
@@ -88,9 +102,19 @@
     g('vix', 'VIX', qg.vixSafe);
     if (ew.safe === true || ew.safe === false) gates.push({ k: 'time', label: 'Time', ok: ew.safe === true });
 
+    // Real vote split from the engine's own tally (server.js marketState.voteTally). The old "bharosa" for WAIT is a fixed 30, so when
+    // the split is available it is shown instead. Display only.
+    var vote = null, vt = s.voteTally;
+    if (vt && num(vt.bull) !== null && num(vt.bear) !== null && num(vt.bullPct) !== null) {
+      var bp = Math.max(0, Math.min(100, Math.round(Number(vt.bullPct))));
+      var up = bp >= 50;
+      vote = { bull: Number(vt.bull), bear: Number(vt.bear), bullPct: bp, bearPct: 100 - bp, lead: up ? 'BULL' : 'BEAR',
+               leadPct: up ? bp : 100 - bp, need: num(vt.needPct) !== null ? Number(vt.needPct) : 65 };
+    }
+
     return {
       show: true, tone: tone, why: why, unlock: unlock, conf: Math.round(conf), need: NEED,
-      confPct: Math.max(0, Math.min(100, conf)), gates: gates, raw: raw, timeNote: (pick || hardLeft) && tn ? tn.why : null
+      confPct: Math.max(0, Math.min(100, conf)), gates: gates, raw: raw, timeNote: (pick || hardLeft) && tn ? tn.why : null, vote: vote
     };
   }
 
@@ -123,8 +147,11 @@
       '<div class="ws-row"><b>KYUN RUKE HAIN</b>' + esc(r.why) + '</div>' +
       '<div class="ws-row"><b>KAB BADLEGA</b>' + esc(r.unlock) + '</div>' +
       (chips ? '<div class="ws-chips">' + chips + '</div>' : '') +
-      '<div class="ws-bar"><i style="width:' + r.confPct + '%"></i><u style="left:' + r.need + '%"></u></div>' +
-      '<div class="ws-conf">Bharosa ' + r.conf + '% · signal ke liye ' + r.need + '% chahiye</div>' +
+      (r.vote
+        ? '<div class="ws-bar"><i style="width:' + r.vote.leadPct + '%"></i><u style="left:' + r.vote.need + '%"></u></div>' +
+          '<div class="ws-conf">' + (r.vote.lead === 'BULL' ? 'Bull' : 'Bear') + ' ' + r.vote.leadPct + '% aage · Bull ' + r.vote.bull + ' vote, Bear ' + r.vote.bear + ' vote · signal ke liye ek taraf ' + r.vote.need + '% chahiye</div>'
+        : '<div class="ws-bar"><i style="width:' + r.confPct + '%"></i><u style="left:' + r.need + '%"></u></div>' +
+          '<div class="ws-conf">Bharosa ' + r.conf + '% · signal ke liye ' + r.need + '% chahiye</div>') +
       (r.timeNote ? '<div class="ws-note">⏱ ' + esc(r.timeNote) + '</div>' : '') +
       '</div>';
   }

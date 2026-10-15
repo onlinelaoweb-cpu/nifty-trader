@@ -38,6 +38,13 @@ assert.ok(/Jhukav upar/.test(r.verdict));
 // RSI overbought chip, mixed votes, ⛔ blocked reason
 r = CP.compute('bitcoin', { session: 'BITCOIN', price: 100, indicators: { rsi: 75, adx: 25, ema9: 101, ema21: 100 }, pcr: { pcr: 0.5 }, signal: { signal: 'WAIT', reasons: ['⛔ RSI 75 overbought (need <70) — WAIT'] } });
 assert.ok(/Mixed/.test(r.verdict)); assert.ok(r.chips.some(c => /overbought/i.test(c.t))); assert.ok(/RSI 75/.test(T(r, 'sig').full));
+// 15 Oct — Bitcoin window overlaps Crude's session: session says CRUDEOIL but windowOpen=true -> LIVE, not BAND
+r = CP.compute('bitcoin', { session: 'CRUDEOIL', windowOpen: true, price: 100, indicators: { rsi: 50, adx: 14, ema9: 100, ema21: 100 }, signal: { signal: 'WAIT', reasons: [] } });
+assert.strictEqual(r.count, 'LIVE'); assert.ok(!/aakhri data/.test(r.verdict)); assert.strictEqual(r.live, true);
+r = CP.compute('bitcoin', { session: 'NIFTY', windowOpen: false, price: 100, indicators: { rsi: 50, adx: 14, ema9: 100, ema21: 100 }, signal: { signal: 'WAIT', reasons: [] } });
+assert.strictEqual(r.count, 'BAND'); assert.ok(/aakhri data/.test(r.verdict));
+r = CP.compute('crude', { session: 'NIFTY', windowOpen: true, price: 100, indicators: {}, signal: {} });
+assert.strictEqual(r.count, 'BAND', 'crude ignores windowOpen');
 // garbage / empty never throws
 for (const x of [null, {}, { indicators: null, signal: null }, { session: 'X', price: 'abc' }]) { const q = CP.compute('crude', x); assert.strictEqual(q.tiles.length, 7); assert.ok(q.verdict); }
 assert.ok(CP.compute('nope', {}).tiles.length === 7);

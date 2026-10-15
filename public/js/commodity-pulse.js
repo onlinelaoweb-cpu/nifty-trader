@@ -26,6 +26,9 @@
     var tiles = [], chips = [], votes = { bull: 0, bear: 0 };
     var tile = function (id, label, cls, val, full) { tiles.push({ id: id, label: label, cls: cls, val: val, full: full }); };
     var price = n(d.price), isLive = d.session === K.live;
+    // 15 Oct: Bitcoin's own window (16:00-08:50) overlaps Crude's evening session, and getActiveSession() returns only ONE
+    // session (Crude wins 17:30-23:55), so Bitcoin showed BAND while live. /api/bitcoin-live already sends windowOpen.
+    if (kind === 'bitcoin' && typeof d.windowOpen === 'boolean') isLive = d.windowOpen;
 
     // TREND: EMA9 vs EMA21 gap
     var e9 = n(ind.ema9), e21 = n(ind.ema21), gap = null, trend = null;

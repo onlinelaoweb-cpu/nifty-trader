@@ -85,6 +85,7 @@ const {
     injectAngelSession: injectAngelSessionNSE,   // nseData Angel session for PCR
     triggerInitialPCR,                            // fire first PCR after Angel login
     fetchFyersQuote,                              // real volume/OHLC for index (Angel WS sends 0)
+    fetchFyersQuotesMulti,                        // 15 Oct: futures + index in ONE call (API-limit saver)
     getCrudeFyersSymbol,                           // 23 Sep: crude's own Fyers futures symbol, for prevClose fetch
     getCrudeOilFutureToken,                       // Phase 2a: MCX CRUDEOIL futures token lookup
     fetchCrudePCR,                                 // Phase 5.2: independent crude PCR confirmation
@@ -1792,6 +1793,8 @@ function combineSignals(indicators) {
 
     // Raw directional intention from the vote tally
     const total = bull + bear;
+    // 15 Oct — DISPLAY ONLY: expose the real vote split so the WAIT box can show it instead of the fixed "30%". No rule reads this.
+    marketState.voteTally = { bull, bear, bullPct: total > 0 ? Math.round((bull / total) * 100) : null, needPct: 65 };
     let rawSignal = 'WAIT', rawConfidence = 0;
     if (total > 0) {
         const pct = (bull / total) * 100;
@@ -9018,7 +9021,10 @@ async function refreshFyersVolume() {
         // even though O/H/L/LTP looked fine (those came from the index fallback).
         // Fixed: use the real current-month contract symbol, e.g. NSE:NIFTY26JULFUT.
         const futSymbol = getCurrentFyersFutSymbol();
-        let futQ = await fetchFyersQuote(futSymbol);
+        // 15 Oct — API-limit saver: futures + index quotes in ONE /data/quotes call (was 2). If either symbol is missing from the
+        // combined answer, that symbol falls back to its own single call exactly as before, so behaviour is unchanged on a miss.
+        const multiQ = await fetchFyersQuotesMulti([futSymbol, 'NSE:NIFTY50-INDEX']);
+        let futQ = multiQ[futSymbol] || await fetchFyersQuote(futSymbol);
 
         // FIX (4 Sep): O/H/L/LTP must come from the SPOT index, not futures.
         // Futures carries a basis premium over spot (~120pt seen live on 4 Sep —
@@ -9029,7 +9035,7 @@ async function refreshFyersVolume() {
         // series there was corrupting the levels by however wide the basis ran
         // that day. Volume has no spot equivalent (index reports 0), so it still
         // comes from futures — only O/H/L/LTP switch to the index quote.
-        let idxQ = await fetchFyersQuote('NSE:NIFTY50-INDEX');
+        let idxQ = multiQ['NSE:NIFTY50-INDEX'] || await fetchFyersQuote('NSE:NIFTY50-INDEX');
 
         if ((!futQ || !futQ.ltp) && (!idxQ || !idxQ.ltp)) {
             console.warn('[Fyers Volume] No quote returned from futures or index — token may need refresh');
@@ -15900,7 +15906,7 @@ function startPollingIntervals() {
             }
         } catch (e) { console.warn('[Crude Signal] tracking interval error:', e.message); }
     }, 60*1000), 40*1000);
-    setTimeout(() => setInterval(refreshFyersVolume,      15*1000), 20*1000);   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
+    setTimeout(() => setInterval(refreshFyersVolume,      30*1000), 20*1000);   // 15 Oct: 15s -> 30s (Fyers Data-API 5,000/day cap)   // real volume/OHLC via Fyers (Angel WS sends 0 for index)
     setTimeout(() => setInterval(computePremarketGap,     60*1000), 20*1000);   // opening gap vs prev close, via Fyers (see combineSignals note)
     // Volume scanner (Phase 2, 6 Sep) — baseline refresh is self-guarded to
     // run once/day (see _baselineDate check inside).

@@ -3,7 +3,7 @@
 // never as a public static file (the Security gate names real gaps in this app). Text mirrors the Claude Doc.
 // `backtick` spans are rendered as <code>. Not legal advice; Gate 2 items must be confirmed with Fyers / SEBI / a lawyer.
 module.exports = {
-  updated: '2026-10-14',
+  updated: '2026-10-15',
   intro: 'Abhi live trading ka samay nahi hai: paanch gates mein se ek bhi poora nahi hua. App paper trading par hi rahega jab tak paanchon tick na ho jaayein. Gates ek ke baad ek hain, koi skip nahi. Ek bhi fail ho toh wapas paper par.',
   disclaimer: 'Main vakeel nahi hoon aur SEBI ke niyam badalte rehte hain. Gate 2 ka har item apne broker (Fyers) ki compliance page ya SEBI/NSE ke circular se khud match karna.',
   gates: [
@@ -22,7 +22,14 @@ module.exports = {
       'Data: 13 Oct tak ki leads (signal_outcomes, 30-min declustered, costs ke saath). 14 Oct is sawal ki wajah hai, isliye test mein nahi; wo naye dino ke saath alag confirmation set mein jaayega.',
       'Cut: fire ke waqt range probability 70% ya zyada (market_snapshot_log se) = range-day, baaki = trend-day. Ye threshold ab fix hai, data dekh ke nahi badlega.',
       'Pass tabhi: har bucket mein kam se kam 20 declustered leads, range-day ka average net return trend-day se kam se kam 5 percentage points kharab, aur dono split-halves mein wahi disha. Warna "koi saboot nahi", koi rule nahi badlega.',
-      'Pass hua toh bhi sirf agle 10 trading din ke liye paper mein filter test hoga, live rule nahi. ADX, last-hour efficiency aur trend probability wale cut exploratory hain, unse koi rule nahi.' ] },
+      'Pass hua toh bhi sirf agle 10 trading din ke liye paper mein filter test hoga, live rule nahi. ADX, last-hour efficiency aur trend probability wale cut exploratory hain, unse koi rule nahi.',
+      '15 Oct note (ADX data): 12–15 Oct ko 5m ADX pre-open junk bars (08:55–09:10) se phoola hua tha (15 Oct 09:23: app ~35, TradingView ~21–25). Fix (sirf 09:15–15:30 ke bars) deploy ke din se lagu; deploy ki tareekh yahan likho: ____. Us tareekh se pehle ke MTF/Brahmastra entries ADX ke maamle mein confounded maano.',
+      '15 Oct ke observation se aaye EXPLORATORY sawal (primary nahi, koi rule inse nahi badlega, sirf agle data par confirmation ke liye): (a) Brahmastra: trend-din vs range-din alag result; (b) Brahmastra: 15m trend ke saath vs khilaf wale trades alag (15 Oct 11:21 ka PE trend ke khilaf SL gaya); (c) trend-din ke andar consolidation (ADX < 15) mein aaye entries alag.',
+      'Ye observation 15 Oct ke sirf 4 Brahmastra trades par hai, isliye hypothesis hai, saboot nahi. Confirmation sirf 16 Oct ke baad ke naye dino ke data se, aur multiple-testing ka dhyan rakho (kai cut = kai mauke galat jeet dikhne ke).',
+      'MTF ka 60-minute same-direction cooldown: 15 Oct ko leads 09:23, 10:23, 11:23 par aayi, yaani cooldown ke gap par. Sirf dekhna ki cooldown ne trend-din mein kitni leads roki; cooldown badalna 18 Oct ke baad hi, data ke saath.',
+      'Display-only badlav (WAIT box mein asli bull/bear vote split, MTF ADX fix) rules nahi badalte. Fir bhi inki deploy tareekh likh lo taaki audit mein saaf rahe.',
+      '15 Oct CRUDE observation (n=2, sirf hypothesis): 18:40 par 9100 CE 47.3 se ~56.3 par trail se nikla, jabki wahi option baad mein ~200 tak gaya (crude ~9,295); 21:30 ka 9250 CE @59 late entry par SL 47 (-20%) laga. Isse aaye EXPLORATORY sawal, primary nahi, koi rule inse nahi badlega: (a) crude options par 10 percentage-point trailing stop (premium points nahi, P&L % points) kitni jaldi toot-ta hai, crude ke 15-min swings (20-50 pts) ke muqable, aur kitne runners kaat deta hai; (b) auto-mute hue crude signals (Sustained Drift, Fast Momentum, Opt RSI Diverge; Trade-Coach average -1.2% se -1.9%) trend din mein kya karte (data signal_outcomes mein "still tracked" hai).',
+      'Crude ke in sawalon ka jawab sirf 16 Oct ke baad ke naye dino se confirm hoga, 15 Oct ke 2 trades se nahi. Multiple-testing ka dhyan: kai cut = galat jeet dikhne ke zyada mauke. Crude lot size (100) abhi unconfirmed hai, uski bhi pushti karo.' ] },
     { id: 'g2', title: 'Gate 2 · SEBI aur broker', note: 'Static IP ka niyam Railway ke saath sabse bada practical roadblock hai. Points ek broker-blog se hain, SEBI ke asli circular se nahi; har item broker se confirm karo.', items: [
       'Fyers se confirm: retail API algo ke niyam (static IP, OAuth + 2FA, roz session band, algo-ID tagging) tumhare account par kaise lagu hain.',
       'Static IP: Railway par static outbound IP milta hai ya nahi, aur kharcha kitna. Extra kharcha tay karne se pehle tumhari approval.',
