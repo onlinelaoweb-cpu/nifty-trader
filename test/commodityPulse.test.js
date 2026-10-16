@@ -48,5 +48,24 @@ assert.strictEqual(r.count, 'BAND', 'crude ignores windowOpen');
 // garbage / empty never throws
 for (const x of [null, {}, { indicators: null, signal: null }, { session: 'X', price: 'abc' }]) { const q = CP.compute('crude', x); assert.strictEqual(q.tiles.length, 7); assert.ok(q.verdict); }
 assert.ok(CP.compute('nope', {}).tiles.length === 7);
+// 16 Oct — support/resistance slider (crude only): levels from today's O/H/L, prev close and round numbers, no extra API
+const lv = CP.compute('crude', { session: 'CRUDEOIL', price: 9270, open: 8923, high: 9327, low: 8900, prevClose: 8950, indicators: { rsi: 55, adx: 25, ema9: 9271, ema21: 9265 }, signal: { signal: 'WAIT', reasons: [] } }).lvl;
+assert.ok(lv, 'levels present');
+assert.strictEqual(lv.sup.price, 9250); assert.strictEqual(lv.res.price, 9300);   // round numbers bracket price (no named level between)
+assert.ok(Math.abs(lv.supD - 20) < 1e-9 && Math.abs(lv.resD - 30) < 1e-9);
+assert.ok(lv.pos > 30 && lv.pos < 70 && lv.mid === 'beech mein', lv.pos + ' ' + lv.mid);
+assert.ok(lv.list.some(c => c.label === 'Aaj ka High' && c.price === 9327) && lv.list.some(c => c.label === 'Kal ka Close'));
+assert.ok(lv.list.length <= 7);
+// a named level beats a round number that sits on it; price just under a named high -> resistance is that high
+const lv2 = CP.compute('crude', { session: 'CRUDEOIL', price: 9320, open: 9000, high: 9327, low: 8900, prevClose: 8950, indicators: {}, signal: {} }).lvl;
+assert.strictEqual(lv2.res.price, 9327); assert.strictEqual(lv2.res.label, 'Aaj ka High'); assert.strictEqual(lv2.sup.price, 9300);
+assert.strictEqual(lv2.mid, 'resistance ke paas');
+// price exactly on a level: that level is neither support nor resistance
+const lv3 = CP.compute('crude', { session: 'CRUDEOIL', price: 9300, open: 9000, high: 9327, low: 8900, prevClose: 8950, indicators: {}, signal: {} }).lvl;
+assert.ok(lv3.sup.price < 9300 && lv3.res.price > 9300);
+// no price / bad data -> no slider, never throws; bitcoin has no slider yet
+assert.strictEqual(CP.compute('crude', {}).lvl, null);
+assert.strictEqual(CP.compute('crude', { price: 'abc' }).lvl, null);
+assert.strictEqual(CP.compute('bitcoin', { session: 'BITCOIN', price: 82000, high: 83000, low: 81000, indicators: {}, signal: {} }).lvl, null);
 CP.render('crude', cr);   // no DOM: must not throw
 console.log('commodityPulse OK');

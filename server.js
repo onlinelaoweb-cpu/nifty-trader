@@ -57,6 +57,7 @@ const { injectAngelSession: injectAngelSessionVolScan,
         getStockMomentumSnapshot,
         getStockReversalSnapshot } = require('./src/api/volumeScanner');
 const { computeTrendRiderSetup, computeCrudeTrendRiderSetup } = require('./src/utils/trendRider');
+const { shouldFireAfterCooldown } = require('./src/utils/triggerCooldown');
 const { calculateSRLevels }         = require('./src/api/levels');
 const { computeDynamicLevels, classifyDynamicLevels } = require('./src/api/dynamicLevels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo, detectBOSCHOCH } = require('./src/api/physicsOfTrading');
@@ -4392,6 +4393,8 @@ Treats sustained extreme RSI as continuation, not exhaustion — will be wrong o
 // crude volume is fixed, if that turns out to matter for this trigger's
 // real-world accuracy.
 let lastCrudeMurarkaLoggedSide = null;
+let lastCrudeMurarkaFire = null;                       // { side, at } of the last ALERTED fire
+const CRUDE_MURARKA_COOLDOWN_MS = 30 * 60 * 1000;      // 16 Oct: same-side repeats at the VWAP-band edge (5 alerts in 30 min)
 
 async function checkCrudeMurarkaTrigger() {
     if (!isConfigured() || !isCrudeSessionOpen()) return;
@@ -4411,6 +4414,10 @@ async function checkCrudeMurarkaTrigger() {
 
         if (murarkaEntry.active && murarkaEntry.side !== lastCrudeMurarkaLoggedSide) {
             lastCrudeMurarkaLoggedSide = murarkaEntry.side;
+            // Same side re-entering the +/-0.2% band within the cooldown is the same setup:
+            // no new log row, alert or journal entry. Rule itself (PCR zone + VWAP band) is unchanged.
+            if (!shouldFireAfterCooldown(lastCrudeMurarkaFire, murarkaEntry.side, Date.now(), CRUDE_MURARKA_COOLDOWN_MS)) return;
+            lastCrudeMurarkaFire = { side: murarkaEntry.side, at: Date.now() };
             const vwapDistPct = vwapProxy > 0 ? Math.abs((spot - vwapProxy) / vwapProxy) * 100 : null;
 
             if (dbPool) {

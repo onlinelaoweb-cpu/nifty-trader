@@ -11,12 +11,36 @@
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 
   var KIND = {
-    crude:   { pfx: 'crp', name: 'CRUDE',   live: 'CRUDEOIL', cur: '₹', minConf: 'CRUDE' },
+    crude:   { pfx: 'crp', name: 'CRUDE',   live: 'CRUDEOIL', cur: '₹', minConf: 'CRUDE', lvlStep: 50 },
     bitcoin: { pfx: 'btp', name: 'BITCOIN', live: 'BITCOIN',  cur: '$', minConf: 'BITCOIN' },
   };
   var ADX_GATE = 20, ADX_STRONG = 30, GAP_REAL = 0.1, GAP_FLAT = 0.03;
 
   function fmt(v, k) { var c = KIND[k].cur; return c + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 }); }
+
+  // 16 Oct — support/resistance slider (display only), like the Nifty tab's. Levels are MECHANICAL and need no extra API call:
+  // today's High / Low / Open, yesterday's close, and round numbers every `lvlStep`. They are reference points, not a proven edge.
+  function computeLevels(kind, d, price) {
+    var K = KIND[kind]; if (!K || !K.lvlStep || price === null || !(price > 0)) return null;
+    var step = K.lvlStep, eps = step * 0.02, cand = [];
+    function add(label, v, named) { v = n(v); if (v !== null && v > 0) cand.push({ label: label, price: v, named: !!named }); }
+    add('Aaj ka High', d.high, true); add('Aaj ka Low', d.low, true); add('Aaj ka Open', d.open, true); add('Kal ka Close', d.prevClose, true);
+    var base = Math.floor(price / step) * step;
+    for (var k = -2; k <= 3; k++) { var rp = base + k * step; add('Round ' + rp, rp, false); }
+    // de-duplicate: a named level wins over a round number sitting on it; two levels within eps merge
+    cand.sort(function (a, b) { return a.price - b.price || (b.named ? 1 : 0) - (a.named ? 1 : 0); });
+    var lv = [];
+    cand.forEach(function (c) { var last = lv[lv.length - 1]; if (last && Math.abs(last.price - c.price) <= eps) { if (c.named && !last.named) lv[lv.length - 1] = c; } else lv.push(c); });
+    var sup = null, res = null;
+    lv.forEach(function (c) { if (c.price < price - eps) sup = c; else if (c.price > price + eps && !res) res = c; });
+    if (!sup || !res || !(res.price > sup.price)) return null;
+    var pos = Math.max(2, Math.min(98, 100 * (price - sup.price) / (res.price - sup.price)));
+    var list = lv.filter(function (c) { return c.named || (c.price >= sup.price - eps && c.price <= res.price + eps); })
+      .map(function (c) { return { label: c.label, price: c.price, dist: c.price - price }; })
+      .sort(function (a, b) { return Math.abs(a.dist) - Math.abs(b.dist); }).slice(0, 7);
+    return { sup: sup, res: res, pos: pos, supD: price - sup.price, resD: res.price - price,
+             mid: pos < 30 ? 'support ke paas' : pos > 70 ? 'resistance ke paas' : 'beech mein', list: list };
+  }
 
   // Pure: live payload -> { verdict, cls, count, sum, tiles[], chips[], held }
   function compute(kind, d) {
@@ -111,7 +135,7 @@
     else verdict = '⏸️ WAIT — abhi koi clean setup nahi';
     if (!isLive && d.session) verdict = '🌙 ' + verdict + ' (aakhri data)';
     var sum = (price !== null ? fmt(price, kind) + (n(d.changePct) !== null ? ' (' + (d.changePct >= 0 ? '+' : '') + Number(d.changePct).toFixed(2) + '%)' : '') + ' · ' : '') + 'upar ' + votes.bull + ' · neeche ' + votes.bear + ' vote';
-    return { verdict: verdict, cls: cls, count: isLive ? 'LIVE' : 'BAND', sum: sum, tiles: tiles, chips: chips, held: held, votes: votes, live: isLive };
+    return { verdict: verdict, cls: cls, count: isLive ? 'LIVE' : 'BAND', sum: sum, tiles: tiles, chips: chips, held: held, votes: votes, live: isLive, lvl: computeLevels(kind, d, price) };
   }
 
   // ── DOM ───────────────────────────────────────────────────────────────────
@@ -120,7 +144,7 @@
   function injectCss() {
     if ($('cmp-css')) return;
     var st = document.createElement('style'); st.id = 'cmp-css';
-    st.textContent = '#crp-card,#btp-card{margin-bottom:10px}#crp-card .pulse-grid,#btp-card .pulse-grid{grid-template-columns:repeat(3,1fr)}@media(min-width:560px){#crp-card .pulse-grid,#btp-card .pulse-grid{grid-template-columns:repeat(6,1fr)}}#crp-card .pt[data-i="6"],#btp-card .pt[data-i="6"]{grid-column:1/-1}.cmp-note{font-size:10.5px;color:var(--dim);opacity:.75;line-height:1.4;margin-top:8px}';
+    st.textContent = '#crp-card,#btp-card{margin-bottom:10px}#crp-card .pulse-grid,#btp-card .pulse-grid{grid-template-columns:repeat(3,1fr)}@media(min-width:560px){#crp-card .pulse-grid,#btp-card .pulse-grid{grid-template-columns:repeat(6,1fr)}}#crp-card .pt[data-i="6"],#btp-card .pt[data-i="6"]{grid-column:1/-1}.cmp-note{font-size:10.5px;color:var(--dim);opacity:.75;line-height:1.4;margin-top:8px}.cmp-lvls{margin-top:8px;border-top:1px solid var(--border);padding-top:6px}.cmp-lv{display:flex;justify-content:space-between;gap:8px;font-size:11px;font-family:monospace;color:var(--dim);padding:1px 0}.cmp-lv span:nth-child(2){color:var(--fg)}.cmp-up{color:var(--red)}.cmp-dn{color:var(--green)}';
     document.head.appendChild(st);
   }
   function ensureMarkup(kind, host) {
@@ -129,6 +153,7 @@
     var p = KIND[kind].pfx;
     host.innerHTML = '<div class="pulse-card" id="' + p + '-box"><div class="pulse-head"><div class="pulse-verdict" id="' + p + '-verdict">Collecting data…</div><div class="pulse-count" id="' + p + '-count">--</div></div>'
       + '<div class="pulse-sum" id="' + p + '-sum">Waiting for data…</div><div class="pulse-extra" id="' + p + '-extra" style="display:none"></div>'
+      + (KIND[kind].lvlStep ? '<div class="pulse-lvl" id="' + p + '-lvl" style="display:none"><div class="pl-row"><span class="pl-s" id="' + p + '-pl-s">--</span><div class="pl-track"><div class="pl-dot" id="' + p + '-pl-dot" style="left:50%"></div></div><span class="pl-r" id="' + p + '-pl-r">--</span></div><div class="pl-sub"><span id="' + p + '-pl-sd">--</span><span id="' + p + '-pl-mid">--</span><span id="' + p + '-pl-rd">--</span></div><div class="cmp-lvls" id="' + p + '-lvls"></div></div>' : '')
       + '<div class="pulse-grid" id="' + p + '-grid"></div><div class="pulse-detail" id="' + p + '-detail">Kisi tile pe tap karo — matlab yahin dikhega</div>'
       + '<div class="cmp-note">Sirf dekhne ke liye — signals ya trades par koi asar nahi. Ye engine ke apne rules (ADX gate 20, RSI 70/30, filter) ko seedha bhasha mein padhta hai.</div></div>';
     host.addEventListener('click', function (e) {
@@ -151,6 +176,17 @@
       var box = $(p + '-box'); box.classList.remove('bull', 'bear'); if (r.cls) box.classList.add(r.cls);
       $(p + '-count').textContent = r.count; $(p + '-sum').textContent = r.sum;
       var ex = $(p + '-extra'); ex.innerHTML = r.chips.map(function (c) { return '<span class="pe-chip" style="color:' + c.c + ';border-color:' + c.c + '">' + esc(c.t) + '</span>'; }).join(''); ex.style.display = r.chips.length ? 'flex' : 'none';
+      var lvEl = $(p + '-lvl');
+      if (lvEl) {
+        var L = r.lvl;
+        if (L) {
+          lvEl.style.display = 'block';
+          $(p + '-pl-s').textContent = L.sup.price; $(p + '-pl-r').textContent = L.res.price;
+          $(p + '-pl-dot').style.left = L.pos + '%';
+          $(p + '-pl-sd').textContent = L.supD.toFixed(0) + ' pts niche'; $(p + '-pl-rd').textContent = L.resD.toFixed(0) + ' pts upar'; $(p + '-pl-mid').textContent = L.mid;
+          $(p + '-lvls').innerHTML = L.list.map(function (c) { return '<div class="cmp-lv"><span>' + esc(c.label) + '</span><span>' + c.price + '</span><span class="' + (c.dist >= 0 ? 'cmp-up' : 'cmp-dn') + '">' + (c.dist >= 0 ? '▲' : '▼') + Math.abs(c.dist).toFixed(0) + '</span></div>'; }).join('');
+        } else lvEl.style.display = 'none';
+      }
       $(p + '-grid').innerHTML = r.tiles.map(function (t, i) { return '<div class="pt ' + t.cls + (i === selIdx ? ' sel' : '') + '" data-i="' + i + '"><div class="pt-l">' + esc(t.label) + '</div><div class="pt-v">' + esc(t.val) + '</div></div>'; }).join('');
       if (selIdx >= 0 && r.tiles[selIdx]) $(p + '-detail').textContent = r.tiles[selIdx].label + ' → ' + r.tiles[selIdx].full;
     } catch (e) { try { console.warn('[CommodityPulse]', e && e.message); } catch (_) {} }

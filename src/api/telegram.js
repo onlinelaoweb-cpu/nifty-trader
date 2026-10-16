@@ -678,7 +678,7 @@ async function sendCloseSummary(state) {
 ${dayChange >= 0 ? '▲' : '▼'} ${Math.abs(dayChange).toFixed(2)} (${dayPct.toFixed(2)}%)
 
 VIX: ${state.vix || '--'}
-RSI: ${state.rsi || '--'}${digestBlock}
+RSI: ${fmtEodRsi(state.rsi)}${digestBlock}
 ━━━━━━━━━━━━━━━━━━
 <i>Vardaan AI — See you tomorrow!</i>
 `.trim();
@@ -1044,6 +1044,27 @@ This isn't a target hit or an auto-exit. But with this much R:R already banked a
     await sendMessage(msg);
 }
 
+// 16 Oct — display helpers (message text only, no engine impact).
+// trade_date comes back from Postgres as a JS Date at UTC midnight, which template-literal
+// printed as "Fri Oct 09 2026 00:00:00 GMT+0000 (Coordinated Universal Time)". Print "09 Oct" instead.
+function fmtReviewDate(d) {
+    if (d === null || d === undefined || d === '') return '--';
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d));
+    const dt = (m && typeof d === 'string') ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : new Date(d);
+    if (isNaN(dt.getTime())) return String(d);
+    const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dt.getUTCMonth()];
+    return String(dt.getUTCDate()).padStart(2, '0') + ' ' + mon;
+}
+
+// EOD "RSI" is the live RSI(9) on 1-minute closes at 15:30. A stale/flat feed followed by one closing
+// jump can push it to an extreme (16 Oct: 93.06), so label it and flag extremes instead of showing a bare number.
+function fmtEodRsi(rsi) {
+    const n = Number(rsi);
+    if (rsi === null || rsi === undefined || rsi === '' || !isFinite(n)) return '--';
+    const extreme = n >= 85 || n <= 15;
+    return n + ' (RSI9·1m' + (extreme ? ', closing-bar spike ho sakta hai' : '') + ')';
+}
+
 // ── Weekly Self-Review Telegram digest (1 Aug audit) ─────────────────────────
 // review = { totalEvals, dayCount, weekStart, weekEnd, stats: [{label, blockedCount, blockRatePct}] }
 // from computeWeeklyGateReview() in server.js. Sent once, Friday close.
@@ -1083,7 +1104,7 @@ ${analytics.approximated > 0 ? `\n<i>${analytics.note}</i>` : ''}`;
     }
 
     const msg = `
-📅 <b>WEEKLY SELF-REVIEW</b> (${review.weekStart} → ${review.weekEnd})
+📅 <b>WEEKLY SELF-REVIEW</b> (${fmtReviewDate(review.weekStart)} → ${fmtReviewDate(review.weekEnd)})
 ━━━━━━━━━━━━━━━━━━
 ${review.totalEvals} directional evaluations across ${review.dayCount} trading day(s) this week.
 
@@ -1100,6 +1121,8 @@ ${analyticsBlock}
 }
 
 module.exports = {
+    fmtReviewDate,
+    fmtEodRsi,
     sendSignalAlert,
     sendMTFAlert,
     sendScalpAlert,
