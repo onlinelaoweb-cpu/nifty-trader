@@ -88,7 +88,7 @@ function summarize(rows) {
 }
 
 // ── the engine ──
-function createAutoJournal({ dbPool, getStrikePremium, now = Date.now, log = () => {}, env = process.env, lotSizes }) {
+function createAutoJournal({ dbPool, getStrikePremium, now = Date.now, log = () => {}, env = process.env, lotSizes, hooks = {} }) {
     const cfg = {
         enabled: String(env.AUTO_JOURNAL || 'on').toLowerCase() !== 'off',
         lots: Math.max(1, parseInt(env.AUTO_JOURNAL_LOTS, 10) || 2),                       // 2 so the half-book can really split
@@ -148,6 +148,8 @@ function createAutoJournal({ dbPool, getStrikePremium, now = Date.now, log = () 
         S.open.set(ins.rows[0].id, { id: ins.rows[0].id, instrument, source, direction, strike: Number(lock.strike), chainId: lock.chainId || null, entry, lots: cfg.lots, lotSize, coach, grid,
             openedAt: now(), lastPremium: entry, lastDataTs: now(), stopPct: grid.slPct ?? -20, exits: [], events: [first], state: 'OPEN' });
         log(`📔 [AutoJournal] ${instrument}|${source} ${direction} → ${lock.strike} ${side} @ ${entry}`);
+        // 17 Oct — optional read-only hook (ATR shadow twin). Fire-and-forget: a failure here can never affect the real paper trade.
+        try { if (hooks.onOpen) Promise.resolve(hooks.onOpen({ id: ins.rows[0].id, instrument, source, direction, strike: Number(lock.strike), chainId: lock.chainId || null, entry, grid, underlying: underlying ?? null, openedAt: now() })).catch(e => log(`[AutoJournal] onOpen hook: ${e.message}`)); } catch (e) { /* ignore */ }
         return true;
     }
 

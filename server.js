@@ -58,6 +58,8 @@ const { injectAngelSession: injectAngelSessionVolScan,
         getStockReversalSnapshot } = require('./src/api/volumeScanner');
 const { computeTrendRiderSetup, computeCrudeTrendRiderSetup } = require('./src/utils/trendRider');
 const { shouldFireAfterCooldown } = require('./src/utils/triggerCooldown');
+const { runIsolated, shouldRunShadow, summarizeShadow } = require('./src/utils/shadowRun');
+const regimeCutV2Lib = require('./src/utils/regimeCutV2');   // 17 Oct — pre-registered 1h-ADX regime test (MTF + Brahmastra)   // 17 Oct — Main Engine 09:15-10:00 shadow log
 const { calculateSRLevels }         = require('./src/api/levels');
 const { computeDynamicLevels, classifyDynamicLevels } = require('./src/api/dynamicLevels');
 const { getSwingTrend, getReactionZoneGate, calcForceLabel, getLatestImpulseFibo, detectBOSCHOCH } = require('./src/api/physicsOfTrading');
@@ -134,6 +136,7 @@ const sizingLib = require('./src/utils/sizingStudy');   // 10 Oct — flat lots 
 const exitRuleLib = require('./src/utils/exitRuleStudy');
 const hourStudyLib = require('./src/utils/hourStudy');   // 14 Oct — hour-of-day study with costs + older/newer-half check (read-only)
 const ofLib = require('./src/utils/orderflowContext');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
+const { createAtrShadow } = require('./src/utils/atrShadow');   // 17 Oct — ATR-scaled SL/target SHADOW twin of each NIFTY paper trade (record-only)
 const { createAutoJournal } = require('./src/utils/autoJournal');   // 10 Oct — strategy-wise AUTO paper journal (signal -> ATM paper trade -> coach-managed exit)
 const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
@@ -1408,7 +1411,11 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
     }
 }
 
-function combineSignals(indicators) {
+function combineSignals(indicators, opts) {
+    // 17 Oct — opts.shadow = true is used ONLY by runMainEngineShadow() (09:15-10:00 what-if log): ignores the
+    // Gate 1 time block and skips the gate-block counters. The caller restores marketState/orbState/signalStreak
+    // afterwards (src/utils/shadowRun.js). Normal calls pass no opts and behave exactly as before.
+    const _shadow = !!(opts && opts.shadow);
     // FIX (10 Sep) — these three risk-based confidence caps (Dynamic Levels
     // range-pocket, Breakout regime, Delta+MTF+DynLevel-without-TrendConviction)
     // were found to be erodable: they use Math.min correctly at THEIR point in
@@ -1424,7 +1431,7 @@ function combineSignals(indicators) {
     let _deltaMtfCapped = false, _deltaMtfCapValue = 55;
 
     // ── Gate 1: safe time window (IST) ────────────────
-    const ew = isSafeEntryWindow();
+    const ew = _shadow ? { status: 'shadow', label: 'Shadow run (time block ignored)', safe: true, reason: null } : isSafeEntryWindow();
     marketState.entryWindow = ew;
     if (!ew.safe) {
         // Theta Zone (14:30-15:30) normally blocks ALL new entries — correct
@@ -2328,7 +2335,7 @@ function combineSignals(indicators) {
     }
     marketState.qualityGate = qualityGate;
     marketState.engineChecklist = buildEngineChecklist(qualityGate, ALL_FACTORS_HARD_GATE && rawSignal !== 'WAIT');
-    trackGateBlocks(qualityGate, rawSignal);
+    if (!_shadow) trackGateBlocks(qualityGate, rawSignal);
 
     if (rawSignal !== 'WAIT' && !qualityGate.deltaAligned) {
         signal = 'WAIT'; confidence = 0;
@@ -7117,6 +7124,81 @@ async function niftyClassicTick(snap, finalSignal, price, liveReasons) {
     }, 30 * 1000);
 }
 
+// ── Main Engine 09:15-10:00 SHADOW LOG (17 Oct) ──────────────────────────────
+// Gate 1 blocks every Main Engine signal 09:15-10:00 ("Gap-fill window", Murarka's teaching, not our data), so
+// the block can never be judged. This records - once a minute, ONLY in that window - what combineSignals() would
+// have said with the time block off. Record only: no Telegram, no journal, no trade, nothing reaches the UI.
+// OFF by default; turn on with the Railway variable MAIN_ENGINE_SHADOW=true. Isolation: the shadow call is
+// synchronous and marketState / orbState / signalStreak are put back exactly as they were (src/utils/shadowRun.js).
+const MAIN_SHADOW_ENABLED = String(process.env.MAIN_ENGINE_SHADOW || '').toLowerCase() === 'true';
+let _mainShadowLastRun = 0, _mainShadowTableReady = false, _mainShadowErrors = 0;
+async function ensureMainShadowTable() {
+    if (!dbPool || _mainShadowTableReady) return;
+    await dbPool.query(`
+        CREATE TABLE IF NOT EXISTS main_engine_shadow_log (
+            id          SERIAL PRIMARY KEY,
+            ts          TIMESTAMPTZ DEFAULT NOW(),
+            nifty       NUMERIC,
+            signal      TEXT,
+            confidence  INT,
+            would_fire  BOOLEAN,
+            bull        NUMERIC,
+            bear        NUMERIC,
+            bull_pct    NUMERIC,
+            gate_passed BOOLEAN,
+            gate        JSONB,
+            reasons     JSONB
+        )`);
+    _mainShadowTableReady = true;
+}
+function runMainEngineShadow(indicators) {
+    try {
+        const ist = getIST();
+        const nowMs = Date.now();
+        if (!shouldRunShadow({ enabled: MAIN_SHADOW_ENABLED && !!dbPool && _mainShadowErrors < 5, nowIstMinutes: ist.getHours() * 60 + ist.getMinutes(),
+                               isTradingDay: isNSEMarketDay(), nowMs, lastRunMs: _mainShadowLastRun, minGapMs: 60 * 1000 })) return;
+        _mainShadowLastRun = nowMs;
+        let ind; try { ind = structuredClone(indicators); } catch (e) { _mainShadowErrors++; return; }   // never hand the live object to the shadow call
+        const streakBefore = { ...signalStreak };
+        const spot = marketState.nifty;
+        let summary = null;
+        const run = runIsolated([marketState, orbState], () => {
+            const res = combineSignals(ind, { shadow: true });
+            summary = summarizeShadow(res, marketState);    // read BEFORE marketState is restored
+            return res;
+        });
+        signalStreak = streakBefore;                         // module-level variable, restored by hand
+        if (!run.ok || !summary) { _mainShadowErrors++; console.warn('[MainShadow] run failed:', run.error); return; }
+        ensureMainShadowTable().then(() => dbPool.query(
+            `INSERT INTO main_engine_shadow_log (nifty, signal, confidence, would_fire, bull, bear, bull_pct, gate_passed, gate, reasons) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            [spot, summary.signal, summary.confidence, summary.wouldFire, summary.bull, summary.bear, summary.bullPct, summary.gate.passed, JSON.stringify(summary.gate), JSON.stringify(summary.reasons)]
+        )).catch(e => { _mainShadowErrors++; console.warn('[MainShadow] log error:', e.message); });
+    } catch (e) { _mainShadowErrors++; console.warn('[MainShadow] error:', e.message); }
+}
+// Read-only. /api/main-shadow-log?days=30&format=text . nifty_30 / nifty_60 = first market_snapshot_log Nifty reading 30 / 60 min later.
+app.get('/api/main-shadow-log', requireToken, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        await ensureMainShadowTable();
+        const days = Math.max(1, Math.min(90, parseInt(req.query.days, 10) || 30));
+        const r = await dbPool.query(`
+            SELECT s.id, s.ts, s.nifty, s.signal, s.confidence, s.would_fire, s.bull, s.bear, s.bull_pct, s.gate_passed, s.gate, s.reasons,
+                   (SELECT m.nifty FROM market_snapshot_log m WHERE m.ts >= s.ts + INTERVAL '30 minutes' ORDER BY m.ts ASC LIMIT 1) AS nifty_30,
+                   (SELECT m.nifty FROM market_snapshot_log m WHERE m.ts >= s.ts + INTERVAL '60 minutes' ORDER BY m.ts ASC LIMIT 1) AS nifty_60
+            FROM main_engine_shadow_log s WHERE s.ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY s.ts ASC LIMIT 5000`, [days]);
+        const rows = r.rows;
+        const fires = rows.filter(x => x.would_fire);
+        const out = { success: true, enabled: MAIN_SHADOW_ENABLED, days, rows: rows.length, wouldFire: fires.length, errors: _mainShadowErrors,
+            note: 'Record only. A fire here is NOT a trade. Cluster fires (same direction within ~60 min = one bet) before counting. Returns exclude costs.', fires, all: String(req.query.format || '') === 'all' ? rows : undefined };
+        if (String(req.query.format || '').toLowerCase() === 'text') {
+            const L = [`MAIN ENGINE SHADOW LOG (09:15-10:00, time block off) - enabled ${MAIN_SHADOW_ENABLED}, ${rows.length} runs, ${fires.length} would-fire, errors ${_mainShadowErrors}`, ''];
+            for (const x of fires) L.push(`${new Date(x.ts).toISOString()} ${x.signal} conf ${x.confidence}% nifty ${x.nifty} -> 30m ${x.nifty_30 ?? '-'} 60m ${x.nifty_60 ?? '-'} | gate ${x.gate_passed} | ${(x.reasons || []).slice(0, 3).join(' ; ')}`);
+            return res.type('text/plain').send(L.join('\n'));
+        }
+        res.json(out);
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 async function updatePrice(price, change, changePct, source) {
     // ── Track today's session-open price (independent of WS OHLC, which is
     // always 0 for the Nifty index). Reset once per IST calendar day so the
@@ -7158,6 +7240,7 @@ async function updatePrice(price, change, changePct, source) {
     }
 
     const _combined = combineSignals(indicators);
+    runMainEngineShadow(indicators);   // 17 Oct — what-if log, 09:15-10:00 only, OFF unless MAIN_ENGINE_SHADOW=true; never touches live state
     let { signal, confidence, reasons } = _combined;
 
     // ── High-Conviction Filter (added 3 Sep, per user request) ───────────────
@@ -13598,6 +13681,55 @@ app.get('/api/mtf-lead-regime', async (req, res) => {
     }
 });
 
+// ── Regime cut v2 (pre-registered 17 Oct) ───────────────────────────────────────────────────────────────────────
+// Read-only. /api/regime-cut-v2?source=mtf|brahmastra&days=90&since=confirmation|all&format=text
+// 1h ADX >= 25 at fire time = trend, < 25 = range; costs 3 pp; 20+ declustered leads per bucket; both halves must agree.
+// Default scope is the CONFIRMATION set (fires on/after 17 Oct 2026 IST). since=all is descriptive only. Nothing here feeds a gate or alert.
+// MTF = closed Strong Confluence leads (signal_performance). Brahmastra = NIFTY signal_outcomes with a locked strike and a Trade-Coach result.
+app.get('/api/regime-cut-v2', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const source = String(req.query.source || 'mtf').toLowerCase();
+        if (source !== 'mtf' && source !== 'brahmastra') return res.json({ success: false, error: 'source must be mtf or brahmastra' });
+        const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 90));
+        const since = String(req.query.since || 'confirmation').toLowerCase() === 'all' ? 'all' : 'confirmation';
+        let items = [];
+        if (source === 'mtf') {
+            const lq = await dbPool.query(`
+                SELECT id, ts, signal, option_type, entry, exit_premium, sl, target, target_hit, sl_hit, max_gain_pct, lead_quality
+                FROM signal_performance
+                WHERE closed = true AND (source = 'mtf' OR (source IS NULL AND lead_quality IS NOT NULL)) AND ts >= NOW() - ($1::int * INTERVAL '1 day')
+                ORDER BY ts ASC LIMIT 5000`, [days]);
+            const study = regimeLeadLib.computeLeadRegimeStudy(lq.rows, [], { tolMin: 10, minN: 4, qualityOnly: 'Strong Confluence', declusterMin: 0 });
+            items = (study.rows || []).map(x => ({ id: x.id, ts: x.ts, side: x.side, ret: x.ret }));
+        } else {
+            const oq = await dbPool.query(`
+                SELECT id, fire_ts AS ts, direction AS side, coach_result AS ret
+                FROM signal_outcomes
+                WHERE source = 'Brahmastra' AND instrument = 'NIFTY' AND entry_strike IS NOT NULL AND coach_result IS NOT NULL AND fire_ts >= NOW() - ($1::int * INTERVAL '1 day')
+                ORDER BY fire_ts ASC LIMIT 5000`, [days]);
+            items = oq.rows;
+        }
+        let snaps = [];
+        if (items.length) {
+            const first = new Date(items[0].ts).getTime() - 30 * 60000, last = new Date(items[items.length - 1].ts).getTime() + 5 * 60000;
+            const sq = await dbPool.query(`SELECT ts, mtf_1h_adx FROM market_snapshot_log WHERE ts >= $1 AND ts <= $2 ORDER BY ts ASC LIMIT 80000`, [new Date(first), new Date(last)]);
+            snaps = sq.rows;
+        }
+        const out = regimeCutV2Lib.evaluateRegimeCutV2(items, snaps, { since });
+        if (String(req.query.format || '').toLowerCase() === 'text') {
+            const L = [`REGIME CUT v2 - ${source.toUpperCase()} - scope ${out.rule.scope}`, `1h ADX >= ${out.rule.thr} = trend, else range | costs ${out.rule.costPp} pp | min ${out.rule.minN} per bucket | margin ${out.rule.minDiffPp} pp | decluster ${out.rule.declusterMin} min`, '',
+                `counts: resolved ${out.counts.resolved}, in scope ${out.counts.inScope}, after decluster ${out.counts.afterDecluster}, matched ${out.counts.matchedToSnapshot}`,
+                `TREND  n=${out.trend.n}  avg net ${out.trend.avgNet}%  win ${out.trend.winPct}%`, `RANGE  n=${out.range.n}  avg net ${out.range.avgNet}%  win ${out.range.winPct}%`,
+                `diff (trend - range): ${out.diffTrendMinusRangePp} pp | halves agree: ${out.halves.agree}`,
+                `first half  trend ${out.halves.first.trend.n}/${out.halves.first.trend.avgNet}  range ${out.halves.first.range.n}/${out.halves.first.range.avgNet}`,
+                `second half trend ${out.halves.second.trend.n}/${out.halves.second.trend.avgNet}  range ${out.halves.second.range.n}/${out.halves.second.range.avgNet}`, '', `VERDICT: ${out.verdict}`];
+            return res.type('text/plain').send(L.join('\n'));
+        }
+        res.json({ success: true, source, ...out });
+    } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
 // ── MTF "chase" study (9 Oct) ────────────────────────────────────────────────
 // Read-only research. /api/mtf-chase-study?days=60&minN=8&gap=10
 // The MTF tracker calls a lead STRONG only when 5m + 15m + 1h all agree; the 1h turns last, so the lead can arrive after the move.
@@ -15424,6 +15556,25 @@ app.get('/api/db-size', requireToken, async (req, res) => {
 
 // ── Auto Journal (10 Oct) — strategy-wise paper trades logged automatically from every signal; read-only for the UI ──
 let _autoJournal = null;
+let _atrShadow = null;
+// 17 Oct — read-only: real journal trade vs its ATR-scaled shadow twin. /api/atr-shadow?days=30&format=text
+app.get('/api/atr-shadow', requireToken, async (req, res) => {
+    if (!_atrShadow) return res.json({ success: true, enabled: false, msg: 'starting (about 25s after boot)' });
+    try {
+        const r = await _atrShadow.report({ days: req.query.days });
+        if (req.query.format !== 'text') return res.json({ success: true, ...r });
+        const c = r.comparison || {}, L = [];
+        L.push(`ATR SHADOW (NIFTY only, record-only) - last ${r.days}d, enabled=${r.enabled}, started=${r.started}`);
+        L.push(`rows ${r.total} | closed pairs ${r.closedPairs} | open now ${r.openNow} | no-reference rows (factor 1, not counted) ${r.noRef}`);
+        L.push(`RULE: ${c.rule}`);
+        L.push(`VERDICT: ${c.verdict}`);
+        L.push(`n=${c.n} | real avg ${c.avgReal}% win ${c.winReal}% worst ${c.worstReal}% | variant avg ${c.avgVariant}% win ${c.winVariant}% worst ${c.worstVariant}% | diff ${c.diffPp}pp`);
+        if (c.halves) L.push(`halves: first n=${c.halves.first.n} diff ${c.halves.first.diffPp}pp | second n=${c.halves.second.n} diff ${c.halves.second.diffPp}pp | agree=${c.halves.agree}`);
+        L.push('', 'id | source | dir | factor | real % (exit) | variant % (exit)');
+        for (const x of r.rows) L.push(`${x.trade_id} | ${x.source} | ${x.direction} | ${x.factor}(${x.basis}) | ${x.base_pct ?? '-'} (${x.base_exit || x.base_state}) | ${x.var_pct ?? '-'} (${x.var_exit || x.var_state})`);
+        res.type('text/plain').send(L.join('\n'));
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
 app.get('/api/auto-journal', requireToken, async (req, res) => {
     if (!_autoJournal) return res.json({ success: true, enabled: false, started: false, strategies: [], msg: 'starting (about 25s after boot)' });
     try { res.json({ success: true, ...(await _autoJournal.report({ days: req.query.days })) }); }
@@ -15609,7 +15760,10 @@ function startPollingIntervals() {
     // 10 Oct — Auto Journal: every signal SENT live to Telegram -> paper trade at the alert's own entry, managed by the Trade-Coach grid (AUTO_JOURNAL=off disables)
     setTimeout(() => {
         try {
+            _atrShadow = createAtrShadow({ dbPool, getStrikePremium, log: m => console.log(m) });
+            _atrShadow.start().catch(e => console.warn('[AtrShadow] start failed:', e.message));
             _autoJournal = createAutoJournal({ dbPool, getStrikePremium,
+                hooks: { onOpen: tr => _atrShadow.open({ ...tr, atr: marketState.dynamicLevels && marketState.dynamicLevels.atr }) },
                 lotSizes: { NIFTY: LOT_SIZE, CRUDE: Number(process.env.AUTO_JOURNAL_LOT_CRUDE) || 100, BITCOIN: null }, log: m => console.log(m) });
             _autoJournal.start().catch(e => console.warn('[AutoJournal] start failed:', e.message));
         } catch (e) { console.warn('[AutoJournal] creation failed:', e.message); }
