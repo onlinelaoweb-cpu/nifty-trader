@@ -138,6 +138,7 @@ const hourStudyLib = require('./src/utils/hourStudy');   // 14 Oct — hour-of-d
 const ofLib = require('./src/utils/orderflowContext');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
 const proxyDayLib = require('./src/utils/proxyDay');   // 17 Oct — read-only 15-min view of the volume-delta PROXY for one day (compare with a real footprint)
 const { createAtrShadow } = require('./src/utils/atrShadow');   // 17 Oct — ATR-scaled SL/target SHADOW twin of each NIFTY paper trade (record-only)
+const tickFlowLib = require('./src/utils/tickFlowLab');   // 17 Oct — record-only tick-flow LAB on the free Angel feed (NIFTY futures); TICKFLOW_LAB=true switches it on
 const { createAutoJournal } = require('./src/utils/autoJournal');   // 10 Oct — strategy-wise AUTO paper journal (signal -> ATM paper trade -> coach-managed exit)
 const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
@@ -15584,6 +15585,25 @@ app.get('/api/db-size', requireToken, async (req, res) => {
 // ── Auto Journal (10 Oct) — strategy-wise paper trades logged automatically from every signal; read-only for the UI ──
 let _autoJournal = null;
 let _atrShadow = null;
+let _tickFlowLab = null;      // 17 Oct — record-only; created ~25s after boot, only if TICKFLOW_LAB=true
+let _lastAngelAuth = null;    // latest Angel login (jwt + feedToken), handed to the tick-flow lab for its own second socket
+// 17 Oct — read-only: free-feed footprint FEASIBILITY lab. /api/tickflow-lab?date=2026-10-19&format=text   (date = IST day; omitted = latest day with rows)
+// 15-min bars of buy/sell volume built from Angel SnapQuote packets of the NIFTY futures (tick rule + quote rule), coverage %, sanity counters, raw samples.
+// Compare with Dhan DEXT T3 by eye. Nothing here feeds signals, gates, alerts or the UI.
+app.get('/api/tickflow-lab', studyGuard, async (req, res) => {
+    if (!_tickFlowLab) return res.json({ success: true, enabled: false, msg: 'TICKFLOW_LAB is not switched on, or still starting (about 25s after boot)' });
+    try {
+        const r = await _tickFlowLab.report({ day: req.query.date });
+        if (!r.ok) return res.json({ success: false, error: r.error });
+        if (String(req.query.format || '').toLowerCase() === 'text') {
+            const head = `LIVE: enabled=${r.live.enabled} connected=${r.live.connected} hasAuth=${r.live.hasAuth} lastPacketAgo=${r.live.lastPacketAgoSec}s\n`;
+            return res.type('text/plain').send(head + tickFlowLib.formatLabText(r, r.stats, r.raws, { symbol: r.symbol }));
+        }
+        res.json({ success: true, ...r });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
 // 17 Oct — read-only: real journal trade vs its ATR-scaled shadow twin. /api/atr-shadow?days=30&format=text
 app.get('/api/atr-shadow', requireToken, async (req, res) => {
     if (!_atrShadow) return res.json({ success: true, enabled: false, msg: 'starting (about 25s after boot)' });
@@ -15789,6 +15809,12 @@ function startPollingIntervals() {
         try {
             _atrShadow = createAtrShadow({ dbPool, getStrikePremium, log: m => console.log(m) });
             _atrShadow.start().catch(e => console.warn('[AtrShadow] start failed:', e.message));
+            // 17 Oct — tick-flow lab (record-only, default OFF; TICKFLOW_LAB=true). Own try/catch: a lab problem must never touch the journal.
+            try {
+                _tickFlowLab = tickFlowLib.createTickFlowLab({ dbPool, log: m => console.log(m) });
+                if (_lastAngelAuth) _tickFlowLab.setAuth(_lastAngelAuth);
+                _tickFlowLab.start().catch(e => console.warn('[TickFlowLab] start failed:', e.message));
+            } catch (e) { console.warn('[TickFlowLab] creation failed:', e.message); }
             _autoJournal = createAutoJournal({ dbPool, getStrikePremium,
                 hooks: { onOpen: tr => _atrShadow.open({ ...tr, atr: marketState.dynamicLevels && marketState.dynamicLevels.atr }) },
                 lotSizes: { NIFTY: LOT_SIZE, CRUDE: Number(process.env.AUTO_JOURNAL_LOT_CRUDE) || 100, BITCOIN: null }, log: m => console.log(m) });
@@ -16330,6 +16356,8 @@ async function tryAngelLogin() {
         // BEFORE tryAngelLogin so hoisting isn't even a question — accessible
         // from both tryAngelLogin and startPollingIntervals.
         startWebSocket(auth, onTick, getWSInstrumentConfig);
+        _lastAngelAuth = { jwtToken: auth.jwtToken, feedToken: auth.feedToken };
+        if (_tickFlowLab) _tickFlowLab.setAuth(_lastAngelAuth);   // 17 Oct — lab opens its OWN second socket; the app's own socket above is untouched
         _angelLoggedIn = true;
         // On retry logins (after init is complete), immediately refresh breadth
         // with the real Angel Nifty50 data. During initial startup this is skipped
