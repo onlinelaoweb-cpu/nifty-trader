@@ -3605,6 +3605,8 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <div id="gl-card"></div>
     <!-- FYERS LOGIN (17 Oct) — token status + button to the in-app mobile login page; filled by /js/fyers-card.js; display only -->
     <div id="fy-card"></div>
+    <!-- ORDER TICKET (17 Oct) — DRY RUN only: checks a manual option ticket (entry+SL+target), sends nothing to any broker; filled by /js/order-ticket.js -->
+    <div id="ot-card"></div>
     <div class="tool-card">
       <div class="tool-title">📱 TELEGRAM</div>
   <div class="tg-wrap"><button class="tg-btn" onclick="testTG(this)">📱 TEST TELEGRAM</button><div id="tg-msg"></div></div>
@@ -8877,6 +8879,7 @@ function renderVolumeScannerUI(d) {
 <script src="/js/tools-pulse.js" defer></script>
 <script src="/js/golive-card.js" defer></script>
 <script src="/js/fyers-card.js" defer></script>
+<script src="/js/order-ticket.js" defer></script>
 <script src="/js/commodity-pulse.js" defer></script>
 <script src="/js/track-pulse.js" defer></script>
 <script src="/js/wait-strip.js" defer></script>

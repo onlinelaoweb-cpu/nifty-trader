@@ -12682,6 +12682,37 @@ app.post('/api/fyers-login/exchange', fyersLoginGuard, async (req, res) => {
     try { res.json(await _fyersLogin.exchange(req.body && req.body.input)); }
     catch (e) { res.json({ ok: false, error: 'server error: ' + e.message }); }
 });
+// 17 Oct — Order Ticket (DRY RUN ONLY): validates a manual NIFTY option ticket (entry + SL + target) and logs it in manual_orders, separate from the
+// paper journal. It NEVER contacts a broker (see src/utils/orderTicket.js, LIVE_ORDERING_ENABLED = false).
+const _orderTicketLib = require('./src/utils/orderTicket');
+let _manualOrdersReady = false;
+async function _ensureManualOrders() {
+    if (_manualOrdersReady || !dbPool) return;
+    await dbPool.query(`CREATE TABLE IF NOT EXISTS manual_orders (id SERIAL PRIMARY KEY, ts TIMESTAMPTZ DEFAULT NOW(), status TEXT, ticket JSONB)`);
+    _manualOrdersReady = true;
+}
+app.post('/api/order-ticket', requireToken, async (req, res) => {
+    try {
+        const b = req.body || {};
+        const r = _orderTicketLib.buildTicket(b, { lotSize: LOT_SIZE });
+        if (!r.ok) return res.json(r);
+        if (b.save !== false && dbPool) {
+            await _ensureManualOrders();
+            const ins = await dbPool.query(`INSERT INTO manual_orders (status, ticket) VALUES ('DRY_RUN', $1) RETURNING id`, [JSON.stringify(r.ticket)]);
+            r.id = ins.rows[0].id;
+        }
+        res.json(r);
+    } catch (e) { res.json({ ok: false, errors: ['server error: ' + e.message], warnings: [] }); }
+});
+app.get('/api/order-ticket/list', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        await _ensureManualOrders();
+        const limit = Math.min(parseInt(req.query.limit) || 10, 100);
+        const r = await dbPool.query(`SELECT id, ts, status, ticket FROM manual_orders ORDER BY id DESC LIMIT ${limit}`);
+        res.json({ success: true, liveOrderingEnabled: _orderTicketLib.LIVE_ORDERING_ENABLED, count: r.rows.length, rows: r.rows });
+    } catch (e) { res.json({ success: false, error: e.message }); }
+});
 // 13 Oct — Go-Live Checklist content for the Tools tab. Behind the global /api token guard (and requireToken),
 // never a public static file, because the Security gate lists real gaps of this app.
 app.get('/api/go-live-checklist', requireToken, (req, res) => {
