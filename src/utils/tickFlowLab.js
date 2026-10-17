@@ -25,7 +25,8 @@
 // (OHLC offsets 91..115 were already verified live by the app's own parser; the rest is checked by the sanity counters.)
 
 const IST_MS = 330 * 60000;
-const SESSION_START_MIN = 9 * 60 + 14, SESSION_END_MIN = 15 * 60 + 32, BAR_START_MIN = 9 * 60 + 15, BAR_MIN = 15, N_BARS = 25;
+// 17 Oct: since 3 Aug 2026 NSE index derivatives trade until 15:40 (cash has a closing auction 15:15-15:35), so the lab now records until 15:42 and has a 26th bar (15:30-15:45)
+const SESSION_START_MIN = 9 * 60 + 14, SESSION_END_MIN = 15 * 60 + 42, BAR_START_MIN = 9 * 60 + 15, BAR_MIN = 15, N_BARS = 26;
 const SCRIP_URL = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json';
 const WS_URL = 'wss://smartapisocket.angelone.in/smart-stream';
 const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
@@ -305,7 +306,7 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
     }
     function disconnect() { const w = S.ws; cleanupSocket(); try { if (w) w.close(); } catch (e) { /* ignore */ } }
 
-    // runs every 20s: connect inside the NSE futures session (Mon-Fri 09:14-15:32 IST), disconnect outside, restart a stalled socket
+    // runs every 20s: connect inside the NSE futures session (Mon-Fri 09:14-15:42 IST), disconnect outside, restart a stalled socket
     function schedule() {
         if (!cfg.enabled || !S.started) return;
         const t = now(), p = istParts(t), inSession = p.dow >= 1 && p.dow <= 5 && p.min >= SESSION_START_MIN && p.min < SESSION_END_MIN;
