@@ -6,10 +6,6 @@ on:
     - cron: '30 3 * * 1-5'
     # NIFTY: Sleep Mon-Fri 3:30 PM IST = 10:00 AM UTC
     - cron: '0 10 * * 1-5'
-    # BITCOIN: Wake Daily 7:00 PM IST = 1:30 PM UTC
-    - cron: '30 13 * * *'
-    # BITCOIN: Sleep Daily 11:00 PM IST = 5:30 PM UTC
-    - cron: '30 17 * * *'
     # FII/DII: Every 30 min on market days 9:00–16:00 IST (3:30–10:30 UTC)
     - cron: '30 3 * * 1-5'
     - cron: '0 4 * * 1-5'
@@ -40,8 +36,6 @@ on:
         options:
           - nifty-wake
           - nifty-sleep
-          - bitcoin-wake
-          - bitcoin-sleep
 
 # ─────────────────────────────────────────────
 # NIFTY WAKE — redeploy latest deployment
@@ -118,69 +112,6 @@ jobs:
           echo "✅ Nifty is SLEEPING!"
 
 # ─────────────────────────────────────────────
-# BITCOIN WAKE
-# ─────────────────────────────────────────────
-  bitcoin-wake:
-    name: '🟠 Bitcoin WAKE (7:00 PM IST)'
-    runs-on: ubuntu-latest
-    if: |
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'bitcoin-wake') ||
-      (github.event_name == 'schedule' && github.event.schedule == '30 13 * * *')
-    steps:
-      - name: Redeploy Bitcoin Service
-        run: |
-          echo "🟢 Waking up Vardaan Bitcoin AI..."
-          RESPONSE=$(curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d "{\"query\": \"mutation { serviceInstanceRedeploy(serviceId: \\\"${{ secrets.BITCOIN_SERVICE_ID }}\\\", environmentId: \\\"${{ secrets.BITCOIN_ENVIRONMENT_ID }}\\\") }\"}" \
-            https://backboard.railway.com/graphql/v2)
-          echo "Response: $RESPONSE"
-          echo "✅ Bitcoin is AWAKE!"
-
-# ─────────────────────────────────────────────
-# BITCOIN SLEEP
-# ─────────────────────────────────────────────
-  bitcoin-sleep:
-    name: '🌙 Bitcoin SLEEP (11:00 PM IST)'
-    runs-on: ubuntu-latest
-    if: |
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'bitcoin-sleep') ||
-      (github.event_name == 'schedule' && github.event.schedule == '30 17 * * *')
-    steps:
-      - name: Find and Stop Bitcoin Deployment
-        run: |
-          echo "🔴 Putting Vardaan Bitcoin AI to sleep..."
-
-          DEPLOY_RESPONSE=$(curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d "{\"query\": \"query { deployments(input: { serviceId: \\\"${{ secrets.BITCOIN_SERVICE_ID }}\\\", environmentId: \\\"${{ secrets.BITCOIN_ENVIRONMENT_ID }}\\\" }, first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { edges { node { id status } } } }\"}" \
-            https://backboard.railway.com/graphql/v2)
-
-          DEPLOYMENT_ID=$(echo $DEPLOY_RESPONSE | python3 -c "
-          import json,sys
-          d=json.load(sys.stdin)
-          edges=d.get('data',{}).get('deployments',{}).get('edges',[])
-          if edges:
-              print(edges[0]['node']['id'])
-          ")
-
-          if [ -z "$DEPLOYMENT_ID" ]; then
-            echo "⚠️ No active deployment found"
-            exit 0
-          fi
-
-          STOP_RESPONSE=$(curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d "{\"query\": \"mutation { deploymentStop(id: \\\"$DEPLOYMENT_ID\\\") }\"}" \
-            https://backboard.railway.com/graphql/v2)
-
-          echo "Stop response: $STOP_RESPONSE"
-          echo "✅ Bitcoin is SLEEPING!"
-
-# ─────────────────────────────────────────────
 # FII/DII PUSH — fetch from NSE, push to Railway
 # Runs every 30 min on market days 9:00–16:00 IST, plus 4 evening retries (18:00, 18:30, 19:30, 20:30 IST) for the day's final figures
 # GitHub runners bypass Railway's NSE IP block
@@ -189,9 +120,9 @@ jobs:
   fiidii-push:
     name: 'FII/DII Push (NSE to Railway)'
     runs-on: ubuntu-latest
-    # 17 Oct audit: do not run on the two Bitcoin crons (13:30 / 17:30 UTC) - an NSE fetch at 7 PM / 11 PM IST is pointless and just adds a failing run
+    # 17 Oct: Bitcoin wake/sleep jobs removed (Bitcoin runs inside the main app). Runs on every remaining schedule slot, or with manual 'nifty-wake'
     if: >-
-      (github.event_name == 'schedule' && github.event.schedule != '30 13 * * *' && github.event.schedule != '30 17 * * *') ||
+      github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'nifty-wake')
     steps:
       - name: Fetch FII/DII from NSE and push to Railway
