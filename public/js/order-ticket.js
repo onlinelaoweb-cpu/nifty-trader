@@ -50,7 +50,6 @@
       + inp('expiry', 'Expiry YYYY-MM-DD (optional)')
       + '<div style="display:flex;gap:4px">' + inp('sl', 'SL', 'inputmode="decimal"') + '<select id="ot-slUnit" style="' + FIELD + ';width:64px"><option value="price">₹</option><option value="%">%</option></select></div>'
       + '<select id="ot-tgUnit" style="' + FIELD + '"><option value="price">Target ₹ price</option><option value="%">Target % (entry se)</option></select>'
-      + '<div></div>'
       + [1, 2, 3].map(function (n) { return '<div style="display:flex;gap:4px">' + inp('t' + n, 'T' + n + ' target', 'inputmode="decimal"') + '</div>' + inp('t' + n + 'lots', 'T' + n + ' lots', 'inputmode="numeric"'); }).join('')
       + '<select id="ot-trailMode" style="' + FIELD + '"><option value="NONE">Trailing nahi</option><option value="STEP">Trailing STEP (T1→entry, T2→T1)</option><option value="POINTS">Trailing POINTS</option></select>'
       + inp('trailPoints', 'Trail points (POINTS ke liye)', 'inputmode="decimal"')
