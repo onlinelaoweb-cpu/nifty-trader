@@ -118,7 +118,8 @@ function classifyAbsorption(A, idx, side, look = 2) {
     let found = null;
     for (let k = Math.max(0, idx - look + 1); k <= idx; k++) {
         const b = A[k];
-        if (b.barVol > 0 && b.barRngPct !== null && b.barRngPct !== undefined && b.barVol >= 1.5 * avgVol && b.barRngPct <= 0.6 * avgRng) found = b;
+        // 17 Oct: a range of exactly 0 means no usable candle data (stale feed), not a quiet absorbing bar - it must never count as absorption.
+        if (b.barVol > 0 && b.barRngPct !== null && b.barRngPct !== undefined && b.barRngPct > 0 && b.barVol >= 1.5 * avgVol && b.barRngPct <= 0.6 * avgRng) found = b;
     }
     if (!found) return 'NONE';
     const span = found.dayHigh - found.dayLow;

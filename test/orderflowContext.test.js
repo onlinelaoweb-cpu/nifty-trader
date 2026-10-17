@@ -51,6 +51,10 @@ assert.strictEqual(O.classifyAbsorption(ab, 10, 1), 'ABSORPTION_AT_EXTREME');
 assert.strictEqual(O.classifyAbsorption(ab, 10, -1), 'ABSORPTION');
 const ab2 = ab.slice(0, 10); assert.strictEqual(O.classifyAbsorption(ab2, 9, 1), 'NONE');
 assert.strictEqual(O.classifyAbsorption(ab.slice(0, 4), 3, 1), null);
+{   // 17 Oct: a step whose range is exactly 0 (stale candles) is never absorption
+    const z = ab.map(x => ({ ...x })); z[10].barRngPct = 0;
+    assert.notStrictEqual(O.classifyAbsorption(z, 10, 1), 'ABSORPTION_AT_EXTREME'); assert.notStrictEqual(O.classifyAbsorption(z, 10, -1), 'ABSORPTION');
+}
 
 // value area / sweep / range buckets
 const va = { poc: 22500, vah: 22550, val: 22450 };

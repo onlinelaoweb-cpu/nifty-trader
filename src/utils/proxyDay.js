@@ -22,11 +22,12 @@ function buildProxyDay(snaps, dayStr, o = {}) {
         const m = istMinutes(s.ms - 1);                          // a step ending exactly on a bar boundary belongs to the bar it closes
         if (m < openMin || m >= closeMin) return;
         const k = Math.floor((m - openMin) / binMin);
-        if (!bins.has(k)) bins.set(k, { k, steps: 0, gaps: 0, vol: 0, delta: 0, prices: [], abs: new Set() });
+        if (!bins.has(k)) bins.set(k, { k, steps: 0, gaps: 0, vol: 0, delta: 0, prices: [], rngs: [], abs: new Set() });
         const b = bins.get(k);
         if (Number.isFinite(s.nifty) && s.nifty > 0) b.prices.push(s.nifty);
         if (s.barVol === null || s.delta === null || !Number.isFinite(s.delta)) { b.gaps++; gapSteps++; return; }
         b.steps++; usable++; b.vol += s.barVol; b.delta += s.delta;
+        if (Number.isFinite(s.barRngPct)) b.rngs.push(s.barRngPct);
         const lo = OF.classifyAbsorption(A, i, 1, 1), hi = OF.classifyAbsorption(A, i, -1, 1);
         if (lo === 'ABSORPTION_AT_EXTREME') b.abs.add('AT_DAY_LOW');
         else if (hi === 'ABSORPTION_AT_EXTREME') b.abs.add('AT_DAY_HIGH');
@@ -43,7 +44,8 @@ function buildProxyDay(snaps, dayStr, o = {}) {
         const absorption = b.abs.has('AT_DAY_LOW') ? 'AT_DAY_LOW' : b.abs.has('AT_DAY_HIGH') ? 'AT_DAY_HIGH' : b.abs.has('ABSORPTION') ? 'ABSORPTION' : b.abs.has('NONE') ? 'NONE' : null;
         out.push({ time: hhmm(openMin + k * binMin), steps: b.steps, gaps: b.gaps, volume: Math.round(b.vol), delta: Math.round(b.delta), cumDelta: Math.round(cum),
             deltaShare: b.vol > 0 ? r2(b.delta / b.vol) : null, open: r2(open), close: r2(close), chgPts: open !== null && close !== null ? r2(close - open) : null,
-            rangePct: hi !== null && close > 0 ? r2((hi - lo) / close * 100) : null, absorption });
+            rangePct: hi !== null && close > 0 ? r2((hi - lo) / close * 100) : null,
+            candleRngPct: b.rngs.length ? r2(b.rngs.reduce((x, y) => x + y, 0) / b.rngs.length) : null, absorption });
     }
     return { day: dayStr, binMin, snapshots: day.length, usableSteps: usable, gapSteps, bins: out };
 }
@@ -54,9 +56,9 @@ function formatProxyDayText(res) {
     L.push(`snapshots ${res.snapshots} | usable steps ${res.usableSteps} | gap steps (no delta) ${res.gapSteps}`);
     L.push('NOT a footprint: delta = step volume x close position in the last 5 one-minute candles (a guess of the buy/sell split). Volume is in the futures feed\'s own unit - compare SHAPE and SIGN with the real footprint, not the absolute size.');
     if (!res.bins.length) { L.push('', 'No usable bars for this day (market closed, or the futures-volume context columns have no rows for it).'); return L.join('\n'); }
-    L.push('', 'time  | steps(gaps) | volume      | proxy delta | cum delta   | delta/vol | open -> close (chg) | range% | absorption');
-    for (const b of res.bins) L.push(`${b.time} | ${b.steps}(${b.gaps})`.padEnd(20) + `| ${String(b.volume).padStart(11)} | ${String(b.delta).padStart(11)} | ${String(b.cumDelta).padStart(11)} | ${String(b.deltaShare ?? '-').padStart(9)} | ${b.open ?? '-'} -> ${b.close ?? '-'} (${b.chgPts ?? '-'}) | ${b.rangePct ?? '-'} | ${b.absorption ?? '-'}`);
-    L.push('', 'Range% uses only the 5-minute snapshot prices inside the bar, so it is coarse (it under-states the true high-low range). Absorption: step volume >= 1.5x the day\'s earlier average while the 5-min range <= 0.6x its average (needs >= 6 earlier steps; blank = not enough data yet).');
+    L.push('', 'time  | steps(gaps) | volume      | proxy delta | cum delta   | delta/vol | open -> close (chg) | range% | 5m-candle rng% | absorption');
+    for (const b of res.bins) L.push(`${b.time} | ${b.steps}(${b.gaps})`.padEnd(20) + `| ${String(b.volume).padStart(11)} | ${String(b.delta).padStart(11)} | ${String(b.cumDelta).padStart(11)} | ${String(b.deltaShare ?? '-').padStart(9)} | ${b.open ?? '-'} -> ${b.close ?? '-'} (${b.chgPts ?? '-'}) | ${b.rangePct ?? '-'} | ${b.candleRngPct ?? '-'} | ${b.absorption ?? '-'}`);
+    L.push('', 'Range% uses only the 5-minute snapshot prices inside the bar, so it is coarse (it under-states the true high-low range). 5m-candle rng% = the average high-low range of the last 5 one-minute candles at each snapshot (the number the absorption test uses); 0 means no usable candle data. Absorption: step volume >= 1.5x the day\'s earlier average while the 5-min range <= 0.6x its average (needs >= 6 earlier steps; blank = not enough data yet).');
     return L.join('\n');
 }
 
