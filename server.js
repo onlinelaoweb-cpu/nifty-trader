@@ -139,6 +139,16 @@ const ofLib = require('./src/utils/orderflowContext');   // 10 Oct — would a d
 const proxyDayLib = require('./src/utils/proxyDay');   // 17 Oct — read-only 15-min view of the volume-delta PROXY for one day (compare with a real footprint)
 const { createAtrShadow } = require('./src/utils/atrShadow');   // 17 Oct — ATR-scaled SL/target SHADOW twin of each NIFTY paper trade (record-only)
 const { createReminder: createFyersTokenReminder } = require('./src/utils/fyersTokenReminder');   // 17 Oct — weekday 08:30/09:00 IST Telegram nudge when the Fyers token is expired/missing
+// 17 Oct — in-app Fyers login (works from a phone): /api/fyers-login/page?key=APP_TOKEN. Uses FYERS_APP_ID + FYERS_SECRET_ID already in Railway.
+const _fyersLoginLib = require('./src/utils/fyersLogin');
+const _nseDataForFyers = require('./src/api/nseData');
+const _fyersLogin = _fyersLoginLib.createFyersLogin({
+    post: (url, body) => axios.post(url, body, { timeout: 15000, headers: { 'Content-Type': 'application/json' } }),
+    apply: t => _nseDataForFyers.setFyersAccessToken(t),
+    current: () => _nseDataForFyers.getFyersAccessToken(),
+    log: m => console.log(m),
+});
+try { _fyersLogin.loadSaved(); } catch (e) { console.warn('[FyersLogin] loadSaved failed:', e.message); }
 const tickFlowLib = require('./src/utils/tickFlowLab');   // 17 Oct — record-only tick-flow LAB on the free Angel feed (NIFTY futures); TICKFLOW_LAB=true switches it on
 const { createAutoJournal } = require('./src/utils/autoJournal');   // 10 Oct — strategy-wise AUTO paper journal (signal -> ATM paper trade -> coach-managed exit)
 const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
@@ -12648,6 +12658,30 @@ function requireToken(req, res, next) {
 let _lastMTMRun = 0;
 // Login probe — frontend uses this to verify password without exposing data
 app.get('/api/auth/check', requireToken, (req, res) => res.json({ ok: true }));
+// 17 Oct — mobile Fyers login. Fails CLOSED: unlike requireToken it refuses everything when APP_TOKEN is not set, because it can switch the live Fyers token.
+function fyersLoginGuard(req, res, next) {
+    const secret = process.env.APP_TOKEN;
+    if (!secret) return res.status(503).json({ success: false, msg: 'APP_TOKEN must be set to use Fyers login.' });
+    const provided = String(req.headers['x-app-token'] || req.query.key || '');
+    const a = Buffer.from(provided), b = Buffer.from(secret);
+    if (a.length === b.length && require('crypto').timingSafeEqual(a, b)) return next();
+    return res.status(401).json({ success: false, msg: 'Unauthorized' });
+}
+let _fyersLoginTries = [];
+app.get('/api/fyers-login/page', fyersLoginGuard, (req, res) => {
+    res.set('Cache-Control', 'no-store'); res.type('html').send(_fyersLoginLib.renderPage());
+});
+app.get('/api/fyers-login/status', fyersLoginGuard, (req, res) => {
+    res.set('Cache-Control', 'no-store'); res.json({ success: true, status: _fyersLogin.status(), loginUrl: _fyersLogin.loginUrl() });
+});
+app.post('/api/fyers-login/exchange', fyersLoginGuard, async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const t = Date.now(); _fyersLoginTries = _fyersLoginTries.filter(x => t - x < 60000);
+    if (_fyersLoginTries.length >= 8) return res.status(429).json({ ok: false, error: 'Bahut try ho gaye, 1 minute ruko.' });
+    _fyersLoginTries.push(t);
+    try { res.json(await _fyersLogin.exchange(req.body && req.body.input)); }
+    catch (e) { res.json({ ok: false, error: 'server error: ' + e.message }); }
+});
 // 13 Oct — Go-Live Checklist content for the Tools tab. Behind the global /api token guard (and requireToken),
 // never a public static file, because the Security gate lists real gaps of this app.
 app.get('/api/go-live-checklist', requireToken, (req, res) => {
@@ -16020,7 +16054,7 @@ function startPollingIntervals() {
     setTimeout(() => { combinedPCRTick(); setInterval(combinedPCRTick, 3 * 60 * 1000); }, 55 * 1000);
     // 17 Oct — Fyers daily-token reminder: reads only the expiry inside the token (no API call); silent when the token is fresh.
     try {
-        const _fyersReminder = createFyersTokenReminder({ getToken: () => process.env.FYERS_ACCESS_TOKEN, send: m => sendRawMessage(m), log: m => console.log(m) });
+        const _fyersReminder = createFyersTokenReminder({ getToken: () => _nseDataForFyers.getFyersAccessToken(), send: m => sendRawMessage(m), log: m => console.log(m) });
         setInterval(() => { _fyersReminder.tick().catch(() => {}); }, 60 * 1000);
     } catch (e) { console.warn('[FyersReminder] not started:', e.message); }
     // Opening Range Breakout (13 Sep) — 90s cadence, narrow window (9:30-10:30)

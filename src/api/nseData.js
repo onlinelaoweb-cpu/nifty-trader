@@ -122,6 +122,15 @@ let   FYERS_ACCESS_TOKEN  = (process.env.FYERS_ACCESS_TOKEN  || '').trim() || nu
 let   FYERS_REFRESH_TOKEN = (process.env.FYERS_REFRESH_TOKEN || '').trim() || null;
 const FYERS_PIN           = (process.env.FYERS_PIN           || '').trim() || '';
 console.log(`[nseData] Fyers: AppID=${FYERS_APP_ID ? '✅' : '❌'} | AccessToken=${FYERS_ACCESS_TOKEN ? '✅ (' + FYERS_ACCESS_TOKEN.slice(0,10) + '...)' : '❌'} | RefreshToken=${FYERS_REFRESH_TOKEN ? '✅ present' : '❌ MISSING'}`);
+// 17 Oct — lets the in-app mobile login (src/utils/fyersLogin.js) switch the running app to a freshly generated token without a Railway edit/redeploy
+function setFyersAccessToken(token) {
+    const t = String(token || '').trim();
+    if (!t) return false;
+    FYERS_ACCESS_TOKEN = t;
+    process.env.FYERS_ACCESS_TOKEN = t;
+    return true;
+}
+function getFyersAccessToken() { return FYERS_ACCESS_TOKEN || ''; }
 
 // ── Fyers Auto Token Refresh ───────────────────────────────────────────────────
 // Fyers access token expires every day at midnight.
@@ -2807,6 +2816,8 @@ module.exports = {
     getFyersGreeksProbe,
     refreshFyersAtmIv,
     getFyersUsage,        // 15 Oct — read-only Fyers call counter
+    setFyersAccessToken,  // 17 Oct — in-app Fyers login
+    getFyersAccessToken,
     getFyersUsageLine,
 
     // Snapshots (for /debug routes)
