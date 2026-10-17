@@ -138,6 +138,7 @@ const hourStudyLib = require('./src/utils/hourStudy');   // 14 Oct — hour-of-d
 const ofLib = require('./src/utils/orderflowContext');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
 const proxyDayLib = require('./src/utils/proxyDay');   // 17 Oct — read-only 15-min view of the volume-delta PROXY for one day (compare with a real footprint)
 const { createAtrShadow } = require('./src/utils/atrShadow');   // 17 Oct — ATR-scaled SL/target SHADOW twin of each NIFTY paper trade (record-only)
+const { createReminder: createFyersTokenReminder } = require('./src/utils/fyersTokenReminder');   // 17 Oct — weekday 08:30/09:00 IST Telegram nudge when the Fyers token is expired/missing
 const tickFlowLib = require('./src/utils/tickFlowLab');   // 17 Oct — record-only tick-flow LAB on the free Angel feed (NIFTY futures); TICKFLOW_LAB=true switches it on
 const { createAutoJournal } = require('./src/utils/autoJournal');   // 10 Oct — strategy-wise AUTO paper journal (signal -> ATM paper trade -> coach-managed exit)
 const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
@@ -882,6 +883,10 @@ const COMBINED_PCR_WEIGHTS = { nifty: 1, bankNifty: 1, sensex: 1, top10Stocks: 1
 // periodically rather than treating it as permanently fixed.
 const TOP10_NIFTY_STOCKS = ['HDFCBANK', 'RELIANCE', 'ICICIBANK', 'INFY', 'TCS', 'BHARTIARTL', 'ITC', 'LT', 'KOTAKBANK', 'SBIN'];
 
+// 17 Oct — COMBINED_PCR_STOCKS=off skips the 10 stock option-chain calls (10 of the 12 Fyers calls made every 3 minutes = ~1,250 of the 5,000/day
+// Data-API budget). Default is ON, i.e. unchanged. With it off the top-10 component simply drops out of the average (Combined PCR is informational only
+// and feeds no signal), so the Combined PCR value itself is then built from Nifty + BankNifty + Sensex only.
+const COMBINED_PCR_STOCKS_ENABLED = String(process.env.COMBINED_PCR_STOCKS || 'on').toLowerCase() !== 'off';
 async function computeCombinedPCR() {
     if (!isMarketOpen()) return;
     try {
@@ -889,7 +894,7 @@ async function computeCombinedPCR() {
         const [bankNiftyResult, sensexResult, ...stockResults] = await Promise.all([
             fetchGenericPCR('NSE:NIFTYBANK-INDEX', 'BankNifty'),
             fetchGenericPCR('BSE:SENSEX-INDEX', 'Sensex'),
-            ...TOP10_NIFTY_STOCKS.map(sym => fetchGenericPCR(`NSE:${sym}-EQ`, sym)),
+            ...(COMBINED_PCR_STOCKS_ENABLED ? TOP10_NIFTY_STOCKS : []).map(sym => fetchGenericPCR(`NSE:${sym}-EQ`, sym)),
         ]);
 
         const stockPCRs = stockResults.filter(r => r?.pcr != null).map(r => r.pcr);
@@ -8766,6 +8771,14 @@ ${priceStr} — after a ${result.daysInRun}-${tfUnit} run, ${tfLabel.toLowerCase
 // within the period they're checked on).
 async function checkExhaustionReversalTrigger(instrument, timeframe) {
     if (!isConfigured()) return;
+    // 17 Oct audit — the CRUDE hourly check fetched 60 days of 1h candles from Fyers (a counted Data-API call, 5,000/day limit) every
+    // 10 minutes round the clock, also while MCX is shut (weekends, 00:35-08:55 IST), when no new hourly candle can exist. The dedup key only
+    // stopped the SIGNAL, not the fetch. Skip the fetch in that window only; every other time and instrument behaves exactly as before.
+    if (instrument === 'CRUDE' && timeframe === 'HOURLY') {
+        const ist = getIST(), dow = ist.getDay(), mins = ist.getHours() * 60 + ist.getMinutes();
+        const afterMidnightClose = mins >= 35 && mins < 8 * 60 + 55;
+        if (dow === 0 || (dow === 6 && mins >= 35) || afterMidnightClose) return;
+    }
     const needsCloseGate = timeframe !== 'HOURLY';
     if (needsCloseGate) {
         const ist = getIST();
@@ -16005,6 +16018,11 @@ function startPollingIntervals() {
     // sentiment gauge, not a fast-reacting signal).
     const combinedPCRTick = () => computeCombinedPCR().catch(e => console.warn('[CombinedPCR] tick error:', e.message));
     setTimeout(() => { combinedPCRTick(); setInterval(combinedPCRTick, 3 * 60 * 1000); }, 55 * 1000);
+    // 17 Oct — Fyers daily-token reminder: reads only the expiry inside the token (no API call); silent when the token is fresh.
+    try {
+        const _fyersReminder = createFyersTokenReminder({ getToken: () => process.env.FYERS_ACCESS_TOKEN, send: m => sendRawMessage(m), log: m => console.log(m) });
+        setInterval(() => { _fyersReminder.tick().catch(() => {}); }, 60 * 1000);
+    } catch (e) { console.warn('[FyersReminder] not started:', e.message); }
     // Opening Range Breakout (13 Sep) — 90s cadence, narrow window (9:30-10:30)
     // so frequent-enough checking matters more here than for the slower ones.
     const orbTick = () => checkOpeningRangeBreakout().catch(e => console.warn('[ORB] tick error:', e.message));

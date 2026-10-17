@@ -184,8 +184,9 @@ jobs:
   fiidii-push:
     name: 'FII/DII Push (NSE to Railway)'
     runs-on: ubuntu-latest
+    # 17 Oct audit: do not run on the two Bitcoin crons (13:30 / 17:30 UTC) - an NSE fetch at 7 PM / 11 PM IST is pointless and just adds a failing run
     if: >-
-      github.event_name == 'schedule' ||
+      (github.event_name == 'schedule' && github.event.schedule != '30 13 * * *' && github.event.schedule != '30 17 * * *') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'nifty-wake')
     steps:
       - name: Fetch FII/DII from NSE and push to Railway
@@ -255,10 +256,12 @@ jobs:
               sys.exit(1)
           PYEOF
 
-          PARSED=$(python3 /tmp/parse_fiidii.py)
+          # 17 Oct audit: GitHub runs this step with 'bash -e', so a failing 'PARSED=$(...)' ended the step RED before the old
+          # 'if [ $? -ne 0 ]' check could run. NSE often blocks or returns nothing; that must be a quiet skip, not a failed run.
+          PARSED=$(python3 /tmp/parse_fiidii.py) || PARSED=""
           echo "Parsed: $PARSED"
 
-          if [ $? -ne 0 ] || [ -z "$PARSED" ]; then
+          if [ -z "$PARSED" ]; then
             echo "Parse failed — skipping push"
             exit 0
           fi
