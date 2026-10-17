@@ -136,6 +136,7 @@ const sizingLib = require('./src/utils/sizingStudy');   // 10 Oct — flat lots 
 const exitRuleLib = require('./src/utils/exitRuleStudy');
 const hourStudyLib = require('./src/utils/hourStudy');   // 14 Oct — hour-of-day study with costs + older/newer-half check (read-only)
 const ofLib = require('./src/utils/orderflowContext');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
+const proxyDayLib = require('./src/utils/proxyDay');   // 17 Oct — read-only 15-min view of the volume-delta PROXY for one day (compare with a real footprint)
 const { createAtrShadow } = require('./src/utils/atrShadow');   // 17 Oct — ATR-scaled SL/target SHADOW twin of each NIFTY paper trade (record-only)
 const { createAutoJournal } = require('./src/utils/autoJournal');   // 10 Oct — strategy-wise AUTO paper journal (signal -> ATM paper trade -> coach-managed exit)
 const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
@@ -13380,6 +13381,32 @@ app.get('/api/entry-context-study', studyGuard, async (req, res) => {
         const out = { gridUsed: grid, snapshotsWithVwap: snaps.length, ...study };
         if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(ctxLib.formatEntryContextText(study) + `\n(snapshots with VWAP available: ${snaps.length})`);
         res.json({ success: true, instrument, source: req.query.source || 'ALL', ...out });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── Order-flow PROXY for one day (17 Oct) ───────────────────────────────────────────────────────────────────────────────
+// Read-only. /api/orderflow-proxy-day?date=2026-10-16&format=text   (date = IST day; omitted = latest day that has futures-volume rows)
+// 15-minute bars: futures volume, proxy delta, cumulative proxy delta, open->close, coarse range, absorption flag. Meant to be compared
+// with a real footprint (e.g. Dhan DEXT T3) for the same day. The proxy is NOT a footprint. Nothing here feeds signals, gates or alerts.
+app.get('/api/orderflow-proxy-day', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        let day = String(req.query.date || '').trim();
+        if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) return res.json({ success: false, error: 'date must look like 2026-10-16 (IST day)' });
+        if (!day) {
+            const m = await dbPool.query(`SELECT MAX(ts) AS t FROM market_snapshot_log WHERE fut_vol IS NOT NULL`);
+            if (!m.rows[0] || !m.rows[0].t) return res.json({ success: false, error: 'No snapshot rows with futures volume yet' });
+            day = new Date(new Date(m.rows[0].t).getTime() + 330 * 60000).toISOString().slice(0, 10);
+        }
+        const from = new Date(Date.parse(day + 'T00:00:00+05:30')), to = new Date(from.getTime() + 24 * 3600 * 1000);
+        const r = await dbPool.query(`SELECT ts, nifty, day_high, day_low, fut_vol, bar_clv, bar_rng_pct FROM market_snapshot_log WHERE ts >= $1 AND ts < $2 ORDER BY ts ASC`, [from, to]);
+        const snaps = r.rows.map(x => ({ ms: new Date(x.ts).getTime(), nifty: Number(x.nifty), dayHigh: x.day_high === null ? null : Number(x.day_high), dayLow: x.day_low === null ? null : Number(x.day_low),
+            futVol: x.fut_vol === null ? null : Number(x.fut_vol), barClv: x.bar_clv === null ? null : Number(x.bar_clv), barRngPct: x.bar_rng_pct === null ? null : Number(x.bar_rng_pct) }));
+        const out = proxyDayLib.buildProxyDay(snaps, day);
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(proxyDayLib.formatProxyDayText(out));
+        res.json({ success: true, ...out });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
