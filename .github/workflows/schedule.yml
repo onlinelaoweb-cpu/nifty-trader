@@ -25,6 +25,11 @@ on:
     - cron: '0 9 * * 1-5'
     - cron: '30 9 * * 1-5'
     - cron: '0 10 * * 1-5'
+    # FII/DII evening retries (17 Oct): NSE posts the day's final FII/DII figures after the close (~6 PM IST). 18:00, 18:30, 19:30, 20:30 IST
+    - cron: '30 12 * * 1-5'
+    - cron: '0 13 * * 1-5'
+    - cron: '0 14 * * 1-5'
+    - cron: '0 15 * * 1-5'
 
   workflow_dispatch:
     inputs:
@@ -177,7 +182,7 @@ jobs:
 
 # ─────────────────────────────────────────────
 # FII/DII PUSH — fetch from NSE, push to Railway
-# Runs every 30 min on market days 6:00–22:00 IST
+# Runs every 30 min on market days 9:00–16:00 IST, plus 4 evening retries (18:00, 18:30, 19:30, 20:30 IST) for the day's final figures
 # GitHub runners bypass Railway's NSE IP block
 # Requires secrets: NIFTY_APP_URL, NIFTY_APP_TOKEN
 # ─────────────────────────────────────────────
