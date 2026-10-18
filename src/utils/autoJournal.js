@@ -227,4 +227,26 @@ function createAutoJournal({ dbPool, getStrikePremium, now = Date.now, log = () 
     return { cfg, start, stop, report, logLiveAlert, tick, _state: S };
 }
 
-module.exports = { createAutoJournal, coachInit, coachStep, effectiveStopPct, pnlOf, summarize, inWindow, pastSquareOff, WINDOWS };
+// ── compact text view of a report() result (read-only; for sharing a small, readable list instead of the long JSON) ──
+// opts: { instrument?, source? } - case-insensitive exact match filters. Never changes any stored data.
+function reportText(rep, opts = {}) {
+    const inst = opts.instrument ? String(opts.instrument).toUpperCase() : null, src = opts.source ? String(opts.source).toLowerCase() : null;
+    const L = [];
+    const ist = ts => { const d = new Date(new Date(ts).getTime() + 330 * 60000); return d.toISOString().slice(5, 16).replace('T', ' '); };
+    const f = v => (v === null || v === undefined || v === '' ? '-' : String(v));
+    const groups = (rep && rep.strategies || []).filter(g => (!inst || String(g.instrument).toUpperCase() === inst) && (!src || String(g.source).toLowerCase() === src));
+    L.push(`Auto Journal - last ${rep && rep.days || '?'} day(s)${inst ? ' - ' + inst : ''}${src ? ' - ' + opts.source : ''}   (times are IST)`);
+    if (!groups.length) { L.push('No matching strategy group.'); return L.join('\n'); }
+    for (const g of groups) {
+        const closed = g.trades.filter(t => t.state === 'CLOSED');
+        const rsKnown = closed.filter(t => t.realized_rs !== null && t.realized_rs !== undefined);
+        L.push('', `${g.instrument} ${g.source}: ${g.total} trades (${g.open} open, ${g.closed} closed) - win ${f(g.winPct)}% - avg ${f(g.avgPct)}% per trade - total Rs ${f(g.totalRs)}`);
+        L.push(`  Rs is known for ${rsKnown.length} of ${closed.length} closed trades (the Rs total adds only those; the avg % uses all closed).`);
+        L.push('  time(IST)    side strike  entry  lots lotsz   pct%     Rs     exit');
+        for (const t of [...g.trades].sort((a, b) => new Date(a.fire_ts) - new Date(b.fire_ts)))
+            L.push(`  ${ist(t.fire_ts)}  ${f(t.side).padEnd(4)} ${String(f(t.strike)).padStart(6)} ${String(f(t.entry_premium)).padStart(6)} ${String(f(t.lots)).padStart(4)} ${String(f(t.lot_size)).padStart(5)} ${String(f(t.realized_pct)).padStart(7)} ${String(f(t.realized_rs)).padStart(7)}  ${f(t.exit_reason)}${t.state === 'OPEN' ? ' (OPEN)' : ''}`);
+    }
+    return L.join('\n');
+}
+
+module.exports = { reportText, createAutoJournal, coachInit, coachStep, effectiveStopPct, pnlOf, summarize, inWindow, pastSquareOff, WINDOWS };

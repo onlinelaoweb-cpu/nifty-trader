@@ -3910,6 +3910,14 @@ function switchJournalTab(tab) {
 function _ajEsc(v) { return String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function _ajCls(v) { return v === null || v === undefined ? 'aj-flat' : v > 0 ? 'aj-pos' : v < 0 ? 'aj-neg' : 'aj-flat'; }
 function _ajPct(v) { return v === null || v === undefined ? '–' : (v > 0 ? '+' : '') + Number(v).toFixed(1) + '%'; }
+// 18 Oct - when the rupee total is known it is the headline (real money: it weights each trade by its premium and lots), and the per-trade % average is shown as a smaller second figure.
+// A simple % average counts a Rs 23 premium trade the same as a Rs 150 one, so it can be green while the rupee total is red.
+function _ajHeadline(g) {
+  if (!g.closed) return '<span class="aj-flat"><b>no closed trade</b></span>';
+  const pct = '<span class="' + _ajCls(g.avgPct) + '">' + _ajPct(g.avgPct) + ' avg/trade</span>';
+  if (g.totalRs === null || g.totalRs === undefined) return '<span class="' + _ajCls(g.avgPct) + '"><b>' + _ajPct(g.avgPct) + ' avg</b></span>';
+  return '<span class="' + _ajCls(g.totalRs) + '"><b>' + (g.totalRs > 0 ? '+' : g.totalRs < 0 ? '-' : '') + '₹' + Math.abs(Math.round(g.totalRs)).toLocaleString('en-IN') + ' net</b></span> · ' + pct;
+}
 function _ajRs(v) { return v === null || v === undefined ? '' : ' · ' + (v > 0 ? '+' : '') + '₹' + Math.round(v).toLocaleString('en-IN'); }
 function _ajTime(ts) { try { return new Date(ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }); } catch (e) { return ''; } }
 const _AJ_REASON = { stop_loss: 'Stop-loss', breakeven_stop: 'Breakeven stop', full_target: 'Target hit', trail_stop: 'Trailing stop', time_exit: 'Time stop', eod_exit: 'End-of-day exit', no_data: 'No price data' };
@@ -3943,7 +3951,7 @@ async function loadAutoJournal() {
       const key = g.key, isOpen = openIds.has(key) ? ' open' : '';
       const shown = g.trades.slice(0, 40), more = g.trades.length - shown.length;
       return '<details class="aj-grp" data-key="' + _ajEsc(key) + '"' + isOpen + '><summary><span><span class="aj-ginst">' + _ajEsc(g.instrument) + '</span><span class="aj-gname">' + _ajEsc(g.source) + '</span>' + (g.muted ? '<span class="aj-muted">muted</span>' : '') + '</span>' +
-        '<span class="aj-gstats"><span class="' + _ajCls(g.avgPct) + '"><b>' + (g.closed ? _ajPct(g.avgPct) + ' avg' : 'no closed trade') + '</b></span><span class="' + _ajCls(g.totalRs) + '">' + _ajRs(g.totalRs) + '</span><br>' + g.total + ' trades · ' + g.open + ' open' + (g.winPct !== null ? ' · win ' + g.winPct + '%' : '') + '</span></summary>' +
+        '<span class="aj-gstats">' + _ajHeadline(g) + '<br>' + g.total + ' trades · ' + g.open + ' open' + (g.winPct !== null ? ' · win ' + g.winPct + '%' : '') + '</span></summary>' +
         '<div class="aj-trades">' + shown.map(_ajTradeHtml).join('') + (more > 0 ? '<div class="aj-more">+ ' + more + ' older trades</div>' : '') + '</div></details>';
     }).join('') || '<div class="aj-note">No live Telegram signals yet in this period. A trade appears here the moment a qualifying signal is sent.</div>';
     listEl.querySelectorAll('details').forEach(el => el.addEventListener('toggle', () => {

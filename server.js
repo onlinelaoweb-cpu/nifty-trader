@@ -15702,7 +15702,12 @@ app.get('/api/atr-shadow', requireToken, async (req, res) => {
 });
 app.get('/api/auto-journal', requireToken, async (req, res) => {
     if (!_autoJournal) return res.json({ success: true, enabled: false, started: false, strategies: [], msg: 'starting (about 25s after boot)' });
-    try { res.json({ success: true, ...(await _autoJournal.report({ days: req.query.days })) }); }
+    try {
+        const rep = await _autoJournal.report({ days: req.query.days });
+        // 18 Oct - optional read-only text view: /api/auto-journal?days=30&instrument=NIFTY&source=Brahmastra&format=text (short list for sharing). No params = same JSON as before.
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(require('./src/utils/autoJournal').reportText(rep, { instrument: req.query.instrument, source: req.query.source }));
+        res.json({ success: true, ...rep });
+    }
     catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
