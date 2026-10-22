@@ -15700,6 +15700,20 @@ app.get('/api/atr-shadow', requireToken, async (req, res) => {
         res.type('text/plain').send(L.join('\n'));
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
+// 22 Oct 2026 - read-only PROBABILITY PROFILE per engine from the Auto Journal's CLOSED trades (win%, payoff, expectancy, streak, drawdown, correlated duplicates).
+// /api/prob-profile?days=30&format=text   (days 1-90, default 30). Changes no signal, rule or stored row.
+app.get('/api/prob-profile', requireToken, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const d = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 30));
+        const r = await dbPool.query(`SELECT instrument, source, direction, side, strike, fire_ts, state, exit_reason, realized_pct, realized_rs
+            FROM auto_journal_trades WHERE source_table='telegram_live' AND fire_ts >= (((NOW() AT TIME ZONE 'Asia/Kolkata')::date - ($1::int - 1))::timestamp AT TIME ZONE 'Asia/Kolkata') ORDER BY fire_ts ASC LIMIT 5000`, [d]);
+        const PP = require('./src/utils/probProfile');
+        const prof = PP.buildProfile(r.rows);
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(PP.profileText(prof, { days: d }));
+        res.json({ success: true, days: d, ...prof });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
 app.get('/api/auto-journal', requireToken, async (req, res) => {
     if (!_autoJournal) return res.json({ success: true, enabled: false, started: false, strategies: [], msg: 'starting (about 25s after boot)' });
     try {
