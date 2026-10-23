@@ -4107,6 +4107,17 @@ function switchTab(name,btn){
   }
 }
 
+// NSE trading holidays 2026 (weekday closures). ONE list for the whole page. MUST equal NSE_HOLIDAYS in src/api/nseData.js
+// (test/holidayListSync.test.js fails if they differ). 24 Oct: the old copies here had 7 wrong/missing dates (e.g. 4 Nov instead of 10 Nov).
+const NSE_HOLIDAYS_2026 = new Set([
+  '2026-01-15','2026-01-26','2026-03-03','2026-03-26','2026-03-31',
+  '2026-04-03','2026-04-14','2026-05-01','2026-05-28','2026-06-26',
+  '2026-08-15','2026-09-14','2026-10-02','2026-10-20','2026-11-10',
+  '2026-11-24','2026-12-25',
+]);
+const nseYmd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const nseIsSessionDay = d => { const wd = d.getDay(); return wd >= 1 && wd <= 5 && !NSE_HOLIDAYS_2026.has(nseYmd(d)); };
+
 // CLOCK - runs immediately
 function updateClock(){
   try{
@@ -4119,15 +4130,30 @@ function updateClock(){
 setInterval(updateClock,500);
 updateClock();
 
+// Display only: when market is closed, RSI/ADX are computed on frozen price — tag them so they are not read as live
+function markFrozenIndicators(frozen){
+  [['rsi-multi-signal','rsi-frozen-tag'],['adx-zone','adx-frozen-tag']].forEach(function(p){
+    const host=document.getElementById(p[0]); if(!host||!host.parentNode) return;
+    let tag=document.getElementById(p[1]);
+    if(frozen){
+      if(!tag){tag=document.createElement('span');tag.id=p[1];tag.textContent='❄ FROZEN';
+        tag.title='Market closed — value is from frozen last-close data, not live';
+        tag.style.cssText='font-size:9px;color:var(--dim);margin-left:6px;font-family:Orbitron,monospace;letter-spacing:1px;';
+        host.parentNode.insertBefore(tag,host);}
+    } else if(tag){tag.remove();}
+  });
+}
 // MARKET + EXPIRY COUNTDOWN
 function updateHeaderBadges(){
   const ist=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
   const h=ist.getHours(),m=ist.getMinutes(),s=ist.getSeconds();
   const secs=h*3600+m*60+s;
   const open=9*3600+15*60,cls=15*3600+30*60;
+  const isWk=ist.getDay()>=1&&ist.getDay()<=5; // Sat/Sun = closed all day
   const badge=document.getElementById('market-badge');
   function fmt(sec){const hh=Math.floor(sec/3600),mm=Math.floor((sec%3600)/60),ss=sec%60;return hh>0?`${hh}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`:`${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;}
-  if(secs<open){badge.className='hbadge market-pre';badge.textContent='⏰ '+fmt(open-secs);}
+  if(!isWk){badge.className='hbadge market-closed';badge.textContent='🔴 CLOSED';}
+  else if(secs<open){badge.className='hbadge market-pre';badge.textContent='⏰ '+fmt(open-secs);}
   else if(secs<=cls){badge.className='hbadge market-open';badge.textContent='🟢 '+fmt(cls-secs);}
   else{badge.className='hbadge market-closed';badge.textContent='🔴 CLOSED';}
   // Sync status dot on strike banner (ticker only manages CLOSED/PRE-MARKET text;
@@ -4135,13 +4161,14 @@ function updateHeaderBadges(){
   const statusDot=document.getElementById('status-dot');
   const statusTxt=document.getElementById('status-txt');
   if(statusDot&&statusTxt){
-    const isOpen=secs>=open&&secs<=cls;
+    const isOpen=isWk&&secs>=open&&secs<=cls;
     if(!isOpen){
       statusDot.className='dot-off';
-      statusTxt.textContent=secs<open?'PRE-MARKET':'CLOSED';
+      statusTxt.textContent=(isWk&&secs<open)?'PRE-MARKET':'CLOSED · last close';
     }
     // when isOpen: leave dot+text alone — renderDashboard sets them via s.connected
   }
+  markFrozenIndicators(!(isWk&&secs>=open&&secs<=cls));
   const day=ist.getDay();
   const daysToExp=day<=2?(2-day):(2+7-day);
   const expBadge=document.getElementById('expiry-badge');
@@ -4182,14 +4209,13 @@ function updateMarketClosedBanner() {
 
   // Calculate seconds until next market open
   function secsUntilOpen() {
-    let d = new Date(now);
-    // If today is weekday and before open → same day
-    if (isWeekday && secs < OPEN) return OPEN - secs;
-    // Otherwise find next Mon–Fri
+    // If today is a trading day and before open -> same day
+    if (isWeekday && !NSE_HOLIDAYS_2026.has(nseYmd(now)) && secs < OPEN) return OPEN - secs;
+    // Otherwise the next trading day (skips weekends AND NSE holidays, same list as the label below)
     let add = 1;
-    while (add <= 7) {
-      const nd = (day + add) % 7;
-      if (nd >= 1 && nd <= 5) break; // Mon–Fri
+    while (add <= 14) {
+      const nd = new Date(now); nd.setDate(now.getDate() + add);
+      if (nseIsSessionDay(nd)) break;
       add++;
     }
     return add * 86400 - secs + OPEN;
@@ -4203,13 +4229,7 @@ function updateMarketClosedBanner() {
   }
 
   function nextSessionLabel() {
-    const holidays = new Set([
-      '2026-01-26','2026-03-02','2026-03-20','2026-04-02','2026-04-03',
-      '2026-04-14','2026-05-01','2026-08-15','2026-08-27','2026-10-02',
-      '2026-10-20','2026-10-21','2026-11-04','2026-12-25',
-    ]);
-    const toStr = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    const isSessionDay = d => { const wd = d.getDay(); return wd >= 1 && wd <= 5 && !holidays.has(toStr(d)); };
+    const holidays = NSE_HOLIDAYS_2026, toStr = nseYmd, isSessionDay = nseIsSessionDay;
     if (isWeekday && secs < OPEN) {
       // check if today itself is a holiday
       const todayStr = toStr(now);
@@ -4227,11 +4247,7 @@ function updateMarketClosedBanner() {
   }
 
   const isWeekend = (day === 0 || day === 6);
-  const NSE_HOLIDAYS = new Set([
-    '2026-01-26','2026-03-02','2026-03-20','2026-04-02','2026-04-03',
-    '2026-04-14','2026-05-01','2026-08-15','2026-08-27','2026-10-02',
-    '2026-10-20','2026-10-21','2026-11-04','2026-12-25',
-  ]);
+  const NSE_HOLIDAYS = NSE_HOLIDAYS_2026;
   const istStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
   const isHoliday = NSE_HOLIDAYS.has(istStr);
   const isPostMkt = isWeekday && !isHoliday && secs > CLOSE;
@@ -5016,11 +5032,11 @@ function renderDashboard(s) {
     const marketHours = (() => {
       const ist = new Date(new Date().toLocaleString('en-US', {timeZone:'Asia/Kolkata'}));
       const secs = ist.getHours()*3600 + ist.getMinutes()*60 + ist.getSeconds();
-      return secs >= 9*3600+15*60 && secs <= 15*3600+30*60;
+      return ist.getDay() >= 1 && ist.getDay() <= 5 && secs >= 9*3600+15*60 && secs <= 15*3600+30*60;
     })();
     const isLive = marketHours && hasPrice;
     dot.className = isLive ? 'dot-live' : 'dot-off';
-    statusTxt.textContent = isLive ? 'LIVE' : (marketHours ? 'WAITING' : statusTxt.textContent);
+    statusTxt.textContent = isLive ? 'LIVE' : (marketHours ? 'WAITING' : 'CLOSED · last close');
     // when closed, ticker (updateHeaderBadges) owns the text — don't overwrite here
   }
 

@@ -37,7 +37,7 @@ function decide({ token, nowMs, sentToday = 0, minAheadMs = 2 * 3600 * 1000 }) {
 }
 
 function buildMessage(reason) {
-    return `🔑 <b>Fyers token renew karo</b> (9:15 se pehle)\nAbhi: ${reason}.\nRenew karke Railway mein <code>FYERS_ACCESS_TOKEN</code> update karo. Token ke bina PCR, futures volume aur crude history band rehte hain.`;
+    return `🔑 <b>Fyers token renew karo</b> (9:15 se pehle)\nAbhi: ${reason}.\nPhone se: app ka Fyers login page kholo (<code>/api/fyers-login/page?key=APP_TOKEN</code>), login karke URL paste karo. Token ke bina PCR, futures volume aur crude history band rehte hain.`;
 }
 
 // stateful helper used by the server timer: createReminder({ getToken, send, now }).tick()
