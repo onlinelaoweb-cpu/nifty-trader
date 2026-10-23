@@ -8545,8 +8545,8 @@ async function fetchSignalAccuracy() {
     // Track Record Pulse always reads ALL-TIME rows (the period buttons must not shrink its sample).
     try {
       if (window.TrackPulse) {
-        if (_saDays === 0) window.TrackPulse.update({ sa: r.rows || [] });
-        else fetch('/api/signal-accuracy?days=0').then(x => x.json()).then(a => { if (a && a.success) window.TrackPulse.update({ sa: a.rows || [] }); }).catch(() => {});
+        if (_saDays === 0) window.TrackPulse.update({ sa: (r.rows || []).filter(x => x.instrument !== 'BITCOIN') });
+        else fetch('/api/signal-accuracy?days=0').then(x => x.json()).then(a => { if (a && a.success) window.TrackPulse.update({ sa: (a.rows || []).filter(x => x.instrument !== 'BITCOIN') }); }).catch(() => {});
       }
     } catch (e) { console.warn('[TrackPulse]', e.message); }
     const rows = (r.rows || []).filter(x => x.instrument === 'NIFTY' || x.instrument === 'CRUDE');
