@@ -137,6 +137,8 @@ const exitRuleLib = require('./src/utils/exitRuleStudy');
 const hourStudyLib = require('./src/utils/hourStudy');   // 14 Oct — hour-of-day study with costs + older/newer-half check (read-only)
 const ofLib = require('./src/utils/orderflowContext');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
 const proxyDayLib = require('./src/utils/proxyDay');   // 17 Oct — read-only 15-min view of the volume-delta PROXY for one day (compare with a real footprint)
+const jumbaaLib = require('./src/utils/jumbaaSignal');   // 23 Oct — Jumbaa signal (S/R 15m-close cross + Smart Money + 1h ADX), shadow/record-only
+const smartMoneyLogLib = require('./src/utils/smartMoneyLog');   // 23 Oct — stores the Smart Money bias + its 5 parts every 5 min (record-only)
 const { createAtrShadow } = require('./src/utils/atrShadow');   // 17 Oct — ATR-scaled SL/target SHADOW twin of each NIFTY paper trade (record-only)
 const { createReminder: createFyersTokenReminder } = require('./src/utils/fyersTokenReminder');   // 17 Oct — weekday 08:30/09:00 IST Telegram nudge when the Fyers token is expired/missing
 // 17 Oct — in-app Fyers login (works from a phone): /api/fyers-login/page?key=APP_TOKEN. Uses FYERS_APP_ID + FYERS_SECRET_ID already in Railway.
@@ -7141,6 +7143,195 @@ async function niftyClassicTick(snap, finalSignal, price, liveReasons) {
     }, 30 * 1000);
 }
 
+// ── SMART MONEY LOG (23 Oct) ─────────────────────────────────────────────────────────────────────────────────────────
+// The Smart Money bias was a live number only. This stores it every 5 min while the market is open: the bias, the total score and each of the
+// 5 parts (OI Buildup, FII, DII, PCR level, ATM flow) + the date of the FII/DII figure (an end-of-day number - usually yesterday's during the day).
+// Record-only: it never changes a signal, gate or alert. Turn off with SMART_MONEY_LOG=off. Read: /api/smart-money-log?days=7&format=text
+const SMART_LOG_ENABLED = String(process.env.SMART_MONEY_LOG || 'on').toLowerCase() !== 'off';
+let _smartLogReady = false, _smartLogErrors = 0;
+async function ensureSmartLogTable() {
+    if (!dbPool || _smartLogReady) return;
+    await dbPool.query(`
+        CREATE TABLE IF NOT EXISTS smart_money_log (
+            id SERIAL PRIMARY KEY, ts TIMESTAMPTZ DEFAULT NOW(), bias TEXT, score NUMERIC,
+            oi_pts NUMERIC, oi_label TEXT, fii_pts NUMERIC, fii_net NUMERIC, dii_pts NUMERIC, dii_net NUMERIC,
+            pcr_pts NUMERIC, pcr NUMERIC, atm_pts NUMERIC, atm_ratio NUMERIC, fii_dii_date TEXT, fii_dii_fetched_at TEXT, nifty NUMERIC)`);
+    await dbPool.query(`CREATE INDEX IF NOT EXISTS smart_money_log_ts_idx ON smart_money_log (ts)`);
+    _smartLogReady = true;
+}
+async function saveSmartMoneyLog() {
+    if (!SMART_LOG_ENABLED || !dbPool || _smartLogErrors >= 5 || !isNSEMarketDay() || !isMarketOpen()) return;
+    try {
+        const r = smartMoneyLogLib.buildRow(marketState);
+        if (!r) return;
+        await ensureSmartLogTable();
+        await dbPool.query(
+            `INSERT INTO smart_money_log (bias, score, oi_pts, oi_label, fii_pts, fii_net, dii_pts, dii_net, pcr_pts, pcr, atm_pts, atm_ratio, fii_dii_date, fii_dii_fetched_at, nifty)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+            [r.bias, r.score, r.oi_pts, r.oi_label, r.fii_pts, r.fii_net, r.dii_pts, r.dii_net, r.pcr_pts, r.pcr, r.atm_pts, r.atm_ratio, r.fii_dii_date, r.fii_dii_fetched_at, r.nifty]);
+    } catch (e) { _smartLogErrors++; console.warn('[SmartLog] error:', e.message); }
+}
+// Read-only. ?days=1-60 (default 7). format=text gives a per-day summary (how often the bias changed) and the latest rows.
+app.get('/api/smart-money-log', requireToken, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        await ensureSmartLogTable();
+        const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 7));
+        const r = await dbPool.query(`SELECT * FROM smart_money_log WHERE ts >= NOW() - ($1::int * INTERVAL '1 day') ORDER BY ts ASC LIMIT 6000`, [days]);
+        const sum = smartMoneyLogLib.summarize(r.rows);
+        if (String(req.query.format || '').toLowerCase() === 'text') {
+            const f = v => (v === null || v === undefined ? '-' : String(v));
+            const L = [`SMART MONEY LOG - last ${days} day(s), ${r.rows.length} rows, enabled ${SMART_LOG_ENABLED}, errors ${_smartLogErrors}`,
+                `Score = OI buildup + FII + DII + PCR level + ATM flow. FII/DII is an end-of-day figure: check its date against the day.`, '', 'PER DAY:'];
+            for (const d of sum) L.push(`  ${d.day}: ${d.rows} rows | first ${d.firstBias} -> last ${d.lastBias} | changed ${d.changes}x | score ${f(d.scoreMin)}..${f(d.scoreMax)} | FII/DII date used: ${d.fiiDiiDates.join(', ') || '-'}`);
+            L.push('', 'LAST 60 ROWS (IST):');
+            for (const x of r.rows.slice(-60)) L.push(`${new Date(x.ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })} ${x.bias} (${f(x.score)}) | OI ${f(x.oi_pts)} FII ${f(x.fii_pts)} DII ${f(x.dii_pts)} PCR ${f(x.pcr_pts)} (${f(x.pcr)}) ATM ${f(x.atm_pts)} (${f(x.atm_ratio)}) | FII ${f(x.fii_net)} DII ${f(x.dii_net)} on ${f(x.fii_dii_date)} | Nifty ${f(x.nifty)}`);
+            L.push('', 'Observation only - not financial advice.');
+            return res.type('text/plain').send(L.join('\n'));
+        }
+        res.json({ success: true, enabled: SMART_LOG_ENABLED, days, perDay: sum, rows: r.rows });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── JUMBAA SIGNAL — shadow test (23 Oct) ─────────────────────────────────────────────────────────────────────────────
+// Prabhash's manual method as one rule: a 15-min candle CLOSES across a key S/R level + Smart Money bias agrees + 1h ADX >= 25.
+// PCR is not used. Record-only: no Telegram, no journal row, no broker. Turn off with JUMBAA_SIGNAL=off.
+// Read it with /api/jumbaa-signal?days=30&format=text (forward index move at +15/+30/+60 min, pre-registered verdict inside).
+const JUMBAA_ENABLED = String(process.env.JUMBAA_SIGNAL || 'on').toLowerCase() !== 'off';
+const _jumbaa = jumbaaLib.createJumbaa();
+const _jumbaaLive = jumbaaLib.createJumbaaLive();   // variant B: live cross, tick by tick
+let _jumbaaLiveTimers = 0;
+let _jumbaaTableReady = false, _jumbaaErrors = 0;
+async function ensureJumbaaTable() {
+    if (!dbPool || _jumbaaTableReady) return;
+    await dbPool.query(`
+        CREATE TABLE IF NOT EXISTS jumbaa_signal_log (
+            id SERIAL PRIMARY KEY, ts TIMESTAMPTZ DEFAULT NOW(), direction TEXT, side TEXT, nifty NUMERIC, prev_close NUMERIC,
+            level NUMERIC, level_type TEXT, level_label TEXT, levels_crossed INT, smart_bias TEXT, adx_1h NUMERIC,
+            atm_strike NUMERIC, atm_premium NUMERIC, vix NUMERIC)`);
+    // 23 Oct v1.1: every 15-min cross is logged, fired or blocked (with the reasons), plus PCR and 5m/15m ADX for later filter studies.
+    await dbPool.query(`ALTER TABLE jumbaa_signal_log ADD COLUMN IF NOT EXISTS fired BOOLEAN, ADD COLUMN IF NOT EXISTS blocked_by TEXT,
+        ADD COLUMN IF NOT EXISTS pcr NUMERIC, ADD COLUMN IF NOT EXISTS adx_5m NUMERIC, ADD COLUMN IF NOT EXISTS adx_15m NUMERIC`);
+    // 23 Oct v2: variant 'A' = 15-min candle-close cross, 'B' = live cross. px_Xm = Nifty X minutes after a B cross (recorded by timers).
+    await dbPool.query(`ALTER TABLE jumbaa_signal_log ADD COLUMN IF NOT EXISTS variant TEXT DEFAULT 'A', ADD COLUMN IF NOT EXISTS px_1m NUMERIC, ADD COLUMN IF NOT EXISTS px_5m NUMERIC,
+        ADD COLUMN IF NOT EXISTS px_15m NUMERIC, ADD COLUMN IF NOT EXISTS px_30m NUMERIC`);
+    // 24 Oct: market breadth (Advance/Decline) at the cross: 'BULLISH' | 'BEARISH' | 'NEUTRAL' + the % of stocks up. Used to compare breadth-agreeing vs not.
+    await dbPool.query(`ALTER TABLE jumbaa_signal_log ADD COLUMN IF NOT EXISTS breadth_sig TEXT, ADD COLUMN IF NOT EXISTS breadth_pct NUMERIC`);
+    _jumbaaTableReady = true;
+}
+// Variant B (23 Oct): catches the cross the moment price clears an S/R level by 3 pts, logs it (fired or blocked + reasons), then records the
+// Nifty price 1 / 5 / 15 / 30 minutes later with timers (a restart loses the timers of that moment - those rows simply have no reading).
+function jumbaaLiveTick(price) {
+    const sigs = _jumbaaLive.step({ ms: Date.now(), price, levels: marketState.srLevels && marketState.srLevels.levels,
+        smartBias: marketState.smartMoney && marketState.smartMoney.bias, adx1h: marketState.mtf && marketState.mtf.tf1h && marketState.mtf.tf1h.adx });
+    if (!sigs.length) return;
+    const flow = marketState.optionFlow || {}, vix = marketState.vix > 0 ? marketState.vix : null, tf = marketState.mtf || {};
+    const nn = v => (v !== null && v !== undefined && Number.isFinite(Number(v)) ? Number(v) : null), atm = Math.round(price / 50) * 50;
+    for (const sig of sigs) {
+        const prem = sig.side === 'CALL' ? flow.atmCEpremium : flow.atmPEpremium;
+        console.log(`🐘 [Jumbaa-B] ${sig.fired ? 'SIGNAL' : 'live cross blocked (' + sig.blockedBy.join(',') + ')'} ${sig.side} @ ${Math.round(price)} — ${sig.levelLabel || sig.levelType || 'level'} ${sig.level} | smart money ${sig.smartBias} | 1h ADX ${sig.adx1h}`);
+        ensureJumbaaTable().then(() => dbPool.query(
+            `INSERT INTO jumbaa_signal_log (variant, direction, side, nifty, prev_close, level, level_type, level_label, levels_crossed, smart_bias, adx_1h, atm_strike, atm_premium, vix, fired, blocked_by, pcr, adx_5m, adx_15m, breadth_sig, breadth_pct)
+             VALUES ('B',$1,$2,$3,NULL,$4,$5,$6,1,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+            [sig.direction, sig.side, price, sig.level, sig.levelType, sig.levelLabel, sig.smartBias, sig.adx1h, atm, nn(prem), vix, sig.fired, sig.blockedBy.join(','),
+             nn(marketState.pcr), nn(tf.tf5m && tf.tf5m.adx), nn(tf.tf15m && tf.tf15m.adx), (marketState.breadth && marketState.breadth.breadthSignal) || null, nn(marketState.breadth && marketState.breadth.breadthPct)]
+        )).then(r => {
+            const id = r.rows[0] && r.rows[0].id; if (!id || _jumbaaLiveTimers > 200) return;
+            for (const m of [1, 5, 15, 30]) {
+                _jumbaaLiveTimers++;
+                const h = setTimeout(() => {
+                    _jumbaaLiveTimers--;
+                    const px = nn(marketState.nifty); if (px === null || !dbPool) return;
+                    dbPool.query(`UPDATE jumbaa_signal_log SET px_${m}m = $1 WHERE id = $2`, [px, id]).catch(e => console.warn('[Jumbaa-B] px update error:', e.message));
+                }, m * 60 * 1000);
+                if (h.unref) h.unref();
+            }
+        }).catch(e => { _jumbaaErrors++; console.warn('[Jumbaa-B] log error:', e.message); });
+    }
+}
+function jumbaaTick(price) {
+    if (!JUMBAA_ENABLED || !dbPool || _jumbaaErrors >= 5) return;
+    jumbaaLiveTick(price);   // variant B first (it never depends on A's result)
+    const sig = _jumbaa.step({ ms: Date.now(), price, levels: marketState.srLevels && marketState.srLevels.levels,
+        smartBias: marketState.smartMoney && marketState.smartMoney.bias, adx1h: marketState.mtf && marketState.mtf.tf1h && marketState.mtf.tf1h.adx });
+    if (!sig) return;
+    const flow = marketState.optionFlow || {};
+    const prem = sig.side === 'CALL' ? flow.atmCEpremium : flow.atmPEpremium;
+    const atm = Math.round(price / 50) * 50, vix = marketState.vix > 0 ? marketState.vix : null;
+    const tf = marketState.mtf || {}, nn = v => (Number.isFinite(Number(v)) && v !== null ? Number(v) : null);
+    console.log(`🐘 [Jumbaa] ${sig.fired ? 'SIGNAL' : 'cross blocked (' + sig.blockedBy.join(',') + ')'} ${sig.side} @ ${Math.round(price)} — ${sig.levelLabel || sig.levelType || 'level'} ${sig.level} | smart money ${sig.smartBias} | 1h ADX ${sig.adx1h}`);
+    ensureJumbaaTable().then(() => dbPool.query(
+        `INSERT INTO jumbaa_signal_log (direction, side, nifty, prev_close, level, level_type, level_label, levels_crossed, smart_bias, adx_1h, atm_strike, atm_premium, vix, fired, blocked_by, pcr, adx_5m, adx_15m, breadth_sig, breadth_pct)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+        [sig.direction, sig.side, price, sig.prevClose, sig.level, sig.levelType, sig.levelLabel, sig.levelsCrossed, sig.smartBias, sig.adx1h, atm, Number.isFinite(Number(prem)) ? Number(prem) : null, vix,
+         sig.fired, sig.blockedBy.join(','), nn(marketState.pcr), nn(tf.tf5m && tf.tf5m.adx), nn(tf.tf15m && tf.tf15m.adx), (marketState.breadth && marketState.breadth.breadthSignal) || null, nn(marketState.breadth && marketState.breadth.breadthPct)]
+    )).catch(e => { _jumbaaErrors++; console.warn('[Jumbaa] log error:', e.message); });
+}
+// Read-only. A (default): nifty_15/30/60 = first market_snapshot_log Nifty reading 15/30/60 min after the signal. ?variant=B = live-cross variant (px_1m/5m/15m/30m recorded by timers).
+app.get('/api/jumbaa-signal', requireToken, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        await ensureJumbaaTable();
+        const days = Math.min(120, Math.max(1, parseInt(req.query.days, 10) || 30));
+        const variant = String(req.query.variant || 'A').toUpperCase() === 'B' ? 'B' : 'A';   // ?variant=B = live-cross variant
+        const r = await dbPool.query(`
+            SELECT s.ts, s.direction, s.side, s.nifty, s.level, s.level_type, s.level_label, s.levels_crossed, s.smart_bias, s.adx_1h, s.atm_strike, s.atm_premium, s.fired, s.blocked_by, s.pcr, s.adx_5m, s.adx_15m, s.breadth_sig, s.breadth_pct, s.px_1m, s.px_5m, s.px_15m, s.px_30m,
+                   (SELECT m.nifty FROM market_snapshot_log m WHERE m.ts >= s.ts + INTERVAL '15 minutes' ORDER BY m.ts ASC LIMIT 1) AS nifty_15,
+                   (SELECT m.nifty FROM market_snapshot_log m WHERE m.ts >= s.ts + INTERVAL '30 minutes' ORDER BY m.ts ASC LIMIT 1) AS nifty_30,
+                   (SELECT m.nifty FROM market_snapshot_log m WHERE m.ts >= s.ts + INTERVAL '60 minutes' ORDER BY m.ts ASC LIMIT 1) AS nifty_60
+            FROM jumbaa_signal_log s WHERE s.ts >= NOW() - ($1::int * INTERVAL '1 day') AND COALESCE(s.variant, 'A') = $2 ORDER BY s.ts ASC LIMIT 3000`, [days, variant]);
+        const firedRows = r.rows.filter(x => x.fired !== false), blockedRows = r.rows.filter(x => x.fired === false);
+        const ev = variant === 'B' ? jumbaaLib.evaluateLive(firedRows) : jumbaaLib.evaluateJumbaa(firedRows);
+        // Breadth comparison (24 Oct): same fired crosses split by whether market breadth agreed with the side (BEARISH+PUT / BULLISH+CALL), disagreed, or was neutral/unknown.
+        const brSplit = jumbaaLib.splitByBreadth(firedRows), evB = k => (variant === 'B' ? jumbaaLib.evaluateLive(brSplit[k]) : jumbaaLib.evaluateJumbaa(brSplit[k])).all;
+        const breadthEval = { agree: evB('agree'), against: evB('against'), neutral: evB('neutral') };
+        const grp = {};   // blocked crosses grouped by reason: what they WOULD have done (for filter study only; not a rule)
+        for (const x of blockedRows) for (const k of String(x.blocked_by || 'other').split(',')) (grp[k] = grp[k] || []).push(x);
+        const blockedEval = Object.fromEntries(Object.entries(grp).map(([k, v]) => [k, (variant === 'B' ? jumbaaLib.evaluateLive(v) : jumbaaLib.evaluateJumbaa(v)).all]));
+        if (String(req.query.format || '').toLowerCase() === 'text') {
+            const f = v => (v === null || v === undefined ? '-' : String(v));
+            if (variant === 'B') {
+                const g = v => (v === null || v === undefined ? '-' : String(v));
+                const LB = [`JUMBAA-B (live cross, shadow, record-only) - last ${days} day(s) - enabled ${JUMBAA_ENABLED}, ${firedRows.length} signals (+${blockedRows.length} blocked crosses), log errors ${_jumbaaErrors}`,
+                    `Rule: price clears an S/R level by 3 pts LIVE (no candle-close wait) + Smart Money agrees + 1h ADX >= 25. PCR not used. Moves are INDEX points in the signal's direction (+ = went the right way), measured 1/5/15/30 min after the cross.`,
+                    `Since last restart: ${JSON.stringify(_jumbaaLive.stats)}`, '',
+                    `ALL: ${ev.all.n} signals (${ev.all.n15} with 15-min reading) | avg +1m ${g(ev.all.avg1)} | +5m ${g(ev.all.avg5)} | +15m ${g(ev.all.avg15)} | +30m ${g(ev.all.avg30)} | right way at 15m ${g(ev.all.hit15Pct)}%`,
+                    `Halves (15m): first ${g(ev.half1.avg15)} (n ${ev.half1.n15}) | second ${g(ev.half2.avg15)} (n ${ev.half2.n15})`, `VERDICT: ${ev.verdict}`, '',
+                    'BLOCKED live crosses by reason (study only, never a rule by itself):'];
+                for (const [k, v] of Object.entries(blockedEval)) LB.push(`  ${k}: ${v.n} crosses | avg +1m ${g(v.avg1)} | +5m ${g(v.avg5)} | +15m ${g(v.avg15)} | +30m ${g(v.avg30)} | right way at 15m ${g(v.hit15Pct)}%`);
+                LB.push('', 'BREADTH split of fired crosses (agree = BEARISH breadth + PUT, or BULLISH breadth + CALL; neutral = breadth neutral/unknown). Comparison only - not a rule:');
+                for (const [k, v] of Object.entries(breadthEval)) LB.push(`  ${k}: ${v.n} crosses | avg +1m ${g(v.avg1)} | +5m ${g(v.avg5)} | +15m ${g(v.avg15)} | +30m ${g(v.avg30)} | right way at 15m ${g(v.hit15Pct)}%`);
+                LB.push(`  Becomes a Jumbaa rule only if each bucket has >= 20 crosses and 'agree' beats 'against' by >= 8 pts at 15m in both time halves (pre-registered 24 Oct).`, '');
+                for (const x of r.rows) {
+                    const sg = x.direction === 'BULLISH' ? 1 : -1, mv = k => (x['px_' + k + 'm'] == null ? '-' : Math.round((Number(x['px_' + k + 'm']) - Number(x.nifty)) * sg));
+                    LB.push(`${new Date(x.ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} ${x.side}${x.fired === false ? ' (blocked: ' + x.blocked_by + ')' : ''} @ ${Math.round(x.nifty)} | level ${x.level} ${g(x.level_label || x.level_type)} | ${x.smart_bias} | breadth ${g(x.breadth_sig)} | ADX ${g(x.adx_1h)} | +1m ${mv(1)} +5m ${mv(5)} +15m ${mv(15)} +30m ${mv(30)}`);
+                }
+                LB.push('', 'Observation only - not financial advice. Index points are not option P&L; costs and theta not included. Compare with the A view: /api/jumbaa-signal?format=text');
+                return res.type('text/plain').send(LB.join('\n'));
+            }
+            const L = [`JUMBAA SIGNAL (shadow, record-only) - last ${days} day(s) - enabled ${JUMBAA_ENABLED}, ${firedRows.length} signals (+${blockedRows.length} blocked crosses), log errors ${_jumbaaErrors}`,
+                `Rule: 15-min close across an S/R level + Smart Money agrees + 1h ADX >= 25. PCR not used. Moves are INDEX points in the signal's direction (+ = went the right way).`,
+                `Since last restart: ${JSON.stringify(_jumbaa.stats)}`, '',
+                `ALL: ${ev.all.n} signals (${ev.all.n60} with 60-min reading) | avg +15m ${f(ev.all.avg15)} | +30m ${f(ev.all.avg30)} | +60m ${f(ev.all.avg60)} | right way at 60m ${f(ev.all.hit60Pct)}%`,
+                `CALL: ${ev.calls.n} | avg60 ${f(ev.calls.avg60)} | PUT: ${ev.puts.n} | avg60 ${f(ev.puts.avg60)}`,
+                `Halves (60m): first ${f(ev.half1.avg60)} (n ${ev.half1.n60}) | second ${f(ev.half2.avg60)} (n ${ev.half2.n60})`,
+                `VERDICT: ${ev.verdict}`, ''];
+            L.push('BLOCKED crosses by reason (what they would have done; a cross can have several reasons) - study only, never a rule by itself:');
+            for (const [k, v] of Object.entries(blockedEval)) L.push(`  ${k}: ${v.n} crosses | avg +15m ${f(v.avg15)} | +30m ${f(v.avg30)} | +60m ${f(v.avg60)} | right way at 60m ${f(v.hit60Pct)}%`);
+            L.push('', 'BREADTH split of fired crosses (agree = BEARISH breadth + PUT, or BULLISH breadth + CALL; neutral = breadth neutral/unknown). Comparison only - not a rule:');
+            for (const [k, v] of Object.entries(breadthEval)) L.push(`  ${k}: ${v.n} crosses | avg +15m ${f(v.avg15)} | +30m ${f(v.avg30)} | +60m ${f(v.avg60)} | right way at 60m ${f(v.hit60Pct)}%`);
+            L.push(`  Becomes a Jumbaa rule only if each bucket has >= 20 crosses and 'agree' beats 'against' by >= 10 pts at 60m in both time halves (pre-registered 24 Oct).`, '');
+            for (const x of r.rows) {
+                const sg = x.direction === 'BULLISH' ? 1 : -1, mv = k => (x['nifty_' + k] == null ? '-' : Math.round((Number(x['nifty_' + k]) - Number(x.nifty)) * sg));
+                L.push(`${new Date(x.ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })} ${x.side}${x.fired === false ? ' (blocked: ' + x.blocked_by + ')' : ''} @ ${Math.round(x.nifty)} | level ${x.level} ${f(x.level_label || x.level_type)} | ${x.smart_bias} | breadth ${f(x.breadth_sig)} | ADX ${f(x.adx_1h)} | ATM ${f(x.atm_strike)} prem ${f(x.atm_premium)} | +15m ${mv(15)} +30m ${mv(30)} +60m ${mv(60)}`);
+            }
+            L.push('', 'Observation only - not financial advice. Index points are not option P&L; costs and theta not included.');
+            return res.type('text/plain').send(L.join('\n'));
+        }
+        res.json({ success: true, enabled: JUMBAA_ENABLED, variant, days, stats: variant === 'B' ? _jumbaaLive.stats : _jumbaa.stats, errors: _jumbaaErrors, evaluation: ev, blockedByReason: blockedEval, breadthSplit: breadthEval, rows: r.rows });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // ── Main Engine 09:15-10:00 SHADOW LOG (17 Oct) ──────────────────────────────
 // Gate 1 blocks every Main Engine signal 09:15-10:00 ("Gap-fill window", Murarka's teaching, not our data), so
 // the block can never be judged. This records - once a minute, ONLY in that window - what combineSignals() would
@@ -7365,6 +7556,8 @@ async function updatePrice(price, change, changePct, source) {
     marketState.signal=signal; marketState.confidence=confidence;
     // 3 Oct — Classic engine shadow tracker (fire-and-forget; never blocks or alters the tick).
     niftyClassicTick(_combined.classic, signal, price, reasons).catch(e => console.warn('[Classic] tick error:', e.message));
+    // 23 Oct — Jumbaa signal shadow log (record-only; never alters the tick, never sends an alert).
+    try { jumbaaTick(price); } catch (e) { console.warn('[Jumbaa] tick error:', e.message); }
     // Derive strength from confidence so the frontend badge is meaningful
     marketState.strength = signal === 'WAIT' ? 'WEAK'
                          : confidence >= 75   ? 'STRONG'
@@ -16300,6 +16493,8 @@ function startPollingIntervals() {
     setTimeout(() => setInterval(flushGateBlockCountsIfDirty, 30*1000), 25*1000);
     // 9 Oct — per-timeframe vote logger (NIFTY / CRUDE / BITCOIN), 5 min cadence, offset from the snapshot above.
     setTimeout(() => setInterval(() => { saveMtfVoteSnapshot().catch(e => console.warn('[MtfVote] error:', e.message)); }, 5*60*1000), 90*1000);
+    // 23 Oct — Smart Money bias + its 5 parts, every 5 min while the market is open (record-only; offset from the snapshots above).
+    setTimeout(() => setInterval(() => { saveSmartMoneyLog().catch(e => console.warn('[SmartLog] error:', e.message)); }, 5*60*1000), 50*1000);
     // 15 Sep — NIFTY 52-Week Reversal Trigger. 5min cadence — both
     // get52WeekHighLow() and getHistoricalCandles() are cache-backed (see
     // historicalData.js), so this doesn't hit the DB every cycle; 5min is
