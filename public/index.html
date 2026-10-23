@@ -8360,7 +8360,7 @@ function renderBitcoinLiveUI(d) {
       <span id="sa-status" style="font-size:10.5px;color:var(--dim);font-family:monospace;"></span>
     </div>
     <div style="font-size:10.5px;line-height:1.4;color:var(--dim);opacity:0.8;margin-bottom:12px;">
-      Real accuracy of every NIFTY + Crude + Bitcoin exploratory trigger — did price actually move the predicted direction by 0.15%+ within 30min of the fire. WIN/LOSS/FLAT, not just "fired". Recent fires also show real option-premium win-rate (10%+ move), plus a Trade-Coach simulation: this app's own exit rules, replayed against the actual premium path — per-instrument grids chosen by an out-of-sample backtest (NIFTY: SL -15%, breakeven +10%, half-book +15%, exit +25% · Bitcoin: SL -30%, breakeven +20%, half-book +30%, exit +40% · Crude: SL -20%, breakeven +20%, half-book +30%, exit +40%) — 90min after each fire, showing what a disciplined trader following the coaching would have actually made. Low sample counts are not statistically reliable yet — treat as early signal, not verdict.
+      NIFTY + Crude signals: kya price ne 30 min mein predicted direction mein move kiya (WIN/LOSS/FLAT), real option-premium result, aur Trade-Coach simulation. Badge sirf dekhne ke liye hai — kuch mute ya change nahi karta. 30 se kam decisive trades par verdict nahi dete (LOW DATA).
     </div>
     <!-- TRACK RECORD PULSE (13 Oct) — "can this be luck?" read of every source; /js/track-pulse.js; display only -->
     <div id="tp2-card"></div>
@@ -8379,12 +8379,20 @@ function renderBitcoinLiveUI(d) {
       <div id="etr-body" style="font-size:12px;">Loading...</div>
     </div>
 
-    <div style="font-size:11px;color:var(--dim);margin:0 0 6px;letter-spacing:0.5px;">🎯 EXPLORATORY TRIGGERS</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:0 0 6px;gap:8px;">
+      <div style="font-size:11px;color:var(--dim);letter-spacing:0.5px;">🎯 SIGNAL SCORECARD — NIFTY · CRUDE</div>
+      <div id="sa-range" style="display:flex;gap:4px;">
+        <button data-sd="1" onclick="setSaRange(1)" style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:rgba(255,255,255,0.06);color:var(--dim);cursor:pointer;">Aaj</button>
+        <button data-sd="7" onclick="setSaRange(7)" style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:rgba(255,255,255,0.06);color:var(--dim);cursor:pointer;">7D</button>
+        <button data-sd="30" onclick="setSaRange(30)" style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:rgba(255,255,255,0.06);color:var(--dim);cursor:pointer;">30D</button>
+        <button data-sd="0" onclick="setSaRange(0)" style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:rgba(255,255,255,0.06);color:var(--dim);cursor:pointer;">All</button>
+      </div>
+    </div>
     <div id="sa-body">Loading...</div>
 
-    <div style="font-size:11px;color:var(--dim);margin:20px 0 6px;letter-spacing:0.5px;border-top:1px solid rgba(255,255,255,0.08);padding-top:16px;">🧭 EXHAUSTION-REVERSAL <span style="opacity:0.6;">(daily timeframe — separate from the above)</span></div>
+    <div style="font-size:11px;color:var(--dim);margin:20px 0 6px;letter-spacing:0.5px;border-top:1px solid rgba(255,255,255,0.08);padding-top:16px;">🧭 EXHAUSTION-REVERSAL <span style="opacity:0.6;">(alag system)</span></div>
     <div style="font-size:10px;line-height:1.4;color:var(--dim);opacity:0.75;margin-bottom:10px;">
-      A longer-timeframe system, now across 4 timeframes (1-Hour/Daily/Weekly/Monthly): watches NIFTY/Crude/Bitcoin for an extended run reaching genuine exhaustion (RSI at a peak/trough on that timeframe), fires once a real reversal confirms. Each timeframe evaluates and thresholds differently (Hourly: 6hrs/0.5%, Daily: 7d/1.5%, Weekly: 21d/3%, Monthly: 60d/5%) — faster timeframes resolve quicker with a tighter bar, slower ones need more room and more time.
+      Lambe timeframe (1-Hour/Daily/Weekly/Monthly) par extended run ke baad reversal. NIFTY aur Crude. Fires kam hote hain, isliye sample chhota rehta hai.
     </div>
     <div id="er-body">Loading...</div>
   </div>
@@ -8397,7 +8405,7 @@ async function fetchExhaustionReversalAccuracy() {
   try {
     const r = await fetch('/api/exhaustion-reversal-accuracy').then(r => r.json());
     if (!r.success) { body.textContent = 'Failed to load: ' + (r.error || 'unknown error'); return; }
-    const rows = r.rows || [];
+    const rows = (r.rows || []).filter(x => x.instrument !== 'BITCOIN');
     if (!rows.length) {
       body.innerHTML = '<div style="color:var(--dim);font-size:12px;">No fires yet — this is a new trigger, fires are naturally rare (especially Weekly/Monthly).</div>';
       return;
@@ -8518,19 +8526,32 @@ async function fetchEngineTrackRecord() {
 </script>
 
 <script>
+let _saDays = 30;
+function setSaRange(d) { _saDays = d; fetchSignalAccuracy(); }
 async function fetchSignalAccuracy() {
   const statusEl = document.getElementById('sa-status');
   const body = document.getElementById('sa-body');
   if (!body) return;
   try {
-    const r = await fetch('/api/signal-accuracy').then(r => r.json());
+    document.querySelectorAll('#sa-range button').forEach(b => {
+      const on = Number(b.dataset.sd) === _saDays;
+      b.style.color = on ? 'var(--accent)' : 'var(--dim)';
+      b.style.borderColor = on ? 'var(--accent)' : 'var(--border)';
+    });
+    const r = await fetch('/api/signal-accuracy?days=' + _saDays).then(r => r.json());
     if (!r.success) { body.textContent = 'Failed to load: ' + (r.error || 'unknown error'); return; }
     if (statusEl) statusEl.textContent = new Date().toLocaleTimeString();
 
-    const rows = r.rows || [];
-    try { if (window.TrackPulse) window.TrackPulse.update({ sa: rows }); } catch (e) { console.warn('[TrackPulse]', e.message); }
+    // Track Record Pulse always reads ALL-TIME rows (the period buttons must not shrink its sample).
+    try {
+      if (window.TrackPulse) {
+        if (_saDays === 0) window.TrackPulse.update({ sa: r.rows || [] });
+        else fetch('/api/signal-accuracy?days=0').then(x => x.json()).then(a => { if (a && a.success) window.TrackPulse.update({ sa: a.rows || [] }); }).catch(() => {});
+      }
+    } catch (e) { console.warn('[TrackPulse]', e.message); }
+    const rows = (r.rows || []).filter(x => x.instrument === 'NIFTY' || x.instrument === 'CRUDE');
     if (!rows.length) {
-      body.innerHTML = '<div style="color:var(--dim);font-size:12px;">No fires harvested yet — triggers need to fire first, then wait 30min for evaluation.</div>';
+      body.innerHTML = '<div style="color:var(--dim);font-size:12px;">' + (_saDays === 1 ? 'Aaj abhi koi resolved signal nahi — fire hone ke 30 min baad result aata hai.' : 'Is period mein koi resolved signal nahi.') + '</div>';
       return;
     }
 
@@ -8595,15 +8616,17 @@ async function fetchSignalAccuracy() {
         const coachVoladjLine = voladjResolved > 0
           ? `<div style="font-size:10px;color:${voladjColor};margin-top:3px;">🧪 Trade-Coach (vol-adj SL/target): avg ${avgVoladj > 0 ? '+' : ''}${avgVoladj}%${medVoladj != null ? ` (median ${medVoladj > 0 ? '+' : ''}${medVoladj}%)` : ''} · ${voladjProfitCount}/${voladjResolved} profitable</div>`
           : '';
+        const vd = (window.SignalVerdict ? window.SignalVerdict.verdict(row) : { key: 'low', icon: '⚪', label: 'LOW DATA', reason: '' });
+        const vCol = vd.key === 'strong' ? 'var(--green)' : vd.key === 'weak' ? 'var(--red)' : vd.key === 'watch' ? 'var(--amber)' : 'var(--dim)';
+        const vBadge = `<span title="${vd.reason}" style="font-size:9px;color:${vCol};border:1px solid ${vCol};border-radius:4px;padding:0 4px;margin-left:2px;">${vd.icon} ${vd.label}</span>`;
         const mutedTag = row.muted ? ' <span style="font-size:9px;color:var(--red);border:1px solid var(--red);border-radius:4px;padding:0 4px;margin-left:4px;">🔇 MUTED</span>' : '';
         html += `
           <div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;">
             <div>
-              <div style="font-size:12.5px;font-weight:600;">${row.source}${mutedTag}</div>
+              <div style="font-size:12.5px;font-weight:600;">${row.source} ${vBadge}${mutedTag}</div>
               <div style="font-size:10px;color:var(--dim);margin-top:2px;">${wins}W · ${losses}L · ${flats}F${pending ? ` · ${pending} pending` : ''}${lowSample ? ' · low sample' : ''}</div>
               ${premiumLine}
               ${coachLine}
-              ${coachVoladjLine}
             </div>
             <div style="font-family:'Orbitron',monospace;font-size:18px;font-weight:700;color:${color};">${winPct != null ? winPct.toFixed(0) + '%' : '--'}</div>
           </div>`;
@@ -8905,6 +8928,7 @@ function renderVolumeScannerUI(d) {
 <script src="/js/fyers-card.js" defer></script>
 <script src="/js/order-ticket.js" defer></script>
 <script src="/js/commodity-pulse.js" defer></script>
+<script src="/js/signal-verdict.js" defer></script>
 <script src="/js/track-pulse.js" defer></script>
 <script src="/js/wait-strip.js" defer></script>
 </body>

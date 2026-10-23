@@ -14092,6 +14092,13 @@ app.get('/api/signal-outcomes', async (req, res) => {
 app.get('/api/signal-accuracy', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
     try {
+        // 24 Oct — optional period: ?days=1 (today, IST) | 7 | 30 | 0 (all time, default — unchanged behaviour).
+        const rawDays = parseInt(req.query.days);
+        const accDays = Number.isFinite(rawDays) ? Math.max(0, Math.min(rawDays, 365)) : 0;
+        const accParams = [];
+        let accWhere = '';
+        if (accDays === 1) accWhere = `WHERE fire_ts >= (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')`;
+        else if (accDays > 1) { accParams.push(accDays); accWhere = `WHERE fire_ts >= now() - ($1::int * interval '1 day')`; }
         const r = await dbPool.query(`
             SELECT
                 source, instrument,
@@ -14139,13 +14146,14 @@ app.get('/api/signal-accuracy', async (req, res) => {
                     FILTER (WHERE coach_result_voladj IS NOT NULL AND entry_strike IS NOT NULL))::numeric, 1) AS median_coachvoladj_pct_move,
                 COUNT(*) FILTER (WHERE coach_result_voladj > 0 AND entry_strike IS NOT NULL) AS coachvoladj_profit_count
             FROM signal_outcomes
+            ${accWhere}
             GROUP BY source, instrument
             ORDER BY instrument, win_rate_pct DESC NULLS LAST
-        `);
+        `, accParams);
         // 28 Sep — flag strategies whose Telegram alerts are currently
         // auto-muted (30+ Trade-Coach results with a negative average).
         const rows = r.rows.map(row => ({ ...row, muted: _mutedStrategies.has(`${row.instrument}|${row.source}`) }));
-        res.json({ success: true, rows, automute: { enabled: AUTOMUTE_ENABLED, minSamples: AUTOMUTE_MIN_SAMPLES, fastMinSamples: AUTOMUTE_FAST_MIN_SAMPLES, fastAvgPct: AUTOMUTE_FAST_AVG } });
+        res.json({ success: true, days: accDays, rows, automute: { enabled: AUTOMUTE_ENABLED, minSamples: AUTOMUTE_MIN_SAMPLES, fastMinSamples: AUTOMUTE_FAST_MIN_SAMPLES, fastAvgPct: AUTOMUTE_FAST_AVG } });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
