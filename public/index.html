@@ -2508,15 +2508,37 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <div class="pulse-detail" id="pulse-detail">Kisi tile pe tap karo — poori detail yahan dikhegi</div>
   </div></div>
 
-  <!-- ═══ ORDER FLOW (24 Oct) — display only: futures volume + approximate delta per 15 min ═══ -->
+  <!-- ═══ ORDER FLOW (24 Oct) — display only: futures volume + approximate delta per 15 min. Live bars arrive over SSE (no polling). ═══ -->
   <div class="sec-label">ORDER FLOW (APPROX)</div>
   <div class="pulse-wrap"><div class="pulse-card" id="of-card">
+    <style>
+      #of-card .of-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--dim);margin-right:6px;vertical-align:middle;}
+      #of-card .of-dot.live{background:var(--green);animation:ofPulse 1.4s ease-in-out infinite;}
+      @keyframes ofPulse{0%,100%{box-shadow:0 0 0 0 rgba(0,230,118,.55);}50%{box-shadow:0 0 0 6px rgba(0,230,118,0);}}
+      #of-card .of-col{flex:1;margin:0 1px;display:flex;flex-direction:column;}
+      #of-card .of-up,#of-card .of-dn{height:38px;display:flex;}
+      #of-card .of-up{align-items:flex-end;border-bottom:1px solid var(--border);}
+      #of-card .of-up i,#of-card .of-dn i{display:block;width:100%;height:0;transition:height .6s ease,opacity .4s ease;}
+      #of-card .of-up i{background:var(--green);} #of-card .of-dn i{background:var(--red);}
+      #of-card .of-col.forming .of-up i,#of-card .of-col.forming .of-dn i{animation:ofBlink 1.2s ease-in-out infinite;}
+      @keyframes ofBlink{0%,100%{opacity:.95;}50%{opacity:.45;}}
+      #of-card .of-lab{font-size:8px;color:var(--dim);text-align:center;height:11px;white-space:nowrap;overflow:visible;margin-top:2px;}
+      #of-card .of-flash-g{animation:ofFg .9s ease-out;} #of-card .of-flash-r{animation:ofFr .9s ease-out;}
+      @keyframes ofFg{0%{color:#fff;text-shadow:0 0 8px var(--green);}100%{}} @keyframes ofFr{0%{color:#fff;text-shadow:0 0 8px var(--red);}100%{}}
+      #of-card .of-meter{display:flex;height:7px;border-radius:4px;overflow:hidden;background:var(--border);}
+      #of-card .of-meter i{display:block;height:100%;transition:width .6s ease;}
+    </style>
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
-      <div id="of-head" style="font-size:12px;color:var(--dim);font-family:'Share Tech Mono',monospace;">Loading…</div>
+      <div id="of-head" style="font-size:12px;color:var(--dim);font-family:'Share Tech Mono',monospace;"><span class="of-dot" id="of-dot"></span><span id="of-head-t">Loading…</span></div>
       <div id="of-upd" style="font-size:10px;color:var(--dim);font-family:'Share Tech Mono',monospace;">--</div>
     </div>
-    <div id="of-sum" style="margin-top:6px;font-size:13px;font-family:'Share Tech Mono',monospace;color:var(--text);"></div>
-    <div id="of-chart" style="margin-top:8px;"></div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px;font-family:'Share Tech Mono',monospace;">
+      <div id="of-fut" style="font-size:15px;color:var(--text);">--</div>
+      <div id="of-sum" style="font-size:12px;color:var(--text);text-align:right;"></div>
+    </div>
+    <div id="of-chart" style="display:flex;margin-top:8px;"></div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-top:8px;font-family:'Share Tech Mono',monospace;"><span id="of-m-lab">Is bar mein: buy / sell</span><span id="of-m-val">--</span></div>
+    <div class="of-meter" style="margin-top:3px;"><i id="of-m-buy" style="width:50%;background:var(--green);"></i><i id="of-m-sell" style="width:50%;background:var(--red);"></i></div>
     <div id="of-rows" style="margin-top:8px;font-size:11px;font-family:'Share Tech Mono',monospace;color:var(--text);"></div>
     <div style="margin-top:8px;font-size:10px;color:var(--dim);line-height:1.4;">Sirf dekhne ke liye. Ye exact footprint nahi hai: Angel ke free feed ke trades ke sample se bana andaza hai (1 din DEXT se milaya, direction lagbhag 80% mili). Koi signal ya alert isse nahi chalta.</div>
   </div></div>
@@ -4439,6 +4461,9 @@ function startSSE() {
     const dot = document.getElementById('sse-dot');
     if (dot) { dot.style.background = 'var(--green)'; dot.title = 'Live (SSE)'; }
   };
+
+  // ── orderflow event (24 Oct) — live volume/delta bars for the ORDER FLOW card ──
+  _sseConn.addEventListener('orderflow', e => { try { renderOrderFlow(JSON.parse(e.data), true); } catch (err) { /* display only */ } });
 
   // ── signal event — full marketState update (same as /api/signal) ──────────
   _sseConn.addEventListener('signal', e => {
@@ -8539,50 +8564,97 @@ async function fetchEngineTrackRecord() {
 </script>
 
 <script>
-let _ofTimer = null;
+// ── ORDER FLOW card (24 Oct): live bars come over the existing SSE stream ('orderflow' event, every ~5 s while the feed is live).
+// One plain fetch on load shows the last day when the market is closed. No polling, no timers that call the server.
+const _OF_N = 26, _OF_START = 9 * 60 + 15;
+let _ofBuilt = false, _ofRecvAt = 0, _ofLastAgo = null, _ofLive = false, _ofPrev = { delta: null, fut: null };
 function _ofK(v) {
   const n = Number(v) || 0, a = Math.abs(n), sg = n > 0 ? '+' : (n < 0 ? '-' : '');
   if (a >= 1e6) return sg + (a / 1e6).toFixed(2) + 'M';
   if (a >= 1e3) return sg + Math.round(a / 1e3) + 'K';
   return sg + Math.round(a);
 }
+function _ofBuild() {
+  const chart = document.getElementById('of-chart');
+  if (!chart) return false;
+  if (_ofBuilt) return true;
+  let h = '';
+  for (let i = 0; i < _OF_N; i++) {
+    const m = _OF_START + i * 15, lab = (i % 4 === 0) ? String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0') : '';
+    h += '<div class="of-col" id="of-c' + i + '"><div class="of-up"><i></i></div><div class="of-dn"><i></i></div><div class="of-lab">' + lab + '</div></div>';
+  }
+  chart.innerHTML = h; _ofBuilt = true; return true;
+}
+function _ofFlash(el, cls) { if (!el) return; el.classList.remove('of-flash-g', 'of-flash-r'); void el.offsetWidth; el.classList.add(cls); }
+function renderOrderFlow(r, isLive) {
+  const head = document.getElementById('of-head-t');
+  if (!head || !r) return;
+  if (!r.success) { head.textContent = 'Order flow load nahi hua'; return; }
+  const dot = document.getElementById('of-dot'), sum = document.getElementById('of-sum'), rows = document.getElementById('of-rows'), fut = document.getElementById('of-fut');
+  if (r.enabled === false) { head.textContent = 'Order-flow feed band hai (TICKFLOW_LAB)'; if (dot) dot.className = 'of-dot'; return; }
+  const bars = r.bars || [];
+  if (!bars.length) { head.textContent = 'Abhi koi data nahi'; if (dot) dot.className = 'of-dot'; return; }
+  _ofBuild();
+  _ofLive = !!isLive; _ofRecvAt = Date.now(); _ofLastAgo = (r.live && r.live.lastPacketAgoSec != null) ? r.live.lastPacketAgoSec : 0;
+  if (dot) dot.className = 'of-dot' + (isLive ? ' live' : '');
+  head.textContent = (isLive ? 'LIVE' : (r.isToday ? 'Aaj' : 'Pichhla din ' + r.day)) + (r.symbol ? ' · ' + r.symbol : '');
+  const t = r.totals || {}, dcol = t.delta > 0 ? 'var(--green)' : (t.delta < 0 ? 'var(--red)' : 'var(--text)');
+  sum.innerHTML = 'Vol <b>' + _ofK(t.vol).replace('+', '') + '</b> &nbsp; Delta (din, andaza) <b id="of-dd" style="color:' + dcol + '">' + _ofK(t.delta) + '</b>' + (t.coveragePct != null ? '<br><span style="color:var(--dim)">sample ' + t.coveragePct + '%</span>' : '');
+  if (_ofPrev.delta !== null && _ofPrev.delta !== t.delta) _ofFlash(document.getElementById('of-dd'), t.delta > _ofPrev.delta ? 'of-flash-g' : 'of-flash-r');
+  _ofPrev.delta = t.delta;
+  if (fut) {
+    if (r.last != null) {
+      const up = _ofPrev.fut === null || r.last >= _ofPrev.fut;
+      fut.innerHTML = 'FUT <b>' + Number(r.last).toFixed(1) + '</b> <span style="font-size:11px;color:' + (up ? 'var(--green)' : 'var(--red)') + '">' + (_ofPrev.fut === null ? '' : (up ? '▲' : '▼')) + '</span>';
+      if (_ofPrev.fut !== null && r.last !== _ofPrev.fut) _ofFlash(fut, r.last > _ofPrev.fut ? 'of-flash-g' : 'of-flash-r');
+      _ofPrev.fut = r.last;
+    } else { fut.textContent = 'FUT --'; }
+  }
+  // bars: fixed 26 slots for the whole session; heights animate (CSS transition)
+  const mx = Math.max(1, ...bars.map(b => Math.abs(b.delta)));
+  const seen = {};
+  bars.forEach((b, k) => {
+    const parts = b.label.split(':'), idx = Math.round((Number(parts[0]) * 60 + Number(parts[1]) - _OF_START) / 15);
+    if (idx < 0 || idx >= _OF_N) return;
+    seen[idx] = 1;
+    const col = document.getElementById('of-c' + idx); if (!col) return;
+    const pos = b.delta >= 0, hh = Math.round(Math.abs(b.delta) / mx * 100) + '%', forming = isLive && k === bars.length - 1;
+    col.classList.toggle('forming', forming);
+    col.querySelector('.of-up i').style.height = pos ? hh : '0%';
+    col.querySelector('.of-dn i').style.height = pos ? '0%' : hh;
+    col.title = b.label + '  V ' + _ofK(b.vol).replace('+', '') + '  Δ ' + _ofK(b.delta);
+    col.style.opacity = (b.partial && !forming) ? 0.55 : 1;
+  });
+  for (let i = 0; i < _OF_N; i++) if (!seen[i]) { const col = document.getElementById('of-c' + i); if (col) { col.classList.remove('forming'); col.querySelector('.of-up i').style.height = '0%'; col.querySelector('.of-dn i').style.height = '0%'; col.title = ''; } }
+  // buy / sell split of the bar that is forming (or the last bar)
+  const lb = bars[bars.length - 1], tot = (lb.buy || 0) + (lb.sell || 0), bp = tot > 0 ? Math.round(lb.buy / tot * 100) : 50;
+  const mb = document.getElementById('of-m-buy'), ms = document.getElementById('of-m-sell'), mv = document.getElementById('of-m-val'), ml = document.getElementById('of-m-lab');
+  if (mb) mb.style.width = bp + '%'; if (ms) ms.style.width = (100 - bp) + '%';
+  if (mv) mv.innerHTML = tot > 0 ? '<span style="color:var(--green)">' + bp + '%</span> / <span style="color:var(--red)">' + (100 - bp) + '%</span>' : '--';
+  if (ml) ml.textContent = (isLive ? 'Chal raha bar ' : 'Aakhri bar ') + lb.label + ': buy / sell';
+  rows.innerHTML = bars.slice(-6).reverse().map(b => {
+    const c = b.delta > 0 ? 'var(--green)' : (b.delta < 0 ? 'var(--red)' : 'var(--text)');
+    return '<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04);"><span>' + b.label + (b.partial ? '*' : '') + '</span><span>V ' + _ofK(b.vol).replace('+', '') + '</span><span style="color:' + c + '">Δ ' + _ofK(b.delta) + '</span></div>';
+  }).join('');
+}
 async function fetchOrderFlow() {
-  const head = document.getElementById('of-head');
-  if (!head) return;
   try {
-    const r = await fetch('/api/orderflow-bars').then(x => x.json());
-    const sum = document.getElementById('of-sum'), chart = document.getElementById('of-chart'), rows = document.getElementById('of-rows'), upd = document.getElementById('of-upd');
-    if (!r || !r.success) { head.textContent = 'Order flow load nahi hua'; return; }
-    if (r.enabled === false) { head.textContent = 'Order-flow feed band hai (TICKFLOW_LAB)'; sum.textContent = ''; chart.innerHTML = ''; rows.innerHTML = ''; return; }
-    const bars = r.bars || [];
-    if (!bars.length) { head.textContent = 'Abhi koi data nahi'; sum.textContent = ''; chart.innerHTML = ''; rows.innerHTML = ''; return; }
-    const lv = r.live || {};
-    head.textContent = (r.isToday ? 'Aaj' : 'Pichhla din ' + r.day) + (r.symbol ? ' · ' + r.symbol : '') + (r.isToday && lv.connected ? ' · LIVE' : '');
-    upd.textContent = new Date().toLocaleTimeString();
-    const t = r.totals || {}, dcol = t.delta > 0 ? 'var(--green)' : (t.delta < 0 ? 'var(--red)' : 'var(--text)');
-    sum.innerHTML = 'Volume <b>' + _ofK(t.vol).replace('+', '') + '</b> &nbsp; Delta (din, andaza) <b style="color:' + dcol + '">' + _ofK(t.delta) + '</b>' + (t.coveragePct != null ? ' &nbsp; <span style="color:var(--dim)">sample ' + t.coveragePct + '%</span>' : '');
-    const mx = Math.max(1, ...bars.map(b => Math.abs(b.delta)));
-    let up = '', dn = '', lb = '';
-    bars.forEach((b, i) => {
-      const h = Math.round(Math.abs(b.delta) / mx * 100), pos = b.delta >= 0;
-      up += '<div style="flex:1;margin:0 1px;display:flex;align-items:flex-end;"><div style="width:100%;height:' + (pos ? h : 0) + '%;background:var(--green);opacity:' + (b.partial ? 0.5 : 0.9) + ';"></div></div>';
-      dn += '<div style="flex:1;margin:0 1px;display:flex;align-items:flex-start;"><div style="width:100%;height:' + (pos ? 0 : h) + '%;background:var(--red);opacity:' + (b.partial ? 0.5 : 0.9) + ';"></div></div>';
-      lb += '<div style="flex:1;margin:0 1px;font-size:8px;color:var(--dim);text-align:center;overflow:visible;white-space:nowrap;">' + (i % 4 === 0 ? b.label : '') + '</div>';
-    });
-    chart.innerHTML = '<div style="display:flex;height:38px;border-bottom:1px solid var(--border);">' + up + '</div><div style="display:flex;height:38px;">' + dn + '</div><div style="display:flex;margin-top:2px;">' + lb + '</div>';
-    rows.innerHTML = bars.slice(-6).reverse().map(b => {
-      const c = b.delta > 0 ? 'var(--green)' : (b.delta < 0 ? 'var(--red)' : 'var(--text)');
-      return '<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04);"><span>' + b.label + (b.partial ? '*' : '') + '</span><span>V ' + _ofK(b.vol).replace('+', '') + '</span><span style="color:' + c + '">Δ ' + _ofK(b.delta) + '</span></div>';
-    }).join('');
-  } catch (e) { head.textContent = 'Order flow load nahi hua'; }
+    const j = await fetch('/api/orderflow-bars').then(x => x.json());
+    if (_ofLive && Date.now() - _ofRecvAt < 15000) return;      // a live push already drew the card — don't overwrite it with the older snapshot
+    renderOrderFlow(j, false);
+  }
+  catch (e) { const h = document.getElementById('of-head-t'); if (h) h.textContent = 'Order flow load nahi hua'; }
 }
-function _ofTick() {
-  const p = document.getElementById('panel-dashboard');
-  if (document.hidden || !p || !p.classList.contains('active')) return;
-  fetchOrderFlow();
-}
+// "x sec pehle" ticks locally every second from the last pushed packet age — it makes no request
+setInterval(() => {
+  const u = document.getElementById('of-upd'), dot = document.getElementById('of-dot');
+  if (!u) return;
+  if (!_ofRecvAt) { u.textContent = '--'; return; }
+  const age = Math.round((Date.now() - _ofRecvAt) / 1000) + (_ofLastAgo || 0);
+  if (_ofLive) { u.textContent = age + 's pehle'; if (age > 20 && dot) dot.className = 'of-dot'; }
+  else u.textContent = new Date(_ofRecvAt).toLocaleTimeString();
+}, 1000);
 setTimeout(fetchOrderFlow, 2500);
-_ofTimer = setInterval(_ofTick, 60000);
 let _saDays = 30;
 function setSaRange(d) { _saDays = d; fetchSignalAccuracy(); }
 async function fetchSignalAccuracy() {

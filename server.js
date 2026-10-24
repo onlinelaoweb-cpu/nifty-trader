@@ -16287,6 +16287,8 @@ function startPollingIntervals() {
                 _tickFlowLab = tickFlowLib.createTickFlowLab({ dbPool, log: m => console.log(m) });
                 if (_lastAngelAuth) _tickFlowLab.setAuth(_lastAngelAuth);
                 _tickFlowLab.start().catch(e => console.warn('[TickFlowLab] start failed:', e.message));
+                // 24 Oct — live order-flow card: push the in-memory view to open dashboards every 5 s over the EXISTING SSE stream (no polling, no broker calls, nothing when nobody is watching or the feed is quiet)
+                setInterval(() => { try { if (!_sseClients.size || !_tickFlowLab) return; const lp = _tickFlowLab.livePayload(); if (lp && lp.success) sseBroadcast('orderflow', lp); } catch (e) { /* display only */ } }, 5000);
             } catch (e) { console.warn('[TickFlowLab] creation failed:', e.message); }
             _autoJournal = createAutoJournal({ dbPool, getStrikePremium,
                 hooks: { onOpen: tr => _atrShadow.open({ ...tr, atr: marketState.dynamicLevels && marketState.dynamicLevels.atr }) },

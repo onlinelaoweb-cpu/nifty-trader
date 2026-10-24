@@ -148,7 +148,7 @@ function buildDayReport(rows, day) {
     const out = bars.filter(b => b.minutes > 0).map(b => {
         const dT = b.buyTick - b.sellTick, dQ = b.buyQ - b.sellQ; cT += dT; cQ += dQ;
         return { label: b.label, minutes: b.minutes, ticks: b.ticks, ticksPerSec: r1(b.ticks / (b.minutes * 60)), events: b.events, vol: b.vol,
-            coveragePct: b.vol > 0 ? r1(b.ltqSum / b.vol * 100) : null, deltaTick: dT, deltaQuote: dQ, cumTick: cT, cumQuote: cQ,
+            coveragePct: b.vol > 0 ? r1(b.ltqSum / b.vol * 100) : null, deltaTick: dT, deltaQuote: dQ, buyQuote: b.buyQ, sellQuote: b.sellQ, cumTick: cT, cumQuote: cQ,
             quoteSharePct: b.vol > 0 ? r1(b.qByQuote / b.vol * 100) : null, unclassPct: b.vol > 0 ? r1(b.unQ / b.vol * 100) : null,
             open: b.open, close: b.close, chg: b.open !== null ? r2(b.close - b.open) : null, avgSpread: b.spreadN ? r2(b.spreadSum / b.spreadN) : null };
     });
@@ -188,7 +188,8 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
     const cfg = { enabled: ['true', 'on', '1', 'yes'].includes(String(env.TICKFLOW_LAB || '').toLowerCase()), tokenOverride: env.TICKFLOW_FUT_TOKEN || null, bootDelayMs };
     const freshStats = () => ({ connects: 0, closes: 0, packets: 0, parsedOk: 0, smallMsgs: 0, unparsed: 0, badLen: 0, otherMode: 0, wrongToken: 0, ltpOutOfRange: 0, volDrop: 0, crossedBook: 0, ltqZeroOnTrade: 0, exchTsSample: null });
     const S = { started: false, bootAt: now(), timers: [], auth: null, ws: null, connecting: false, fut: null, futDay: null, flow: createFlow(), bucket: null, day: null,
-        stats: freshStats(), rawCount: 0, rawQueue: [], lastPacketAt: 0, connectedAt: 0, notBefore: 0, backoffMs: 5000, failures: 0, heartbeat: null, saving: false, pending: [] };
+        stats: freshStats(), rawCount: 0, rawQueue: [], lastPacketAt: 0, connectedAt: 0, notBefore: 0, backoffMs: 5000, failures: 0, heartbeat: null, saving: false, pending: [], today: [] };
+    const L = { rows: [], day: null, at: 0, loading: false };   // DB minutes of today, read now and then (never per tick)
 
     async function ensureTables() {
         await dbPool.query(`CREATE TABLE IF NOT EXISTS tickflow_lab_min (ts TIMESTAMPTZ PRIMARY KEY, sym TEXT, ticks INT, events INT, vol BIGINT, ltq_sum BIGINT, exact_n INT, multi_n INT, odd_n INT,
@@ -220,7 +221,7 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
     function handleMessage(raw, atMs = now()) {
         try {
             const p = istParts(atMs);
-            if (S.day !== p.day) { S.day = p.day; S.stats = freshStats(); S.rawCount = 0; S.flow = createFlow(); }
+            if (S.day !== p.day) { S.day = p.day; S.stats = freshStats(); S.rawCount = 0; S.flow = createFlow(); S.today = []; }
             const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
             S.stats.packets++; S.lastPacketAt = atMs;
             if (buf.length < 123) { S.stats.smallMsgs++; if (S.stats.smallMsgs <= 3) log(`[TickFlowLab] small msg len=${buf.length}: ${buf.toString('utf8', 0, Math.min(buf.length, 120))}`); return false; }
@@ -242,7 +243,7 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
             if (s.dv > 0 && !(t.ltq > 0)) S.stats.ltqZeroOnTrade++;
             const minStart = Math.floor(atMs / 60000) * 60000;
             if (!S.bucket || S.bucket.ts !== minStart) {
-                if (S.bucket) S.pending.push(S.bucket);
+                if (S.bucket) { S.pending.push(S.bucket); S.today.push(S.bucket); }
                 S.bucket = newBucket(minStart);
                 flush().catch(() => {});
             }
@@ -346,7 +347,29 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
         return { ok: true, ...rep, symbol: st.rows[0] ? st.rows[0].sym : null, stats: st.rows[0] ? st.rows[0].stats : null, raws: rw.rows.reverse(),
             live: { enabled: cfg.enabled, started: S.started, connected: !!S.ws, hasAuth: !!S.auth, lastPacketAgoSec: S.lastPacketAt ? Math.round((now() - S.lastPacketAt) / 1000) : null } };
     }
-    return { cfg, start, stop, setAuth, report, flush, schedule, _handleMessage: handleMessage, _state: S };
+
+    // ── live card (24 Oct): built from memory + a rarely-refreshed DB read; never touches the broker API ─────────────────
+    async function refreshRows() {
+        if (!dbPool || L.loading) return; L.loading = true;
+        try {
+            const d = istParts(now()).day, from = new Date(Date.parse(d + 'T00:00:00+05:30')), to = new Date(from.getTime() + 24 * 3600 * 1000);
+            const r = await dbPool.query(`SELECT * FROM tickflow_lab_min WHERE ts >= $1 AND ts < $2 ORDER BY ts ASC`, [from, to]);
+            L.rows = r.rows.map(x => ({ ts: new Date(x.ts).getTime(), ticks: Number(x.ticks), events: Number(x.events), vol: Number(x.vol), ltqSum: Number(x.ltq_sum), buyTick: Number(x.buy_tick), sellTick: Number(x.sell_tick),
+                unTick: Number(x.un_tick), buyQ: Number(x.buy_q), sellQ: Number(x.sell_q), unQ: Number(x.un_q), qByQuote: Number(x.q_by_quote), o: num(x.o), h: num(x.h), l: num(x.l), c: num(x.c), spreadSum: Number(x.spread_sum), spreadN: Number(x.spread_n) }));
+            L.day = d; L.at = now();
+        } catch (e) { L.at = now(); }          // retry in 5 min, not on every tick
+        finally { L.loading = false; }
+    }
+    // null when there is nothing live to show (lab off, not started, or no packet for 2 minutes)
+    function livePayload() {
+        if (!S.started) return null;
+        const t = now(), p = istParts(t);
+        if (!S.lastPacketAt || t - S.lastPacketAt > 120000) return null;
+        if (L.day !== p.day || t - L.at > 300000) refreshRows().catch(() => {});
+        return mergeLiveCard({ dbRows: L.day === p.day ? L.rows : [], todayBuckets: S.today, current: S.bucket, day: p.day, symbol: S.fut && S.fut.symbol,
+            live: { connected: !!S.ws, lastPacketAgoSec: Math.round((t - S.lastPacketAt) / 1000) }, nowMs: t });
+    }
+    return { cfg, start, stop, setAuth, report, flush, schedule, livePayload, _handleMessage: handleMessage, _state: S };
 }
 
 // 24 Oct — DISPLAY-ONLY card payload for the dashboard (volume + approximate delta per 15 min). Pure.
@@ -355,12 +378,33 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
 function toCardPayload(rep, nowMs = Date.now()) {
     if (!rep || !rep.ok) return { success: false, error: (rep && rep.error) || 'no report' };
     const bars = (rep.bars || []).map(b => ({ label: b.label, vol: Number(b.vol) || 0, delta: Number(b.deltaQuote) || 0, cum: Number(b.cumQuote) || 0,
+        buy: Number(b.buyQuote) || 0, sell: Number(b.sellQuote) || 0,
         coveragePct: b.coveragePct === undefined ? null : b.coveragePct, partial: b.minutes < BAR_MIN }));
     const t = rep.totals || {};
     const ist = istParts(nowMs);
     return { success: true, enabled: true, day: rep.day, isToday: rep.day === ist.day, symbol: rep.symbol || null,
         live: rep.live ? { connected: !!rep.live.connected, lastPacketAgoSec: rep.live.lastPacketAgoSec } : null,
-        bars, totals: { vol: Number(t.vol) || 0, delta: Number(t.cumQuote) || 0, coveragePct: t.coveragePct === undefined ? null : t.coveragePct } };
+        bars, totals: { vol: Number(t.vol) || 0, delta: Number(t.cumQuote) || 0, buy: bars.reduce((a, b) => a + b.buy, 0), sell: bars.reduce((a, b) => a + b.sell, 0),
+            coveragePct: t.coveragePct === undefined ? null : t.coveragePct } };
 }
 
-module.exports = { toCardPayload, parseSnapQuote, createFlow, flowStep, newBucket, addToBucket, findNiftyFutToken, buildDayReport, formatLabText, istParts, createTickFlowLab };
+// minute bucket (in memory) -> the row shape buildDayReport expects
+function bucketToRow(b) {
+    return { ts: b.ts, ticks: b.ticks, events: b.events, vol: b.vol, ltqSum: b.ltqSum, buyTick: b.buyTick, sellTick: b.sellTick, unTick: b.unTick, buyQ: b.buyQ, sellQ: b.sellQ, unQ: b.unQ,
+        qByQuote: b.qByQuote, o: b.o, h: b.h, l: b.l, c: b.c, spreadSum: b.spreadSum, spreadN: b.spreadN };
+}
+
+// PURE: DB rows (older minutes, may be stale) + this process's own completed minutes + the minute still forming -> card payload.
+// Memory wins over the DB for the same minute, so a minute never disappears between a flush and the next DB read.
+function mergeLiveCard({ dbRows = [], todayBuckets = [], current = null, day, symbol = null, live = null, nowMs = Date.now() }) {
+    const byTs = new Map();
+    for (const r of dbRows) byTs.set(r.ts, r);
+    for (const b of todayBuckets) if (b && b.ticks) byTs.set(b.ts, bucketToRow(b));
+    if (current && current.ticks) byTs.set(current.ts, bucketToRow(current));
+    const rep = { ok: true, ...buildDayReport([...byTs.values()], day), symbol, live };
+    const card = toCardPayload(rep, nowMs);
+    if (card.success) { card.last = current && current.c !== null ? current.c : null; card.serverTs = nowMs; }
+    return card;
+}
+
+module.exports = { mergeLiveCard, bucketToRow, toCardPayload, parseSnapQuote, createFlow, flowStep, newBucket, addToBucket, findNiftyFutToken, buildDayReport, formatLabText, istParts, createTickFlowLab };

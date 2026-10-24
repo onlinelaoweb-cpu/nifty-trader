@@ -28,3 +28,26 @@ const rep = { ok: true, ...buildDayReport(rows, '2026-10-23'), symbol: 'NIFTY27O
     assert.strictEqual(empty.success, true); assert.strictEqual(empty.bars.length, 0); assert.strictEqual(empty.totals.vol, 0);
 }
 console.log('orderflowCard tests OK');
+
+// ── live card: memory + DB merge (24 Oct) ─────────────────────────────────────────────────────────────────────
+{
+    const { mergeLiveCard, bucketToRow } = require('../src/utils/tickFlowLab');
+    const mk = (min, o) => ({ ts: IST0 + min * 60000, ticks: 50, events: 5, vol: 1000, ltqSum: 200, buyTick: 0, sellTick: 0, unTick: 0, buyQ: o.buy, sellQ: o.sell, unQ: 0, qByQuote: 100, o: 22500, h: 22501, l: 22499, c: o.c || 22500.5, spreadSum: 3, spreadN: 1 });
+    const dbRows = []; for (let m = 0; m < 10; m++) dbRows.push(bucketToRow(mk(m, { buy: 100, sell: 100 })));    // 09:15-09:24 in the DB: delta 0
+    const today = [mk(8, { buy: 300, sell: 100 }), mk(9, { buy: 300, sell: 100 })];                         // memory knows minutes 8,9 better (newer): +200 each
+    const cur = mk(10, { buy: 500, sell: 100, c: 22510 });                                                   // 09:25 still forming: +400
+    const p = mergeLiveCard({ dbRows, todayBuckets: today, current: cur, day: '2026-10-23', symbol: 'NIFTY27OCT26FUT', live: { connected: true, lastPacketAgoSec: 1 }, nowMs: Date.UTC(2026, 9, 23, 4, 0) });
+    assert.strictEqual(p.success, true); assert.strictEqual(p.bars.length, 1);                                // all in the 09:15 bar (minutes 0-10)
+    assert.strictEqual(p.bars[0].delta, 0 * 8 + 200 + 200 + 400);                                            // minutes 0-7 net 0, 8 and 9 overridden to +200, minute 10 = +400
+    assert.strictEqual(p.bars[0].buy, 8 * 100 + 300 + 300 + 500); assert.strictEqual(p.bars[0].sell, 8 * 100 + 100 + 100 + 100);
+    assert.strictEqual(p.bars[0].partial, true); assert.strictEqual(p.last, 22510); assert.strictEqual(p.serverTs, Date.UTC(2026, 9, 23, 4, 0));
+    assert.strictEqual(p.totals.buy, p.bars[0].buy); assert.strictEqual(p.isToday, true); assert.strictEqual(p.live.connected, true);
+    // nothing forming yet: last is null, still renders from memory/DB
+    const q = mergeLiveCard({ dbRows, todayBuckets: [], current: null, day: '2026-10-23', nowMs: Date.UTC(2026, 9, 23, 4, 0) });
+    assert.strictEqual(q.last, null); assert.strictEqual(q.bars[0].delta, 0);
+    // empty everything -> success with no bars (the page shows "Abhi koi data nahi")
+    const e = mergeLiveCard({ day: '2026-10-23' }); assert.strictEqual(e.success, true); assert.strictEqual(e.bars.length, 0);
+    // a bucket with no ticks is ignored
+    assert.strictEqual(mergeLiveCard({ todayBuckets: [{ ts: IST0, ticks: 0 }], day: '2026-10-23' }).bars.length, 0);
+}
+console.log('orderflowCard live tests OK');
