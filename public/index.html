@@ -2508,6 +2508,19 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <div class="pulse-detail" id="pulse-detail">Kisi tile pe tap karo — poori detail yahan dikhegi</div>
   </div></div>
 
+  <!-- ═══ ORDER FLOW (24 Oct) — display only: futures volume + approximate delta per 15 min ═══ -->
+  <div class="sec-label">ORDER FLOW (APPROX)</div>
+  <div class="pulse-wrap"><div class="pulse-card" id="of-card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
+      <div id="of-head" style="font-size:12px;color:var(--dim);font-family:'Share Tech Mono',monospace;">Loading…</div>
+      <div id="of-upd" style="font-size:10px;color:var(--dim);font-family:'Share Tech Mono',monospace;">--</div>
+    </div>
+    <div id="of-sum" style="margin-top:6px;font-size:13px;font-family:'Share Tech Mono',monospace;color:var(--text);"></div>
+    <div id="of-chart" style="margin-top:8px;"></div>
+    <div id="of-rows" style="margin-top:8px;font-size:11px;font-family:'Share Tech Mono',monospace;color:var(--text);"></div>
+    <div style="margin-top:8px;font-size:10px;color:var(--dim);line-height:1.4;">Sirf dekhne ke liye. Ye exact footprint nahi hai: Angel ke free feed ke trades ke sample se bana andaza hai (1 din DEXT se milaya, direction lagbhag 80% mili). Koi signal ya alert isse nahi chalta.</div>
+  </div></div>
+
   <!-- S/R LEVELS -->
   <div class="sec-label">KEY LEVELS (AUTO)</div>
   <div class="sr-section">
@@ -8526,6 +8539,50 @@ async function fetchEngineTrackRecord() {
 </script>
 
 <script>
+let _ofTimer = null;
+function _ofK(v) {
+  const n = Number(v) || 0, a = Math.abs(n), sg = n > 0 ? '+' : (n < 0 ? '-' : '');
+  if (a >= 1e6) return sg + (a / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return sg + Math.round(a / 1e3) + 'K';
+  return sg + Math.round(a);
+}
+async function fetchOrderFlow() {
+  const head = document.getElementById('of-head');
+  if (!head) return;
+  try {
+    const r = await fetch('/api/orderflow-bars').then(x => x.json());
+    const sum = document.getElementById('of-sum'), chart = document.getElementById('of-chart'), rows = document.getElementById('of-rows'), upd = document.getElementById('of-upd');
+    if (!r || !r.success) { head.textContent = 'Order flow load nahi hua'; return; }
+    if (r.enabled === false) { head.textContent = 'Order-flow feed band hai (TICKFLOW_LAB)'; sum.textContent = ''; chart.innerHTML = ''; rows.innerHTML = ''; return; }
+    const bars = r.bars || [];
+    if (!bars.length) { head.textContent = 'Abhi koi data nahi'; sum.textContent = ''; chart.innerHTML = ''; rows.innerHTML = ''; return; }
+    const lv = r.live || {};
+    head.textContent = (r.isToday ? 'Aaj' : 'Pichhla din ' + r.day) + (r.symbol ? ' · ' + r.symbol : '') + (r.isToday && lv.connected ? ' · LIVE' : '');
+    upd.textContent = new Date().toLocaleTimeString();
+    const t = r.totals || {}, dcol = t.delta > 0 ? 'var(--green)' : (t.delta < 0 ? 'var(--red)' : 'var(--text)');
+    sum.innerHTML = 'Volume <b>' + _ofK(t.vol).replace('+', '') + '</b> &nbsp; Delta (din, andaza) <b style="color:' + dcol + '">' + _ofK(t.delta) + '</b>' + (t.coveragePct != null ? ' &nbsp; <span style="color:var(--dim)">sample ' + t.coveragePct + '%</span>' : '');
+    const mx = Math.max(1, ...bars.map(b => Math.abs(b.delta)));
+    let up = '', dn = '', lb = '';
+    bars.forEach((b, i) => {
+      const h = Math.round(Math.abs(b.delta) / mx * 100), pos = b.delta >= 0;
+      up += '<div style="flex:1;margin:0 1px;display:flex;align-items:flex-end;"><div style="width:100%;height:' + (pos ? h : 0) + '%;background:var(--green);opacity:' + (b.partial ? 0.5 : 0.9) + ';"></div></div>';
+      dn += '<div style="flex:1;margin:0 1px;display:flex;align-items:flex-start;"><div style="width:100%;height:' + (pos ? 0 : h) + '%;background:var(--red);opacity:' + (b.partial ? 0.5 : 0.9) + ';"></div></div>';
+      lb += '<div style="flex:1;margin:0 1px;font-size:8px;color:var(--dim);text-align:center;overflow:visible;white-space:nowrap;">' + (i % 4 === 0 ? b.label : '') + '</div>';
+    });
+    chart.innerHTML = '<div style="display:flex;height:38px;border-bottom:1px solid var(--border);">' + up + '</div><div style="display:flex;height:38px;">' + dn + '</div><div style="display:flex;margin-top:2px;">' + lb + '</div>';
+    rows.innerHTML = bars.slice(-6).reverse().map(b => {
+      const c = b.delta > 0 ? 'var(--green)' : (b.delta < 0 ? 'var(--red)' : 'var(--text)');
+      return '<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04);"><span>' + b.label + (b.partial ? '*' : '') + '</span><span>V ' + _ofK(b.vol).replace('+', '') + '</span><span style="color:' + c + '">Δ ' + _ofK(b.delta) + '</span></div>';
+    }).join('');
+  } catch (e) { head.textContent = 'Order flow load nahi hua'; }
+}
+function _ofTick() {
+  const p = document.getElementById('panel-dashboard');
+  if (document.hidden || !p || !p.classList.contains('active')) return;
+  fetchOrderFlow();
+}
+setTimeout(fetchOrderFlow, 2500);
+_ofTimer = setInterval(_ofTick, 60000);
 let _saDays = 30;
 function setSaRange(d) { _saDays = d; fetchSignalAccuracy(); }
 async function fetchSignalAccuracy() {
@@ -8545,8 +8602,8 @@ async function fetchSignalAccuracy() {
     // Track Record Pulse always reads ALL-TIME rows (the period buttons must not shrink its sample).
     try {
       if (window.TrackPulse) {
-        if (_saDays === 0) window.TrackPulse.update({ sa: (r.rows || []).filter(x => x.instrument !== 'BITCOIN') });
-        else fetch('/api/signal-accuracy?days=0').then(x => x.json()).then(a => { if (a && a.success) window.TrackPulse.update({ sa: (a.rows || []).filter(x => x.instrument !== 'BITCOIN') }); }).catch(() => {});
+        if (_saDays === 0) window.TrackPulse.update({ sa: r.rows || [] });
+        else fetch('/api/signal-accuracy?days=0').then(x => x.json()).then(a => { if (a && a.success) window.TrackPulse.update({ sa: a.rows || [] }); }).catch(() => {});
       }
     } catch (e) { console.warn('[TrackPulse]', e.message); }
     const rows = (r.rows || []).filter(x => x.instrument === 'NIFTY' || x.instrument === 'CRUDE');

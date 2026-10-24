@@ -349,4 +349,18 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
     return { cfg, start, stop, setAuth, report, flush, schedule, _handleMessage: handleMessage, _state: S };
 }
 
-module.exports = { parseSnapQuote, createFlow, flowStep, newBucket, addToBucket, findNiftyFutToken, buildDayReport, formatLabText, istParts, createTickFlowLab };
+// 24 Oct — DISPLAY-ONLY card payload for the dashboard (volume + approximate delta per 15 min). Pure.
+// delta = the lab's quote-rule delta (buy volume minus sell volume it could classify; it sees only a sample of trades, so it is approximate).
+// Nothing here feeds signals, gates or alerts.
+function toCardPayload(rep, nowMs = Date.now()) {
+    if (!rep || !rep.ok) return { success: false, error: (rep && rep.error) || 'no report' };
+    const bars = (rep.bars || []).map(b => ({ label: b.label, vol: Number(b.vol) || 0, delta: Number(b.deltaQuote) || 0, cum: Number(b.cumQuote) || 0,
+        coveragePct: b.coveragePct === undefined ? null : b.coveragePct, partial: b.minutes < BAR_MIN }));
+    const t = rep.totals || {};
+    const ist = istParts(nowMs);
+    return { success: true, enabled: true, day: rep.day, isToday: rep.day === ist.day, symbol: rep.symbol || null,
+        live: rep.live ? { connected: !!rep.live.connected, lastPacketAgoSec: rep.live.lastPacketAgoSec } : null,
+        bars, totals: { vol: Number(t.vol) || 0, delta: Number(t.cumQuote) || 0, coveragePct: t.coveragePct === undefined ? null : t.coveragePct } };
+}
+
+module.exports = { toCardPayload, parseSnapQuote, createFlow, flowStep, newBucket, addToBucket, findNiftyFutToken, buildDayReport, formatLabText, istParts, createTickFlowLab };

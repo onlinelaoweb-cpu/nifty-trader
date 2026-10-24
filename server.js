@@ -16042,6 +16042,22 @@ app.get('/api/tickflow-lab', studyGuard, async (req, res) => {
         res.json({ success: false, error: e.message });
     }
 });
+// 24 Oct — DISPLAY-ONLY card for the NIFTY LIVE tab: 15-min futures volume + approximate delta (Angel free feed, quote-rule). Not a footprint, feeds nothing.
+// /api/orderflow-bars   (latest day with lab rows; ?date=YYYY-MM-DD for another day). Cached 20 s so many open tabs cost one query.
+let _ofCardCache = { key: '', ts: 0, body: null };
+app.get('/api/orderflow-bars', async (req, res) => {
+    if (!_tickFlowLab) return res.json({ success: true, enabled: false, msg: 'Order-flow lab is off (TICKFLOW_LAB) or still starting.' });
+    try {
+        const key = String(req.query.date || '');
+        if (_ofCardCache.body && _ofCardCache.key === key && Date.now() - _ofCardCache.ts < 20000) return res.json(_ofCardCache.body);
+        const rep = await _tickFlowLab.report({ day: req.query.date });
+        const body = tickFlowLib.toCardPayload(rep);
+        if (body.success) _ofCardCache = { key, ts: Date.now(), body };
+        res.json(body);
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
 // 17 Oct — read-only: real journal trade vs its ATR-scaled shadow twin. /api/atr-shadow?days=30&format=text
 app.get('/api/atr-shadow', requireToken, async (req, res) => {
     if (!_atrShadow) return res.json({ success: true, enabled: false, msg: 'starting (about 25s after boot)' });
