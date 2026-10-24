@@ -67,7 +67,10 @@ const free = { slipPts: 0, chargePct: 0, brokerage: 0, qty: 100 };
     assert.strictEqual(tp4.netTotalRs, 32000);
     const tp12 = res.variants.find(v => v.name === 'TP12/SL4');                 // +12 never reached -> exits at the 30-min timeout (+6)
     assert.strictEqual(tp12.hitTpPct, 0); assert.strictEqual(tp12.timeoutPct, 100); assert.strictEqual(tp12.netAvgRs, 600);
-    assert.strictEqual(res.variantsTried, 12); assert.strictEqual(res.variants.length, 13);
+    assert.strictEqual(res.variantsTried, 16); assert.strictEqual(res.variants.length, 17);      // 12 target/stop + 4 stop-only + HOLD
+    const so = res.variants.find(v => v.name === 'HOLD+SL10');                  // no target, wide stop never touched -> same as HOLD
+    assert.ok(so && so.tp === null && so.sl === 10); assert.strictEqual(so.netAvgRs, 600); assert.strictEqual(so.hitSlPct, 0);
+    assert.strictEqual(computeScalpCostStudy(makeTrades(80, m => 106), { ...free, slOnly: [] }).variants.length, 13);
 }
 
 {   // costs turn a small winner into a loser: +2 pts gross, 1 pt slippage each side = 0 before charges, brokerage pushes it negative
@@ -127,6 +130,44 @@ const free = { slipPts: 0, chargePct: 0, brokerage: 0, qty: 100 };
     const txt = formatScalpCostText(res, { instrument: 'NIFTY', days: 30 });
     assert.ok(txt.includes('SCALP-COST STUDY') && txt.includes('HOLD') && txt.includes('TP4/SL4') && txt.includes('PER TRIGGER'));
     assert.ok(/cannot be resolved/.test(txt));
+}
+
+
+// ── v2: stop-fill option ─────────────────────────────────────────────────────────────────────────────────────
+{
+    const gap = P([0, 100], [5, 90], [10, 120]);                                  // gaps straight through a 4-pt stop
+    assert.deepStrictEqual(simulateScalp(100, gap, 0, null, 4, 30), { exitPx: 90, reason: 'sl' });              // default = worse
+    assert.deepStrictEqual(simulateScalp(100, gap, 0, null, 4, 30, 'worse'), { exitPx: 90, reason: 'sl' });
+    assert.deepStrictEqual(simulateScalp(100, gap, 0, null, 4, 30, 'level'), { exitPx: 96, reason: 'sl' });     // optimistic
+    const worse = computeScalpCostStudy(makeTrades(80, m => m < 5 ? 100 : (m < 10 ? 90 : 90)), { ...free, stopFill: 'worse' });
+    const level = computeScalpCostStudy(makeTrades(80, m => m < 5 ? 100 : (m < 10 ? 90 : 90)), { ...free, stopFill: 'level' });
+    assert.strictEqual(worse.params.stopFill, 'worse'); assert.strictEqual(level.params.stopFill, 'level');
+    assert.strictEqual(worse.variants.find(v => v.name === 'HOLD+SL10').netAvgRs, -1000);   // 10-pt stop, premium 90 -> fills at 90
+    assert.strictEqual(level.variants.find(v => v.name === 'HOLD+SL10').netAvgRs, -1000);   // 100-10 = 90 level, same here
+    const w4 = worse.variants.find(v => v.name === 'TP4/SL4').netAvgRs, l4 = level.variants.find(v => v.name === 'TP4/SL4').netAvgRs;
+    assert.strictEqual(w4, -1000); assert.strictEqual(l4, -400);                              // 'level' is never worse than 'worse'
+    assert.ok(l4 >= w4);
+    assert.strictEqual(computeScalpCostStudy(makeTrades(80, m => 106), { ...free, stopFill: 'junk' }).params.stopFill, 'worse');
+}
+
+// ── v2: robustness stats and the outlier-driven verdict ─────────────────────────────────────────────────────────
+{   // 72 small losers (-2 pts) + 8 huge winners (+40 pts), spread over both halves -> positive average, but only because of the winners
+    const t = makeTrades(80, (m, i) => (i % 10 === 5 ? 140 : 98));
+    const res = computeScalpCostStudy(t, free);
+    const hold = res.variants[0];
+    assert.strictEqual(hold.netAvgRs, (8 * 4000 - 72 * 200) / 80);                    // +220 per trade on average
+    assert.strictEqual(hold.medianNetRs, -200); assert.strictEqual(hold.worstNetRs, -200); assert.strictEqual(hold.bestNetRs, 4000);
+    assert.strictEqual(hold.netAvgExTop10Rs, -200);                                   // best 10% (8 trades) removed -> only losers left
+    assert.ok(hold.older.netAvgRs > 0 && hold.newer.netAvgRs > 0);                    // halves alone would have said PASS
+    assert.strictEqual(hold.verdict, 'POSITIVE, OUTLIER-DRIVEN');
+}
+{   // evenly spread winners stay a PASS and show a positive median
+    const res = computeScalpCostStudy(makeTrades(80, m => m < 10 ? 100 + m * 0.6 : 106), free);
+    const hold = res.variants[0];
+    assert.strictEqual(hold.verdict, 'PASS'); assert.strictEqual(hold.medianNetRs, 600); assert.strictEqual(hold.netAvgExTop10Rs, 600); assert.strictEqual(hold.worstNetRs, 600);
+    const txt = formatScalpCostText(res, { instrument: 'NIFTY', days: 30 });
+    assert.ok(txt.includes('ROBUSTNESS') && txt.includes('worst trade') && txt.includes('HOLD+SL10') && txt.includes('conservative'));
+    assert.ok(formatScalpCostText(computeScalpCostStudy(makeTrades(80, m => 106), { ...free, stopFill: 'level' })).includes('optimistic'));
 }
 
 console.log('scalpCostStudy tests OK');

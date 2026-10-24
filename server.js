@@ -13610,7 +13610,7 @@ app.get('/api/hour-study', studyGuard, async (req, res) => {
 });
 
 // ── Scalp-cost study (24 Oct) ────────────────────────────────────────────────────────────────────────────────
-// Read-only research. /api/scalp-cost-study?instrument=NIFTY&source=&days=60&decluster=30&timeout=30&tps=4,6,8,12&sls=4,6,8&slip=1&charge=0.07&brokerage=40&qty=130&minPrem=10&minN=60&format=text
+// Read-only research. /api/scalp-cost-study?instrument=NIFTY&source=&days=60&decluster=30&timeout=30&tps=4,6,8,12&sls=4,6,8&slonly=10,15,20,30|none&stopfill=worse|level&slip=1&charge=0.07&brokerage=40&qty=130&minPrem=10&minN=60&format=text
 // Replays the stored premium paths (signal_outcome_path) of finished trigger outcomes as FIXED target/stop scalps (premium points) and reports
 // net rupees AFTER slippage, percentage charges and brokerage, trades/day and cost/day, with an older/newer-half check. CRUDE: pass qty and the
 // right charge rates yourself (defaults are NIFTY option rates). Nothing here feeds signals, gates or alerts. See src/utils/scalpCostStudy.js.
@@ -13643,6 +13643,8 @@ app.get('/api/scalp-cost-study', studyGuard, async (req, res) => {
         const study = scalpCostLib.computeScalpCostStudy([...byId.values()], {
             declusterMin: clampInt(req.query.decluster, 30, 0, 240), timeoutMin: clampInt(req.query.timeout, 30, 5, 90),
             tps: list(req.query.tps, [4, 6, 8, 12]), sls: list(req.query.sls, [4, 6, 8]),
+            slOnly: String(req.query.slonly || '').toLowerCase() === 'none' ? [] : list(req.query.slonly, [10, 15, 20, 30]),
+            stopFill: String(req.query.stopfill || '').toLowerCase() === 'level' ? 'level' : 'worse',
             slipPts: clampNum(req.query.slip, 1, 0, 20), chargePct: clampNum(req.query.charge, 0.07, 0, 2),
             brokerage: clampNum(req.query.brokerage, 40, 0, 500), qty: clampInt(req.query.qty, instrument === 'NIFTY' ? LOT_SIZE * 2 : 100, 1, 5000),
             minPremium: clampNum(req.query.minPrem, 10, 0, 500), minN: clampInt(req.query.minN, 60, 5, 1000), minHalfN: clampInt(req.query.minHalfN, 25, 3, 500),
