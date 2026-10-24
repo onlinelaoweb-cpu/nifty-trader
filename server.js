@@ -135,7 +135,8 @@ const ctxLib = require('./src/utils/entryContextStudy');   // 10 Oct — does en
 const sizingLib = require('./src/utils/sizingStudy');   // 10 Oct — flat lots vs fixed-rupee-risk sizing (Murarka: bigger stop -> fewer lots)
 const exitRuleLib = require('./src/utils/exitRuleStudy');
 const hourStudyLib = require('./src/utils/hourStudy');   // 14 Oct — hour-of-day study with costs + older/newer-half check (read-only)
-const scalpCostLib = require('./src/utils/scalpCostStudy');   // 24 Oct — scalp-cost study: fixed target/stop scalps after brokerage + slippage (read-only)
+const scalpCostLib = require('./src/utils/scalpCostStudy');
+const winnerLib = require('./src/utils/winnerAnatomy');   // 24 Oct — scalp-cost study: fixed target/stop scalps after brokerage + slippage (read-only)
 const ofLib = require('./src/utils/orderflowContext');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
 const proxyDayLib = require('./src/utils/proxyDay');   // 17 Oct — read-only 15-min view of the volume-delta PROXY for one day (compare with a real footprint)
 const jumbaaLib = require('./src/utils/jumbaaSignal');   // 23 Oct — Jumbaa signal (S/R 15m-close cross + Smart Money + 1h ADX), shadow/record-only
@@ -13658,6 +13659,43 @@ app.get('/api/scalp-cost-study', studyGuard, async (req, res) => {
     }
 });
 
+// ── Winner anatomy (24 Oct) ──────────────────────────────────────────────────────────────────────────────────
+// Read-only research. /api/winner-anatomy?instrument=NIFTY&days=60&cluster=30&timeout=60&slip=0.5&charge=0.07&brokerage=0&qty=130&format=text
+// Independent events (triggers firing together = one), 5 exit rules incl. trailing stops, and a profile of big vs average winners
+// (trigger, hour, weekday, premium, confluence, first 10 minutes). Research only; nothing feeds signals. See src/utils/winnerAnatomy.js.
+app.get('/api/winner-anatomy', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const clampNum = (v, d, lo, hi) => { const x = Number(v); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const instrument = String(req.query.instrument || 'NIFTY').toUpperCase();
+        const days = clampInt(req.query.days, 60, 1, 365);
+        const r = await dbPool.query(`
+            SELECT o.id, o.source, o.direction, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
+            FROM signal_outcomes o
+            JOIN signal_outcome_path p ON p.outcome_id = o.id
+            WHERE o.coach_result IS NOT NULL AND o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = $1 AND o.fire_ts >= NOW() - ($2::int * INTERVAL '1 day')
+            ORDER BY o.id, p.sample_ts ASC
+            LIMIT 300000`, [instrument, days]);
+        const byId = new Map();
+        for (const row of r.rows) {
+            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, direction: row.direction, entryPremium: Number(row.entry_premium), fireTs: new Date(row.fire_ts).getTime(), path: [] });
+            byId.get(row.id).path.push({ ts: new Date(row.sample_ts).getTime(), premium: Number(row.premium) });
+        }
+        const study = winnerLib.computeWinnerStudy([...byId.values()], {
+            clusterMin: clampInt(req.query.cluster, 30, 5, 240), timeoutMin: clampInt(req.query.timeout, 60, 10, 90),
+            stopFill: String(req.query.stopfill || '').toLowerCase() === 'level' ? 'level' : 'worse',
+            slipPts: clampNum(req.query.slip, 0.5, 0, 20), chargePct: clampNum(req.query.charge, 0.07, 0, 2), brokerage: clampNum(req.query.brokerage, 0, 0, 500),
+            qty: clampInt(req.query.qty, instrument === 'NIFTY' ? LOT_SIZE * 2 : 100, 1, 5000), minPremium: clampNum(req.query.minPrem, 10, 0, 500),
+        });
+        const meta = { instrument, days };
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(winnerLib.formatWinnerText(study, meta));
+        res.json({ success: true, ...meta, rowsRead: r.rows.length, ...study });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // ── Scalp forward test (24 Oct) ──────────────────────────────────────────────────────────────────────────────
 // Record-only. /api/scalp-forward-test?format=text   (start date: env SCALP_FORWARD_START, default 2026-10-26; or ?start=YYYY-MM-DD)
 // ONE rule fixed in advance (HOLD + 15-pt stop, 60 min, costs assumed) replayed on NIFTY signals fired on/after the start date only.
@@ -13668,7 +13706,7 @@ app.get('/api/scalp-forward-test', studyGuard, async (req, res) => {
         const startStr = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.start || '')) ? String(req.query.start) : (/^\d{4}-\d{2}-\d{2}$/.test(process.env.SCALP_FORWARD_START || '') ? process.env.SCALP_FORWARD_START : '2026-10-26');
         const startTs = new Date(startStr + 'T00:00:00+05:30').getTime();
         const r = await dbPool.query(`
-            SELECT o.id, o.source, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
+            SELECT o.id, o.source, o.direction, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
             FROM signal_outcomes o
             JOIN signal_outcome_path p ON p.outcome_id = o.id
             WHERE o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = 'NIFTY' AND o.fire_ts >= $1
@@ -13676,7 +13714,7 @@ app.get('/api/scalp-forward-test', studyGuard, async (req, res) => {
             LIMIT 300000`, [new Date(startTs)]);
         const byId = new Map();
         for (const row of r.rows) {
-            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, entryPremium: Number(row.entry_premium), fireTs: new Date(row.fire_ts).getTime(), path: [] });
+            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, direction: row.direction, entryPremium: Number(row.entry_premium), fireTs: new Date(row.fire_ts).getTime(), path: [] });
             byId.get(row.id).path.push({ ts: new Date(row.sample_ts).getTime(), premium: Number(row.premium) });
         }
         // only outcomes whose 60-minute window has fully passed (otherwise a half-recorded path would look like an early exit)
