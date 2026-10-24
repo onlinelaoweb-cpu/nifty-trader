@@ -2508,38 +2508,59 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <div class="pulse-detail" id="pulse-detail">Kisi tile pe tap karo — poori detail yahan dikhegi</div>
   </div></div>
 
-  <!-- ═══ ORDER FLOW (24 Oct) — display only: futures volume + approximate delta per 15 min. Live bars arrive over SSE (no polling). ═══ -->
+  <!-- ═══ ORDER FLOW (24 Oct) — display only: futures volume + approximate delta per 15 min. Live rows arrive over SSE (no polling). ═══ -->
   <div class="sec-label">ORDER FLOW (APPROX)</div>
   <div class="pulse-wrap"><div class="pulse-card" id="of-card">
     <style>
       #of-card .of-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--dim);margin-right:6px;vertical-align:middle;}
       #of-card .of-dot.live{background:var(--green);animation:ofPulse 1.4s ease-in-out infinite;}
       @keyframes ofPulse{0%,100%{box-shadow:0 0 0 0 rgba(0,230,118,.55);}50%{box-shadow:0 0 0 6px rgba(0,230,118,0);}}
-      #of-card .of-col{flex:1;margin:0 1px;display:flex;flex-direction:column;}
-      #of-card .of-up,#of-card .of-dn{height:38px;display:flex;}
-      #of-card .of-up{align-items:flex-end;border-bottom:1px solid var(--border);}
-      #of-card .of-up i,#of-card .of-dn i{display:block;width:100%;height:0;transition:height .6s ease,opacity .4s ease;}
-      #of-card .of-up i{background:var(--green);} #of-card .of-dn i{background:var(--red);}
-      #of-card .of-col.forming .of-up i,#of-card .of-col.forming .of-dn i{animation:ofBlink 1.2s ease-in-out infinite;}
-      @keyframes ofBlink{0%,100%{opacity:.95;}50%{opacity:.45;}}
-      #of-card .of-lab{font-size:8px;color:var(--dim);text-align:center;height:11px;white-space:nowrap;overflow:visible;margin-top:2px;}
+      #of-card .of-verdict{margin-top:8px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,0.03);}
+      #of-card .of-verdict.buy{border-color:var(--green);} #of-card .of-verdict.sell{border-color:var(--red);}
+      #of-card .of-vt{font-family:'Orbitron',monospace;font-size:14px;font-weight:700;letter-spacing:.4px;color:var(--amber);}
+      #of-card .of-verdict.buy .of-vt{color:var(--green);} #of-card .of-verdict.sell .of-vt{color:var(--red);}
+      #of-card .of-vs{margin-top:3px;font-size:11px;color:var(--dim);line-height:1.4;}
+      #of-card .of-meter{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--border);margin-top:8px;}
+      #of-card .of-meter i{display:block;height:100%;transition:width .6s ease;}
+      #of-card .of-lh,#of-card .of-row{display:grid;grid-template-columns:42px repeat(4,1fr);gap:2px;align-items:center;}
+      #of-card .of-lh{margin-top:10px;font-size:9px;color:var(--dim);letter-spacing:1px;padding-bottom:3px;border-bottom:1px solid var(--border);font-family:'Orbitron',monospace;}
+      #of-card .of-lh span:nth-child(n+2),#of-card .of-row span:nth-child(n+2){text-align:right;}
+      #of-card .of-row span.c{padding:3px 5px;border-radius:3px;}
+      #of-card .of-row{padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:12px;font-family:'Share Tech Mono',monospace;color:var(--text);}
+      #of-card .of-row.forming{background:rgba(255,193,7,0.07);border-radius:6px;}
+      #of-card .of-row .of-t{color:var(--dim);}
+      #of-card .of-bar{position:relative;height:12px;background:rgba(255,255,255,0.04);border-radius:3px;}
+      #of-card .of-bar:before{content:'';position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--border);}
+      #of-card .of-bar i{position:absolute;top:0;bottom:0;width:0;transition:width .6s ease;}
+      #of-card .of-bar i.p{left:50%;background:var(--green);border-radius:0 3px 3px 0;} #of-card .of-bar i.n{right:50%;background:var(--red);border-radius:3px 0 0 3px;}
+      #of-card .of-row.forming .of-bar i{animation:ofBlink 1.2s ease-in-out infinite;}
+      @keyframes ofBlink{0%,100%{opacity:.95;}50%{opacity:.5;}}
+      #of-card.of-collapsed .of-row:nth-child(n+9){display:none;}
+      #of-card .of-more{margin-top:8px;text-align:center;font-size:11px;color:var(--accent);cursor:pointer;font-family:'Share Tech Mono',monospace;padding:6px;}
       #of-card .of-flash-g{animation:ofFg .9s ease-out;} #of-card .of-flash-r{animation:ofFr .9s ease-out;}
       @keyframes ofFg{0%{color:#fff;text-shadow:0 0 8px var(--green);}100%{}} @keyframes ofFr{0%{color:#fff;text-shadow:0 0 8px var(--red);}100%{}}
-      #of-card .of-meter{display:flex;height:7px;border-radius:4px;overflow:hidden;background:var(--border);}
-      #of-card .of-meter i{display:block;height:100%;transition:width .6s ease;}
+      #of-card details{margin-top:8px;font-size:11px;color:var(--dim);line-height:1.5;} #of-card summary{cursor:pointer;color:var(--accent);}
     </style>
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
       <div id="of-head" style="font-size:12px;color:var(--dim);font-family:'Share Tech Mono',monospace;"><span class="of-dot" id="of-dot"></span><span id="of-head-t">Loading…</span></div>
       <div id="of-upd" style="font-size:10px;color:var(--dim);font-family:'Share Tech Mono',monospace;">--</div>
     </div>
-    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px;font-family:'Share Tech Mono',monospace;">
+    <div class="of-verdict" id="of-verdict">
+      <div class="of-vt" id="of-vt">Data aa raha hai…</div>
+      <div class="of-vs" id="of-vs">Kuch second mein yahan batayenge ki abhi kaun haavi hai: khareedne wale ya bechne wale.</div>
+      <div class="of-meter"><i id="of-m-buy" style="width:50%;background:var(--green);"></i><i id="of-m-sell" style="width:50%;background:var(--red);"></i></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;margin-top:3px;font-family:'Share Tech Mono',monospace;"><span style="color:var(--green)">BUY <b id="of-m-bp">--</b></span><span style="color:var(--red)">SELL <b id="of-m-sp">--</b></span></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;font-family:'Share Tech Mono',monospace;">
       <div id="of-fut" style="font-size:15px;color:var(--text);">--</div>
       <div id="of-sum" style="font-size:12px;color:var(--text);text-align:right;"></div>
     </div>
-    <div id="of-chart" style="display:flex;margin-top:8px;"></div>
-    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-top:8px;font-family:'Share Tech Mono',monospace;"><span id="of-m-lab">Is bar mein: buy / sell</span><span id="of-m-val">--</span></div>
-    <div class="of-meter" style="margin-top:3px;"><i id="of-m-buy" style="width:50%;background:var(--green);"></i><i id="of-m-sell" style="width:50%;background:var(--red);"></i></div>
-    <div id="of-rows" style="margin-top:8px;font-size:11px;font-family:'Share Tech Mono',monospace;color:var(--text);"></div>
+    <div class="of-lh"><span>TIME</span><span>BUY</span><span>SELL</span><span>DELTA</span><span>VOL</span></div>
+    <div id="of-list"></div>
+    <div class="of-more" id="of-more" onclick="ofToggleAll()" style="display:none;">Poore din ke bars dikhao ▼</div>
+    <details><summary>Kaise padhein?</summary>
+      <div>Har row 15 minute ka hissa hai (sabse naya upar; peela row abhi chal raha hai). <b>BUY</b> = khareedne wale ka maal, <b>SELL</b> = bechne wale ka, <b>DELTA</b> = buy minus sell (DEXT jaisa). Delta ka rang jitna gehra, utna zor: hara = buyers, laal = sellers. <b>VOL</b> = total maal. Chhote bar ya +/-10K se kam ko noise samjho.</div>
+    </details>
     <div style="margin-top:8px;font-size:10px;color:var(--dim);line-height:1.4;">Sirf dekhne ke liye. Ye exact footprint nahi hai: Angel ke free feed ke trades ke sample se bana andaza hai (1 din DEXT se milaya, direction lagbhag 80% mili). Koi signal ya alert isse nahi chalta.</div>
   </div></div>
 
@@ -8564,44 +8585,61 @@ async function fetchEngineTrackRecord() {
 </script>
 
 <script>
-// ── ORDER FLOW card (24 Oct): live bars come over the existing SSE stream ('orderflow' event, every ~5 s while the feed is live).
-// One plain fetch on load shows the last day when the market is closed. No polling, no timers that call the server.
-const _OF_N = 26, _OF_START = 9 * 60 + 15;
-let _ofBuilt = false, _ofRecvAt = 0, _ofLastAgo = null, _ofLive = false, _ofPrev = { delta: null, fut: null };
+// ── ORDER FLOW card (24 Oct): live rows come over the existing SSE stream ('orderflow' event, every ~5 s while the feed is live).
+// One plain fetch on load shows the last day when the market is closed (and up to 3 retries 20 s apart only while the server is still starting).
+// No polling, no timers that call the server.
+let _ofRecvAt = 0, _ofLastAgo = null, _ofLive = false, _ofPrev = { delta: null, fut: null }, _ofRetry = 0, _ofAll = false;
 function _ofK(v) {
   const n = Number(v) || 0, a = Math.abs(n), sg = n > 0 ? '+' : (n < 0 ? '-' : '');
   if (a >= 1e6) return sg + (a / 1e6).toFixed(2) + 'M';
   if (a >= 1e3) return sg + Math.round(a / 1e3) + 'K';
   return sg + Math.round(a);
 }
-function _ofBuild() {
-  const chart = document.getElementById('of-chart');
-  if (!chart) return false;
-  if (_ofBuilt) return true;
-  let h = '';
-  for (let i = 0; i < _OF_N; i++) {
-    const m = _OF_START + i * 15, lab = (i % 4 === 0) ? String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0') : '';
-    h += '<div class="of-col" id="of-c' + i + '"><div class="of-up"><i></i></div><div class="of-dn"><i></i></div><div class="of-lab">' + lab + '</div></div>';
-  }
-  chart.innerHTML = h; _ofBuilt = true; return true;
+function ofToggleAll() {
+  _ofAll = !_ofAll;
+  const c = document.getElementById('of-card'), m = document.getElementById('of-more');
+  if (c) c.classList.toggle('of-collapsed', !_ofAll);
+  if (m) m.textContent = _ofAll ? 'Kam dikhao ▲' : 'Poore din ke bars dikhao ▼';
 }
 function _ofFlash(el, cls) { if (!el) return; el.classList.remove('of-flash-g', 'of-flash-r'); void el.offsetWidth; el.classList.add(cls); }
+function _ofSet(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; }
 function renderOrderFlow(r, isLive) {
   const head = document.getElementById('of-head-t');
   if (!head || !r) return;
+  const dot = document.getElementById('of-dot');
   if (!r.success) { head.textContent = 'Order flow load nahi hua'; return; }
-  const dot = document.getElementById('of-dot'), sum = document.getElementById('of-sum'), rows = document.getElementById('of-rows'), fut = document.getElementById('of-fut');
-  if (r.enabled === false) { head.textContent = 'Order-flow feed band hai (TICKFLOW_LAB)'; if (dot) dot.className = 'of-dot'; return; }
+  if (r.enabled === false) {
+    head.textContent = 'Abhi start ho raha hai…'; if (dot) dot.className = 'of-dot';
+    _ofSet('of-vt', 'Feed abhi ready nahi'); _ofSet('of-vs', 'Server abhi chalu hua hai (ya TICKFLOW_LAB band hai). Thodi der baad apne aap dobara try karega.');
+    if (_ofRetry < 3) { _ofRetry++; setTimeout(fetchOrderFlow, 20000); }
+    return;
+  }
   const bars = r.bars || [];
-  if (!bars.length) { head.textContent = 'Abhi koi data nahi'; if (dot) dot.className = 'of-dot'; return; }
-  _ofBuild();
-  _ofLive = !!isLive; _ofRecvAt = Date.now(); _ofLastAgo = (r.live && r.live.lastPacketAgoSec != null) ? r.live.lastPacketAgoSec : 0;
+  if (!bars.length) { head.textContent = 'Abhi koi data nahi'; if (dot) dot.className = 'of-dot'; _ofSet('of-vt', 'Data nahi mila'); _ofSet('of-vs', 'Lab sirf Mon-Fri 09:15-15:30 mein data jodta hai.'); return; }
+  _ofRetry = 0; _ofLive = !!isLive; _ofRecvAt = Date.now(); _ofLastAgo = (r.live && r.live.lastPacketAgoSec != null) ? r.live.lastPacketAgoSec : 0;
   if (dot) dot.className = 'of-dot' + (isLive ? ' live' : '');
   head.textContent = (isLive ? 'LIVE' : (r.isToday ? 'Aaj' : 'Pichhla din ' + r.day)) + (r.symbol ? ' · ' + r.symbol : '');
+
+  // plain-words verdict for the bar that is forming (or the last bar)
+  const lb = bars[bars.length - 1], tot = (lb.buy || 0) + (lb.sell || 0), bp = tot > 0 ? Math.round(lb.buy / tot * 100) : 50, sp = 100 - bp;
+  const vbox = document.getElementById('of-verdict');
+  let cls = '', title = 'Buy aur sell barabar', sub;
+  if (tot < 2000) { title = 'Abhi data kam hai'; sub = 'Is bar mein itne trades nahi aaye ki kuch kaha ja sake.'; }
+  else if (bp >= 55) { cls = 'buy'; title = 'BUYERS haavi hain'; sub = (isLive ? 'Is chalte bar' : 'Aakhri bar') + ' (' + lb.label + ') mein khareedne wale zyada hain: ' + bp + '% buy, ' + sp + '% sell.'; }
+  else if (bp <= 45) { cls = 'sell'; title = 'SELLERS haavi hain'; sub = (isLive ? 'Is chalte bar' : 'Aakhri bar') + ' (' + lb.label + ') mein bechne wale zyada hain: ' + sp + '% sell, ' + bp + '% buy.'; }
+  else { sub = (isLive ? 'Is chalte bar' : 'Aakhri bar') + ' (' + lb.label + ') mein dono taraf lagbhag barabar: ' + bp + '% buy, ' + sp + '% sell.'; }
+  if (vbox) vbox.className = 'of-verdict ' + cls;
+  _ofSet('of-vt', title); _ofSet('of-vs', sub);
+  const mb = document.getElementById('of-m-buy'), ms = document.getElementById('of-m-sell');
+  if (mb) mb.style.width = bp + '%'; if (ms) ms.style.width = sp + '%';
+  _ofSet('of-m-bp', tot > 0 ? bp + '%' : '--'); _ofSet('of-m-sp', tot > 0 ? sp + '%' : '--');
+
   const t = r.totals || {}, dcol = t.delta > 0 ? 'var(--green)' : (t.delta < 0 ? 'var(--red)' : 'var(--text)');
-  sum.innerHTML = 'Vol <b>' + _ofK(t.vol).replace('+', '') + '</b> &nbsp; Delta (din, andaza) <b id="of-dd" style="color:' + dcol + '">' + _ofK(t.delta) + '</b>' + (t.coveragePct != null ? '<br><span style="color:var(--dim)">sample ' + t.coveragePct + '%</span>' : '');
+  const sum = document.getElementById('of-sum');
+  if (sum) sum.innerHTML = 'Poore din: Vol <b>' + _ofK(t.vol).replace('+', '') + '</b><br>Delta <b id="of-dd" style="color:' + dcol + '">' + _ofK(t.delta) + '</b> <span style="color:var(--dim)">(andaza)</span>';
   if (_ofPrev.delta !== null && _ofPrev.delta !== t.delta) _ofFlash(document.getElementById('of-dd'), t.delta > _ofPrev.delta ? 'of-flash-g' : 'of-flash-r');
   _ofPrev.delta = t.delta;
+  const fut = document.getElementById('of-fut');
   if (fut) {
     if (r.last != null) {
       const up = _ofPrev.fut === null || r.last >= _ofPrev.fut;
@@ -8610,40 +8648,40 @@ function renderOrderFlow(r, isLive) {
       _ofPrev.fut = r.last;
     } else { fut.textContent = 'FUT --'; }
   }
-  // bars: fixed 26 slots for the whole session; heights animate (CSS transition)
-  const mx = Math.max(1, ...bars.map(b => Math.abs(b.delta)));
-  const seen = {};
-  bars.forEach((b, k) => {
-    const parts = b.label.split(':'), idx = Math.round((Number(parts[0]) * 60 + Number(parts[1]) - _OF_START) / 15);
-    if (idx < 0 || idx >= _OF_N) return;
-    seen[idx] = 1;
-    const col = document.getElementById('of-c' + idx); if (!col) return;
-    const pos = b.delta >= 0, hh = Math.round(Math.abs(b.delta) / mx * 100) + '%', forming = isLive && k === bars.length - 1;
-    col.classList.toggle('forming', forming);
-    col.querySelector('.of-up i').style.height = pos ? hh : '0%';
-    col.querySelector('.of-dn i').style.height = pos ? '0%' : hh;
-    col.title = b.label + '  V ' + _ofK(b.vol).replace('+', '') + '  Δ ' + _ofK(b.delta);
-    col.style.opacity = (b.partial && !forming) ? 0.55 : 1;
-  });
-  for (let i = 0; i < _OF_N; i++) if (!seen[i]) { const col = document.getElementById('of-c' + i); if (col) { col.classList.remove('forming'); col.querySelector('.of-up i').style.height = '0%'; col.querySelector('.of-dn i').style.height = '0%'; col.title = ''; } }
-  // buy / sell split of the bar that is forming (or the last bar)
-  const lb = bars[bars.length - 1], tot = (lb.buy || 0) + (lb.sell || 0), bp = tot > 0 ? Math.round(lb.buy / tot * 100) : 50;
-  const mb = document.getElementById('of-m-buy'), ms = document.getElementById('of-m-sell'), mv = document.getElementById('of-m-val'), ml = document.getElementById('of-m-lab');
-  if (mb) mb.style.width = bp + '%'; if (ms) ms.style.width = (100 - bp) + '%';
-  if (mv) mv.innerHTML = tot > 0 ? '<span style="color:var(--green)">' + bp + '%</span> / <span style="color:var(--red)">' + (100 - bp) + '%</span>' : '--';
-  if (ml) ml.textContent = (isLive ? 'Chal raha bar ' : 'Aakhri bar ') + lb.label + ': buy / sell';
-  rows.innerHTML = bars.slice(-6).reverse().map(b => {
-    const c = b.delta > 0 ? 'var(--green)' : (b.delta < 0 ? 'var(--red)' : 'var(--text)');
-    return '<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04);"><span>' + b.label + (b.partial ? '*' : '') + '</span><span>V ' + _ofK(b.vol).replace('+', '') + '</span><span style="color:' + c + '">Δ ' + _ofK(b.delta) + '</span></div>';
-  }).join('');
+
+  // rows: newest on top, one per 15-minute bar. Rows are kept (not rebuilt) so the bars animate; a new bar is inserted on top.
+  const list = document.getElementById('of-list');
+  if (list) {
+    const mx = Math.max(1, ...bars.map(b => Math.abs(b.delta)));
+    bars.forEach((b, k) => {
+      const id = 'of-r-' + b.label.replace(':', ''), forming = isLive && k === bars.length - 1;
+      let row = document.getElementById(id);
+      if (!row) {
+        row = document.createElement('div'); row.id = id; row.className = 'of-row';
+        row.innerHTML = '<span class="of-t"></span><span class="c of-b"></span><span class="c of-s"></span><span class="c of-d"></span><span class="c of-v"></span>';
+        row.firstChild.textContent = b.label;
+        list.insertBefore(row, list.firstChild);
+      }
+      row.classList.toggle('forming', forming);
+      const al = Math.min(0.55, 0.08 + Math.abs(b.delta) / mx * 0.47), pos = b.delta >= 0;
+      const bq = row.querySelector('.of-b'), sq = row.querySelector('.of-s'), dq = row.querySelector('.of-d'), vq = row.querySelector('.of-v');
+      bq.textContent = _ofK(b.buy).replace('+', ''); sq.textContent = _ofK(b.sell).replace('+', ''); vq.textContent = _ofK(b.vol).replace('+', '');
+      bq.style.color = 'var(--green)'; sq.style.color = 'var(--red)';
+      dq.textContent = _ofK(b.delta); dq.style.fontWeight = '700';
+      dq.style.background = (pos ? 'rgba(0,230,118,' : 'rgba(255,82,82,') + al.toFixed(2) + ')';
+      row.title = b.label + (b.partial ? ' (adhoora bar)' : '') + ' — vol ' + _ofK(b.vol).replace('+', '') + ', delta ' + _ofK(b.delta);
+    });
+    const more = document.getElementById('of-more'), card = document.getElementById('of-card');
+    if (more) more.style.display = bars.length > 8 ? '' : 'none';
+    if (card && !card.dataset.ofInit) { card.classList.add('of-collapsed'); card.dataset.ofInit = '1'; }
+  }
 }
 async function fetchOrderFlow() {
   try {
     const j = await fetch('/api/orderflow-bars').then(x => x.json());
     if (_ofLive && Date.now() - _ofRecvAt < 15000) return;      // a live push already drew the card — don't overwrite it with the older snapshot
     renderOrderFlow(j, false);
-  }
-  catch (e) { const h = document.getElementById('of-head-t'); if (h) h.textContent = 'Order flow load nahi hua'; }
+  } catch (e) { const h = document.getElementById('of-head-t'); if (h) h.textContent = 'Order flow load nahi hua'; }
 }
 // "x sec pehle" ticks locally every second from the last pushed packet age — it makes no request
 setInterval(() => {
