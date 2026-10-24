@@ -135,6 +135,7 @@ const ctxLib = require('./src/utils/entryContextStudy');   // 10 Oct — does en
 const sizingLib = require('./src/utils/sizingStudy');   // 10 Oct — flat lots vs fixed-rupee-risk sizing (Murarka: bigger stop -> fewer lots)
 const exitRuleLib = require('./src/utils/exitRuleStudy');
 const hourStudyLib = require('./src/utils/hourStudy');   // 14 Oct — hour-of-day study with costs + older/newer-half check (read-only)
+const scalpCostLib = require('./src/utils/scalpCostStudy');   // 24 Oct — scalp-cost study: fixed target/stop scalps after brokerage + slippage (read-only)
 const ofLib = require('./src/utils/orderflowContext');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
 const proxyDayLib = require('./src/utils/proxyDay');   // 17 Oct — read-only 15-min view of the volume-delta PROXY for one day (compare with a real footprint)
 const jumbaaLib = require('./src/utils/jumbaaSignal');   // 23 Oct — Jumbaa signal (S/R 15m-close cross + Smart Money + 1h ADX), shadow/record-only
@@ -13602,6 +13603,52 @@ app.get('/api/hour-study', studyGuard, async (req, res) => {
         });
         const meta = { instrument, source: req.query.source || 'ALL', days };
         if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(hourStudyLib.formatHourText(study, meta));
+        res.json({ success: true, ...meta, rowsRead: r.rows.length, ...study });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── Scalp-cost study (24 Oct) ────────────────────────────────────────────────────────────────────────────────
+// Read-only research. /api/scalp-cost-study?instrument=NIFTY&source=&days=60&decluster=30&timeout=30&tps=4,6,8,12&sls=4,6,8&slip=1&charge=0.07&brokerage=40&qty=130&minPrem=10&minN=60&format=text
+// Replays the stored premium paths (signal_outcome_path) of finished trigger outcomes as FIXED target/stop scalps (premium points) and reports
+// net rupees AFTER slippage, percentage charges and brokerage, trades/day and cost/day, with an older/newer-half check. CRUDE: pass qty and the
+// right charge rates yourself (defaults are NIFTY option rates). Nothing here feeds signals, gates or alerts. See src/utils/scalpCostStudy.js.
+app.get('/api/scalp-cost-study', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const clampNum = (v, d, lo, hi) => { const x = Number(v); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const list = (v, d) => {
+            const a = String(v || '').split(',').map(x => Number(x)).filter(x => Number.isFinite(x) && x > 0 && x <= 100);
+            return a.length ? [...new Set(a)].slice(0, 6) : d;
+        };
+        const instrument = String(req.query.instrument || 'NIFTY').toUpperCase();
+        const days = clampInt(req.query.days, 60, 1, 365);
+        const params = [instrument, days];
+        let where = `o.coach_result IS NOT NULL AND o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = $1 AND o.fire_ts >= NOW() - ($2::int * INTERVAL '1 day')`;
+        if (req.query.source) { params.push(String(req.query.source)); where += ` AND o.source = $${params.length}`; }
+        const r = await dbPool.query(`
+            SELECT o.id, o.source, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
+            FROM signal_outcomes o
+            JOIN signal_outcome_path p ON p.outcome_id = o.id
+            WHERE ${where}
+            ORDER BY o.id, p.sample_ts ASC
+            LIMIT 300000`, params);
+        const byId = new Map();
+        for (const row of r.rows) {
+            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, entryPremium: Number(row.entry_premium), fireTs: new Date(row.fire_ts).getTime(), path: [] });
+            byId.get(row.id).path.push({ ts: new Date(row.sample_ts).getTime(), premium: Number(row.premium) });
+        }
+        const study = scalpCostLib.computeScalpCostStudy([...byId.values()], {
+            declusterMin: clampInt(req.query.decluster, 30, 0, 240), timeoutMin: clampInt(req.query.timeout, 30, 5, 90),
+            tps: list(req.query.tps, [4, 6, 8, 12]), sls: list(req.query.sls, [4, 6, 8]),
+            slipPts: clampNum(req.query.slip, 1, 0, 20), chargePct: clampNum(req.query.charge, 0.07, 0, 2),
+            brokerage: clampNum(req.query.brokerage, 40, 0, 500), qty: clampInt(req.query.qty, instrument === 'NIFTY' ? LOT_SIZE * 2 : 100, 1, 5000),
+            minPremium: clampNum(req.query.minPrem, 10, 0, 500), minN: clampInt(req.query.minN, 60, 5, 1000), minHalfN: clampInt(req.query.minHalfN, 25, 3, 500),
+        });
+        const meta = { instrument, source: req.query.source || 'ALL', days };
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(scalpCostLib.formatScalpCostText(study, meta));
         res.json({ success: true, ...meta, rowsRead: r.rows.length, ...study });
     } catch (e) {
         res.json({ success: false, error: e.message });
