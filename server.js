@@ -136,7 +136,8 @@ const sizingLib = require('./src/utils/sizingStudy');   // 10 Oct — flat lots 
 const exitRuleLib = require('./src/utils/exitRuleStudy');
 const hourStudyLib = require('./src/utils/hourStudy');   // 14 Oct — hour-of-day study with costs + older/newer-half check (read-only)
 const scalpCostLib = require('./src/utils/scalpCostStudy');
-const winnerLib = require('./src/utils/winnerAnatomy');   // 24 Oct — scalp-cost study: fixed target/stop scalps after brokerage + slippage (read-only)
+const winnerLib = require('./src/utils/winnerAnatomy');
+const confluenceLib = require('./src/utils/confluenceRule');   // 24 Oct — scalp-cost study: fixed target/stop scalps after brokerage + slippage (read-only)
 const ofLib = require('./src/utils/orderflowContext');   // 10 Oct — would a different exit rule (late BE, book 20-25% then trail, time stop, early cut) keep more of the peak?
 const proxyDayLib = require('./src/utils/proxyDay');   // 17 Oct — read-only 15-min view of the volume-delta PROXY for one day (compare with a real footprint)
 const jumbaaLib = require('./src/utils/jumbaaSignal');   // 23 Oct — Jumbaa signal (S/R 15m-close cross + Smart Money + 1h ADX), shadow/record-only
@@ -13691,6 +13692,43 @@ app.get('/api/winner-anatomy', studyGuard, async (req, res) => {
         const meta = { instrument, days };
         if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(winnerLib.formatWinnerText(study, meta));
         res.json({ success: true, ...meta, rowsRead: r.rows.length, ...study });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── Confluence forward test #2 (24 Oct) ──────────────────────────────────────────────────────────────────────
+// Record-only. /api/confluence-forward?format=text  (start: env SCALP_FORWARD_START, default 2026-10-26, or ?start=YYYY-MM-DD)
+//   ?backtest=1&days=60  -> IN-SAMPLE look-back on old data (rules were chosen after seeing it; orientation only, proves nothing)
+// Two pre-registered rules (3 different triggers together; same + 10-min confirm) replayed on NIFTY signals. No orders, no signal changes.
+app.get('/api/confluence-forward', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const backtest = String(req.query.backtest || '') === '1';
+        const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 60));
+        const okDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+        const startStr = okDate(req.query.start) ? String(req.query.start) : (okDate(process.env.SCALP_FORWARD_START) ? process.env.SCALP_FORWARD_START : '2026-10-26');
+        const startTs = backtest ? 0 : new Date(startStr + 'T00:00:00+05:30').getTime();
+        const since = backtest ? new Date(Date.now() - days * 86400000) : new Date(startTs);
+        const r = await dbPool.query(`
+            SELECT o.id, o.source, o.direction, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
+            FROM signal_outcomes o
+            JOIN signal_outcome_path p ON p.outcome_id = o.id
+            WHERE o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = 'NIFTY' AND o.fire_ts >= $1
+            ORDER BY o.id, p.sample_ts ASC
+            LIMIT 300000`, [since]);
+        const byId = new Map();
+        for (const row of r.rows) {
+            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, direction: row.direction, entryPremium: Number(row.entry_premium), fireTs: new Date(row.fire_ts).getTime(), path: [] });
+            byId.get(row.id).path.push({ ts: new Date(row.sample_ts).getTime(), premium: Number(row.premium) });
+        }
+        // only signals whose whole 60-minute window has passed (a half-recorded path would look like an early exit)
+        const cutoff = Date.now() - (confluenceLib.CONFLUENCE_RULE.timeoutMin + 5) * 60000;
+        const done = [...byId.values()].filter(x => x.fireTs <= cutoff);
+        const out = confluenceLib.evaluateConfluence(done, { startTs });
+        const meta = backtest ? { backtest: true, days } : { start: startStr };
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(confluenceLib.formatConfluenceText(out, meta));
+        res.json({ success: true, ...meta, rowsRead: r.rows.length, ...out });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
