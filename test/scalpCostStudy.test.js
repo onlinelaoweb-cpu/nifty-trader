@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { simulateScalp, tradeRupees, computeScalpCostStudy, formatScalpCostText } = require('../src/utils/scalpCostStudy');
+const { simulateScalp, tradeRupees, computeScalpCostStudy, formatScalpCostText, evaluateForward, formatForwardText, FORWARD_RULE } = require('../src/utils/scalpCostStudy');
 
 const M = 60000;
 const P = (...pairs) => pairs.map(([m, premium]) => ({ ts: m * M, premium }));   // minutes after fire (fireTs = 0)
@@ -168,6 +168,63 @@ const free = { slipPts: 0, chargePct: 0, brokerage: 0, qty: 100 };
     const txt = formatScalpCostText(res, { instrument: 'NIFTY', days: 30 });
     assert.ok(txt.includes('ROBUSTNESS') && txt.includes('worst trade') && txt.includes('HOLD+SL10') && txt.includes('conservative'));
     assert.ok(formatScalpCostText(computeScalpCostStudy(makeTrades(80, m => 106), { ...free, stopFill: 'level' })).includes('optimistic'));
+}
+
+// ── v3: extremes list, expiry-day split, forward test ───────────────────────────────────────────────────────────
+{   // BASE is Monday 5 Oct 2026 -> day index 1 is Tuesday (expiry). Tuesday trades lose 4 pts, other days win 6 pts.
+    const t = makeTrades(100, (m, i) => (Math.floor(i / 20) === 1 ? 96 : 106));
+    const res = computeScalpCostStudy(t, free);
+    const sp = res.expirySplit.find(e => e.name === 'HOLD');
+    assert.strictEqual(sp.expiry.n, 20); assert.strictEqual(sp.expiry.days, 1); assert.strictEqual(sp.expiry.netAvgRs, -400);
+    assert.strictEqual(sp.other.n, 80); assert.strictEqual(sp.other.days, 4); assert.strictEqual(sp.other.netAvgRs, 600);
+    const only = computeScalpCostStudy(t, { ...free, expiry: 'only' }), excl = computeScalpCostStudy(t, { ...free, expiry: 'exclude' });
+    assert.strictEqual(only.tradesUsed, 20); assert.strictEqual(excl.tradesUsed, 80);
+    assert.strictEqual(computeScalpCostStudy(t, { ...free, expiry: 'junk' }).tradesUsed, 100);
+    const txt = formatScalpCostText(res, { instrument: 'NIFTY', days: 30 });
+    assert.ok(txt.includes('EXPIRY DAY') && txt.includes('BEST 5 and WORST 5'));
+}
+{   // one trade with a 4x premium jump is the best trade and gets flagged
+    const t = makeTrades(80, (m, i) => (i === 7 && m >= 10 ? 400 : 102));
+    const res = computeScalpCostStudy(t, free);
+    assert.strictEqual(res.extremes.variant, 'HOLD');
+    assert.strictEqual(res.extremes.best.length, 5); assert.strictEqual(res.extremes.worst.length, 5);
+    const top = res.extremes.best[0];
+    assert.strictEqual(top.netRs, 30000); assert.strictEqual(top.exit, 400); assert.strictEqual(top.peak, 400); assert.strictEqual(top.flag, 'CHECK DATA');
+    assert.ok(top.time.startsWith('2026-10-05') && top.weekday === 'Mon');
+    assert.strictEqual(res.extremes.worst[0].flag, '');
+    assert.strictEqual(computeScalpCostStudy(t, { ...free, focus: 'HOLD+SL10' }).extremes.variant, 'HOLD+SL10');
+    assert.strictEqual(computeScalpCostStudy(t, { ...free, focus: 'nope' }).extremes.variant, 'HOLD');
+}
+{   // forward test: 60-minute paths, rule HOLD+SL15
+    const START = Date.UTC(2026, 9, 26, 3, 45, 0);                            // Mon 26 Oct 09:15 IST
+    const mk = (n, endPrem, perDay = 20) => Array.from({ length: n }, (_, i) => {
+        const fireTs = START + Math.floor(i / perDay) * DAY + (i % perDay) * 40 * M;
+        return { id: i, source: 'X', fireTs, entryPremium: 100, path: [0, 5, 10, 20, 40, 60].map(m => ({ ts: fireTs + m * M, premium: m === 60 ? endPrem : 100 })) };
+    });
+    // ignore signals before the start date
+    const early = mk(30, 150).map(x => ({ ...x, fireTs: x.fireTs - 10 * DAY, path: x.path.map(p => ({ ...p, ts: p.ts - 10 * DAY })) }));
+    const none = evaluateForward(early, { startTs: START - 3600000 });
+    assert.strictEqual(none.trades, 0); assert.strictEqual(none.status, 'COLLECTING');
+    // too few trades -> COLLECTING even if great
+    const few = evaluateForward(mk(40, 110), { startTs: START - 3600000 });
+    assert.strictEqual(few.status, 'COLLECTING'); assert.ok(few.reasons[0].includes('need 300'));
+    // plenty of trades, steady small profit -> PASS (cost: 2*0.5*130=130 + charges ~ 0.07%*130*(100+110)*... ), +10 pts = 1300 gross
+    const good = evaluateForward(mk(320, 110), { startTs: START - 3600000 });
+    assert.ok(good.trades >= 300 && good.days >= 10, 'trades ' + good.trades + ' days ' + good.days);
+    assert.strictEqual(good.status, 'PASS'); assert.ok(good.netAvgRs > 0 && good.checks.every(c => c.ok));
+    // steady losses -> FAIL
+    const bad = evaluateForward(mk(320, 90), { startTs: START - 3600000 });
+    assert.strictEqual(bad.status, 'FAIL'); assert.ok(bad.reasons.length > 0);
+    // profit only from one lucky trade -> FAIL on the outlier rule
+    const lucky = mk(320, 102).map((x, i) => i === 100 ? { ...x, path: x.path.map(p => p.ts === x.fireTs + 60 * M ? { ...p, premium: 400 } : p) } : x);
+    const lk = evaluateForward(lucky, { startTs: START - 3600000 });
+    assert.ok(lk.netTotalRs > 0, 'total ' + lk.netTotalRs); assert.strictEqual(lk.status, 'FAIL');
+    assert.ok(lk.reasons.some(x => x.includes('best single trade')));
+    // garbage input does not throw
+    assert.strictEqual(evaluateForward(null).trades, 0); assert.strictEqual(evaluateForward([{}, null, { fireTs: 'x' }]).status, 'COLLECTING');
+    const txt = formatForwardText(good, { start: '2026-10-26' });
+    assert.ok(txt.includes('STATUS: PASS') && txt.includes('RULE (fixed in advance)') && txt.includes('DAY BY DAY'));
+    assert.strictEqual(FORWARD_RULE.sl, 15);
 }
 
 console.log('scalpCostStudy tests OK');

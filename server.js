@@ -13610,7 +13610,7 @@ app.get('/api/hour-study', studyGuard, async (req, res) => {
 });
 
 // ── Scalp-cost study (24 Oct) ────────────────────────────────────────────────────────────────────────────────
-// Read-only research. /api/scalp-cost-study?instrument=NIFTY&source=&days=60&decluster=30&timeout=30&tps=4,6,8,12&sls=4,6,8&slonly=10,15,20,30|none&stopfill=worse|level&slip=1&charge=0.07&brokerage=40&qty=130&minPrem=10&minN=60&format=text
+// Read-only research. /api/scalp-cost-study?instrument=NIFTY&source=&days=60&decluster=30&timeout=30&tps=4,6,8,12&sls=4,6,8&slonly=10,15,20,30|none&stopfill=worse|level&slip=1&charge=0.07&brokerage=40&qty=130&minPrem=10&minN=60&expiry=all|only|exclude&focus=HOLD&format=text
 // Replays the stored premium paths (signal_outcome_path) of finished trigger outcomes as FIXED target/stop scalps (premium points) and reports
 // net rupees AFTER slippage, percentage charges and brokerage, trades/day and cost/day, with an older/newer-half check. CRUDE: pass qty and the
 // right charge rates yourself (defaults are NIFTY option rates). Nothing here feeds signals, gates or alerts. See src/utils/scalpCostStudy.js.
@@ -13648,10 +13648,44 @@ app.get('/api/scalp-cost-study', studyGuard, async (req, res) => {
             slipPts: clampNum(req.query.slip, 1, 0, 20), chargePct: clampNum(req.query.charge, 0.07, 0, 2),
             brokerage: clampNum(req.query.brokerage, 40, 0, 500), qty: clampInt(req.query.qty, instrument === 'NIFTY' ? LOT_SIZE * 2 : 100, 1, 5000),
             minPremium: clampNum(req.query.minPrem, 10, 0, 500), minN: clampInt(req.query.minN, 60, 5, 1000), minHalfN: clampInt(req.query.minHalfN, 25, 3, 500),
+            expiry: String(req.query.expiry || 'all').toLowerCase(), focus: String(req.query.focus || 'HOLD'),
         });
         const meta = { instrument, source: req.query.source || 'ALL', days };
         if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(scalpCostLib.formatScalpCostText(study, meta));
         res.json({ success: true, ...meta, rowsRead: r.rows.length, ...study });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── Scalp forward test (24 Oct) ──────────────────────────────────────────────────────────────────────────────
+// Record-only. /api/scalp-forward-test?format=text   (start date: env SCALP_FORWARD_START, default 2026-10-26; or ?start=YYYY-MM-DD)
+// ONE rule fixed in advance (HOLD + 15-pt stop, 60 min, costs assumed) replayed on NIFTY signals fired on/after the start date only.
+// Shows COLLECTING until 300 trades over 10 trading days, then PASS or FAIL against pre-set conditions. Places no orders, changes no signals.
+app.get('/api/scalp-forward-test', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const startStr = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.start || '')) ? String(req.query.start) : (/^\d{4}-\d{2}-\d{2}$/.test(process.env.SCALP_FORWARD_START || '') ? process.env.SCALP_FORWARD_START : '2026-10-26');
+        const startTs = new Date(startStr + 'T00:00:00+05:30').getTime();
+        const r = await dbPool.query(`
+            SELECT o.id, o.source, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
+            FROM signal_outcomes o
+            JOIN signal_outcome_path p ON p.outcome_id = o.id
+            WHERE o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = 'NIFTY' AND o.fire_ts >= $1
+            ORDER BY o.id, p.sample_ts ASC
+            LIMIT 300000`, [new Date(startTs)]);
+        const byId = new Map();
+        for (const row of r.rows) {
+            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, entryPremium: Number(row.entry_premium), fireTs: new Date(row.fire_ts).getTime(), path: [] });
+            byId.get(row.id).path.push({ ts: new Date(row.sample_ts).getTime(), premium: Number(row.premium) });
+        }
+        // only outcomes whose 60-minute window has fully passed (otherwise a half-recorded path would look like an early exit)
+        const cutoff = Date.now() - (scalpCostLib.FORWARD_RULE.timeoutMin + 5) * 60000;
+        const done = [...byId.values()].filter(x => x.fireTs <= cutoff);
+        const fw = scalpCostLib.evaluateForward(done, { startTs });
+        const meta = { start: startStr };
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(scalpCostLib.formatForwardText(fw, meta));
+        res.json({ success: true, ...meta, rowsRead: r.rows.length, ...fw });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
