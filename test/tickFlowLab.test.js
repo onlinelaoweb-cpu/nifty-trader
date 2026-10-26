@@ -45,6 +45,18 @@ assert.strictEqual(s.volDrop, true); assert.strictEqual(s.dv, 0);
 s = L.flowStep(f, { ltp: 100, volume: 60, bid: 99.95, ask: 100.05 });                  // continues from the new base
 assert.strictEqual(s.dv, 50);
 
+// block print: a single increment >= BLOCK_MIN stays in volume (dv) but gets no direction
+{
+  const fb = L.createFlow();
+  L.flowStep(fb, { ltp: 100, volume: 1000, bid: 99.95, ask: 100.05 });
+  const sb = L.flowStep(fb, { ltp: 100.05, volume: 1000 + L.BLOCK_MIN, bid: 100, ask: 100.1 });
+  assert.deepStrictEqual([sb.dv, sb.block, sb.tickDir, sb.quoteDir, sb.byQuote], [L.BLOCK_MIN, true, 0, 0, false]);
+  const sn = L.flowStep(fb, { ltp: 100.05, volume: 1000 + L.BLOCK_MIN + 40, bid: 100, ask: 100.1 });  // normal trade after it still classifies
+  assert.strictEqual(sn.block, false); assert.strictEqual(sn.dv, 40); assert.notStrictEqual(sn.tickDir, 0);
+  const s0 = L.flowStep(L.createFlow(), { ltp: 100, volume: 5 }, 0);                                    // blockMin 0 = feature off
+  assert.strictEqual(s0.block, false);
+}
+
 // bucket + coverage
 const b = L.newBucket(0), fl = L.createFlow();
 for (const x of [{ ltp: 100, volume: 1000, ltq: 0 }, { ltp: 100.05, volume: 1075, ltq: 75, bid: 100, ask: 100.1 }, { ltp: 100, volume: 1175, ltq: 60, bid: 99.95, ask: 100.05 }]) L.addToBucket(b, x, L.flowStep(fl, x));

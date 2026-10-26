@@ -69,8 +69,11 @@ function parseSnapQuote(buf) {
 // ── classifier (pure, stateful object) ───────────────────────────────────────────────────────────────────────────────────
 function createFlow() { return { vol: null, ltp: null, dir: 0, bid: null, ask: null }; }
 // returns { dv, tickDir, quoteDir, byQuote, volDrop }; dv = trade size since the previous packet (0 when nothing traded)
-function flowStep(f, t) {
-    const out = { dv: 0, tickDir: 0, quoteDir: 0, byQuote: false, volDrop: false };
+// 27 Oct — one packet-to-packet jump of BLOCK_MIN contracts or more is a single big print (a cross / block): who was the aggressor cannot be told from a snapshot feed
+// (26 Oct 12:30: one ~0.5M print was booked as SELL here while DEXT booked it BUY, which turned a +413K bar into -535K). It is kept in volume but left OUT of buy/sell/delta (goes to 'unclassified').
+const BLOCK_MIN = 100000;
+function flowStep(f, t, blockMin = BLOCK_MIN) {
+    const out = { dv: 0, tickDir: 0, quoteDir: 0, byQuote: false, volDrop: false, block: false };
     const move = f.ltp === null ? 0 : Math.sign(t.ltp - f.ltp);
     if (f.vol !== null && t.volume < f.vol) out.volDrop = true;
     else if (f.vol !== null && t.volume > f.vol) {
@@ -79,6 +82,7 @@ function flowStep(f, t) {
         if (f.ask > 0 && t.ltp >= f.ask) { out.quoteDir = 1; out.byQuote = true; }
         else if (f.bid > 0 && t.ltp <= f.bid) { out.quoteDir = -1; out.byQuote = true; }
         else out.quoteDir = out.tickDir;
+        if (blockMin > 0 && out.dv >= blockMin) { out.block = true; out.tickDir = 0; out.quoteDir = 0; out.byQuote = false; }
     }
     if (move) f.dir = move;
     f.vol = t.volume; f.ltp = t.ltp;
@@ -148,7 +152,7 @@ function buildDayReport(rows, day) {
     const out = bars.filter(b => b.minutes > 0).map(b => {
         const dT = b.buyTick - b.sellTick, dQ = b.buyQ - b.sellQ; cT += dT; cQ += dQ;
         return { label: b.label, minutes: b.minutes, ticks: b.ticks, ticksPerSec: r1(b.ticks / (b.minutes * 60)), events: b.events, vol: b.vol,
-            coveragePct: b.vol > 0 ? r1(b.ltqSum / b.vol * 100) : null, deltaTick: dT, deltaQuote: dQ, buyQuote: b.buyQ, sellQuote: b.sellQ, cumTick: cT, cumQuote: cQ,
+            coveragePct: b.vol > 0 ? r1(b.ltqSum / b.vol * 100) : null, deltaTick: dT, deltaQuote: dQ, buyQuote: b.buyQ, sellQuote: b.sellQ, unQuote: b.unQ, cumTick: cT, cumQuote: cQ,
             quoteSharePct: b.vol > 0 ? r1(b.qByQuote / b.vol * 100) : null, unclassPct: b.vol > 0 ? r1(b.unQ / b.vol * 100) : null,
             open: b.open, close: b.close, chg: b.open !== null ? r2(b.close - b.open) : null, avgSpread: b.spreadN ? r2(b.spreadSum / b.spreadN) : null };
     });
@@ -185,8 +189,8 @@ function formatLabText(rep, stats, raws, meta = {}) {
 
 // ── the lab (runtime) ────────────────────────────────────────────────────────────────────────────────────────────────────
 function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = process.env, wsFactory = null, fetchScrip = null, bootDelayMs = 90000, onAuthFail = null }) {
-    const cfg = { enabled: ['true', 'on', '1', 'yes'].includes(String(env.TICKFLOW_LAB || '').toLowerCase()), tokenOverride: env.TICKFLOW_FUT_TOKEN || null, bootDelayMs };
-    const freshStats = () => ({ connects: 0, closes: 0, packets: 0, parsedOk: 0, smallMsgs: 0, unparsed: 0, badLen: 0, otherMode: 0, wrongToken: 0, ltpOutOfRange: 0, volDrop: 0, crossedBook: 0, ltqZeroOnTrade: 0, exchTsSample: null });
+    const cfg = { enabled: ['true', 'on', '1', 'yes'].includes(String(env.TICKFLOW_LAB || '').toLowerCase()), tokenOverride: env.TICKFLOW_FUT_TOKEN || null, bootDelayMs, blockMin: env.TICKFLOW_BLOCK_MIN !== undefined && env.TICKFLOW_BLOCK_MIN !== '' && Number.isFinite(Number(env.TICKFLOW_BLOCK_MIN)) ? Number(env.TICKFLOW_BLOCK_MIN) : BLOCK_MIN };
+    const freshStats = () => ({ connects: 0, closes: 0, packets: 0, parsedOk: 0, smallMsgs: 0, unparsed: 0, badLen: 0, otherMode: 0, wrongToken: 0, ltpOutOfRange: 0, volDrop: 0, crossedBook: 0, ltqZeroOnTrade: 0, blocks: 0, blockVol: 0, exchTsSample: null });
     const S = { started: false, bootAt: now(), timers: [], auth: null, ws: null, connecting: false, fut: null, futDay: null, flow: createFlow(), bucket: null, day: null,
         stats: freshStats(), rawCount: 0, rawQueue: [], lastPacketAt: 0, connectedAt: 0, notBefore: 0, auth401: false, lastAuthFixAt: 0, backoffMs: 5000, failures: 0, heartbeat: null, saving: false, pending: [], today: [] };
     const L = { rows: [], day: null, at: 0, loading: false };   // DB minutes of today, read now and then (never per tick)
@@ -237,8 +241,9 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
                 S.rawCount++;
                 S.rawQueue.push({ day: p.day, label: `#${S.stats.parsedOk}`, len: buf.length, hex: buf.toString('hex'), parsed: { ...t } });
             }
-            const s = flowStep(S.flow, t);
+            const s = flowStep(S.flow, t, cfg.blockMin);
             if (s.volDrop) S.stats.volDrop++;
+            if (s.block) { S.stats.blocks++; S.stats.blockVol += s.dv; log(`[TickFlowLab] block print ${s.dv} contracts at ${t.ltp} - kept in volume, left out of buy/sell`); }
             if (t.bid !== null && t.ask !== null && t.bid > t.ask) S.stats.crossedBook++;
             if (s.dv > 0 && !(t.ltq > 0)) S.stats.ltqZeroOnTrade++;
             const minStart = Math.floor(atMs / 60000) * 60000;
@@ -384,7 +389,7 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
 function toCardPayload(rep, nowMs = Date.now()) {
     if (!rep || !rep.ok) return { success: false, error: (rep && rep.error) || 'no report' };
     const bars = (rep.bars || []).map(b => ({ label: b.label, vol: Number(b.vol) || 0, delta: Number(b.deltaQuote) || 0, cum: Number(b.cumQuote) || 0,
-        buy: Number(b.buyQuote) || 0, sell: Number(b.sellQuote) || 0,
+        buy: Number(b.buyQuote) || 0, sell: Number(b.sellQuote) || 0, unk: Number(b.unQuote) || 0, o: b.open === undefined ? null : b.open, c: b.close === undefined ? null : b.close,
         coveragePct: b.coveragePct === undefined ? null : b.coveragePct, partial: b.minutes < BAR_MIN }));
     const t = rep.totals || {};
     const ist = istParts(nowMs);
@@ -413,4 +418,4 @@ function mergeLiveCard({ dbRows = [], todayBuckets = [], current = null, day, sy
     return card;
 }
 
-module.exports = { mergeLiveCard, bucketToRow, toCardPayload, parseSnapQuote, createFlow, flowStep, newBucket, addToBucket, findNiftyFutToken, buildDayReport, formatLabText, istParts, createTickFlowLab };
+module.exports = { BLOCK_MIN, mergeLiveCard, bucketToRow, toCardPayload, parseSnapQuote, createFlow, flowStep, newBucket, addToBucket, findNiftyFutToken, buildDayReport, formatLabText, istParts, createTickFlowLab };
