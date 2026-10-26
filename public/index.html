@@ -2522,7 +2522,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
       #of-card .of-vs{margin-top:3px;font-size:11px;color:var(--dim);line-height:1.4;}
       #of-card .of-meter{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--border);margin-top:8px;}
       #of-card .of-meter i{display:block;height:100%;transition:width .6s ease;}
-      #of-card .of-lh,#of-card .of-row{display:grid;grid-template-columns:42px repeat(4,1fr);gap:2px;align-items:center;}
+      #of-card .of-lh,#of-card .of-row{display:grid;grid-template-columns:62px repeat(4,1fr);gap:2px;align-items:center;}
       #of-card .of-lh{margin-top:10px;font-size:9px;color:var(--dim);letter-spacing:1px;padding-bottom:3px;border-bottom:1px solid var(--border);font-family:'Orbitron',monospace;}
       #of-card .of-lh span:nth-child(n+2),#of-card .of-row span:nth-child(n+2){text-align:right;}
       #of-card .of-row span.c{padding:3px 5px;border-radius:3px;}
@@ -2536,11 +2536,9 @@ html.vn-day .checklist-header{background:#F5F7FF;}
       #of-card .of-row.forming .of-bar i{animation:ofBlink 1.2s ease-in-out infinite;}
       @keyframes ofBlink{0%,100%{opacity:.95;}50%{opacity:.5;}}
       #of-card.of-collapsed .of-row:nth-child(n+9){display:none;}
-      #of-card .of-cvd{margin-top:10px;} #of-card .of-cvd-h{display:flex;justify-content:space-between;font-size:10px;color:var(--dim);font-family:'Share Tech Mono',monospace;margin-bottom:3px;}
-      #of-card .of-cvd-b{position:relative;display:flex;align-items:stretch;gap:2px;height:60px;border-radius:4px;background:rgba(255,255,255,0.03);}
-      #of-card .of-cvd-b:after{content:'';position:absolute;left:0;right:0;top:50%;height:1px;background:var(--border);}
-      #of-card .of-cvd-b i{flex:1;position:relative;display:block;min-width:0;}
-      #of-card .of-cvd-b i b{position:absolute;left:0;right:0;border-radius:2px;transition:height .6s ease;} #of-card .of-cvd-b i b.p{bottom:50%;background:var(--green);} #of-card .of-cvd-b i b.n{top:50%;background:var(--red);}
+      #of-card .of-trend{margin-top:10px;padding:7px 9px;border-radius:6px;font-size:12px;line-height:1.4;background:rgba(255,255,255,0.04);border-left:3px solid var(--dim);}
+      #of-card .of-trend.g{border-left-color:var(--green);} #of-card .of-trend.r{border-left-color:var(--red);} #of-card .of-trend.w{border-left-color:var(--amber);}
+      #of-card .of-mk{margin-left:3px;cursor:help;}
       #of-card .of-blk{color:var(--amber);cursor:help;margin-left:2px;}
       #of-card .of-more{margin-top:8px;text-align:center;font-size:11px;color:var(--accent);cursor:pointer;font-family:'Share Tech Mono',monospace;padding:6px;}
       #of-card .of-flash-g{animation:ofFg .9s ease-out;} #of-card .of-flash-r{animation:ofFr .9s ease-out;}
@@ -2561,12 +2559,12 @@ html.vn-day .checklist-header{background:#F5F7FF;}
       <div id="of-fut" style="font-size:15px;color:var(--text);">--</div>
       <div id="of-sum" style="font-size:12px;color:var(--text);text-align:right;"></div>
     </div>
-    <div class="of-cvd"><div class="of-cvd-h"><span>CVD (din ka jod, andaza)</span><span id="of-cvd-v">--</span></div><div class="of-cvd-b" id="of-cvd-b"></div></div>
+    <div class="of-trend" id="of-trend" style="display:none;"></div>
     <div class="of-lh"><span>TIME</span><span>BUY</span><span>SELL</span><span>DELTA</span><span>VOL</span></div>
     <div id="of-list"></div>
     <div class="of-more" id="of-more" onclick="ofToggleAll()" style="display:none;">Poore din ke bars dikhao ▼</div>
     <details><summary>Kaise padhein?</summary>
-      <div>Har row 15 minute ka hissa hai (sabse naya upar; peela row abhi chal raha hai). <b>BUY</b> = khareedne wale ka maal, <b>SELL</b> = bechne wale ka, <b>DELTA</b> = buy minus sell (DEXT jaisa). Delta ka rang jitna gehra, utna zor: hara = buyers, laal = sellers. <b>VOL</b> = total maal. Upar ka <b>CVD</b> chart har bar tak ka buy-minus-sell jod hai (DEXT ke CVD jaisa): hara upar = buyers ka jod badh raha hai. <span style="color:var(--amber)">◆</span> = us bar mein ek bahut bada single print aaya jiska buyer/seller pata nahi chalta, isliye wo delta mein nahi gina gaya (volume mein hai). Chhote bar ya +/-10K se kam ko noise samjho.</div>
+      <div>Har row 15 minute ka hissa hai (sabse naya upar; peela row abhi chal raha hai). <b>BUY</b> = khareedne wale ka maal, <b>SELL</b> = bechne wale ka, <b>DELTA</b> = buy minus sell (DEXT jaisa). Delta ka rang jitna gehra, utna zor: hara = buyers, laal = sellers. <b>VOL</b> = total maal. Time ke saath <b style="color:var(--green)">✓</b> = us bar mein price aur delta ek hi taraf gaye (move mein dum hai), <b style="color:var(--amber)">⚠</b> = ulte gaye (move par bharosa kam). Upar ki line pichle 1 ghante ka haal ek sentence mein batati hai. <span style="color:var(--amber)">◆</span> = us bar mein ek bahut bada single print aaya jiska buyer/seller pata nahi chalta, isliye wo delta mein nahi gina gaya (volume mein hai). Chhote bar ya +/-10K se kam ko noise samjho.</div>
     </details>
     <div style="margin-top:8px;font-size:10px;color:var(--dim);line-height:1.4;">Sirf dekhne ke liye. Ye exact footprint nahi hai: Angel ke free feed ke trades ke sample se bana andaza hai (1 din DEXT se milaya, direction lagbhag 80% mili). Koi signal ya alert isse nahi chalta.</div>
   </div></div>
@@ -8609,6 +8607,7 @@ function ofToggleAll() {
 }
 function _ofFlash(el, cls) { if (!el) return; el.classList.remove('of-flash-g', 'of-flash-r'); void el.offsetWidth; el.classList.add(cls); }
 function _ofSet(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; }
+const _OF_MV = 10, _OF_DS = 30000, _OF_BMV = 3, _OF_BDS = 10000;   // trend: >=10 pts & >=30K delta; per bar: >=3 pts & >=10K delta
 function renderOrderFlow(r, isLive) {
   const head = document.getElementById('of-head-t');
   if (!head || !r) return;
@@ -8692,24 +8691,28 @@ function renderOrderFlow(r, isLive) {
       dq.textContent = _ofK(b.delta); dq.style.fontWeight = '700';
       dq.style.background = (pos ? 'rgba(0,230,118,' : 'rgba(255,82,82,') + al.toFixed(2) + ')';
       const blk = (b.unk || 0) >= Math.max(50000, 0.25 * b.vol), tEl = row.firstChild;
-      tEl.textContent = b.label; if (blk) { const m = document.createElement('span'); m.className = 'of-blk'; m.textContent = '◆'; tEl.appendChild(m); }
-      row.title = b.label + (b.partial ? ' (adhoora bar)' : '') + ' — vol ' + _ofK(b.vol).replace('+', '') + ', delta ' + _ofK(b.delta) + ', CVD ' + _ofK(b.cum || 0) + (blk ? ' — ◆ ' + _ofK(b.unk).replace('+', '') + ' ka bada print, side pata nahi, delta mein nahi gina' : '');
+      tEl.textContent = b.label;
+      let mk = '', mkT = '';
+      if (b.o != null && b.c != null) { const mv = b.c - b.o; if (Math.abs(mv) >= _OF_BMV && Math.abs(b.delta) >= _OF_BDS) { const ok = (mv > 0) === (b.delta > 0); mk = ok ? '✓' : '⚠'; mkT = ok ? 'price aur delta ek taraf' : 'price aur delta ulte'; } }
+      if (mk) { const m2 = document.createElement('span'); m2.className = 'of-mk'; m2.style.color = mk === '✓' ? 'var(--green)' : 'var(--amber)'; m2.textContent = mk; tEl.appendChild(m2); }
+      if (blk) { const m = document.createElement('span'); m.className = 'of-blk'; m.textContent = '◆'; tEl.appendChild(m); }
+      row.title = b.label + (b.partial ? ' (adhoora bar)' : '') + ' — vol ' + _ofK(b.vol).replace('+', '') + ', delta ' + _ofK(b.delta) + (mkT ? ' — ' + mk + ' ' + mkT : '') + (blk ? ' — ◆ ' + _ofK(b.unk).replace('+', '') + ' ka bada print, side pata nahi, delta mein nahi gina' : '');
     });
-    // CVD histogram: running delta after each bar, 26 fixed slots (a full day), scaled to the day's biggest |CVD|
-    const cb = document.getElementById('of-cvd-b');
-    if (cb) {
-      const SL = 26;
-      if (cb.children.length !== SL) { cb.innerHTML = ''; for (let k = 0; k < SL; k++) { const it = document.createElement('i'); it.innerHTML = '<b class="p"></b><b class="n"></b>'; cb.appendChild(it); } }
-      const mxc = Math.max(1, ...bars.map(b => Math.abs(b.cum || 0)));
-      for (let k = 0; k < SL; k++) {
-        const it = cb.children[k], b = bars[k], pe = it.children[0], ne = it.children[1];
-        if (!b) { pe.style.height = '0%'; ne.style.height = '0%'; it.title = ''; continue; }
-        const c = b.cum || 0, h = Math.max(2, Math.round(Math.abs(c) / mxc * 50)) + '%';
-        pe.style.height = c > 0 ? h : '0%'; ne.style.height = c < 0 ? h : '0%';
-        it.title = b.label + ' tak CVD ' + _ofK(c);
-      }
-      const lc = bars[bars.length - 1].cum || 0, cv = document.getElementById('of-cvd-v');
-      if (cv) { cv.textContent = _ofK(lc); cv.style.color = lc > 0 ? 'var(--green)' : (lc < 0 ? 'var(--red)' : 'var(--text)'); }
+    // price-vs-delta trend line (last ~1 hour): do price and delta agree? Display only.
+    const tr = document.getElementById('of-trend');
+    if (tr) {
+      const done = bars.filter(b => !b.partial), use = (done.length >= 2 ? done : bars).slice(-4);
+      const f0 = use[0], l0 = use[use.length - 1];
+      if (use.length >= 2 && f0.o != null && l0.c != null) {
+        const mv = l0.c - f0.o, ds = use.reduce((a, b) => a + b.delta, 0);
+        let msg, cls;
+        if (mv >= _OF_MV && ds >= _OF_DS) { msg = 'Pichle ' + use.length + ' bars: price upar (' + mv.toFixed(0) + ' pts), buyers ka zor sach mein hai.'; cls = 'g'; }
+        else if (mv <= -_OF_MV && ds <= -_OF_DS) { msg = 'Pichle ' + use.length + ' bars: price neeche (' + mv.toFixed(0) + ' pts), sellers ka zor sach mein hai.'; cls = 'r'; }
+        else if (mv >= _OF_MV && ds <= -_OF_DS) { msg = '⚠ Price upar (+' + mv.toFixed(0) + ' pts) par delta sellers ka: upar ki move par bharosa kam.'; cls = 'w'; }
+        else if (mv <= -_OF_MV && ds >= _OF_DS) { msg = '⚠ Price neeche (' + mv.toFixed(0) + ' pts) par delta buyers ka: neeche ki move kamzor, bounce ho sakta hai.'; cls = 'w'; }
+        else { msg = 'Pichle ' + use.length + ' bars: price aur delta saaf signal nahi de rahe (sideways ya mila-jula).'; cls = ''; }
+        tr.className = 'of-trend ' + cls; tr.textContent = msg + ' (' + f0.label + ' se)'; tr.style.display = '';
+      } else { tr.style.display = 'none'; }
     }
     const more = document.getElementById('of-more'), card = document.getElementById('of-card');
     if (more) more.style.display = bars.length > 8 ? '' : 'none';
