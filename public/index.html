@@ -2607,7 +2607,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <div class="cl-mini-bar"><div class="cl-mini-fill" id="cl-mini-fill" style="width:0%"></div></div>
     <div class="checklist-body" id="checklist-body">
       <!-- AUTO items — evaluated by updateChecklistAuto(s) -->
-      <div class="cl-item auto-wait" id="cl-gift" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🌏 GIFT Nifty Gap <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-gift-val" style="color:var(--dim);">Waiting for data…</div></div></div>
+      <div class="cl-item auto-wait" id="cl-gift" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🌏 Nifty Gap (GIFT proxy, vote nahi) <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-gift-val" style="color:var(--dim);">Waiting for data…</div></div></div>
       <div class="cl-item auto-wait" id="cl-global" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🌍 Global Markets Bias <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-global-val" style="color:var(--dim);">Waiting for data…</div></div></div>
       <div class="cl-item auto-wait" id="cl-vix" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📊 India VIX — below 20? <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-vix-val" style="color:var(--dim);">Waiting for data…</div></div></div>
       <div class="cl-item auto-wait" id="cl-pcr" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📈 PCR Bias <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-pcr-val" style="color:var(--dim);">Waiting for data…</div></div></div>
@@ -3628,7 +3628,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     </div>
     <div class="global-section"><div class="global-section-title">🌏 ASIA</div>
       <div class="global-grid-3">
-        <div class="gitem" id="g-giftNifty"><div><div class="gitem-name">GIFT NIFTY</div></div><div class="gitem-right"><div class="gitem-price" id="g-giftNifty-p" style="font-size:13px;">--</div><div class="gitem-chg flat" id="g-giftNifty-c">--</div></div></div>
+        <div class="gitem" id="g-giftNifty"><div><div class="gitem-name">NIFTY (GIFT proxy)</div></div><div class="gitem-right"><div class="gitem-price" id="g-giftNifty-p" style="font-size:13px;">--</div><div class="gitem-chg flat" id="g-giftNifty-c">--</div></div></div>
         <div class="gitem" id="g-nikkei"><div><div class="gitem-name">NIKKEI</div></div><div class="gitem-right"><div class="gitem-price" id="g-nikkei-p" style="font-size:13px;">--</div><div class="gitem-chg flat" id="g-nikkei-c">--</div></div></div>
         <div class="gitem" id="g-hangseng"><div><div class="gitem-name">HANG SENG</div></div><div class="gitem-right"><div class="gitem-price" id="g-hangseng-p" style="font-size:13px;">--</div><div class="gitem-chg flat" id="g-hangseng-c">--</div></div></div>
         <div class="gitem" id="g-shanghai"><div><div class="gitem-name">SHANGHAI</div></div><div class="gitem-right"><div class="gitem-price" id="g-shanghai-p" style="font-size:13px;">--</div><div class="gitem-chg flat" id="g-shanghai-c">--</div></div></div>
@@ -5736,7 +5736,7 @@ function updateInsightsUI(s) {
       const labelEl = document.getElementById('ins-daytype-label');
       if (trendEl) trendEl.textContent = dt.trendProbability + '%';
       if (rangeEl) rangeEl.textContent = dt.rangeProbability + '%';
-      if (labelEl && dt.recommendation) labelEl.textContent = dt.recommendation.label;
+      if (labelEl && dt.recommendation) labelEl.textContent = (s.noTrade && s.noTrade.active) ? dt.recommendation.label.replace('✅ Recommended:', 'Din ka jhukav (abhi entry nahi):') : dt.recommendation.label;
     }
 
     // Trap Zone
@@ -7346,11 +7346,9 @@ function updateChecklistAuto(s) {
   if (giftData && giftData.change != null) {
     const chg = giftData.change;
     const dir = chg > 50 ? 'GAP UP' : chg < -50 ? 'GAP DOWN' : chg > 0 ? 'FLAT UP' : 'FLAT DOWN';
-    const isBull = chg > 0;
-    setItem('cl-gift', isBull ? 'pass' : 'fail',
-      dir + ' · ' + (chg >= 0 ? '+' : '') + chg.toFixed(0) + ' pts',
-      isBull ? 'var(--green)' : 'var(--red)');
-    bulletScore.push(chg > 50 ? 1 : chg < -50 ? -1 : 0);
+    // 26 Oct — the "GIFT Nifty" feed is really Nifty spot (Yahoo ^NSEI proxy), so it must not vote: it would just count Nifty's own move twice
+    setItem('cl-gift', 'wait', 'Nifty spot (GIFT proxy): ' + (chg >= 0 ? '+' : '') + chg.toFixed(0) + ' pts · vote nahi', chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : 'var(--dim)');
+    bulletScore.push(0);
   } else {
     setItem('cl-gift', 'wait', 'Waiting for GIFT Nifty…', 'var(--dim)');
   }
@@ -7578,7 +7576,7 @@ function updateChecklistAuto(s) {
 
 // ─── MARKET PULSE (11 Oct) — one-look summary built from the same data as the old pre-market checklist ───
 const _PULSE_TILES = [
-  ['cl-global','GLOBAL'], ['cl-gift','GIFT NIFTY'], ['cl-bn','BANK NIFTY'], ['cl-fii','FII + DII'],
+  ['cl-global','GLOBAL'], ['cl-gift','NIFTY GAP*'], ['cl-bn','BANK NIFTY'], ['cl-fii','FII + DII'],
   ['cl-pcr','PCR'], ['cl-em','OPTION FLOW'], ['cl-mtf','TREND (MTF)'], ['cl-adx','ADX'],
   ['cl-vix','VIX'], ['cl-events','EVENTS'], ['x-sm','SMART MONEY'], ['x-mom','PRICE MOMENTUM']
 ];
@@ -7588,7 +7586,8 @@ function _pulseShort(id, s, it) {
     case 'cl-global': return s.global?.bias || '--';
     case 'cl-gift': { const c = s.global?.asia?.giftNifty?.change; return c == null ? '--' : sg(Math.round(c)) + ' pts'; }
     case 'cl-bn': { const l = s.global?.bankNiftyLeadSignal; if (l && l.label) return String(l.label).replace(/_/g, ' '); const c = s.global?.sectors?.bankNifty?.changePct; return c == null ? '--' : sg(c.toFixed(2)) + '%'; }
-    case 'cl-fii': { if (!s.fii && !s.dii) return '--'; const n = (s.fii?.net || 0) + (s.dii?.net || 0); return sg(Math.round(n)) + ' Cr'; }
+    case 'cl-fii': { if (!s.fii && !s.dii) return '--'; const n = (s.fii?.net || 0) + (s.dii?.net || 0); const ist = new Date(Date.now() + 19800000), mn = ist.getUTCHours() * 60 + ist.getUTCMinutes(), dw = ist.getUTCDay();
+      return sg(Math.round(n)) + ' Cr' + (dw >= 1 && dw <= 5 && mn >= 555 && mn < 1080 ? ' (pichla din)' : ''); }
     case 'cl-pcr': return s.pcr == null ? '--' : s.pcr.toFixed(2) + (s.pcr > 1.1 ? ' BULL' : s.pcr < 0.8 ? ' BEAR' : ' NEUT');
     case 'cl-em': return s.earlyMom && s.earlyMom.score != null ? sg(s.earlyMom.score) + ' / 9' : '--';
     case 'cl-mtf': return s.mtf && s.mtf.signal ? (s.mtf.signal === 'BUY CALL' ? 'UP' : s.mtf.signal === 'BUY PUT' ? 'DOWN' : 'MIXED') + (s.mtf.aligned ? ' ✓' : '') : '--';
@@ -8621,7 +8620,13 @@ function renderOrderFlow(r, isLive) {
   head.textContent = (isLive ? 'LIVE' : (r.isToday ? 'Aaj' : 'Pichhla din ' + r.day)) + (r.symbol ? ' · ' + r.symbol : '');
 
   // plain-words verdict for the bar that is forming (or the last bar)
-  const lb = bars[bars.length - 1], tot = (lb.buy || 0) + (lb.sell || 0), bp = tot > 0 ? Math.round(lb.buy / tot * 100) : 50, sp = 100 - bp;
+  // after the close the very last bar is a few minutes of closing prints (tiny volume) - judge the last proper bar instead
+  let lb = bars[bars.length - 1];
+  if (!isLive) {
+    const vs = bars.map(b => b.vol).sort((x, y) => x - y), med = vs[Math.floor(vs.length / 2)] || 0;
+    for (let k = bars.length - 1; k >= 0; k--) { if (bars[k].vol >= med * 0.5) { lb = bars[k]; break; } }
+  }
+  const tot = (lb.buy || 0) + (lb.sell || 0), bp = tot > 0 ? Math.round(lb.buy / tot * 100) : 50, sp = 100 - bp;
   const vbox = document.getElementById('of-verdict');
   let cls = '', title = 'Buy aur sell barabar', sub;
   if (tot < 2000) { title = 'Abhi data kam hai'; sub = 'Is bar mein itne trades nahi aaye ki kuch kaha ja sake.'; }
@@ -8636,7 +8641,17 @@ function renderOrderFlow(r, isLive) {
 
   const t = r.totals || {}, dcol = t.delta > 0 ? 'var(--green)' : (t.delta < 0 ? 'var(--red)' : 'var(--text)');
   const sum = document.getElementById('of-sum');
-  if (sum) sum.innerHTML = 'Poore din: Vol <b>' + _ofK(t.vol).replace('+', '') + '</b><br>Delta <b id="of-dd" style="color:' + dcol + '">' + _ofK(t.delta) + '</b> <span style="color:var(--dim)">(andaza)</span>';
+  if (sum) {
+    // 26 Oct — the day total alone misled (one huge bar can outweigh everything else): lead with how many bars went each way, keep the total small, and call out a single outlier bar
+    const up = bars.filter(b => b.delta > 0).length, dn = bars.filter(b => b.delta < 0).length;
+    const ad = bars.map(b => Math.abs(b.delta)).sort((x, y) => x - y), med = ad[Math.floor(ad.length / 2)] || 0;
+    let big = bars[0]; bars.forEach(b => { if (Math.abs(b.delta) > Math.abs(big.delta)) big = b; });
+    const outlier = Math.abs(big.delta) >= 100000 && Math.abs(big.delta) >= 4 * med;
+    sum.innerHTML = 'Ab tak (' + bars[0].label + ' se): Vol <b>' + _ofK(t.vol).replace('+', '') + '</b><br>' +
+      '<span style="color:var(--green)">Buyers ke bars <b>' + up + '</b></span> · <span style="color:var(--red)">Sellers ke bars <b>' + dn + '</b></span><br>' +
+      '<span style="color:var(--dim);font-size:10px;">Total delta <b id="of-dd" style="color:' + dcol + '">' + _ofK(t.delta) + '</b> (andaza, kam bharose ka)' +
+      (outlier ? '<br>★ ' + big.label + ' ka ek bar (' + _ofK(big.delta) + ') total ko kheench raha hai; uske bina ' + _ofK(t.delta - big.delta) : '') + '</span>';
+  }
   if (_ofPrev.delta !== null && _ofPrev.delta !== t.delta) _ofFlash(document.getElementById('of-dd'), t.delta > _ofPrev.delta ? 'of-flash-g' : 'of-flash-r');
   _ofPrev.delta = t.delta;
   const fut = document.getElementById('of-fut');

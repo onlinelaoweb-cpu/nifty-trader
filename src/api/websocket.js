@@ -14,6 +14,9 @@ const loginAngel = require('./angelAuth');
 // of a timer's fate being tied to a specific connection's closure lifetime.
 let _currentWS    = null;
 let _currentLabel = null;
+// 26 Oct — every fresh Angel login that opens the app's own socket is also announced here, so the order-flow lab never keeps a stale token
+let _authListener = null;
+function setAuthListener(fn) { _authListener = typeof fn === 'function' ? fn : null; }
 let _crudeDiagCount = 0; // 10 Sep — caps the O/H/L diagnostic hex logging below
 function getCurrentWSLabel() { return _currentLabel; }
 function closeCurrentWS() {
@@ -131,6 +134,7 @@ async function startWebSocket(authData, onTick, getInstrumentConfig = null) {
             console.error('❌ feedToken missing');
             return;
         }
+        try { if (_authListener) _authListener(authData); } catch (e) { /* display-only listener must never break the socket */ }
 
         // Phase 2b (8 Sep) — resolve which instrument to subscribe to. Falls
         // back to NIFTY if no provider is given, or if the provider throws/
@@ -264,4 +268,4 @@ async function startWebSocket(authData, onTick, getInstrumentConfig = null) {
     }
 }
 
-module.exports = { startWebSocket, getCurrentWSLabel, closeCurrentWS };
+module.exports = { startWebSocket, getCurrentWSLabel, closeCurrentWS, setAuthListener };

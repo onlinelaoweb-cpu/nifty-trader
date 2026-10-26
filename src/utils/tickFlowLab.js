@@ -184,11 +184,11 @@ function formatLabText(rep, stats, raws, meta = {}) {
 }
 
 // ── the lab (runtime) ────────────────────────────────────────────────────────────────────────────────────────────────────
-function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = process.env, wsFactory = null, fetchScrip = null, bootDelayMs = 90000 }) {
+function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = process.env, wsFactory = null, fetchScrip = null, bootDelayMs = 90000, onAuthFail = null }) {
     const cfg = { enabled: ['true', 'on', '1', 'yes'].includes(String(env.TICKFLOW_LAB || '').toLowerCase()), tokenOverride: env.TICKFLOW_FUT_TOKEN || null, bootDelayMs };
     const freshStats = () => ({ connects: 0, closes: 0, packets: 0, parsedOk: 0, smallMsgs: 0, unparsed: 0, badLen: 0, otherMode: 0, wrongToken: 0, ltpOutOfRange: 0, volDrop: 0, crossedBook: 0, ltqZeroOnTrade: 0, exchTsSample: null });
     const S = { started: false, bootAt: now(), timers: [], auth: null, ws: null, connecting: false, fut: null, futDay: null, flow: createFlow(), bucket: null, day: null,
-        stats: freshStats(), rawCount: 0, rawQueue: [], lastPacketAt: 0, connectedAt: 0, notBefore: 0, backoffMs: 5000, failures: 0, heartbeat: null, saving: false, pending: [], today: [] };
+        stats: freshStats(), rawCount: 0, rawQueue: [], lastPacketAt: 0, connectedAt: 0, notBefore: 0, auth401: false, lastAuthFixAt: 0, backoffMs: 5000, failures: 0, heartbeat: null, saving: false, pending: [], today: [] };
     const L = { rows: [], day: null, at: 0, loading: false };   // DB minutes of today, read now and then (never per tick)
 
     async function ensureTables() {
@@ -288,7 +288,7 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
                 S.heartbeat = setInterval(() => { try { if (ws.readyState === 1) ws.ping(); } catch (e) { /* ignore */ } }, 30000);
             });
             ws.on('message', raw => { handleMessage(raw); });
-            ws.on('error', err => { log(`[TickFlowLab] socket error: ${err && err.message}`); });
+            ws.on('error', err => { log(`[TickFlowLab] socket error: ${err && err.message}`); if (/401/.test(String(err && err.message))) S.auth401 = true; });
             ws.on('close', code => {
                 S.stats.closes++;
                 if (S.ws !== ws) return;            // an intentional / stale close (already detached): no back-off, no reconnect bookkeeping
@@ -296,6 +296,12 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
                 cleanupSocket();
                 if (lived > 60000) { S.backoffMs = 5000; S.failures = 0; } else { S.failures++; S.backoffMs = Math.min(S.backoffMs * 2, 120000); }
                 S.notBefore = now() + (S.failures >= 8 ? 600000 : S.backoffMs);
+                // 26 Oct — two 401s in a row = the Angel token is stale: ask the app for a fresh login (at most once per 10 min)
+                if (S.auth401 && S.failures >= 2 && typeof onAuthFail === 'function' && now() - S.lastAuthFixAt > 600000) {
+                    S.lastAuthFixAt = now(); S.auth401 = false;
+                    log('[TickFlowLab] token looks stale (401) - asking for a fresh Angel login');
+                    Promise.resolve().then(() => onAuthFail()).catch(e => log(`[TickFlowLab] fresh login failed: ${e && e.message}`));
+                }
                 log(`[TickFlowLab] socket closed (${code}) after ${Math.round(lived / 1000)}s - retry in ${Math.round((S.notBefore - now()) / 1000)}s`);
                 flush().catch(() => {});
             });
@@ -317,7 +323,7 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
         } else if (S.ws) { disconnect(); flush().catch(() => {}); }
     }
 
-    function setAuth(auth) { S.auth = auth && auth.feedToken ? { jwtToken: auth.jwtToken, feedToken: auth.feedToken } : null; S.failures = 0; S.notBefore = 0; }
+    function setAuth(auth) { S.auth = auth && auth.feedToken ? { jwtToken: auth.jwtToken, feedToken: auth.feedToken } : null; S.failures = 0; S.notBefore = 0; S.auth401 = false; }
     async function start() {
         if (S.started || !cfg.enabled || !dbPool) { if (!cfg.enabled) log('[TickFlowLab] TICKFLOW_LAB not set - not started'); return; }
         await ensureTables();

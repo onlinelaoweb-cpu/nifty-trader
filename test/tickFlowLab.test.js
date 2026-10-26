@@ -124,3 +124,26 @@ assert.deepStrictEqual(L.istParts(m0), { day: '2026-10-19', min: 555, dow: 1 });
     lab.stop();
     console.log('tickFlowLab tests OK');
 })().catch(e => { console.error(e); process.exit(1); });
+// 26 Oct — two 401s in a row ask the app for a fresh Angel login (once per 10 min), and setAuth reconnects at once
+(async () => {
+    const L = require('../src/utils/tickFlowLab');
+    const dbPool = { query: async () => ({ rows: [] }) };
+    const sockets = [];
+    const wsFactory = () => { const h = {}; const ws = { readyState: 1, on: (e, fn) => { h[e] = fn; }, send() {}, ping() {}, close() {}, h }; sockets.push(ws); return ws; };
+    let clock = Date.UTC(2026, 9, 26, 3, 50), asked = 0;
+    const lab = L.createTickFlowLab({ dbPool, now: () => clock, log: () => {}, env: { TICKFLOW_LAB: 'true', ANGEL_API_KEY: 'k', ANGEL_CLIENT_ID: 'c' }, wsFactory, fetchScrip: async () => scrip, bootDelayMs: 0, onAuthFail: async () => { asked++; } });
+    await lab.start();
+    lab.setAuth({ jwtToken: 'old', feedToken: 'old' });
+    for (let i = 0; i < 3; i++) {
+        lab.schedule(); await new Promise(r => setTimeout(r, 15));
+        const w = sockets[sockets.length - 1]; w.h.error({ message: 'Unexpected server response: 401' }); w.h.close(1006);
+        clock += 200000;
+    }
+    await new Promise(r => setTimeout(r, 15));
+    assert.strictEqual(asked, 1, 'asked once, not on every failure');
+    const n = sockets.length;
+    lab.setAuth({ jwtToken: 'new', feedToken: 'new' }); lab.schedule(); await new Promise(r => setTimeout(r, 15));
+    assert.strictEqual(sockets.length, n + 1, 'fresh token reconnects at once');
+    lab.stop();
+    console.log('tickFlowLab auth-refresh OK');
+})().catch(e => { console.error(e); process.exit(1); });

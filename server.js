@@ -10,7 +10,7 @@ const axios    = require('axios');
 const { RSI, EMA } = require('technicalindicators'); // Phase 4 (8 Sep) — pure crude indicators, see computeCrudeIndicators()
 
 const loginAngel                    = require('./src/api/angelAuth');
-const { startWebSocket, getCurrentWSLabel, closeCurrentWS } = require('./src/api/websocket');
+const { startWebSocket, getCurrentWSLabel, closeCurrentWS, setAuthListener } = require('./src/api/websocket');
 // 13 Sep refactor (Phase 1) — pure helpers extracted verbatim, zero logic
 // change. Names/signatures identical so every existing call site below
 // still works unmodified.
@@ -906,11 +906,16 @@ async function computeCombinedPCR() {
     if (!isMarketOpen()) return;
     try {
         const niftyPCR = marketState.pcr; // already-live, reuse rather than re-fetch
-        const [bankNiftyResult, sensexResult, ...stockResults] = await Promise.all([
-            fetchGenericPCR('NSE:NIFTYBANK-INDEX', 'BankNifty'),
-            fetchGenericPCR('BSE:SENSEX-INDEX', 'Sensex'),
-            ...(COMBINED_PCR_STOCKS_ENABLED ? TOP10_NIFTY_STOCKS : []).map(sym => fetchGenericPCR(`NSE:${sym}-EQ`, sym)),
-        ]);
+        // 26 Oct — these 12 Fyers calls used to fire at the same instant (12/sec vs Fyers' 5/sec limit): ~70 HTTP 429s every 3 min, only 4/10 stocks answered.
+        // Now one after another, 260 ms apart (<4 calls/sec). Same data, same result shape — it just takes ~3 s instead of ~1 s.
+        const _cpcrJobs = [
+            () => fetchGenericPCR('NSE:NIFTYBANK-INDEX', 'BankNifty'),
+            () => fetchGenericPCR('BSE:SENSEX-INDEX', 'Sensex'),
+            ...(COMBINED_PCR_STOCKS_ENABLED ? TOP10_NIFTY_STOCKS : []).map(sym => () => fetchGenericPCR(`NSE:${sym}-EQ`, sym)),
+        ];
+        const _cpcrResults = [];
+        for (const job of _cpcrJobs) { _cpcrResults.push(await job()); await new Promise(r => setTimeout(r, 260)); }
+        const [bankNiftyResult, sensexResult, ...stockResults] = _cpcrResults;
 
         const stockPCRs = stockResults.filter(r => r?.pcr != null).map(r => r.pcr);
         const top10AvgPCR = stockPCRs.length
@@ -16024,7 +16029,10 @@ app.get('/api/db-size', requireToken, async (req, res) => {
 let _autoJournal = null;
 let _atrShadow = null;
 let _tickFlowLab = null;      // 17 Oct — record-only; created ~25s after boot, only if TICKFLOW_LAB=true
-let _lastAngelAuth = null;    // latest Angel login (jwt + feedToken), handed to the tick-flow lab for its own second socket
+let _lastAngelAuth = null;
+// 26 Oct — any fresh Angel login (boot, or the app's own socket reconnect) is handed to the order-flow lab too
+setAuthListener(a => { if (a && a.feedToken) { _lastAngelAuth = { jwtToken: a.jwtToken, feedToken: a.feedToken }; if (_tickFlowLab) _tickFlowLab.setAuth(_lastAngelAuth); } });
+    // latest Angel login (jwt + feedToken), handed to the tick-flow lab for its own second socket
 // 17 Oct — read-only: free-feed footprint FEASIBILITY lab. /api/tickflow-lab?date=2026-10-19&format=text   (date = IST day; omitted = latest day with rows)
 // 15-min bars of buy/sell volume built from Angel SnapQuote packets of the NIFTY futures (tick rule + quote rule), coverage %, sanity counters, raw samples.
 // Compare with Dhan DEXT T3 by eye. Nothing here feeds signals, gates, alerts or the UI.
@@ -16284,7 +16292,8 @@ function startPollingIntervals() {
             _atrShadow.start().catch(e => console.warn('[AtrShadow] start failed:', e.message));
             // 17 Oct — tick-flow lab (record-only, default OFF; TICKFLOW_LAB=true). Own try/catch: a lab problem must never touch the journal.
             try {
-                _tickFlowLab = tickFlowLib.createTickFlowLab({ dbPool, log: m => console.log(m) });
+                _tickFlowLab = tickFlowLib.createTickFlowLab({ dbPool, log: m => console.log(m),
+                    onAuthFail: async () => { const a = await loginAngel(); if (a && a.feedToken) { _lastAngelAuth = { jwtToken: a.jwtToken, feedToken: a.feedToken }; _tickFlowLab.setAuth(_lastAngelAuth); console.log('[TickFlowLab] fresh Angel token handed to the lab'); } } });
                 if (_lastAngelAuth) _tickFlowLab.setAuth(_lastAngelAuth);
                 _tickFlowLab.start().catch(e => console.warn('[TickFlowLab] start failed:', e.message));
                 // 24 Oct — live order-flow card: push the in-memory view to open dashboards every 5 s over the EXISTING SSE stream (no polling, no broker calls, nothing when nobody is watching or the feed is quiet)
