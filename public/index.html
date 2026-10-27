@@ -5335,7 +5335,7 @@ function renderDashboard(s) {
   const pnlEl = document.getElementById('header-pnl');
   const tradesEl = document.getElementById('header-trades');
   if (pnlEl) {
-    pnlEl.textContent = 'Manual P&L: ₹' + summary.realizedPnl.toFixed(0);   // 14 Oct — the manual Journal tab only (Auto Journal is separate)
+    pnlEl.textContent = 'App-signal P&L: ₹' + summary.realizedPnl.toFixed(0);   // 27 Oct — renamed: this journal also auto-logs every Telegram signal (1 lot), so it is not the user's own manual trades
     pnlEl.className = 'hbadge ' + (summary.realizedPnl > 0 ? 'pnl-pos' : summary.realizedPnl < 0 ? 'pnl-neg' : 'pnl-zero');
   }
   if (tradesEl) tradesEl.textContent = summary.total + ' Trade' + (summary.total !== 1 ? 's' : '');
@@ -8693,7 +8693,7 @@ function renderOrderFlow(r, isLive) {
       const blk = (b.unk || 0) >= Math.max(50000, 0.25 * b.vol), tEl = row.firstChild;
       tEl.textContent = b.label;
       let mk = '', mkT = '';
-      if (b.o != null && b.c != null) { const mv = b.c - b.o; if (Math.abs(mv) >= _OF_BMV && Math.abs(b.delta) >= _OF_BDS) { const ok = (mv > 0) === (b.delta > 0); mk = ok ? '✓' : '⚠'; mkT = ok ? 'price aur delta ek taraf' : 'price aur delta ulte'; } }
+      if (!forming && !b.partial && b.o != null && b.c != null) { const mv = b.c - b.o; if (Math.abs(mv) >= _OF_BMV && Math.abs(b.delta) >= _OF_BDS) { const ok = (mv > 0) === (b.delta > 0); mk = ok ? '✓' : '⚠'; mkT = ok ? 'price aur delta ek taraf' : 'price aur delta ulte'; } }
       if (mk) { const m2 = document.createElement('span'); m2.className = 'of-mk'; m2.style.color = mk === '✓' ? 'var(--green)' : 'var(--amber)'; m2.textContent = mk; tEl.appendChild(m2); }
       if (blk) { const m = document.createElement('span'); m.className = 'of-blk'; m.textContent = '◆'; tEl.appendChild(m); }
       row.title = b.label + (b.partial ? ' (adhoora bar)' : '') + ' — vol ' + _ofK(b.vol).replace('+', '') + ', delta ' + _ofK(b.delta) + (mkT ? ' — ' + mk + ' ' + mkT : '') + (blk ? ' — ◆ ' + _ofK(b.unk).replace('+', '') + ' ka bada print, side pata nahi, delta mein nahi gina' : '');
@@ -8701,7 +8701,7 @@ function renderOrderFlow(r, isLive) {
     // price-vs-delta trend line (last ~1 hour): do price and delta agree? Display only.
     const tr = document.getElementById('of-trend');
     if (tr) {
-      const done = bars.filter(b => !b.partial), use = (done.length >= 2 ? done : bars).slice(-4);
+      const done = bars.filter((b, k) => !b.partial && !(isLive && k === bars.length - 1)), use = done.slice(-4);   // only finished bars: a forming bar flips back and forth
       const f0 = use[0], l0 = use[use.length - 1];
       if (use.length >= 2 && f0.o != null && l0.c != null) {
         const mv = l0.c - f0.o, ds = use.reduce((a, b) => a + b.delta, 0);
@@ -8712,7 +8712,7 @@ function renderOrderFlow(r, isLive) {
         else if (mv <= -_OF_MV && ds >= _OF_DS) { msg = '⚠ Price neeche (' + mv.toFixed(0) + ' pts) par delta buyers ka: neeche ki move kamzor, bounce ho sakta hai.'; cls = 'w'; }
         else { msg = 'Pichle ' + use.length + ' bars: price aur delta saaf signal nahi de rahe (sideways ya mila-jula).'; cls = ''; }
         tr.className = 'of-trend ' + cls; tr.textContent = msg + ' (' + f0.label + ' se)'; tr.style.display = '';
-      } else { tr.style.display = 'none'; }
+      } else { tr.className = 'of-trend'; tr.textContent = 'Price-delta trend ke liye 2 poore bars chahiye (abhi bar ban raha hai).'; tr.style.display = ''; }
     }
     const more = document.getElementById('of-more'), card = document.getElementById('of-card');
     if (more) more.style.display = bars.length > 8 ? '' : 'none';

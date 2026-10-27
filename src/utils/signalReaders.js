@@ -28,6 +28,9 @@ function computeSmartMoneyBias(marketState) {
             : (sig === 'BULL' ? 'Bullish OI 🐂' : 'Bearish OI 🐻');
         score += pts;
         components.push({ label: 'OI Buildup', value: shortLabel, pts, bull: sig === 'BULL' });
+    } else if (oi && oi.fetchedAt && oi.totalCEoiChange !== null && oi.totalCEoiChange !== undefined) {
+        // 27 Oct — OI data IS there, the last ~3-min change was just below the noise threshold (neutral). Display wording only; score unchanged (0).
+        components.push({ label: 'OI Buildup', value: 'OI shaant (is cycle mein khaas badlav nahi)', pts: 0, bull: null });
     } else {
         components.push({ label: 'OI Buildup', value: 'Awaiting data', pts: 0, bull: null });
     }
