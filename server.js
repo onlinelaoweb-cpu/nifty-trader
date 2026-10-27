@@ -11,6 +11,7 @@ const { RSI, EMA } = require('technicalindicators'); // Phase 4 (8 Sep) — pure
 
 const loginAngel                    = require('./src/api/angelAuth');
 const { startWebSocket, getCurrentWSLabel, closeCurrentWS, setAuthListener } = require('./src/api/websocket');
+const { isCrudeTick } = require('./src/utils/tickRoute');   // 28 Oct — crude vs NIFTY tick routing by socket label
 // 13 Sep refactor (Phase 1) — pure helpers extracted verbatim, zero logic
 // change. Names/signatures identical so every existing call site below
 // still works unmodified.
@@ -7882,7 +7883,8 @@ async function onTick(tickData) {
     // (isCrudeSessionOpen() true) — any other state (NIFTY, CLOSED, or a
     // getActiveSession() failure) falls through to the existing NIFTY handling
     // unchanged, so this can never accidentally divert a real NIFTY tick.
-    if (getActiveSession() === 'CRUDEOIL') {
+    // 28 Oct — route by the socket's own label (tickData.label), not only by the clock: see src/utils/tickRoute.js
+    if (isCrudeTick(tickData.label, getActiveSession())) {
         // Sanity check mirrors NIFTY's >5% guard, scaled to crude's own price,
         // so a genuine wrong-offset packet doesn't corrupt crude state either.
         const lastCrude = marketState.crudeoil.price;

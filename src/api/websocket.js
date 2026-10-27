@@ -243,7 +243,8 @@ async function startWebSocket(authData, onTick, getInstrumentConfig = null) {
                             low     : tick.low,
                             close   : tick.close,
                             exchTs  : tick.exchTs,
-                            source  : 'websocket'
+                            source  : 'websocket',
+                            label   : config.label     // 28 Oct — which instrument this socket subscribed to; server.js routes by it, not by the clock
                         });
                     }
                 }
