@@ -89,7 +89,13 @@ function createFyersUsage({ now = Date.now } = {}) {
 
     function summaryLine() {
         const s = snapshot();
-        return `📈 [FyersUsage ${s.date}] data calls ${s.dataCallsToday}/${s.limits.perDay} (${s.dailyLimitUsedPct}%) · peak ${s.peakPerMinute}/min (>${s.limits.perMin}: ${s.minutesOverPerMinLimit} min) · peak ${s.peakPerSecond}/sec (>${s.limits.perSec}: ${s.secondsOverPerSecLimit} sec) · 429s ${s.status429Today}`;
+        return `📈 [FyersUsage ${s.date}] data calls ${s.dataCallsToday}/${s.limits.perDay} (${s.dailyLimitUsedPct}%) · peak ${s.peakPerMinute}/min (>${s.limits.perMin}: ${s.minutesOverPerMinLimit} min) · peak ${s.peakPerSecond}/sec (>${s.limits.perSec}: ${s.secondsOverPerSecLimit} sec) · 429s ${s.status429Today}` + hoursPart(s);
+    }
+
+    // 27 Oct — calls per IST hour (e.g. "hrs 9:310 10:309 ... 16:140"): shows how much of the daily 5,000 is spent after NSE hours (Crude evening session)
+    function hoursPart(s) {
+        const h = Object.keys(s.dataCallsByHourIST).map(Number).sort((x, y) => x - y);
+        return h.length ? ' · hrs ' + h.map(k => k + ':' + s.dataCallsByHourIST[k]).join(' ') : '';
     }
 
     return { record, record429, snapshot, summaryLine, LIMITS };

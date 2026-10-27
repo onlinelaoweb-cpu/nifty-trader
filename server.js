@@ -16627,7 +16627,9 @@ function startPollingIntervals() {
     globalThis.__stockScannerEnabled = STOCK_SCANNER_ENABLED;
     console.log(STOCK_SCANNER_ENABLED ? '🔥 [VolScan] stock scanner ENABLED (STOCK_SCANNER_ENABLED=true)' : '🔥 [VolScan] stock scanner DISABLED — set Railway variable STOCK_SCANNER_ENABLED=true to turn it on');
     // 15 Oct — Fyers usage summary line in the log, every 30 min (so history survives restarts) — log only, no behaviour.
-    setTimeout(() => setInterval(() => { try { if (isNSEMarketDay() && isMarketOpen()) console.log(getFyersUsageLine()); } catch (e) { /* ignore */ } }, 30*60*1000), 60*1000);
+    // 27 Oct — now logged ALL day (was NSE hours only), but only when the count moved since the last line: the evening Crude calls count against the same 5,000/day, and the old log went silent at 15:30.
+    let _fyersUsageLastLogged = -1;
+    setTimeout(() => setInterval(() => { try { const n = getFyersUsage().dataCallsToday; if (n !== _fyersUsageLastLogged) { _fyersUsageLastLogged = n; console.log(getFyersUsageLine()); } } catch (e) { /* ignore */ } }, 30*60*1000), 60*1000);
     const volBaselineTick = async () => {
         try {
             const stocks = await getFnOStockList();
