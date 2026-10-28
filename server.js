@@ -50,7 +50,9 @@ const { fetchMarketData }           = require('./src/api/marketData');
 const { analyzeMultiTimeframe, getAdxDebug } = require('./src/api/multiTimeframe');
 const { fetchGlobalCues, fetchIntradayBars } = require('./src/api/globalCues');
 const { fetchAdvanceDecline,
-        injectAngelSession }        = require('./src/api/breadth');
+        injectAngelSession,
+        applyAutoWeights }          = require('./src/api/breadth');
+const { refreshAutoWeights, effectiveWeights } = require('./src/utils/niftyWeightsAuto');
 const { injectAngelSession: injectAngelSessionVolScan,
         refreshVolumeBaselines, refreshLiveVolumes,
         getVolumeScannerSnapshot, getVolumeScannerStatus,
@@ -1021,10 +1023,20 @@ function updateOptionFlow(atmCE, atmPE, atmStrike = null) {
     // momentum. That's a live candidate for why direction accuracy on
     // this trigger sits at ~coin-flip: reset the series on any roll so
     // RSI only ever sees one continuous strike's actual price history.
+    // 28 Oct — same roll also corrupted ceChange/peChange: they compare this
+    // poll's ATM premium with the PREVIOUS poll's, but after a roll those are
+    // two different strikes (e.g. 22650 CE ₹173 vs 22600 CE ₹195 = fake -11%).
+    // Spot sitting on a 25-pt boundary (22625) rolls back and forth every poll
+    // and printed alternating fake PUT/CALL BUYERS. A roll poll now reports
+    // 0% change (NEUTRAL, nothing logged); next poll compares same strike again.
+    let strikeRolled = false;
     if (atmStrike != null) {
         if (lastOptFlowStrike !== null && atmStrike !== lastOptFlowStrike) {
             ceOptionPremiumSeries = []; peOptionPremiumSeries = [];
+            strikeRolled = true;
         }
+        // first poll of a new day: prev premium is yesterday's last reading — not comparable either
+        if (lastOptFlowStrike === null) strikeRolled = true;
         lastOptFlowStrike = atmStrike;
     }
     // 23 Sep — feed the rolling series for Option RSI Divergence.
@@ -1032,8 +1044,8 @@ function updateOptionFlow(atmCE, atmPE, atmStrike = null) {
     if (atmPE > 0) { peOptionPremiumSeries.push(atmPE); if (peOptionPremiumSeries.length > 60) peOptionPremiumSeries.shift(); }
 
     const prev = marketState.optionFlow;
-    const ceChange = atmCE && prev.atmCEpremium ? parseFloat((((atmCE-prev.atmCEpremium)/prev.atmCEpremium)*100).toFixed(2)) : 0;
-    const peChange = atmPE && prev.atmPEpremium ? parseFloat((((atmPE-prev.atmPEpremium)/prev.atmPEpremium)*100).toFixed(2)) : 0;
+    const ceChange = !strikeRolled && atmCE && prev.atmCEpremium ? parseFloat((((atmCE-prev.atmCEpremium)/prev.atmCEpremium)*100).toFixed(2)) : 0;
+    const peChange = !strikeRolled && atmPE && prev.atmPEpremium ? parseFloat((((atmPE-prev.atmPEpremium)/prev.atmPEpremium)*100).toFixed(2)) : 0;
     let dominance = 'NEUTRAL';
     if      (ceChange > 1 && ceChange > peChange+1)  dominance = 'CALL BUYERS';
     else if (peChange > 1 && peChange > ceChange+1)  dominance = 'PUT BUYERS';
@@ -14651,7 +14663,7 @@ app.get('/api/nifty-contribution', async (req, res) => {
     try {
         const qs = await getNiftyContributionQuotes();
         const result = computeNiftyContribution({
-            weights: NIFTY_WEIGHTS, quotes: qs.data, indexQuote: qs.index,
+            weights: effectiveWeights(NIFTY_WEIGHTS), quotes: qs.data, indexQuote: qs.index,   // 28 Oct — top-10 weights auto from NSE free-float when available
             nifty: { price: marketState.nifty, change: marketState.change, changePct: marketState.changePct, prevClose: marketState.prevClose },
             sectors: marketState.global?.sectors, nowMs: Date.now(),
             // 4 Oct — decided from the clock/holiday calendar, NOT marketState.marketClosed: that flag is
@@ -16630,6 +16642,12 @@ function startPollingIntervals() {
     console.log(STOCK_SCANNER_ENABLED ? '🔥 [VolScan] stock scanner ENABLED (STOCK_SCANNER_ENABLED=true)' : '🔥 [VolScan] stock scanner DISABLED — set Railway variable STOCK_SCANNER_ENABLED=true to turn it on');
     // 15 Oct — Fyers usage summary line in the log, every 30 min (so history survives restarts) — log only, no behaviour.
     // 27 Oct — now logged ALL day (was NSE hours only), but only when the count moved since the last line: the evening Crude calls count against the same 5,000/day, and the old log went silent at 15:30.
+    // 28 Oct — auto Nifty weights: first try 90 s after boot, then every 3 h (cheap: shares the cached Nifty50 fetch).
+    // Any failure keeps the static tables. Switch off with env NIFTY_WEIGHTS_AUTO=0.
+    { const _nwRun = () => refreshAutoWeights({
+          fetchRows: () => require('./src/api/yahooFetch').fetchNifty50Stocks(),
+          officialTop10: NIFTY_WEIGHTS.top10, applyToBreadth: applyAutoWeights });
+      setTimeout(() => { _nwRun(); setInterval(_nwRun, 3*60*60*1000); }, 90*1000); }
     let _fyersUsageLastLogged = -1;
     setTimeout(() => setInterval(() => { try { const n = getFyersUsage().dataCallsToday; if (n !== _fyersUsageLastLogged) { _fyersUsageLastLogged = n; console.log(getFyersUsageLine()); } } catch (e) { /* ignore */ } }, 30*60*1000), 60*1000);
     const volBaselineTick = async () => {

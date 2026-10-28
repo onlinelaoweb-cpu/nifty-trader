@@ -424,4 +424,16 @@ async function fetchAdvanceDecline() {
     }
 }
 
-module.exports = { fetchAdvanceDecline, injectAngelSession };
+// 28 Oct — live free-float weights (niftyWeightsAuto). Only applied when ALL of the top-20 table stocks are present
+// in the incoming map; otherwise the static table stays as is. Originals are kept so it can be rolled back.
+const _origWeights = new Map(NIFTY_STOCKS.map(n => [n.symbol, n.weight]));
+function applyAutoWeights(map) {
+    if (!map) return 0;
+    const top20 = NIFTY_STOCKS.slice(0, 20);
+    if (!top20.every(n => map[n.symbol] > 0)) return 0;
+    let n2 = 0;
+    for (const n of NIFTY_STOCKS) { if (map[n.symbol] > 0) { n.weight = map[n.symbol]; n2++; } else n.weight = _origWeights.get(n.symbol); }
+    return n2;
+}
+
+module.exports = { fetchAdvanceDecline, injectAngelSession, applyAutoWeights };

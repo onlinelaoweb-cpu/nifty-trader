@@ -228,6 +228,7 @@ function extractPreOpen(data) {
             dayHigh          : r.lastPrice  ?? r.iep,
             dayLow           : r.lastPrice  ?? r.iep,
             totalTradedVolume: r.totalTradedVolume ?? r.quantity ?? 0,
+            ffmc             : r.ffmc ?? r.metadata?.ffmc ?? null,   // 28 Oct — free-float mcap for auto weights (niftyWeightsAuto)
         }));
 }
 
@@ -243,6 +244,7 @@ function extractStockIndex(data) {
         dayHigh          : r.dayHigh       ?? r.high,
         dayLow           : r.dayLow        ?? r.low,
         totalTradedVolume: r.totalTradedVolume ?? r.volume ?? 0,
+        ffmc             : r.ffmc ?? null,   // 28 Oct — free-float mcap for auto weights (niftyWeightsAuto)
     }));
 }
 

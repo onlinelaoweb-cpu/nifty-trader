@@ -5335,7 +5335,7 @@ function renderDashboard(s) {
   const pnlEl = document.getElementById('header-pnl');
   const tradesEl = document.getElementById('header-trades');
   if (pnlEl) {
-    pnlEl.textContent = 'App-signal P&L: ₹' + summary.realizedPnl.toFixed(0);   // 27 Oct — renamed: this journal also auto-logs every Telegram signal (1 lot), so it is not the user's own manual trades
+    pnlEl.title = 'Telegram signals ka 1-lot journal. Auto Journal (2 lots) alag hai.'; pnlEl.textContent = 'Signal Journal P&L: ₹' + summary.realizedPnl.toFixed(0);   // 27 Oct — renamed: this journal also auto-logs every Telegram signal (1 lot), so it is not the user's own manual trades
     pnlEl.className = 'hbadge ' + (summary.realizedPnl > 0 ? 'pnl-pos' : summary.realizedPnl < 0 ? 'pnl-neg' : 'pnl-zero');
   }
   if (tradesEl) tradesEl.textContent = summary.total + ' Trade' + (summary.total !== 1 ? 's' : '');
@@ -6410,11 +6410,17 @@ function updateMurarkaPanel(s) {
   const ratio = s.oiImbalanceRatio;
   if (ratioEl && ratio !== null && ratio !== undefined) {
     ratioEl.textContent = ratio.toFixed(2);
-    const bull = ratio > 1.15;
-    const bear = ratio < 0.75;
-    ratioEl.style.color = bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--amber)';
+    // 28 Oct — ratio = ΔPuts ÷ ΔCalls of ONE ~3-min cycle. When both totals are tiny (< 50K, same bar as OI Buildup)
+    // the ratio is noise (e.g. -0.15 from a few thousand contracts) — say so instead of calling a winner.
+    const _oiq = s.oiBuildup;
+    const quiet = !!(_oiq && _oiq.totalCEoiChange != null && _oiq.totalPEoiChange != null &&
+                     Math.abs(_oiq.totalCEoiChange) < 50000 && Math.abs(_oiq.totalPEoiChange) < 50000);
+    const bull = !quiet && ratio > 1.15;
+    const bear = !quiet && ratio < 0.75;
+    ratioEl.style.color = quiet ? 'var(--dim)' : bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--amber)';
     if (ratioLbl) {
-      ratioLbl.textContent = bull ? '🐂 Put writers dominating (bullish)' :
+      ratioLbl.textContent = quiet ? 'OI shaant (is cycle mein khaas badlav nahi) — ratio ka matlab nahi' :
+                             bull ? '🐂 Put writers dominating (bullish)' :
                              bear ? '🐻 Call writers dominating (bearish)' :
                                     'Mixed — no clear edge';
       ratioLbl.style.color = bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--dim)';
@@ -6423,11 +6429,13 @@ function updateMurarkaPanel(s) {
     if (ratioBar) {
       const pct = Math.min(100, Math.max(0, (ratio / 2.0) * 100));
       ratioBar.style.width = pct + '%';
-      ratioBar.style.background = bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--amber)';
+      ratioBar.style.background = quiet ? 'var(--dim)' : bull ? 'var(--green)' : bear ? 'var(--red)' : 'var(--amber)';
     }
   } else if (ratioEl) {
     ratioEl.textContent = '--';
-    if (ratioLbl) ratioLbl.textContent = 'Awaiting OI data';
+    // 28 Oct — ratio is null when ΔCalls is exactly 0 (silent cycle) although OI data did arrive: say so
+    const _oiq0 = s.oiBuildup;
+    if (ratioLbl) ratioLbl.textContent = (_oiq0 && _oiq0.fetchedAt && _oiq0.totalCEoiChange != null) ? 'OI shaant (is cycle mein khaas badlav nahi)' : 'Awaiting OI data';
   }
 
   // ── Murarka Entry Alert ────────────────────────────────────────────────────
@@ -6467,8 +6475,14 @@ function updateMurarkaPanel(s) {
 
   // CE Table (call writing = resistance building)
   const ceTableEl = document.getElementById('mz-ce-table');
-  if (ceTableEl && Array.isArray(oi.topCEbuildup) && oi.topCEbuildup.length > 0) {
-    ceTableEl.innerHTML = oi.topCEbuildup.map((row, i) => {
+  // 28 Oct — show only strikes with a real OI addition; zero-delta ties (far strikes) were just sort-order junk
+  const _ceRows = Array.isArray(oi.topCEbuildup) ? oi.topCEbuildup.filter(r => r.ceOIChange > 0) : [];
+  const _peRows = Array.isArray(oi.topPEbuildup) ? oi.topPEbuildup.filter(r => r.peOIChange > 0) : [];
+  const _quietTxt = '<div style="color:var(--dim);font-size:10px;">Koi nayi writing nahi (OI shaant)</div>';
+  if (ceTableEl && Array.isArray(oi.topCEbuildup) && oi.topCEbuildup.length > 0 && _ceRows.length === 0) {
+    ceTableEl.innerHTML = _quietTxt;
+  } else if (ceTableEl && _ceRows.length > 0) {
+    ceTableEl.innerHTML = _ceRows.map((row, i) => {
       const isTop = i === 0;
       const delta = row.ceOIChange;
       const isBuilding = delta > 0;
@@ -6484,8 +6498,10 @@ function updateMurarkaPanel(s) {
 
   // PE Table (put writing = support building)
   const peTableEl = document.getElementById('mz-pe-table');
-  if (peTableEl && Array.isArray(oi.topPEbuildup) && oi.topPEbuildup.length > 0) {
-    peTableEl.innerHTML = oi.topPEbuildup.map((row, i) => {
+  if (peTableEl && Array.isArray(oi.topPEbuildup) && oi.topPEbuildup.length > 0 && _peRows.length === 0) {
+    peTableEl.innerHTML = _quietTxt;
+  } else if (peTableEl && _peRows.length > 0) {
+    peTableEl.innerHTML = _peRows.map((row, i) => {
       const isTop = i === 0;
       const delta = row.peOIChange;
       const isBuilding = delta > 0;
@@ -7556,10 +7572,10 @@ function updateChecklistAuto(s) {
       cls = 'wait'; color = 'var(--amber)';
     } else if (conf < 50 && netScore >= 4) {
       // Score looks bullish but app confidence is low — warn trader
-      verdict = '🟡 Market mood: BULL (engine WAIT par)';   // 13 Oct: was "BULL SIGNAL" — a mood, not a signal
+      verdict = '🟡 Pulse mood: BULL (engine WAIT par — engine ka hisaab alag)';   // 13 Oct: was "BULL SIGNAL" — a mood, not a signal
       cls = 'side'; color = 'var(--amber)';
     } else if (conf < 50 && netScore <= -4) {
-      verdict = '🟡 Market mood: BEAR (engine WAIT par)';
+      verdict = '🟡 Pulse mood: BEAR (engine WAIT par — engine ka hisaab alag)';
       cls = 'side'; color = 'var(--amber)';
     } else if (netScore >= 6) { verdict = `🟢 Strong Bull (${bullVotes}/${total})`;    cls = 'bull'; color = 'var(--green)'; }
     else if (netScore <= -6)   { verdict = `🔴 Strong Bear (${bearVotes}/${total})`;   cls = 'bear'; color = 'var(--red)'; }
