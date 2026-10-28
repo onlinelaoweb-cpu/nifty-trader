@@ -2540,6 +2540,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
       #of-card .of-trend.g{border-left-color:var(--green);} #of-card .of-trend.r{border-left-color:var(--red);} #of-card .of-trend.w{border-left-color:var(--amber);}
       #of-card .of-mk{margin-left:3px;cursor:help;}
       #of-card .of-blk{color:var(--amber);cursor:help;margin-left:2px;}
+      #of-card .of-row.of-open .of-d{opacity:.6;} #of-card .of-row.of-open .of-mk{opacity:.5;}   /* 29 Oct — open ke pehle 4 bars: delta kam bharose ka */
       #of-card .of-more{margin-top:8px;text-align:center;font-size:11px;color:var(--accent);cursor:pointer;font-family:'Share Tech Mono',monospace;padding:6px;}
       #of-card .of-flash-g{animation:ofFg .9s ease-out;} #of-card .of-flash-r{animation:ofFr .9s ease-out;}
       @keyframes ofFg{0%{color:#fff;text-shadow:0 0 8px var(--green);}100%{}} @keyframes ofFr{0%{color:#fff;text-shadow:0 0 8px var(--red);}100%{}}
@@ -2564,9 +2565,9 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <div id="of-list"></div>
     <div class="of-more" id="of-more" onclick="ofToggleAll()" style="display:none;">Poore din ke bars dikhao ▼</div>
     <details><summary>Kaise padhein?</summary>
-      <div>Har row 15 minute ka hissa hai (sabse naya upar; peela row abhi chal raha hai). <b>BUY</b> = khareedne wale ka maal, <b>SELL</b> = bechne wale ka, <b>DELTA</b> = buy minus sell (DEXT jaisa). Delta ka rang jitna gehra, utna zor: hara = buyers, laal = sellers. <b>VOL</b> = total maal. Time ke saath <b style="color:var(--green)">✓</b> = us bar mein price aur delta ek hi taraf gaye (move mein dum hai), <b style="color:var(--amber)">⚠</b> = ulte gaye (move par bharosa kam). Upar ki line pichle 1 ghante ka haal ek sentence mein batati hai. <span style="color:var(--amber)">◆</span> = us bar mein ek bahut bada single print aaya jiska buyer/seller pata nahi chalta, isliye wo delta mein nahi gina gaya (volume mein hai). Chhote bar ya +/-10K se kam ko noise samjho.</div>
+      <div>Har row 15 minute ka hissa hai (sabse naya upar; peela row abhi chal raha hai). <b>BUY</b> = khareedne wale ka maal, <b>SELL</b> = bechne wale ka, <b>DELTA</b> = buy minus sell (DEXT jaisa). Delta ka rang jitna gehra, utna zor: hara = buyers, laal = sellers. <b>VOL</b> = total maal. Time ke saath <b style="color:var(--green)">✓</b> = us bar mein price aur delta ek hi taraf gaye (move mein dum hai), <b style="color:var(--amber)">⚠</b> = ulte gaye (move par bharosa kam). Upar ki line pichle 1 ghante ka haal ek sentence mein batati hai. <span style="color:var(--amber)">◆</span> = us bar mein ek bahut bada single print aaya jiska buyer/seller pata nahi chalta, isliye wo delta mein nahi gina gaya (volume mein hai). Chhote bar ya +/-10K se kam ko noise samjho. <b>Open ke pehle 4 bars (09:15–10:00)</b> ka delta halka dikhta hai: gap par quotes late aate hain, isliye wahan delta kam bharose ka hai (DEXT se milane par 10:15 ke baad ke bars lagbhag exact the).</div>
     </details>
-    <div style="margin-top:8px;font-size:10px;color:var(--dim);line-height:1.4;">Sirf dekhne ke liye. Ye exact footprint nahi hai: Angel ke free feed ke trades ke sample se bana andaza hai (1 din DEXT se milaya, direction lagbhag 80% mili). Koi signal ya alert isse nahi chalta.</div>
+    <div style="margin-top:8px;font-size:10px;color:var(--dim);line-height:1.4;">Sirf dekhne ke liye. Ye exact footprint nahi hai: Angel ke free feed ke trades ke sample se bana andaza hai (2 din DEXT se milaya: volume match, direction lagbhag 85–90% mili; open ke bars ka delta kam bharose ka). Koi signal ya alert isse nahi chalta.</div>
   </div></div>
 
   <!-- S/R LEVELS -->
@@ -8623,6 +8624,8 @@ function ofToggleAll() {
 }
 function _ofFlash(el, cls) { if (!el) return; el.classList.remove('of-flash-g', 'of-flash-r'); void el.offsetWidth; el.classList.add(cls); }
 function _ofSet(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; }
+const _OF_OPEN_END = '10:15';   // 29 Oct — bars before this (09:15–10:00) have unreliable delta: at the open quotes lag the gap (DEXT 28 Oct: 09:15 bar -82K vs app -212K; from 10:15 on bars matched within ~6K)
+const _ofIsOpen = lbl => String(lbl) < _OF_OPEN_END;
 const _OF_MV = 10, _OF_DS = 30000, _OF_BMV = 3, _OF_BDS = 10000;   // trend: >=10 pts & >=30K delta; per bar: >=3 pts & >=10K delta
 function renderOrderFlow(r, isLive) {
   const head = document.getElementById('of-head-t');
@@ -8669,10 +8672,14 @@ function renderOrderFlow(r, isLive) {
     const ad = bars.map(b => Math.abs(b.delta)).sort((x, y) => x - y), med = ad[Math.floor(ad.length / 2)] || 0;
     let big = bars[0]; bars.forEach(b => { if (Math.abs(b.delta) > Math.abs(big.delta)) big = b; });
     const outlier = Math.abs(big.delta) >= 100000 && Math.abs(big.delta) >= 4 * med;
+    const openBars = bars.filter(b => _ofIsOpen(b.label)), lateBars = bars.filter(b => !_ofIsOpen(b.label));
+    const lateDelta = lateBars.reduce((a, b) => a + (b.delta || 0), 0);
     sum.innerHTML = 'Ab tak (' + bars[0].label + ' se): Vol <b>' + _ofK(t.vol).replace('+', '') + '</b><br>' +
       '<span style="color:var(--green)">Buyers ke bars <b>' + up + '</b></span> · <span style="color:var(--red)">Sellers ke bars <b>' + dn + '</b></span><br>' +
       '<span style="color:var(--dim);font-size:10px;">Total delta <b id="of-dd" style="color:' + dcol + '">' + _ofK(t.delta) + '</b> (andaza, kam bharose ka)' +
-      (outlier ? '<br>★ ' + big.label + ' ka ek bar (' + _ofK(big.delta) + ') total ko kheench raha hai; uske bina ' + _ofK(t.delta - big.delta) : '') + '</span>';
+      (outlier ? '<br>★ ' + big.label + ' ka ek bar (' + _ofK(big.delta) + ') total ko kheench raha hai; uske bina ' + _ofK(t.delta - big.delta) : '') +
+      (openBars.length ? '<br>⚠ Open ke bars (' + openBars[0].label + '–10:00) ka delta kam bharose ka (gap par quotes late aate hain)' +
+        (lateBars.length ? '. <b>10:15 ke baad ka delta ' + '<span style="color:' + (lateDelta > 0 ? 'var(--green)' : (lateDelta < 0 ? 'var(--red)' : 'var(--text)')) + '">' + _ofK(lateDelta) + '</span></b> (zyada bharose ka)' : ' — 10:15 ke baad ka delta abhi nahi bana') : '') + '</span>';
   }
   if (_ofPrev.delta !== null && _ofPrev.delta !== t.delta) _ofFlash(document.getElementById('of-dd'), t.delta > _ofPrev.delta ? 'of-flash-g' : 'of-flash-r');
   _ofPrev.delta = t.delta;
@@ -8700,6 +8707,7 @@ function renderOrderFlow(r, isLive) {
         list.insertBefore(row, list.firstChild);
       }
       row.classList.toggle('forming', forming);
+      row.classList.toggle('of-open', _ofIsOpen(b.label));
       const al = Math.min(0.55, 0.08 + Math.abs(b.delta) / mx * 0.47), pos = b.delta >= 0;
       const bq = row.querySelector('.of-b'), sq = row.querySelector('.of-s'), dq = row.querySelector('.of-d'), vq = row.querySelector('.of-v');
       bq.textContent = _ofK(b.buy).replace('+', ''); sq.textContent = _ofK(b.sell).replace('+', ''); vq.textContent = _ofK(b.vol).replace('+', '');
@@ -8712,7 +8720,7 @@ function renderOrderFlow(r, isLive) {
       if (!forming && !b.partial && b.o != null && b.c != null) { const mv = b.c - b.o; if (Math.abs(mv) >= _OF_BMV && Math.abs(b.delta) >= _OF_BDS) { const ok = (mv > 0) === (b.delta > 0); mk = ok ? '✓' : '⚠'; mkT = ok ? 'price aur delta ek taraf' : 'price aur delta ulte'; } }
       if (mk) { const m2 = document.createElement('span'); m2.className = 'of-mk'; m2.style.color = mk === '✓' ? 'var(--green)' : 'var(--amber)'; m2.textContent = mk; tEl.appendChild(m2); }
       if (blk) { const m = document.createElement('span'); m.className = 'of-blk'; m.textContent = '◆'; tEl.appendChild(m); }
-      row.title = b.label + (b.partial ? ' (adhoora bar)' : '') + ' — vol ' + _ofK(b.vol).replace('+', '') + ', delta ' + _ofK(b.delta) + (mkT ? ' — ' + mk + ' ' + mkT : '') + (blk ? ' — ◆ ' + _ofK(b.unk).replace('+', '') + ' ka bada print, side pata nahi, delta mein nahi gina' : '');
+      row.title = b.label + (b.partial ? ' (adhoora bar)' : '') + (_ofIsOpen(b.label) ? ' (open ka bar: delta kam bharose ka)' : '') + ' — vol ' + _ofK(b.vol).replace('+', '') + ', delta ' + _ofK(b.delta) + (mkT ? ' — ' + mk + ' ' + mkT : '') + (blk ? ' — ◆ ' + _ofK(b.unk).replace('+', '') + ' ka bada print, side pata nahi, delta mein nahi gina' : '');
     });
     // price-vs-delta trend line (last ~1 hour): do price and delta agree? Display only.
     const tr = document.getElementById('of-trend');
