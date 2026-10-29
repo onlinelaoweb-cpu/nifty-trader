@@ -2082,6 +2082,10 @@ function combineSignals(indicators, opts) {
     // 4. Price breaking below Support → BEARISH confirmation (+2)
     // 5. Price in "no man's land" (far from any level) → neutral
     {
+        // 29 Oct — FIX: paSignal was only ever SET, never cleared, so yesterday's "Support se bounce @22675" stayed on the Pulse card all night
+        // (and into the next morning, 49 pts away from price) and the Entry Quality "S/R:10 (price action confirms)" bonus could fire on a stale event.
+        // Re-evaluated on every pass now, so it only exists while the condition below is true.
+        marketState.paSignal = null;
         const srLvls = marketState.srLevels?.levels;
         const price  = marketState.nifty;
         const prevPrice = marketState.prevNifty || price;  // previous tick price

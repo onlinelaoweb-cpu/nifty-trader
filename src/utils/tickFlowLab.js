@@ -225,7 +225,12 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
     function handleMessage(raw, atMs = now()) {
         try {
             const p = istParts(atMs);
-            if (S.day !== p.day) { S.day = p.day; S.stats = freshStats(); S.rawCount = 0; S.flow = createFlow(); S.today = []; }
+            if (S.day !== p.day) {
+                // 29 Oct — the previous day's last minute-bucket is still in S.bucket when the first packet of a new day arrives (process not restarted overnight).
+                // It belongs to the OLD day: hand it to the DB flush and drop it, otherwise it was pushed into the new day's list and showed up as a stray "15:30" bar on the morning card.
+                if (S.bucket) { S.pending.push(S.bucket); S.bucket = null; }
+                S.day = p.day; S.stats = freshStats(); S.rawCount = 0; S.flow = createFlow(); S.today = [];
+            }
             const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
             S.stats.packets++; S.lastPacketAt = atMs;
             if (buf.length < 123) { S.stats.smallMsgs++; if (S.stats.smallMsgs <= 3) log(`[TickFlowLab] small msg len=${buf.length}: ${buf.toString('utf8', 0, Math.min(buf.length, 120))}`); return false; }
@@ -409,9 +414,10 @@ function bucketToRow(b) {
 // Memory wins over the DB for the same minute, so a minute never disappears between a flush and the next DB read.
 function mergeLiveCard({ dbRows = [], todayBuckets = [], current = null, day, symbol = null, live = null, nowMs = Date.now() }) {
     const byTs = new Map();
-    for (const r of dbRows) byTs.set(r.ts, r);
-    for (const b of todayBuckets) if (b && b.ticks) byTs.set(b.ts, bucketToRow(b));
-    if (current && current.ticks) byTs.set(current.ts, bucketToRow(current));
+    const sameDay = ts => istParts(ts).day === day;   // 29 Oct — never let another day's minutes into this day's card (belt and braces for the roll-over fix)
+    for (const r of dbRows) if (sameDay(r.ts)) byTs.set(r.ts, r);
+    for (const b of todayBuckets) if (b && b.ticks && sameDay(b.ts)) byTs.set(b.ts, bucketToRow(b));
+    if (current && current.ticks && sameDay(current.ts)) byTs.set(current.ts, bucketToRow(current));
     const rep = { ok: true, ...buildDayReport([...byTs.values()], day), symbol, live };
     const card = toCardPayload(rep, nowMs);
     if (card.success) { card.last = current && current.c !== null ? current.c : null; card.serverTs = nowMs; }

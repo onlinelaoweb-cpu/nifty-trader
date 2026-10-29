@@ -159,3 +159,36 @@ assert.deepStrictEqual(L.istParts(m0), { day: '2026-10-19', min: 555, dow: 1 });
     lab.stop();
     console.log('tickFlowLab auth-refresh OK');
 })().catch(e => { console.error(e); process.exit(1); });
+
+// ── 29 Oct: yesterday's last minute must not appear on the new day's card ──────────────────────────
+(async () => {
+    const queries = [];
+    const dbPool = { query: async (sql, p) => { queries.push({ sql, p }); return { rows: [] }; } };
+    const sockets = [];
+    const wsFactory = () => { const h = {}; const ws = { readyState: 1, sent: [], on: (e, fn) => { h[e] = fn; }, send: m => ws.sent.push(m), ping() {}, close: () => {}, h }; sockets.push(ws); return ws; };
+    let clock = Date.UTC(2026, 9, 28, 10, 0);                                         // Wed 28 Oct 15:30 IST (closing minutes)
+    const lab = L.createTickFlowLab({ dbPool, now: () => clock, log: () => {}, env: { TICKFLOW_LAB: 'true', ANGEL_API_KEY: 'k', ANGEL_CLIENT_ID: 'c' }, wsFactory, fetchScrip: async () => scrip, bootDelayMs: 0 });
+    await lab.start();
+    lab._handleMessage(pkt({ token: '1', ltp: 22775, vol: 1000 }), clock);
+    lab._handleMessage(pkt({ token: '1', ltp: 22775.05, vol: 1075, ltq: 75, bid: 22775, ask: 22775.1 }), clock + 1000);   // yesterday's last bucket (15:30)
+    const yBucketTs = lab._state.bucket.ts;
+    // next day 09:14:30 IST = 03:44:30 UTC — first packet of the new day
+    clock = Date.UTC(2026, 9, 29, 3, 44, 30);
+    lab._handleMessage(pkt({ token: '1', ltp: 22700, vol: 5000 }), clock);
+    lab._handleMessage(pkt({ token: '1', ltp: 22700.05, vol: 5100, ltq: 100, bid: 22700, ask: 22700.1 }), clock + 1000);
+    const st = lab._state;
+    assert.strictEqual(st.day, '2026-10-29');
+    assert(!st.today.some(b => b.ts === yBucketTs), 'yesterday bucket must not be in today list');
+    assert(st.bucket.ts !== yBucketTs && st.bucket.ts >= Date.UTC(2026, 9, 29, 3, 44), 'current bucket is today minute');
+    assert(st.pending.some(b => b.ts === yBucketTs) || queries.some(q => /INSERT INTO tickflow_lab_min/.test(q.sql)), 'yesterday bucket still goes to DB');
+    await new Promise(r => setTimeout(r, 30));
+    const card = lab.livePayload();
+    assert(card && card.success);
+    assert(!card.bars.some(b => b.label === '15:30'), 'no stray 15:30 bar on the morning card');
+    // pure guard: other-day minutes are ignored by mergeLiveCard
+    const mk = (ts, vol) => ({ ts, ticks: 5, events: 5, vol, ltqSum: vol, buyTick: 0, sellTick: 0, unTick: 0, buyQ: vol, sellQ: 0, unQ: 0, qByQuote: vol, o: 1, h: 1, l: 1, c: 1, spreadSum: 0, spreadN: 0 });
+    const p2 = L.mergeLiveCard({ dbRows: [], todayBuckets: [mk(yBucketTs, 50), mk(Date.UTC(2026, 9, 29, 3, 45), 70)], current: null, day: '2026-10-29', symbol: 'X' });
+    assert.deepStrictEqual(p2.bars.map(b => b.label), ['09:15']); assert.strictEqual(p2.bars[0].vol, 70);
+    lab.stop();
+    console.log('tickFlowLab day-rollover OK');
+})().catch(e => { console.error(e); process.exit(1); });
