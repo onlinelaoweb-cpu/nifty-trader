@@ -96,17 +96,18 @@ const NIFTY50_ANGEL_TOKENS = [
 ];
 
 // Weighted Nifty 50 stocks (used with Tier 1 & Tier 2 data)
+// 29 Oct: top-10 weights synced to the official factsheet of 30 Sep 2026 (src/utils/niftyWeights.js). Rest are still approximate — refresh monthly.
 const NIFTY_STOCKS = [
-    { symbol: 'RELIANCE',   name: 'RELIANCE',   weight: 9.2 },
-    { symbol: 'HDFCBANK',   name: 'HDFC BANK',  weight: 8.1 },
-    { symbol: 'ICICIBANK',  name: 'ICICI BANK', weight: 7.2 },
-    { symbol: 'INFY',       name: 'INFY',       weight: 5.8 },
+    { symbol: 'RELIANCE',   name: 'RELIANCE',   weight: 7.58 },
+    { symbol: 'HDFCBANK',   name: 'HDFC BANK',  weight: 10.38 },
+    { symbol: 'ICICIBANK',  name: 'ICICI BANK', weight: 9.05 },
+    { symbol: 'INFY',       name: 'INFY',       weight: 3.35 },
     { symbol: 'TCS',        name: 'TCS',        weight: 5.1 },
-    { symbol: 'KOTAKBANK',  name: 'KOTAK',      weight: 3.9 },
-    { symbol: 'LT',         name: 'L&T',        weight: 3.8 },
-    { symbol: 'SBIN',       name: 'SBI',        weight: 3.2 },
-    { symbol: 'AXISBANK',   name: 'AXIS BANK',  weight: 3.0 },
-    { symbol: 'BHARTIARTL', name: 'BHARTI',     weight: 2.8 },
+    { symbol: 'KOTAKBANK',  name: 'KOTAK',      weight: 2.93 },
+    { symbol: 'LT',         name: 'L&T',        weight: 4.20 },
+    { symbol: 'SBIN',       name: 'SBI',        weight: 3.79 },
+    { symbol: 'AXISBANK',   name: 'AXIS BANK',  weight: 3.37 },
+    { symbol: 'BHARTIARTL', name: 'BHARTI',     weight: 5.10 },
     { symbol: 'ITC',        name: 'ITC',        weight: 2.7 },
     { symbol: 'WIPRO',      name: 'WIPRO',      weight: 2.3 },
     { symbol: 'HCLTECH',    name: 'HCL TECH',   weight: 2.2 },
@@ -125,7 +126,7 @@ const NIFTY_STOCKS = [
     { symbol: 'ADANIENT',    name: 'ADANI ENT',  weight: 1.2 },
     { symbol: 'ADANIPORTS',  name: 'ADANI PORTS',weight: 1.1 },
     { symbol: 'ULTRACEMCO',  name: 'ULTRA CEM',  weight: 1.1 },
-    { symbol: 'M&M',         name: 'M&M',        weight: 1.0 },
+    { symbol: 'M&M',         name: 'M&M',        weight: 2.52 },
     { symbol: 'TATAMOTORS',  name: 'TATA MOTORS',weight: 1.0 },
     { symbol: 'JSWSTEEL',    name: 'JSW STEEL',  weight: 0.9 },
     { symbol: 'TATASTEEL',   name: 'TATA STEEL', weight: 0.9 },

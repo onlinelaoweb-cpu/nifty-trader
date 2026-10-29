@@ -16647,11 +16647,13 @@ function startPollingIntervals() {
     // 15 Oct — Fyers usage summary line in the log, every 30 min (so history survives restarts) — log only, no behaviour.
     // 27 Oct — now logged ALL day (was NSE hours only), but only when the count moved since the last line: the evening Crude calls count against the same 5,000/day, and the old log went silent at 15:30.
     // 28 Oct — auto Nifty weights: first try 90 s after boot, then every 3 h (cheap: shares the cached Nifty50 fetch).
-    // Any failure keeps the static tables. Switch off with env NIFTY_WEIGHTS_AUTO=0.
+    // Any failure keeps the static tables. Opt-in: env NIFTY_WEIGHTS_AUTO=1 (default off, see below).
     { const _nwRun = () => refreshAutoWeights({
           fetchRows: () => require('./src/api/yahooFetch').fetchNifty50Stocks(),
           officialTop10: NIFTY_WEIGHTS.top10, applyToBreadth: applyAutoWeights });
-      setTimeout(() => { _nwRun(); setInterval(_nwRun, 3*60*60*1000); }, 90*1000); }
+      // 29 Oct — OPT-IN only (env NIFTY_WEIGHTS_AUTO=1). First live run showed rows=0: all five NSE per-stock URLs time out from Railway (15 s each, ~75 s per attempt),
+      // so by default we do not spend NSE requests on it. Static weights stay in force. Turn on only if a working free-float source is wired in.
+      if (process.env.NIFTY_WEIGHTS_AUTO === '1') setTimeout(() => { _nwRun(); setInterval(_nwRun, 3*60*60*1000); }, 90*1000); }
     let _fyersUsageLastLogged = -1;
     setTimeout(() => setInterval(() => { try { const n = getFyersUsage().dataCallsToday; if (n !== _fyersUsageLastLogged) { _fyersUsageLastLogged = n; console.log(getFyersUsageLine()); } } catch (e) { /* ignore */ } }, 30*60*1000), 60*1000);
     const volBaselineTick = async () => {
