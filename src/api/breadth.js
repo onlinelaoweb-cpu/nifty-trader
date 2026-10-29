@@ -224,6 +224,16 @@ async function fetchBreadthFromAngel() {
                         : null;
 
         if (!apiStatus || !fetched) {
+            // 30 Oct — Angel returns HTTP 200 with an EMPTY body from Railway all day (seen every 2 min in logs).
+            // Treat it like the HTML block: after 3 in a row back off 30 min instead of retrying + warning forever. Yahoo fallback already serves A/D.
+            if (res.data === '' || res.data == null) {
+                _angelAD.failStreak++;
+                if (_angelAD.failStreak === 3 || (_angelAD.failStreak > 3 && Date.now() >= _angelAD.backoffUntil)) {
+                    _angelAD.backoffUntil = Date.now() + 30 * 60 * 1000;
+                    console.log(`[A/D Tier1] Angel returns empty body (streak ${_angelAD.failStreak}) — backing off 30 min. Yahoo fallback active.`);
+                }
+                return null;
+            }
             const errMsg  = res.data?.message || res.data?.errorcode || `HTTP ${res.status}`;
             const errCode = res.data?.errorcode || res.status;
             console.warn(`[A/D Tier1] Angel API error (${errCode}): ${errMsg} | full: ${JSON.stringify(res.data).substring(0, 200)}`);

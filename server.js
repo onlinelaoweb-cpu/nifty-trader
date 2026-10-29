@@ -13096,7 +13096,7 @@ app.get('/api/session', (req,res) => res.json({
 // volume refresh) is market-hour-gated, so there's no way to verify a fresh
 // token outside trading hours without this. Just a plain quote lookup —
 // works any time, reveals immediately if the token is valid or not.
-app.get('/api/fyers-token-check', async (req, res) => {
+app.get('/api/fyers-token-check', requireToken, async (req, res) => {
     try {
         const q = await fetchFyersQuote('NSE:NIFTY50-INDEX');
         if (q && q.ltp > 0) {
@@ -13109,11 +13109,12 @@ app.get('/api/fyers-token-check', async (req, res) => {
     }
 });
 
+// 30 Oct — now needs APP_TOKEN (open as /api/telegram-sync-check?key=YOUR_TOKEN); was open to anyone = Telegram spam risk.
 // 10 Sep — simple GET Telegram sync check, no POST/auth needed (unlike the
 // existing /api/telegram/test, which requires a POST + X-App-Token). Opens
 // directly in a browser — sends a lightweight confirmation message so you
 // can see it land in the actual Telegram chat, not just check config status.
-app.get('/api/telegram-sync-check', async (req, res) => {
+app.get('/api/telegram-sync-check', requireToken, async (req, res) => {
     if (!isConfigured()) {
         return res.json({ success: false, message: 'Not configured — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing in Railway variables' });
     }
