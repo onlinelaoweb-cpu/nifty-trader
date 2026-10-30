@@ -929,6 +929,19 @@ html.vn-day .gold-header-text{color:#8b6508;text-shadow:none;opacity:1;}
 .logo{font-family:'Orbitron',monospace;font-size:14.5px;font-weight:900;color:var(--green);letter-spacing:2.5px;text-shadow:0 0 24px rgba(0,255,136,0.6);display:flex;align-items:center;gap:8px;}
 .logo-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green),0 0 24px rgba(0,255,136,0.4);animation:blink 1.5s infinite;}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
+/* 30 Oct — Bias Flip Watch blinker (display only) */
+@keyframes bfFast{0%,100%{opacity:1;box-shadow:0 0 14px currentColor}50%{opacity:0.25;box-shadow:none}}
+@keyframes bfSoft{0%,100%{opacity:1}50%{opacity:0.55}}
+.hbadge.bf-bull{color:var(--green);border-color:var(--green);background:rgba(0,255,136,0.1);}
+.hbadge.bf-bear{color:var(--red);border-color:var(--red);background:rgba(255,34,68,0.1);}
+.hbadge.bf-flip{animation:bfFast 0.7s infinite;font-weight:900;}
+.hbadge.bf-early{animation:bfSoft 1.6s infinite;border-style:dashed;}
+.hbadge.bf-off{color:var(--dim);border-color:var(--border);background:rgba(26,58,90,0.3);}
+.bf-row{display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px solid var(--border);font-size:12px;}
+.bf-row:last-child{border-bottom:none;}
+.bf-up{color:var(--green);font-weight:700;} .bf-dn{color:var(--red);font-weight:700;} .bf-zero{color:var(--dim);}
+.bf-grp{font-size:10px;letter-spacing:1.2px;color:var(--dim);margin:8px 0 2px;}
+@media (prefers-reduced-motion: reduce){.hbadge.bf-flip,.hbadge.bf-early{animation:none;}}
 .header-controls{display:flex;align-items:center;gap:8px;}
 #live-clock{font-family:'Share Tech Mono',monospace;font-size:13.5px;color:var(--amber);letter-spacing:1px;}
 .icon-btn{background:rgba(26,58,90,0.5);border:1px solid var(--border);color:var(--dim);border-radius:6px;padding:3px 8px;font-size:14px;cursor:pointer;transition:all 0.2s;}
@@ -2388,6 +2401,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <div class="hbadge market-closed" id="market-badge">--</div>
     <div class="hbadge pnl-zero" id="header-nifty-chg">-- pts  --%</div>
     <div class="hbadge expiry" id="expiry-badge">⏳ Expiry: --</div>
+    <div class="hbadge bf-off" id="header-bias" title="Bias Flip Watch — sirf display, signals par asar nahi">BIAS: --</div>
     <div class="hbadge pnl-zero" id="header-pnl">P&L: ₹0</div>
     <div class="hbadge" id="header-trades" style="color:var(--dim);border-color:var(--border);">0 Trades</div>
   </div>
@@ -5330,6 +5344,7 @@ function renderDashboard(s) {
 
   // ── Murarka Strategy Panel update ────────────────────────────────────────────
   updateMurarkaPanel(s);
+  try { renderBiasFlip(s.biasFlip); } catch (e) { console.warn('[biasFlip]', e.message); }
 
   // Header P&L from trades
   const summary = getTradeSummaryLocal();
@@ -5699,6 +5714,72 @@ function renderInsightsHero(s) {
   if (bar && mh) { bar.style.width = Math.max(0, Math.min(100, mh.total)) + '%'; bar.style.background = mh.total >= 80 ? 'var(--green)' : mh.total >= 60 ? 'var(--green)' : mh.total >= 40 ? 'var(--amber)' : 'var(--red)'; }
 }
 // ─── AI INSIGHTS TAB ──────────────────────────────────────────────────────
+// ── Bias Flip Watch (30 Oct) — display only ──────────────────────────────────
+let _bfLast = null, _bfRecvAt = 0, _bfSeenEvent = null;
+function _bfTime(ms) { try { return new Date(ms).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }); } catch (e) { return '--'; } }
+function renderBiasFlip(b) {
+  if (b) { _bfLast = b; _bfRecvAt = Date.now(); }
+  b = _bfLast;
+  const badge = document.getElementById('header-bias');
+  if (!b) return;
+  const word = b.bias === 'BULL' ? 'BULLISH' : b.bias === 'BEAR' ? 'PUT / BEARISH' : 'NEUTRAL';
+  // flash window measured on the browser clock: remaining = untilMs - serverNowMs (no clock-skew issue)
+  let flash = b.flash, remainMs = null;
+  if (flash && flash.level === 'flip') {
+    remainMs = flash.untilMs - b.serverNowMs - (Date.now() - _bfRecvAt);
+    if (remainMs <= 0) flash = null;
+  }
+  if (badge) {
+    let cls = 'hbadge bf-off', txt = 'BIAS: ' + (b.live ? 'NEUTRAL' : 'MARKET CLOSED');
+    if (b.live) {
+      const sideCls = b.bias === 'BULL' ? 'bf-bull' : b.bias === 'BEAR' ? 'bf-bear' : 'bf-off';
+      cls = 'hbadge ' + sideCls; txt = 'BIAS: ' + (b.bias === 'BULL' ? '🟢 CALL' : b.bias === 'BEAR' ? '🔴 PUT' : 'NEUTRAL');
+      if (flash && flash.level === 'flip') { cls = 'hbadge ' + (flash.side === 'BULL' ? 'bf-bull' : 'bf-bear') + ' bf-flip'; txt = (flash.side === 'BULL' ? '🟢 BIAS → CALL' : '🔴 BIAS → PUT') + (flash.kind === 'FLIP' ? ' (FLIP)' : ''); }
+      else if (b.early) { cls = 'hbadge ' + (b.early.toward === 'BULL' ? 'bf-bull' : 'bf-bear') + ' bf-early'; txt = (b.early.toward === 'BULL' ? '🟢 ' : '🔴 ') + 'turn ka shak → ' + (b.early.toward === 'BULL' ? 'CALL' : 'PUT'); }
+    }
+    badge.className = cls; badge.textContent = txt;
+  }
+  // sound once per new flip event
+  if (flash && flash.level === 'flip' && flash.eventId !== _bfSeenEvent) {
+    if (_bfSeenEvent !== null) { try { playAlert(flash.side === 'BULL' ? 'call' : 'put'); } catch (e) { /* silent */ } }
+    _bfSeenEvent = flash.eventId;
+  } else if (_bfSeenEvent === null && b.events && b.events.length) _bfSeenEvent = b.events[0].id;
+
+  const head = document.getElementById('bf-head');
+  if (!head) return;
+  head.textContent = b.live ? ('Bias: ' + word + '  |  score ' + (b.score > 0 ? '+' : '') + b.score + '/9' + (b.biasSince ? '  |  since ' + _bfTime(b.biasSince) : '')) : 'Market band hai — switch tracking ruki hui.';
+  head.style.color = b.bias === 'BULL' ? 'var(--green)' : b.bias === 'BEAR' ? 'var(--red)' : 'var(--dim)';
+  const eEl = document.getElementById('bf-early');
+  if (eEl) {
+    if (b.early) { eEl.style.display = ''; eEl.textContent = '⚠ Turn ka shak → ' + (b.early.toward === 'BULL' ? 'CALL' : 'PUT') + ': ' + b.early.labels.join(', ') + ' pehle hi palat gaye. Confirm tab maano jab neeche CONFIRMING mein bhi aaye.'; }
+    else eEl.style.display = 'none';
+  }
+  const fill = (id, group) => {
+    const box = document.getElementById(id); if (!box) return; box.textContent = '';
+    (b.factors || []).filter(f => f.group === group).forEach(f => {
+      const row = document.createElement('div'); row.className = 'bf-row';
+      const l = document.createElement('span'); l.textContent = f.label + ' — ' + f.note;
+      const r = document.createElement('span'); r.className = f.side > 0 ? 'bf-up' : f.side < 0 ? 'bf-dn' : 'bf-zero';
+      r.textContent = (f.side > 0 ? '▲ CALL' : f.side < 0 ? '▼ PUT' : '• —') + (f.side ? ' ' + _bfTime(f.sinceMs) : '');
+      row.appendChild(l); row.appendChild(r); box.appendChild(row);
+    });
+  };
+  fill('bf-early-list', 'early'); fill('bf-confirm-list', 'confirm');
+  const ev = document.getElementById('bf-events');
+  if (ev) {
+    ev.textContent = '';
+    if (!b.events || !b.events.length) ev.textContent = 'Abhi koi switch nahi.';
+    else b.events.forEach(e => {
+      const d = document.createElement('div');
+      const nm = x => x === 'BULL' ? 'CALL bias' : x === 'BEAR' ? 'PUT bias' : 'neutral';
+      d.textContent = _bfTime(e.atMs) + '  ' + e.kind + ': ' + nm(e.from) + ' → ' + nm(e.to) + (e.why && e.why.length ? '  (' + e.why.join(', ') + ')' : '');
+      d.style.color = e.to === 'BULL' ? 'var(--green)' : e.to === 'BEAR' ? 'var(--red)' : 'var(--dim)';
+      ev.appendChild(d);
+    });
+  }
+}
+setInterval(() => { try { if (_bfLast) renderBiasFlip(null); } catch (e) { /* display only */ } }, 5000);
+
 function updateInsightsUI(s) {
   try { renderInsightsHero(s); } catch (e) { console.warn('[insHero]', e.message); }
   try {
@@ -9051,6 +9132,17 @@ function renderVolumeScannerUI(d) {
       <div id="ins-notrade-wrap" class="ix-why" style="display:none;"><div class="ix-why-t">⛔ NO TRADE — WHY</div><div id="ins-notrade-reasons"></div></div>
       <div class="ix-plan"><b>Plan:</b> <span id="ins-daytype-label">Awaiting data...</span></div>
       <div id="ins-datahealth-wrap" class="ix-health"><span>🩺</span><span id="ins-datahealth-label">Awaiting first check...</span></div>
+    </div>
+
+    <!-- Bias Flip Watch (30 Oct) -->
+    <div class="ix-sec">BIAS FLIP WATCH</div>
+    <div class="ix-card" id="bf-card">
+      <div id="bf-head" style="font-size:14px;font-weight:700;">Awaiting data...</div>
+      <div id="bf-early" style="display:none;margin-top:4px;font-size:12px;color:var(--amber);"></div>
+      <div class="bf-grp">EARLY SIGNS (pehle badalte hain)</div><div id="bf-early-list"></div>
+      <div class="bf-grp">CONFIRMING SIGNS (baad mein pakki karte hain)</div><div id="bf-confirm-list"></div>
+      <div class="bf-grp">RECENT SWITCHES</div><div id="bf-events" style="font-size:12px;color:var(--dim);">Abhi koi switch nahi.</div>
+      <div style="font-size:10px;color:var(--dim);margin-top:6px;">Sirf display. Signals, gates ya journal par koi asar nahi. Din/restart par reset.</div>
     </div>
 
     <!-- 2. Market ka mijaaz -->

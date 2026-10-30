@@ -129,6 +129,17 @@ async function getHistoricalLevels(currentPrice) {
     }
 }
 
+// 30 Oct — running high/low of LIVE SPOT seen by this process today (index price only; the WS day high can be a futures
+// fallback with ~50 pt basis, so it is deliberately not used). Resets each IST day.
+let _liveRange = { day: '', high: 0, low: Infinity };
+function _trackLiveRange(price) {
+    if (!(price > 0)) return;
+    const day = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+    if (_liveRange.day !== day) _liveRange = { day, high: 0, low: Infinity };
+    if (price > _liveRange.high) _liveRange.high = price;
+    if (price < _liveRange.low)  _liveRange.low  = price;
+}
+
 async function calculateSRLevels(currentPrice, maxPainData = null) {
     try {
         // ── Prev-day OHLC (for daily pivots) ─────────────────────────────────
@@ -152,12 +163,17 @@ async function calculateSRLevels(currentPrice, maxPainData = null) {
 
         // ── Weekly OHLC ───────────────────────────────────────────────────────
         const weeklyOHLC = await getWeeklyOHLC();
-        const wHigh = weeklyOHLC
+        const wHigh0 = weeklyOHLC
             ? parseFloat(weeklyOHLC.high.toFixed(0))
             : parseFloat(Math.max(...(memCandles.length > 0 ? memCandles.map(c => c.high) : [pdH])).toFixed(0));
-        const wLow = weeklyOHLC
+        const wLow0 = weeklyOHLC
             ? parseFloat(weeklyOHLC.low.toFixed(0))
             : parseFloat(Math.min(...(memCandles.length > 0 ? memCandles.map(c => c.low) : [pdL])).toFixed(0));
+        // 30 Oct — the weekly bars are cached for 60 min, so on a breakout day "Week High" could sit BELOW live price
+        // (seen 11:11: WH 23019 while Nifty was at 23030). Fold in today's live spot range so the level never lags the market.
+        _trackLiveRange(currentPrice);
+        const wHigh = _liveRange.high > 0 ? Math.max(wHigh0, Math.round(_liveRange.high)) : wHigh0;
+        const wLow  = Number.isFinite(_liveRange.low) ? Math.min(wLow0, Math.round(_liveRange.low)) : wLow0;
 
         // ── 1-Year historical levels ──────────────────────────────────────────
         const hist = await getHistoricalLevels(currentPrice);

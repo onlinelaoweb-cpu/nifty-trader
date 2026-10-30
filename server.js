@@ -4795,6 +4795,7 @@ async function checkNiftyBrahmastraTrigger() {
         if (lastNiftyBrahmastraDirection === direction && (Date.now() - lastNiftyBrahmastraAt) < BRAHMASTRA_COOLDOWN_MS) return;
         lastNiftyBrahmastraAt = Date.now();
         lastNiftyBrahmastraDirection = direction;
+        marketState.lastBrahmastra = { direction, atMs: lastNiftyBrahmastraAt };   // 30 Oct — read-only by Bias Flip Watch
 
         const nifty = marketState.nifty;
         const isBull = direction === 'BULLISH';
@@ -9270,11 +9271,8 @@ async function refreshPCR() {
             // < 1.0 = more calls being written (bearish bias)
             const pOI = oiState.totalPEoiChange;
             const cOI = oiState.totalCEoiChange;
-            if (pOI !== null && cOI !== null && cOI !== 0) {
-                marketState.oiImbalanceRatio = parseFloat((pOI / Math.abs(cOI)).toFixed(2));
-            } else {
-                marketState.oiImbalanceRatio = null;
-            }
+            // 30 Oct — sign-aware (see src/utils/oiImbalance.js): call UNWINDING no longer reads as "call writers dominating".
+            marketState.oiImbalanceRatio = require('./src/utils/oiImbalance').computeOiImbalance(pOI, cOI);
         }
 
         // ── Murarka PCR Zone + Entry Alert ────────────────────────────────────
@@ -16318,6 +16316,27 @@ function startPollingIntervals() {
                 // 24 Oct — live order-flow card: push the in-memory view to open dashboards every 5 s over the EXISTING SSE stream (no polling, no broker calls, nothing when nobody is watching or the feed is quiet)
                 setInterval(() => { try { if (!_sseClients.size || !_tickFlowLab) return; const lp = _tickFlowLab.livePayload(); if (lp && lp.success) sseBroadcast('orderflow', lp); } catch (e) { /* display only */ } }, 5000);
             } catch (e) { console.warn('[TickFlowLab] creation failed:', e.message); }
+            // 30 Oct — Bias Flip Watch (DISPLAY ONLY): reads existing marketState every 20 s, never feeds signals/journals
+            try {
+                const biasTracker = require('./src/utils/biasFlip').createBiasTracker();
+                setInterval(() => {
+                    try {
+                        const ist = getIST(), mins = ist.getHours() * 60 + ist.getMinutes(), dow = ist.getDay();   // getIST() carries IST in its local fields
+                        const live = dow >= 1 && dow <= 5 && mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30;
+                        let bars = [];
+                        try { const lp = _tickFlowLab && _tickFlowLab.livePayload(); if (lp && lp.success && Array.isArray(lp.bars)) bars = lp.bars; } catch (e) { /* none */ }
+                        const m = marketState;
+                        m.biasFlip = biasTracker.update({
+                            dayKey: ist.getFullYear() + '-' + String(ist.getMonth() + 1).padStart(2, '0') + '-' + String(ist.getDate()).padStart(2, '0'), live,
+                            nifty: m.nifty, vwap: m.vwap,
+                            pcrTrend: m.pcrSlope && m.pcrSlope.trend, earlyMomSignal: m.earlyMom && m.earlyMom.signal,
+                            oiSignal: m.oiBuildup && m.oiBuildup.signal, mtfSignal: m.mtf && m.mtf.signal, engineSignal: m.signal,
+                            bosEvent: m.physicsOfTrading && m.physicsOfTrading.bosChoch && m.physicsOfTrading.bosChoch.event,
+                            brahmastra: m.lastBrahmastra || null, orderFlowBars: bars,
+                        }, Date.now());
+                    } catch (e) { /* display only */ }
+                }, 20000);
+            } catch (e) { console.warn('[BiasFlip] start failed:', e.message); }
             _autoJournal = createAutoJournal({ dbPool, getStrikePremium,
                 hooks: { onOpen: tr => _atrShadow.open({ ...tr, atr: marketState.dynamicLevels && marketState.dynamicLevels.atr }) },
                 lotSizes: { NIFTY: LOT_SIZE, CRUDE: Number(process.env.AUTO_JOURNAL_LOT_CRUDE) || 100, BITCOIN: null }, log: m => console.log(m) });
