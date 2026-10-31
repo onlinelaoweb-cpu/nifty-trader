@@ -269,6 +269,11 @@ function _hasStreamCookie(req, secret) {
         return a.length === b.length && _crypto.timingSafeEqual(a, b);
     } catch (e) { return false; }
 }
+// 31 Oct — constant-time token compare (same result as ===, without leaking length/prefix timing)
+function _tokEq(a, b) {
+    const x = Buffer.from(String(a == null ? '' : a)), y = Buffer.from(String(b == null ? '' : b));
+    return x.length === y.length && require('crypto').timingSafeEqual(x, y);
+}
 const _cookieRescueLogged = new Map();   // ip -> last log ts (so a 5-second reconnect loop does not spam the log)
 app.use('/api', (req, res, next) => {
     if (req.path === '/health') return next();
@@ -277,7 +282,7 @@ app.use('/api', (req, res, next) => {
     const rawKey = Array.isArray(req.query.key) ? req.query.key[req.query.key.length - 1] : req.query.key;
     const key = rawKey == null ? '' : String(rawKey).trim();
     const provided = req.headers['x-app-token'] || key;
-    if (provided === secret) {
+    if (_tokEq(provided, secret)) {
         // authenticated by header/key -> make sure this browser holds the stream cookie (set once, 30 days)
         if (req.method === 'GET' && req.path !== '/stream' && !_hasStreamCookie(req, secret)) {
             const https = req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
@@ -12863,7 +12868,7 @@ function requireToken(req, res, next) {
     const secret = process.env.APP_TOKEN;
     if (!secret) return next();  // not configured — allow all (default)
     const provided = req.headers['x-app-token'] || req.query.key;
-    if (provided === secret) return next();
+    if (_tokEq(provided, secret)) return next();
     console.warn(`[Auth] Blocked unauthorized POST to ${req.path} from ${req.ip}`);
     return res.status(401).json({ success: false, msg: 'Unauthorized — set X-App-Token header' });
 }

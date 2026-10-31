@@ -20,6 +20,16 @@
 'use strict';
 const axios = require('axios');
 
+// 31 Oct — expected NSE-from-Railway failures were ~28 error lines per cycle and buried real errors; log each kind at most once per 30 min.
+const _warnAt = {};
+function _warnThrottled(key, msg, everyMs = 30 * 60 * 1000) {
+    const now = Date.now();
+    if (_warnAt[key] && now - _warnAt[key] < everyMs) return;
+    _warnAt[key] = now;
+    console.warn(msg);
+}
+
+
 // ── NSE session cookie ────────────────────────────────────────────────────────
 let _nseCookie   = null;
 let _nseCookieAt = 0;
@@ -180,7 +190,7 @@ async function fetchAllIndices() {
             if (_allIndicesFailStreak >= ALL_INDICES_BACKOFF_AFTER) {
                 console.warn(`[NSE] allIndices failed ${_allIndicesFailStreak}× in a row — backing off for 15 min (Railway rate-limit): ${e.message}`);
             } else {
-                console.warn('[NSE] allIndices failed:', e.message);
+                _warnThrottled('idx-fail', '[NSE] allIndices failed: ' + e.message + ' (shown at most every 30 min)');
             }
         } finally {
             _allIndicesFetch = null;
@@ -362,12 +372,12 @@ async function nseIndexQuote(indexName) {
                 };
             }
         } else {
-            console.warn(`[NSE] index quote ${indexName}: allIndices cache stale (${Math.round(cacheAge / 1000)}s) — skipping straight to Yahoo`);
+            _warnThrottled('idx-stale', `[NSE] allIndices cache stale (${Math.round(cacheAge / 1000)}s) — index quotes going straight to Yahoo (this line is shown at most every 30 min)`);
         }
         // NSE blocked / not found / stale — try Yahoo Finance directly
         const yahooSym = YAHOO_FALLBACK_MAP[indexName];
         if (yahooSym) {
-            console.warn(`[NSE] index not found: ${indexName} — trying Yahoo fallback`);
+            _warnThrottled('idx-fallback', `[NSE] index not found in NSE data — using Yahoo fallback (first seen: ${indexName}; shown at most every 30 min)`);
             const q = await yahooDirectQuote(yahooSym);
             if (q) { console.log(`[Yahoo fallback] ${indexName}: ${q.price}`); return q; }
         }

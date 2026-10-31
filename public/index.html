@@ -7035,6 +7035,27 @@ function getTradeSummaryLocal() {
   };
 }
 
+// 31 Oct — header "Signal Journal P&L" read the localStorage cache and only refreshed when the Journal tab was opened,
+// so wins closed later (target / trailing-SL) never reached the header. Pull from the server every 60 s and redraw the header.
+function _refreshHeaderPnl() {
+  const summary = getTradeSummaryLocal();
+  const pnlEl = document.getElementById('header-pnl');
+  const tradesEl = document.getElementById('header-trades');
+  if (pnlEl) {
+    pnlEl.textContent = 'Signal Journal P&L: ₹' + summary.realizedPnl.toFixed(0);
+    pnlEl.className = 'hbadge ' + (summary.realizedPnl > 0 ? 'pnl-pos' : summary.realizedPnl < 0 ? 'pnl-neg' : 'pnl-zero');
+  }
+  if (tradesEl) tradesEl.textContent = summary.total + ' Trade' + (summary.total !== 1 ? 's' : '');
+}
+let _hdrPnlSyncing = false;
+async function _hdrPnlTick() {
+  if (_hdrPnlSyncing || document.hidden) return;
+  _hdrPnlSyncing = true;
+  try { if (await _syncFromServer()) _refreshHeaderPnl(); } catch (e) { /* display only */ } finally { _hdrPnlSyncing = false; }
+}
+setTimeout(_hdrPnlTick, 4000);
+setInterval(_hdrPnlTick, 60000);
+
 // ── DOM renderer (pure sync — works from current _trades) ─
 function _renderJournal() {
   const summary = getTradeSummaryLocal();
