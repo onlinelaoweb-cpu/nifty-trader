@@ -105,7 +105,9 @@ function computeSmartMoneyBias(marketState) {
 }
 
 function computeDayType(marketState) {
-    const adxVal = marketState.adx?.adx ?? null;
+    // 2 Nov — 1m ADX is null until 60 session candles (~10:15). Until then use 5m ADX (already valid) so Day Type
+    // doesn't read "70% range" purely because ADX is warming up. Gate logic in server.js is untouched.
+    const adxVal = marketState.adx?.adx ?? marketState.mtf?.tf5m?.adx ?? null;
     let trendScore = 0;
     if (adxVal !== null) trendScore += Math.min((adxVal / 40) * 40, 40);   // up to 40 pts
     if (marketState.mtf?.aligned)          trendScore += 30;               // all 3 TF agree

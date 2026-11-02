@@ -63,6 +63,43 @@ function pnlOf(entry, exits, lots, lotSize) {
     return { pct: r2(pct), rs: lotSize ? Math.round(rs) : null };
 }
 
+// ── 2 Nov — same-bet stacking (display/analysis only, never changes a trade) ──
+// Several strategies firing the same instrument + strike + side within `windowMin` minutes is ONE bet taken N times.
+// Marks each such trade with stackN (how many trades are in its cluster) and returns the clusters with combined P&L.
+function annotateStacking(rows, windowMin = 90) {
+    const ms = r => new Date(r.fire_ts).getTime();
+    const day = r => new Date(ms(r) + 330 * 60000).toISOString().slice(0, 10);
+    const by = new Map();
+    for (const r of rows) {
+        if (!(Number(r.strike) > 0)) continue;
+        const k = `${r.instrument}|${day(r)}|${r.strike}|${r.side}`;
+        if (!by.has(k)) by.set(k, []);
+        by.get(k).push(r);
+    }
+    const clusters = [];
+    for (const [k, list] of by) {
+        list.sort((x, y) => ms(x) - ms(y));
+        let cur = [];
+        const flush = () => {
+            const srcs = new Set(cur.map(t => t.source));
+            if (cur.length >= 2 && srcs.size >= 2) {
+                cur.forEach(t => { t.stackN = cur.length; });
+                const closed = cur.filter(t => t.realized_rs !== null && t.realized_rs !== undefined && t.state === 'CLOSED');
+                const [inst, d, strike, side] = k.split('|');
+                clusters.push({ instrument: inst, day: d, strike: Number(strike), side, firstTs: cur[0].fire_ts, trades: cur.length, sources: [...srcs],
+                    totalRs: closed.length ? Math.round(closed.reduce((a, t) => a + Number(t.realized_rs), 0)) : null, open: cur.filter(t => t.state === 'OPEN').length });
+            }
+            cur = [];
+        };
+        for (const r of list) {
+            if (cur.length && ms(r) - ms(cur[cur.length - 1]) > windowMin * 60000) flush();
+            cur.push(r);
+        }
+        flush();
+    }
+    return clusters.sort((a, b) => new Date(b.firstTs) - new Date(a.firstTs));
+}
+
 // ── summaries for the Journal tab (pure) ──
 function summarize(rows) {
     const groups = new Map();
@@ -221,7 +258,8 @@ function createAutoJournal({ dbPool, getStrikePremium, now = Date.now, log = () 
             return { ...x, strike: Number(x.strike), entry_premium: entry, last_premium: last || null, realized_pct: x.realized_pct === null ? null : Number(x.realized_pct), realized_rs: x.realized_rs === null ? null : Number(x.realized_rs),
                 livePct, liveRs, stopPrem, tgtPrem, halfBooked: !!(x.coach && x.coach.halfBooked), coach: undefined };
         });
-        return { enabled: cfg.enabled, started: S.started, config: { lots: cfg.lots, trailPts: cfg.trailPts, timeStopMin: cfg.timeStopMin }, skipped: S.skipped, days: d, strategies: summarize(rows) };
+        const stacking = annotateStacking(rows);
+        return { enabled: cfg.enabled, started: S.started, config: { lots: cfg.lots, trailPts: cfg.trailPts, timeStopMin: cfg.timeStopMin }, skipped: S.skipped, days: d, stacking, strategies: summarize(rows) };
     }
 
     return { cfg, start, stop, report, logLiveAlert, tick, _state: S };
@@ -249,4 +287,4 @@ function reportText(rep, opts = {}) {
     return L.join('\n');
 }
 
-module.exports = { reportText, createAutoJournal, coachInit, coachStep, effectiveStopPct, pnlOf, summarize, inWindow, pastSquareOff, WINDOWS };
+module.exports = { annotateStacking, reportText, createAutoJournal, coachInit, coachStep, effectiveStopPct, pnlOf, summarize, inWindow, pastSquareOff, WINDOWS };

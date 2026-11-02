@@ -2627,7 +2627,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <div class="cl-mini-bar"><div class="cl-mini-fill" id="cl-mini-fill" style="width:0%"></div></div>
     <div class="checklist-body" id="checklist-body">
       <!-- AUTO items — evaluated by updateChecklistAuto(s) -->
-      <div class="cl-item auto-wait" id="cl-gift" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🌏 Nifty Gap (GIFT proxy, vote nahi) <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-gift-val" style="color:var(--dim);">Waiting for data…</div></div></div>
+      <div class="cl-item auto-wait" id="cl-gift" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🌏 Nifty vs pichhla close (vote nahi) <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-gift-val" style="color:var(--dim);">Waiting for data…</div></div></div>
       <div class="cl-item auto-wait" id="cl-global" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">🌍 Global Markets Bias <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-global-val" style="color:var(--dim);">Waiting for data…</div></div></div>
       <div class="cl-item auto-wait" id="cl-vix" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📊 India VIX — below 20? <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-vix-val" style="color:var(--dim);">Waiting for data…</div></div></div>
       <div class="cl-item auto-wait" id="cl-pcr" data-auto="1"><div class="cl-box"></div><div class="cl-text-wrap"><div class="cl-text">📈 PCR Bias <span class="cl-auto-tag auto">AUTO</span></div><div class="cl-auto-val" id="cl-pcr-val" style="color:var(--dim);">Waiting for data…</div></div></div>
@@ -4002,7 +4002,7 @@ function _ajTradeHtml(t) {
   const exits = (t.exits || []).map(e => (e.reason === 'half_book' ? 'half booked @ ' : (_AJ_REASON[e.reason] || e.reason) + ' @ ') + e.premium).join(' → ');
   const status = open ? '<span class="aj-badge open">OPEN</span>' : '<span class="aj-badge">' + _ajEsc(_AJ_REASON[t.exit_reason] || t.exit_reason || 'closed') + '</span>';
   const lvl = open ? ' · SL ' + _ajEsc(t.stopPrem) + (t.stop_pct > 0 ? ' (locked profit)' : t.stop_pct === 0 ? ' (breakeven)' : '') + ' · target ' + _ajEsc(t.tgtPrem) + (t.halfBooked ? ' · ½ booked' : '') : '';
-  return '<div class="aj-tr"><div class="aj-tr1"><span>' + _ajTime(t.fire_ts) + ' · <b>' + _ajEsc(t.strike) + ' ' + _ajEsc(t.side) + '</b>' + status + (t.muted ? '<span class="aj-badge">muted</span>' : '') + '</span>' +
+  return '<div class="aj-tr"><div class="aj-tr1"><span>' + _ajTime(t.fire_ts) + ' · <b>' + _ajEsc(t.strike) + ' ' + _ajEsc(t.side) + '</b>' + status + (t.muted ? '<span class="aj-badge">muted</span>' : '') + (t.stackN > 1 ? '<span class="aj-badge" title="Same strike + side fired by multiple strategies within 90 min — one bet, taken ' + t.stackN + ' times">🔁 stack x' + t.stackN + '</span>' : '') + '</span>' +
     '<span class="' + _ajCls(pct) + '"><b>' + _ajPct(pct) + '</b>' + _ajRs(rs) + '</span></div>' +
     '<div class="aj-tr2">in ' + _ajEsc(t.entry_premium) + (open ? ' · now ' + _ajEsc(t.last_premium) : '') + (exits ? ' · ' + _ajEsc(exits) : '') + lvl + ' · ' + _ajEsc(t.lots) + ' lots</div></div>';
 }
@@ -4020,6 +4020,8 @@ async function loadAutoJournal() {
     const sk = d.skipped || {};
     note.textContent = all.length + ' paper trades in ' + d.days + ' day(s) · ' + nOpen + ' open · ' + (d.config ? d.config.lots + ' lots each, trailing ' + (d.config.trailPts ? d.config.trailPts + ' pts' : 'off') : '') +
       ((sk.noChain || sk.duplicate || sk.late) ? ' · not journaled since boot: ' + (sk.noChain || 0) + ' no option price, ' + (sk.duplicate || 0) + ' repeat while open, ' + (sk.late || 0) + ' after square-off' : '');
+    const stk = d.stacking || [];
+    if (stk.length) note.textContent += ' · 🔁 same-bet stacks: ' + stk.slice(0, 3).map(c => c.strike + c.side + ' x' + c.trades + (c.totalRs !== null ? ' (' + (c.totalRs >= 0 ? '+' : '') + '₹' + c.totalRs + ')' : '')).join(', ') + (stk.length > 3 ? ' +' + (stk.length - 3) + ' more' : '');
     const openT = all.filter(t => t.state === 'OPEN').sort((a, b) => new Date(b.fire_ts) - new Date(a.fire_ts));
     openEl.innerHTML = openT.length ? '<div class="aj-grp" style="padding:6px 8px;"><div class="aj-gname" style="padding:4px 2px;">🔵 OPEN NOW</div>' + openT.map(t => '<div class="aj-ginst" style="margin-top:4px;">' + _ajEsc(t.instrument) + ' · ' + _ajEsc(t.source) + '</div>' + _ajTradeHtml(t)).join('') + '</div>' : '';
     const openIds = new Set(JSON.parse(listEl.dataset.open || '[]'));
@@ -4356,6 +4358,7 @@ setInterval(updateMarketClosedBanner, 1000);
 // ─── STATE ───────────────────────────────────────────────
 let _lastState = null;
 let _lastSRUpdatedAt = null;  // dirty flag: skip SR table rebuild when levels haven't changed
+let _lastSRDrawPrice = 0;
 let _pollTimer    = null;
 let _sseConn      = null;   // EventSource connection
 let _sseFallback  = false;  // true if SSE failed, using polling
@@ -4997,7 +5000,7 @@ function renderDashboard(s) {
     document.getElementById('adx-dim').textContent = '--';
     document.getElementById('adx-bar').style.width = '0%';
     document.getElementById('adx-zone').textContent = '--';
-    document.getElementById('adx-trend-label').textContent = s.adx === null ? '⏳ Needs 60 session candles' : 'LOADING';
+    document.getElementById('adx-trend-label').textContent = s.adx === null ? '⏳ ADX warming up (1m needs 60 candles, ~10:15) — gate inactive, not closed' : 'LOADING';
     document.getElementById('adx-card').style.borderLeft = '2px solid var(--amber)';
   }
   } catch(e) { console.warn('[renderDashboard] ADX section failed:', e.message); }
@@ -5222,13 +5225,16 @@ function renderDashboard(s) {
     if (updEl && s.srLevels.updatedAt) updEl.textContent = new Date(s.srLevels.updatedAt).toLocaleTimeString('en-IN');
     // Dirty flag: SR levels recalc every 10 min — skip full DOM rebuild on every 3s poll
     const listEl = document.getElementById('sr-levels-list');
-    if (listEl && s.srLevels.levels && s.srLevels.levels.length && s.srLevels.updatedAt !== _lastSRUpdatedAt) {
+    // 2 Nov — also redraw when price has moved 5+ pts since the last draw: the list was rebuilt only every 10 min, so the
+    // distances (and the ▲/▼ side) lagged the live price by up to 30 pts (e.g. 09:20 showed WH "▲48" while the tile said 18 away).
+    if (listEl && s.srLevels.levels && s.srLevels.levels.length && (s.srLevels.updatedAt !== _lastSRUpdatedAt || (cur > 0 && Math.abs(cur - _lastSRDrawPrice) >= 5))) {
       _lastSRUpdatedAt = s.srLevels.updatedAt;
+      _lastSRDrawPrice = cur;
       const isDayMode = document.documentElement.classList.contains('vn-day');
       const TYPE_COLOR = { R3:'#ff4d4d', R2:'#ff6b6b', R1:'#ff9999', PP: isDayMode ? '#8b6508' : '#ffd700',
                            S1:'#99ddff', S2:'#66bbff', S3:'#3399ff',
                            PDH:'#ffaa55', PDL:'#55aaff', WH:'#ff77aa', WL:'#77aaff', MP:'#cc88ff' };
-      listEl.innerHTML = s.srLevels.levels.map(lv => {
+      listEl.innerHTML = (_adjLevels(s, cur) || s.srLevels.levels).map(lv => {
         const isAbove = lv.price > cur;
         const dist    = cur > 0 ? Math.abs(cur - lv.price).toFixed(0) : '--';
         const color   = TYPE_COLOR[lv.type] || 'var(--dim)';
@@ -5355,6 +5361,7 @@ function renderDashboard(s) {
     pnlEl.className = 'hbadge ' + (summary.realizedPnl > 0 ? 'pnl-pos' : summary.realizedPnl < 0 ? 'pnl-neg' : 'pnl-zero');
   }
   if (tradesEl) tradesEl.textContent = summary.total + ' Trade' + (summary.total !== 1 ? 's' : '');
+  _riskGuard();
 
   // PCR History — only redraw slope chart when data actually changed (canvas draw is expensive)
   if (s.pcrHistory) {
@@ -5472,14 +5479,24 @@ async function fetchBreadthFull() {
     if (!r.ok) return;
     const b = await r.json();
     if (b) {
-      if (b.stocks && b.stocks.length) _lastBreadthStocks = b.stocks;
+      if (b.stocks && b.stocks.length) { _lastBreadthStocks = b.stocks; _lastBreadthStocksAt = Date.now(); }
       updateBreadthUI(b);
     }
   } catch(e) { console.warn('[Breadth] fetch error:', e.message); }
 }
 
+let _lastBreadthStocksAt = 0, _breadthStocksFetching = false;
 function updateBreadthUI(b) {
   if (!b) return;
+  // 2 Nov — the live state payload strips breadth.stocks[] (server size cut), so any redraw from it wiped the stock list
+  // ("stock list not available"). Reuse the last full list and refresh it in the background when it is older than 90 s.
+  if (!(b.stocks && b.stocks.length)) {
+    if (_lastBreadthStocks && _lastBreadthStocks.length) b = Object.assign({}, b, { stocks: _lastBreadthStocks });
+    if ((!_lastBreadthStocks || Date.now() - _lastBreadthStocksAt > 90000) && !_breadthStocksFetching) {
+      _breadthStocksFetching = true;
+      Promise.resolve(fetchBreadthFull()).catch(() => {}).then(() => { _breadthStocksFetching = false; });
+    }
+  }
   const up = b.advances || 0, dn = b.declines || 0, unch = b.unchanged || 0;
   const total = up + dn + unch || 1;
   const bullPct = Math.round((up / total) * 100);
@@ -5729,6 +5746,9 @@ function renderBiasFlip(b) {
     remainMs = flash.untilMs - b.serverNowMs - (Date.now() - _bfRecvAt);
     if (remainMs <= 0) flash = null;
   }
+  // 2 Nov — first 15 min (before 09:30 IST) flips were noise (09:20 TURN → 09:33 FADE): no flash/sound then. Score and events still show.
+  const _bfIst = new Date((b.serverNowMs || Date.now()) + 330 * 60000), _bfPre930 = (_bfIst.getUTCHours() * 60 + _bfIst.getUTCMinutes()) < 570;
+  if (_bfPre930) flash = null;
   if (badge) {
     let cls = 'hbadge bf-off', txt = 'BIAS: ' + (b.live ? 'NEUTRAL' : 'MARKET CLOSED');
     if (b.live) {
@@ -7035,6 +7055,28 @@ function getTradeSummaryLocal() {
   };
 }
 
+// 2 Nov — Risk Guard (display only, never blocks a signal): warns when today's Signal Journal shows a daily loss beyond the limit,
+// 3 losses in a row, or too many trades. Limit (Rs) can be changed: localStorage.setItem('rg_limit','5000').
+function _riskGuard() {
+  try {
+    const anchor = document.getElementById('header-trades'); if (!anchor) return;
+    let el = document.getElementById('header-risk');
+    if (!el) { el = document.createElement('div'); el.id = 'header-risk'; el.className = 'hbadge'; el.style.display = 'none'; anchor.insertAdjacentElement('afterend', el); }
+    const today = new Date().toDateString();
+    const done = _trades.filter(t => new Date(t.time).toDateString() === today && t.exit != null).sort((a, b) => new Date(a.time) - new Date(b.time));
+    const pnl = done.reduce((x, t) => x + (t.pnl || 0), 0);
+    let streak = 0; for (let i = done.length - 1; i >= 0 && (done[i].pnl || 0) < 0; i--) streak++;
+    let limit = 3000; try { limit = Number(localStorage.getItem('rg_limit')) || 3000; } catch (e) { /* default */ }
+    const why = [];
+    if (pnl <= -limit) why.push('day loss ₹' + Math.round(pnl));
+    if (streak >= 3) why.push(streak + ' losses in a row');
+    if (done.length >= 8) why.push(done.length + ' trades done');
+    if (!why.length) { el.style.display = 'none'; return; }
+    el.style.display = ''; el.className = 'hbadge pnl-neg';
+    el.textContent = '🛑 Risk Guard: ' + why.join(' · ');
+    el.title = 'Sirf chetavni — signal block nahi hota. Rules: day loss ≥ ₹' + limit + ', 3 losses in a row, 8+ trades.';
+  } catch (e) { /* display only */ }
+}
 // 31 Oct — header "Signal Journal P&L" read the localStorage cache and only refreshed when the Journal tab was opened,
 // so wins closed later (target / trailing-SL) never reached the header. Pull from the server every 60 s and redraw the header.
 function _refreshHeaderPnl() {
@@ -7046,6 +7088,7 @@ function _refreshHeaderPnl() {
     pnlEl.className = 'hbadge ' + (summary.realizedPnl > 0 ? 'pnl-pos' : summary.realizedPnl < 0 ? 'pnl-neg' : 'pnl-zero');
   }
   if (tradesEl) tradesEl.textContent = summary.total + ' Trade' + (summary.total !== 1 ? 's' : '');
+  _riskGuard();
 }
 let _hdrPnlSyncing = false;
 async function _hdrPnlTick() {
@@ -7471,7 +7514,7 @@ function updateChecklistAuto(s) {
     const chg = giftData.change;
     const dir = chg > 50 ? 'GAP UP' : chg < -50 ? 'GAP DOWN' : chg > 0 ? 'FLAT UP' : 'FLAT DOWN';
     // 26 Oct — the "GIFT Nifty" feed is really Nifty spot (Yahoo ^NSEI proxy), so it must not vote: it would just count Nifty's own move twice
-    setItem('cl-gift', 'wait', 'Nifty spot (GIFT proxy): ' + (chg >= 0 ? '+' : '') + chg.toFixed(0) + ' pts · vote nahi', chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : 'var(--dim)');
+    setItem('cl-gift', 'wait', 'Nifty vs prev close: ' + (chg >= 0 ? '+' : '') + chg.toFixed(0) + ' pts · vote nahi', chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : 'var(--dim)');
     bulletScore.push(0);
   } else {
     setItem('cl-gift', 'wait', 'Waiting for GIFT Nifty…', 'var(--dim)');
@@ -7700,7 +7743,7 @@ function updateChecklistAuto(s) {
 
 // ─── MARKET PULSE (11 Oct) — one-look summary built from the same data as the old pre-market checklist ───
 const _PULSE_TILES = [
-  ['cl-global','GLOBAL'], ['cl-gift','NIFTY GAP*'], ['cl-bn','BANK NIFTY'], ['cl-fii','FII + DII'],
+  ['cl-global','GLOBAL'], ['cl-gift','NIFTY vs PREV CLOSE'], ['cl-bn','BANK NIFTY'], ['cl-fii','FII + DII'],
   ['cl-pcr','PCR'], ['cl-em','OPTION FLOW'], ['cl-mtf','TREND (MTF)'], ['cl-adx','ADX'],
   ['cl-vix','VIX'], ['cl-events','EVENTS'], ['x-sm','SMART MONEY'], ['x-mom','PRICE MOMENTUM']
 ];
@@ -7820,8 +7863,25 @@ function renderPulse(s, bulletScore) {
 // Nearest support/resistance recomputed from the CURRENT price. The server's nearSup/nearRes
 // are fixed at the last refresh, so after price crosses a stored level they go stale (a level can
 // even sit on the wrong side). Uses the full level list when present; falls back to the stored pair.
+// 2 Nov — Week High / Week Low come from a cache refreshed every 10 min, so after a new high (09:53: WH 23305 shown ▼21 below spot 23327)
+// they sat below/above the live price. Fold today's live high/low (s.wsHigh / s.wsLow) and the live price in, display only.
+function _adjLevels(s, cur) {
+  const raw = s && s.srLevels && Array.isArray(s.srLevels.levels) ? s.srLevels.levels : null;
+  if (!raw) return null;
+  const hi = Math.max(Number(s.wsHigh) || 0, cur > 0 ? Math.round(cur) : 0);
+  const lo = Math.min(Number(s.wsLow) > 0 ? Number(s.wsLow) : Infinity, cur > 0 ? Math.round(cur) : Infinity);
+  let changed = false;
+  const out = raw.map(l => {
+    if (!l) return l;
+    if (l.type === 'WH' && hi > l.price) { changed = true; return Object.assign({}, l, { price: Math.round(hi) }); }
+    if (l.type === 'WL' && Number.isFinite(lo) && lo < l.price) { changed = true; return Object.assign({}, l, { price: Math.round(lo) }); }
+    return l;
+  });
+  if (changed) out.sort((a, b) => (b && b.price || 0) - (a && a.price || 0));
+  return out;
+}
 function liveSR(s, cur) {
-  const lv = s && s.srLevels && Array.isArray(s.srLevels.levels) ? s.srLevels.levels : null;
+  const lv = _adjLevels(s, cur);
   if (lv && lv.length && cur > 0) {
     let sup = null, res = null;
     for (const l of lv) {

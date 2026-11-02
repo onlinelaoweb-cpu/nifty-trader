@@ -114,7 +114,11 @@ function createBiasTracker() {
         const list = FACTOR_DEFS.map(d => {
             const cur = f[d.key] || { side: 0, note: '' };
             const prev = fstate[d.key];
-            if (!prev || prev.side !== cur.side) fstate[d.key] = { side: cur.side, since: nowMs };
+            // 2 Nov — after the close (live === false) keep the last live reading frozen. Post-close recalcs (e.g. VWAP at 16:09)
+            // were flipping factors and showing "PUT 16:09" on a day that closed at its high.
+            if (inp.live === false && prev) return { key: d.key, group: d.group, label: d.label, side: prev.side, note: prev.note || '', sinceMs: prev.since };
+            if (!prev || prev.side !== cur.side) fstate[d.key] = { side: cur.side, since: nowMs, note: cur.note };
+            else fstate[d.key].note = cur.note;
             return { key: d.key, group: d.group, label: d.label, side: cur.side, note: cur.note, sinceMs: fstate[d.key].since };
         });
         const score = list.reduce((a, x) => a + x.side, 0);

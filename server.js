@@ -16323,7 +16323,27 @@ function startPollingIntervals() {
             } catch (e) { console.warn('[TickFlowLab] creation failed:', e.message); }
             // 30 Oct — Bias Flip Watch (DISPLAY ONLY): reads existing marketState every 20 s, never feeds signals/journals
             try {
+                // 2 Nov — end-of-day log: one Railway log line per Auto Journal strategy (trades / wins / SL hits / net Rs) + stacks,
+                // written once per IST day after 15:40, so every day can be reviewed from logs. Read-only.
+                let _dayLogged = '';
+                setInterval(async () => {
+                    try {
+                        if (!_autoJournal) return;
+                        const ist = getIST(), day = `${ist.getFullYear()}-${ist.getMonth() + 1}-${ist.getDate()}`;
+                        if (day === _dayLogged || ist.getDay() === 0 || ist.getDay() === 6 || (ist.getHours() * 60 + ist.getMinutes()) < 940) return;
+                        _dayLogged = day;
+                        console.log(`📅 [DayLog ${day}] close check: nifty ${marketState.nifty} | vwap ${marketState.vwap} | prevClose ${marketState.prevClose} | change ${marketState.change}`);   // resolves the "Below VWAP at close" question
+                        const rep = await _autoJournal.report({ days: 1 });
+                        for (const g of (rep.strategies || [])) {
+                            const closed = g.trades.filter(t => t.state === 'CLOSED');
+                            const sl = closed.filter(t => /stop/i.test(String(t.exit_reason || ''))).length;
+                            console.log(`📅 [DayLog ${day}] ${g.instrument} ${g.source}: ${g.total} trades, ${closed.filter(t => t.realized_pct > 0).length} wins, ${sl} SL, net ₹${g.totalRs ?? '-'}, avg ${g.avgPct ?? '-'}%`);
+                        }
+                        for (const c of (rep.stacking || [])) console.log(`📅 [DayLog ${day}] STACK ${c.instrument} ${c.strike}${c.side} x${c.trades} (${c.sources.join('+')}) net ₹${c.totalRs ?? '-'}`);
+                    } catch (e) { /* log only */ }
+                }, 60000);
                 const biasTracker = require('./src/utils/biasFlip').createBiasTracker();
+                let _biasLoggedKey = '';   // 2 Nov — one log line per bias event so a day can be audited from Railway logs
                 setInterval(() => {
                     try {
                         const ist = getIST(), mins = ist.getHours() * 60 + ist.getMinutes(), dow = ist.getDay();   // getIST() carries IST in its local fields
@@ -16339,6 +16359,14 @@ function startPollingIntervals() {
                             bosEvent: m.physicsOfTrading && m.physicsOfTrading.bosChoch && m.physicsOfTrading.bosChoch.event,
                             brahmastra: m.lastBrahmastra || null, orderFlowBars: bars,
                         }, Date.now());
+                        const ev = m.biasFlip && m.biasFlip.events && m.biasFlip.events[0];
+                        if (ev) {
+                            const key = m.biasFlip.day + '#' + ev.id;
+                            if (key !== _biasLoggedKey) {
+                                _biasLoggedKey = key;
+                                console.log(`🧭 [BiasFlip] ${ev.kind}: ${ev.from} → ${ev.to} | score ${ev.score}/9 | ${(ev.why || []).join(', ') || '-'} | nifty ${m.nifty}`);
+                            }
+                        }
                     } catch (e) { /* display only */ }
                 }, 20000);
             } catch (e) { console.warn('[BiasFlip] start failed:', e.message); }

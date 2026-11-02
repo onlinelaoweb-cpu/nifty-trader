@@ -95,3 +95,15 @@ b = t2.update({ ...base, pcrTrend: 'FALLING' }, T0 + 120000);
 assert.strictEqual(b.factors.find(x => x.key === 'pcr').sinceMs, T0 + 120000);
 
 console.log('biasFlip tests passed');
+
+// 2 Nov — factors stay frozen after the close
+{
+    const { createBiasTracker } = require('../src/utils/biasFlip');
+    const t = createBiasTracker(), T0 = Date.parse('2026-11-02T09:00:00Z');
+    const base = { dayKey: '2026-11-02', nifty: 23440, vwap: 23300, pcrTrend: null, earlyMomSignal: null, oiSignal: null, mtfSignal: null, engineSignal: 'WAIT', orderFlowBars: [] };
+    const live = t.update({ ...base, live: true }, T0);
+    const post = t.update({ ...base, vwap: 23500, live: false }, T0 + 3600000);   // VWAP "moves" after close
+    const v = x => x.factors.find(f => f.key === 'vwap');
+    if (v(live).side !== 1 || v(post).side !== 1 || v(post).sinceMs !== v(live).sinceMs) throw new Error('post-close factor not frozen');
+    console.log('biasFlip freeze ok');
+}

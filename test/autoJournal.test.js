@@ -96,3 +96,15 @@ const grid = { slPct: -15, breakevenAt: 10, halfBookAt: 15, fullExitAt: 25 };
     assert.strictEqual(await off.logLiveAlert(alert()), false);
     console.log('autoJournal tests passed');
 })().catch(e => { console.error(e); process.exit(1); });
+// 2 Nov — same-bet stacking (display only)
+{
+    const { annotateStacking } = require('../src/utils/autoJournal');
+    const base = Date.parse('2026-11-02T05:05:00Z');   // 10:35 IST
+    const mk = (src, minOff, strike, side, rs) => ({ instrument: 'NIFTY', source: src, strike, side, fire_ts: new Date(base + minOff * 60000).toISOString(), state: 'CLOSED', realized_rs: rs });
+    const rows = [mk('Brahmastra', 0, 23350, 'CE', -2000), mk('MTF', 20, 23350, 'CE', -1800), mk('Murarka', 40, 23350, 'CE', -2014), mk('Brahmastra', 300, 23350, 'CE', 500), mk('MTF', 5, 23400, 'PE', 100)];
+    const cl = annotateStacking(rows);
+    if (cl.length !== 1 || cl[0].trades !== 3 || cl[0].totalRs !== -5814 || rows[0].stackN !== 3 || rows[3].stackN || rows[4].stackN) throw new Error('stacking wrong: ' + JSON.stringify(cl));
+    // same source repeating is not a multi-strategy stack
+    if (annotateStacking([mk('MTF', 0, 1, 'CE', 1), mk('MTF', 10, 1, 'CE', 1)]).length !== 0) throw new Error('same-source should not stack');
+    console.log('stacking ok');
+}
