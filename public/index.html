@@ -5921,7 +5921,7 @@ function updateInsightsUI(s) {
       if (probBar) {
         probBar.innerHTML = `
           <div style="width:${pe.bullish}%;background:var(--green);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;text-shadow:0 0 3px rgba(0,0,0,.7);font-weight:700;">${pe.bullish>=10?pe.bullish+'%':''}</div>
-          <div style="width:${pe.sideways}%;background:var(--amber);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;text-shadow:0 0 3px rgba(0,0,0,.7);font-weight:700;">${pe.sideways>=10?pe.sideways+'%':''}</div>
+          <div style="width:${pe.sideways}%;background:var(--amber);display:flex;align-items:center;justify-content:center;font-size:11px;color:#1b1400;font-weight:700;">${pe.sideways>=10?pe.sideways+'%':''}</div>
           <div style="width:${pe.bearish}%;background:var(--red);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;text-shadow:0 0 3px rgba(0,0,0,.7);font-weight:700;">${pe.bearish>=10?pe.bearish+'%':''}</div>
         `;
       }

@@ -125,8 +125,8 @@
     var st = document.createElement('style');
     st.textContent =
       '.signal-wrap.ws-on .signal-card.wait .conf-wrap,.signal-wrap.ws-on .signal-card.wait .conf-ticks,.signal-wrap.ws-on .signal-card.wait #conf-text{display:none !important;}' +
-      '.signal-wrap.ws-on .signal-card.wait{padding-bottom:8px;border-bottom-left-radius:0;border-bottom-right-radius:0;}' +
-      '.ws-box{border:2px solid rgba(255,187,0,0.5);border-top:0;border-radius:0 0 var(--card-radius,12px) var(--card-radius,12px);background:var(--bg2);padding:10px 12px 11px;text-align:left;}' +
+      '.signal-wrap.ws-on .signal-card.wait{padding-bottom:8px !important;margin-bottom:0 !important;border-width:2px 2px 0 2px !important;border-bottom-left-radius:0 !important;border-bottom-right-radius:0 !important;}' +   /* 4 Nov — index.html has later !important rules (radius 10px, border 1px, desktop margin-bottom 12px) that broke the join: rounded corners + a gap above the box */
+      '.ws-box{border:2px solid rgba(255,187,0,0.5);border-top:0;border-radius:0 0 10px 10px;background:var(--bg2);padding:10px 12px 11px;text-align:left;}' +
       '.ws-box.soon{border-color:rgba(0,255,136,0.45);}' +
       '.ws-row{font-size:14px;line-height:1.5;color:var(--text);margin-bottom:6px;}' +
       '.ws-row b{font-family:\'Orbitron\',monospace;font-size:10px;letter-spacing:1.5px;color:var(--dim);display:block;margin-bottom:1px;}' +

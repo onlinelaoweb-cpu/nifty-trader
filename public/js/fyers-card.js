@@ -24,7 +24,7 @@
     host.innerHTML = '<div class="tool-card"><div class="tool-title">🔑 FYERS LOGIN (roz subah)</div>'
       + '<div style="font-size:12px;line-height:1.5;color:' + col + '">' + st.text + '</div>'
       + '<div style="font-size:11px;color:var(--dim,#889);margin:4px 0 8px">Token roz ~6 baje expire hota hai. 9:15 se pehle naya banao — phone se bhi.</div>'
-      + '<button type="button" data-fy-open="1" style="width:100%;padding:12px;border:0;border-radius:8px;background:var(--blue,#4c8dff);color:#fff;font-size:14px;cursor:pointer">Fyers login page kholo</button></div>';
+      + '<button type="button" data-fy-open="1" style="width:100%;padding:12px;border:0;border-radius:8px;background:var(--blue,#4c8dff);color:#04111f;font-weight:600;font-size:14px;cursor:pointer">Fyers login page kholo</button></div>';
   }
   function refresh() {
     try {
