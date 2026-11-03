@@ -79,7 +79,8 @@ function computeSmartMoneyBias(marketState) {
     }
 
     const optFlow = marketState.optionFlow;
-    if (optFlow && optFlow.atmCEpremium && optFlow.atmPEpremium && optFlow.atmCEpremium > 0 && optFlow.atmPEpremium > 0) {
+    // 3 Nov — expiry afternoon: a decayed leg (e.g. PE Rs0.05, ratio 216) is not buyer/seller activity; need both ATM premiums >= Rs1
+    if (optFlow && optFlow.atmCEpremium >= 1 && optFlow.atmPEpremium >= 1) {
         const ratio = optFlow.atmCEpremium / optFlow.atmPEpremium;
         if (ratio > 1.25) {
             score += 1;
@@ -599,9 +600,11 @@ function computeProbabilityEngine(marketState) {
     bearish  = Math.round((bearish  / sum) * 100);
     sideways = 100 - bullish - bearish;
 
+    // 3 Nov — before 10:15 IST the structure/trend inputs are still empty (0/6 vs 0/6), so a WAIT reads as "96% sideways" even on a strong trend day
+    const _pi = new Date(Date.now() + 330 * 60000), _warming = sig !== 'BUY CALL' && sig !== 'BUY PUT' && ((tc?.bullCount ?? 0) + (tc?.bearCount ?? 0)) === 0 && (_pi.getUTCHours() * 60 + _pi.getUTCMinutes()) < 615;
     return {
-        bullish, bearish, sideways,
-        label: `📊 Bullish ${bullish}% · Bearish ${bearish}% · Sideways ${sideways}%`,
+        bullish, bearish, sideways, warming: _warming,
+        label: `📊 Bullish ${bullish}% · Bearish ${bearish}% · Sideways ${sideways}%` + (_warming ? ' — 10:15 se pehle data bun raha hai, isko mat maano' : ''),
         note: 'Derived from current signal confidence + Trend Conviction condition counts — an illustrative split, not an independent statistical model.',
         generatedAt: new Date().toISOString(),
     };

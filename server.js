@@ -47,6 +47,7 @@ const { processIndicators,
         calcMomentumBreakdown,
         computePOC, computeDelta }                    = require('./src/api/indicators');
 const { fetchMarketData }           = require('./src/api/marketData');
+const sahiApi                       = require('./src/api/sahi');   // 3 Nov — read-only Sahi market data, shadow compare only, OFF unless SAHI_ENABLED=1
 const { analyzeMultiTimeframe, getAdxDebug } = require('./src/api/multiTimeframe');
 const { fetchGlobalCues, fetchIntradayBars } = require('./src/api/globalCues');
 const { fetchAdvanceDecline,
@@ -16321,6 +16322,8 @@ function startPollingIntervals() {
                 // 24 Oct — live order-flow card: push the in-memory view to open dashboards every 5 s over the EXISTING SSE stream (no polling, no broker calls, nothing when nobody is watching or the feed is quiet)
                 setInterval(() => { try { if (!_sseClients.size || !_tickFlowLab) return; const lp = _tickFlowLab.livePayload(); if (lp && lp.success) sseBroadcast('orderflow', lp); } catch (e) { /* display only */ } }, 5000);
             } catch (e) { console.warn('[TickFlowLab] creation failed:', e.message); }
+            // 3 Nov — Sahi shadow (read-only, scope marketdata.read): logs Sahi vs app nifty + option-chain PCR; feeds nothing. OFF unless SAHI_ENABLED=1
+            try { sahiApi.startShadow(() => ({ ist: getIST(), nifty: marketState.nifty, pcr: marketState.pcr, atmPcr: marketState.atmPcr })); } catch (e) { console.warn('[Sahi] start failed:', e.message); }
             // 30 Oct — Bias Flip Watch (DISPLAY ONLY): reads existing marketState every 20 s, never feeds signals/journals
             try {
                 // 2 Nov — end-of-day log: one Railway log line per Auto Journal strategy (trades / wins / SL hits / net Rs) + stacks,
@@ -16364,7 +16367,7 @@ function startPollingIntervals() {
                             const key = m.biasFlip.day + '#' + ev.id;
                             if (key !== _biasLoggedKey) {
                                 _biasLoggedKey = key;
-                                console.log(`🧭 [BiasFlip] ${ev.kind}: ${ev.from} → ${ev.to} | score ${ev.score}/9 | ${(ev.why || []).join(', ') || '-'} | nifty ${m.nifty}`);
+                                console.log(`🧭 [BiasFlip] ${ev.kind}: ${ev.from} → ${ev.to} | score ${ev.score}/9 | ${(ev.why || []).join(', ') || '-'} | nifty ${m.nifty} | breadth ${m.breadth && m.breadth.breadthSignal || '-'} ${m.breadth && m.breadth.advances != null ? m.breadth.advances + '↑' + m.breadth.declines + '↓' : ''}`);   // 3 Nov — breadth logged beside each event to test it as a factor over several days
                             }
                         }
                     } catch (e) { /* display only */ }

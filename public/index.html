@@ -4553,6 +4553,8 @@ function startSSE() {
           const sign = t.change >= 0 ? '+' : '';
           changeEl.textContent = `${sign}${t.change.toFixed(2)}  (${sign}${t.changePct.toFixed(2)}%)`;
           changeEl.className = 'price-change ' + (t.change > 0 ? 'up' : t.change < 0 ? 'down' : 'flat');
+          const hdrTick = document.getElementById('header-nifty-chg');   // 3 Nov — header was only updated by the slower state path, so it could differ from the hero (+213 vs +205 at pre-open)
+          if (hdrTick) { hdrTick.textContent = sign + t.change.toFixed(0) + ' pts  ' + sign + t.changePct.toFixed(2) + '%'; hdrTick.className = 'hbadge ' + (t.change > 0 ? 'pnl-pos' : t.change < 0 ? 'pnl-neg' : 'pnl-zero'); }
         }
         // Also update ATM strike in hero (recalc on each tick)
         const atmEl = document.getElementById('atm-strike-display-hero');
@@ -6491,7 +6493,7 @@ function updateMurarkaPanel(s) {
     if (lbl) {
       const col = zone.zone === 'BULL' ? 'var(--green)' : zone.zone === 'BEAR' ? 'var(--red)' : 'var(--amber)';
       const bg  = zone.zone === 'BULL' ? 'rgba(0,255,136,0.06)' : zone.zone === 'BEAR' ? 'rgba(255,34,68,0.06)' : 'rgba(255,187,0,0.06)';
-      lbl.textContent   = zone.label || '--';
+      lbl.textContent   = (zone.label || '--').replace(/&gt;/g, '>').replace(/&lt;/g, '<');   // 3 Nov — label carried HTML entities that showed literally ("PCR 1.29 &gt; 1.1")
       lbl.style.color   = col;
       lbl.style.background = bg;
     }
@@ -6548,7 +6550,8 @@ function updateMurarkaPanel(s) {
   if (me && meLbl) {
     if (me.active) {
       const entryCol = me.side === 'CE' ? 'var(--green)' : 'var(--red)';
-      meLbl.textContent  = me.label;
+      const _mIst = new Date(Date.now() + 330 * 60000), _mPre10 = (_mIst.getUTCHours() * 60 + _mIst.getUTCMinutes()) < 600;
+      meLbl.textContent  = (_mPre10 ? '⏳ Setup ban gaya, par entry 10:00 ke baad (gap-fill window) — ' : '') + me.label;   // 3 Nov — card said "Murarka Entry!" at 09:39 while the engine says wait for 10:00
       meLbl.style.color  = entryCol;
       meLbl.style.fontWeight = '700';
       if (meRsn) meRsn.textContent = me.reason;
@@ -7510,8 +7513,9 @@ function updateChecklistAuto(s) {
 
   // 1. GIFT Nifty Gap
   const giftData = s.global?.asia?.giftNifty;
-  if (giftData && giftData.change != null) {
-    const chg = giftData.change;
+  const _spotChg = (s.nifty > 0 && s.change != null) ? s.change : null;   // 3 Nov — same number as the price header
+  if (_spotChg !== null || (giftData && giftData.change != null)) {
+    const chg = _spotChg !== null ? _spotChg : giftData.change;
     const dir = chg > 50 ? 'GAP UP' : chg < -50 ? 'GAP DOWN' : chg > 0 ? 'FLAT UP' : 'FLAT DOWN';
     // 26 Oct — the "GIFT Nifty" feed is really Nifty spot (Yahoo ^NSEI proxy), so it must not vote: it would just count Nifty's own move twice
     setItem('cl-gift', 'wait', 'Nifty vs prev close: ' + (chg >= 0 ? '+' : '') + chg.toFixed(0) + ' pts · vote nahi', chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : 'var(--dim)');
@@ -7751,7 +7755,7 @@ function _pulseShort(id, s, it) {
   const sg = n => (n >= 0 ? '+' : '') + n;
   switch (id) {
     case 'cl-global': return s.global?.bias || '--';
-    case 'cl-gift': { const c = s.global?.asia?.giftNifty?.change; return c == null ? '--' : sg(Math.round(c)) + ' pts'; }
+    case 'cl-gift': { const c = (s.nifty > 0 && s.change != null) ? s.change : s.global?.asia?.giftNifty?.change; return c == null ? '--' : sg(Math.round(c)) + ' pts'; }
     case 'cl-bn': { const l = s.global?.bankNiftyLeadSignal; if (l && l.label) return String(l.label).replace(/_/g, ' '); const c = s.global?.sectors?.bankNifty?.changePct; return c == null ? '--' : sg(c.toFixed(2)) + '%'; }
     case 'cl-fii': { if (!s.fii && !s.dii) return '--'; const n = (s.fii?.net || 0) + (s.dii?.net || 0); const ist = new Date(Date.now() + 19800000), mn = ist.getUTCHours() * 60 + ist.getUTCMinutes(), dw = ist.getUTCDay();
       return sg(Math.round(n)) + ' Cr' + (dw >= 1 && dw <= 5 && mn >= 555 && mn < 1080 ? ' (pichla din)' : ''); }
@@ -7871,10 +7875,20 @@ function _adjLevels(s, cur) {
   const hi = Math.max(Number(s.wsHigh) || 0, cur > 0 ? Math.round(cur) : 0);
   const lo = Math.min(Number(s.wsLow) > 0 ? Number(s.wsLow) : Infinity, cur > 0 ? Math.round(cur) : Infinity);
   let changed = false;
+  const _ist = new Date(Date.now() + 330 * 60000), _dow = _ist.getUTCDay() || 7;
+  const _mon = new Date(_ist.getTime() - (_dow - 1) * 86400000);
+  const _curMonthKey = _ist.getUTCFullYear() + '-' + String(_ist.getUTCMonth() + 1).padStart(2, '0');
+  const _curMonthWeekOk = _mon.getUTCMonth() === _ist.getUTCMonth();
   const out = raw.map(l => {
     if (!l) return l;
     if (l.type === 'WH' && hi > l.price) { changed = true; return Object.assign({}, l, { price: Math.round(hi) }); }
     if (l.type === 'WL' && Number.isFinite(lo) && lo < l.price) { changed = true; return Object.assign({}, l, { price: Math.round(lo) }); }
+    // 3 Nov — Monthly High/Low of the CURRENT month were frozen at yesterday's value (showed 23441 with spot 23620). The week range is a valid
+    // proxy only while this week started inside the current month, so apply it only then.
+    if ((l.type === 'MH' || l.type === 'ML') && _curMonthWeekOk && String(l.label || '').indexOf(_curMonthKey) >= 0) {
+      if (l.type === 'MH' && hi > l.price) { changed = true; return Object.assign({}, l, { price: Math.round(hi) }); }
+      if (l.type === 'ML' && Number.isFinite(lo) && lo < l.price) { changed = true; return Object.assign({}, l, { price: Math.round(lo) }); }
+    }
     return l;
   });
   if (changed) out.sort((a, b) => (b && b.price || 0) - (a && a.price || 0));

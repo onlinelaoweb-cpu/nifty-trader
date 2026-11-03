@@ -162,6 +162,7 @@ async function calculateSRLevels(currentPrice, maxPainData = null) {
         const s3 = parseFloat((pdL - 2 * (pdH - pp)).toFixed(0));
 
         // ── Weekly OHLC ───────────────────────────────────────────────────────
+        // 3 Nov — this is the range of the last 7 daily bars (rolling), not Mon-today, so it is labelled '7-Day' (WL 22387 looked wrong as a 'week' low)
         const weeklyOHLC = await getWeeklyOHLC();
         const wHigh0 = weeklyOHLC
             ? parseFloat(weeklyOHLC.high.toFixed(0))
@@ -182,13 +183,13 @@ async function calculateSRLevels(currentPrice, maxPainData = null) {
         const levels = [
             { price: r3,    type: 'R3',  label: 'Pivot R3',      strength: 1 },
             { price: r2,    type: 'R2',  label: 'Pivot R2',      strength: 2 },
-            { price: wHigh, type: 'WH',  label: 'Week High',     strength: 3 },
+            { price: wHigh, type: 'WH',  label: '7-Day High',     strength: 3 },
             { price: pdH,   type: 'PDH', label: 'Prev Day High', strength: 3 },
             { price: r1,    type: 'R1',  label: 'Pivot R1',      strength: 2 },
             { price: pp,    type: 'PP',  label: 'Pivot Point',   strength: 3 },
             { price: s1,    type: 'S1',  label: 'Pivot S1',      strength: 2 },
             { price: pdL,   type: 'PDL', label: 'Prev Day Low',  strength: 3 },
-            { price: wLow,  type: 'WL',  label: 'Week Low',      strength: 3 },
+            { price: wLow,  type: 'WL',  label: '7-Day Low',      strength: 3 },
             { price: s2,    type: 'S2',  label: 'Pivot S2',      strength: 2 },
             { price: s3,    type: 'S3',  label: 'Pivot S3',      strength: 1 },
         ];
