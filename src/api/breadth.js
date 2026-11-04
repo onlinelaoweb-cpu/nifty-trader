@@ -96,7 +96,7 @@ const NIFTY50_ANGEL_TOKENS = [
 ];
 
 // Weighted Nifty 50 stocks (used with Tier 1 & Tier 2 data)
-// 29 Oct: top-10 weights synced to the official factsheet of 30 Sep 2026 (src/utils/niftyWeights.js). Rest are still approximate — refresh monthly.
+// Top-10 weights are synced from src/utils/niftyWeights.js at load (see syncTop10FromOfficial below). Rest are still approximate — refresh monthly.
 const NIFTY_STOCKS = [
     { symbol: 'RELIANCE',   name: 'RELIANCE',   weight: 7.58 },
     { symbol: 'HDFCBANK',   name: 'HDFC BANK',  weight: 10.38 },
@@ -150,6 +150,22 @@ const NIFTY_STOCKS = [
     { symbol: 'UPL',         name: 'UPL',        weight: 0.4 },
     { symbol: 'BEL',         name: 'BEL',        weight: 0.4 },
 ];
+
+// 5 Nov — top-10 weights now come straight from src/utils/niftyWeights.js (official factsheet), so the monthly update there
+// also fixes this table and the A/D "bull weight" / Nifty-driver card can never disagree. A stock that fell out of the
+// top 10 (M&M on 30 Oct) can no longer weigh more than the 10th stock, so it is capped just below it. Rest stay approximate.
+(function syncTop10FromOfficial() {
+    try {
+        const { NIFTY_WEIGHTS } = require('../utils/niftyWeights');
+        const top = NIFTY_WEIGHTS.top10, min10 = Math.min(...top.map(t => t.weight));
+        const inTop = new Set(top.map(t => t.symbol));
+        for (const n of NIFTY_STOCKS) {
+            const t = top.find(x => x.symbol === n.symbol);
+            if (t) n.weight = t.weight;
+            else if (n.weight >= min10 && !inTop.has(n.symbol)) n.weight = Math.round((min10 - 0.01) * 100) / 100;
+        }
+    } catch (e) { /* keep the static table */ }
+})();
 
 // Sector sub-indices from allIndices — used as Tier 3 breadth proxy
 const SECTOR_INDICES = [
