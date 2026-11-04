@@ -10,6 +10,7 @@
 //
 // Returns null if no spread is appropriate.
 
+const { VIX_T } = require('../utils/thresholds');   // 5 Nov — shared VIX cut-offs
 const { daysToNextExpiry } = (() => {
     // Inline DTE calculation (mirrors server.js logic, no circular require)
     function daysToNextExpiry() {
@@ -71,8 +72,8 @@ function suggestSpreadStrategy(marketState) {
     const isSideways     = adx < 20 || swing === 'SIDEWAYS';
     const isBullish      = mtfSig === 'BUY CALL' && swing === 'UPTREND';
     const isBearish      = mtfSig === 'BUY PUT'  && swing === 'DOWNTREND';
-    const vixLow         = vix < 14;
-    const vixVeryLow     = vix < 12;
+    const vixLow         = vix < VIX_T.ELEVATED;
+    const vixVeryLow     = vix < VIX_T.VERY_LOW;
     const nearExpiry     = dte <= 2;   // Monday/Tuesday — theta decay fast
 
     // ── Strategy selection ────────────────────────────────────────────────────

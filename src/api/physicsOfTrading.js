@@ -43,6 +43,7 @@
 // lookback: how many recent closed candles to scan (default 30, e.g. last
 // 30 one-minute candles ≈ last 30 min of session — tune via the `candles`
 // you pass in; pass 5m/15m candles for a higher-timeframe read).
+const { VIX_T, PCR_T } = require('../utils/thresholds');   // 5 Nov — shared VIX / PCR cut-offs
 function findSwingPoints(candles, lookback = 30) {
     const c = candles.slice(-lookback);
     const swingHighs = [];
@@ -129,13 +130,13 @@ function getSwingTrend(candles, lookback = 30) {
 function calcForceLabel({ pcr, oiInterpretation, volumeSpike, vix, adRatio } = {}) {
     const bits = [];
     if (pcr != null) {
-        if (pcr > 1.2)      bits.push('PCR bullish');
-        else if (pcr < 0.8) bits.push('PCR bearish');
+        if (pcr > PCR_T.STRONG_BULL) bits.push('PCR bullish');
+        else if (pcr < PCR_T.LEAN_BEAR) bits.push('PCR bearish');
         else                bits.push('PCR neutral');
     }
     if (oiInterpretation) bits.push(`OI: ${oiInterpretation}`);
     if (volumeSpike)      bits.push('Volume spike ✅');
-    if (vix != null)      bits.push(vix < 14 ? 'VIX low (stable force)' : vix > 20 ? 'VIX high (active force)' : 'VIX moderate');
+    if (vix != null)      bits.push(vix < VIX_T.ELEVATED ? 'VIX low (stable force)' : vix > VIX_T.HIGH ? 'VIX high (active force)' : 'VIX moderate');
     if (adRatio != null)  bits.push(adRatio > 1 ? 'A/D bullish' : adRatio < 1 ? 'A/D bearish' : 'A/D flat');
 
     return bits.length ? bits.join(' | ') : 'Force data unavailable';

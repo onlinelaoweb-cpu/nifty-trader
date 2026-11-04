@@ -37,13 +37,14 @@ async function fetchVIX() {
 }
 
 function buildVIX(vix, change, prevClose) {
+    // 5 Nov: labels now follow the same cut-offs as the engine's size tiers (signalReaders vixTier: 15 / 20 / 30), so the VIX
+    // card, the Pulse tile and the Regime line all name the same band (15–20 used to read "MODERATE" here but "ELEVATED" in Regime).
     function vixInfo(v) {
         if (v < 12) return { signal: 'VERY LOW',  note: 'Market complacent', range: 'ATM ±150' };
         if (v < 15) return { signal: 'LOW',       note: 'Normal market',     range: 'ATM ±150' };
-        if (v < 20) return { signal: 'MODERATE',  note: 'Some uncertainty',  range: 'ATM ±200' };
-        if (v < 25) return { signal: 'HIGH',       note: 'Elevated fear',    range: 'ATM ±250' };
-        if (v < 30) return { signal: 'VERY HIGH',  note: 'Reduce qty 50%',   range: 'ATM ±300' };
-        return             { signal: 'EXTREME',    note: 'Avoid trading',    range: 'AVOID'    };
+        if (v < 20) return { signal: 'ELEVATED',  note: 'Premiums getting expensive — size capped 50%', range: 'ATM ±200' };
+        if (v < 30) return { signal: 'HIGH',      note: 'Elevated fear — size capped 25%', range: 'ATM ±250' };
+        return             { signal: 'EXTREME',   note: 'Avoid option buying', range: 'AVOID'    };
     }
     const info = vixInfo(vix);
     const changePct = prevClose > 0 ? parseFloat(((change / prevClose) * 100).toFixed(2)) : 0;

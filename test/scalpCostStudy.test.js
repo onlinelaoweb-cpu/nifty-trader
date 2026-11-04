@@ -207,16 +207,16 @@ const free = { slipPts: 0, chargePct: 0, brokerage: 0, qty: 100 };
     assert.strictEqual(none.trades, 0); assert.strictEqual(none.status, 'COLLECTING');
     // too few trades -> COLLECTING even if great
     const few = evaluateForward(mk(40, 110), { startTs: START - 3600000 });
-    assert.strictEqual(few.status, 'COLLECTING'); assert.ok(few.reasons[0].includes('need 300'));
+    assert.strictEqual(few.status, 'COLLECTING'); assert.ok(few.reasons[0].includes('need 600'));
     // plenty of trades, steady small profit -> PASS (cost: 2*0.5*130=130 + charges ~ 0.07%*130*(100+110)*... ), +10 pts = 1300 gross
-    const good = evaluateForward(mk(320, 110), { startTs: START - 3600000 });
-    assert.ok(good.trades >= 300 && good.days >= 10, 'trades ' + good.trades + ' days ' + good.days);
+    const good = evaluateForward(mk(640, 110), { startTs: START - 3600000 });
+    assert.ok(good.trades >= 600 && good.days >= 20, 'trades ' + good.trades + ' days ' + good.days);
     assert.strictEqual(good.status, 'PASS'); assert.ok(good.netAvgRs > 0 && good.checks.every(c => c.ok));
     // steady losses -> FAIL
-    const bad = evaluateForward(mk(320, 90), { startTs: START - 3600000 });
+    const bad = evaluateForward(mk(640, 90), { startTs: START - 3600000 });
     assert.strictEqual(bad.status, 'FAIL'); assert.ok(bad.reasons.length > 0);
     // profit only from one lucky trade -> FAIL on the outlier rule
-    const lucky = mk(320, 102).map((x, i) => i === 100 ? { ...x, path: x.path.map(p => p.ts === x.fireTs + 60 * M ? { ...p, premium: 400 } : p) } : x);
+    const lucky = mk(640, 102).map((x, i) => i === 100 ? { ...x, path: x.path.map(p => p.ts === x.fireTs + 60 * M ? { ...p, premium: 400 } : p) } : x);
     const lk = evaluateForward(lucky, { startTs: START - 3600000 });
     assert.ok(lk.netTotalRs > 0, 'total ' + lk.netTotalRs); assert.strictEqual(lk.status, 'FAIL');
     assert.ok(lk.reasons.some(x => x.includes('best single trade')));

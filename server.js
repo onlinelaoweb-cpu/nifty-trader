@@ -159,6 +159,7 @@ const _fyersLogin = _fyersLoginLib.createFyersLogin({
 });
 try { _fyersLogin.loadSaved(); } catch (e) { console.warn('[FyersLogin] loadSaved failed:', e.message); }
 const tickFlowLib = require('./src/utils/tickFlowLab');   // 17 Oct — record-only tick-flow LAB on the free Angel feed (NIFTY futures); TICKFLOW_LAB=true switches it on
+const { VIX_T, PCR_T } = require('./src/utils/thresholds');   // 5 Nov — one set of VIX / PCR cut-offs for the whole app
 const { createAutoJournal } = require('./src/utils/autoJournal');   // 10 Oct — strategy-wise AUTO paper journal (signal -> ATM paper trade -> coach-managed exit)
 const { createHtfCache } = require('./src/utils/htfCache');   // 9 Oct — TTL cache for the 15m/1h candles the vote logger needs
 { const _wp = validateNiftyWeights(); if (_wp.length) console.warn('[NiftyWeights] niftyWeights.js has problems:', _wp.join(' | ')); }
@@ -2796,8 +2797,8 @@ function combineSignals(indicators, opts) {
         // penalize valid signals with 0pts just because Railway IPs are blocked.
         const pcr = marketState.pcr;
         if (pcr != null) {
-            const pcrBullish = pcr > 1.2;
-            const pcrBearish = pcr < 0.8;
+            const pcrBullish = pcr > PCR_T.STRONG_BULL;
+            const pcrBearish = pcr < PCR_T.LEAN_BEAR;
             const signalBullish = signal === 'BUY CALL';   // FIX: space not underscore
             if ((signalBullish && pcrBullish) || (!signalBullish && pcrBearish)) {
                 qs += 20; scoreBreakdown.push(`PCR:20 (${pcr.toFixed(2)} strong confluence)`);
@@ -3052,9 +3053,9 @@ function combineSignals(indicators, opts) {
         const forceWeak    = Math.abs(forceScore) < 2;
         // Direction-specific hints shown below force bits
         const forceHint = trendDir === 'UP'
-            ? 'Need: PCR>1.1, PCR rising, VIX<14, A/D>1.5, FII buying'
+            ? `Need: PCR>${PCR_T.LEAN_BULL}, PCR rising, VIX<${VIX_T.ELEVATED}, A/D>1.5, FII buying`
             : trendDir === 'DOWN'
-            ? 'Need: PCR<0.8, PCR falling, VIX>20, A/D<0.7, FII selling'
+            ? `Need: PCR<${PCR_T.LEAN_BEAR}, PCR falling, VIX>${VIX_T.HIGH}, A/D<0.7, FII selling`
             : '';
         if (!trendDir || trendDir === 'SIDEWAYS') {
             law2 = { status: 'WAIT', label: `⏳ Force check pending — no trend direction yet`, bits, forceScore, forceHint: 'Wait for Law 1 trend first' };
@@ -3208,9 +3209,9 @@ function evaluateBTST() {
     if (!tf15ok) fails++;
     if (!tf1hok) fails++;
 
-    // Rule 5: VIX < 18
-    const vixOk = !s.vix || s.vix < 18;
-    checks.push({ label: `VIX ${s.vix ?? '--'}`, pass: vixOk, detail: 'need <18' });
+    // Rule 5: VIX below the HIGH tier (was 18 — now the shared 20)
+    const vixOk = !s.vix || s.vix < VIX_T.HIGH;
+    checks.push({ label: `VIX ${s.vix ?? '--'}`, pass: vixOk, detail: `need <${VIX_T.HIGH}` });
     if (!vixOk) fails++;
 
     // Rule 6: PCR direction
@@ -4950,8 +4951,8 @@ async function checkBroadMarketShiftTrigger() {
         if (globalBias === 'BULLISH' || globalBias === 'BEARISH') votes.push({ source: 'Global Cues', direction: globalBias });
 
         const atmPcr = marketState.atmPcr;
-        if (atmPcr > 1.1) votes.push({ source: 'ATM PCR', direction: 'BULLISH' });
-        else if (atmPcr > 0 && atmPcr < 0.9) votes.push({ source: 'ATM PCR', direction: 'BEARISH' });
+        if (atmPcr > PCR_T.LEAN_BULL) votes.push({ source: 'ATM PCR', direction: 'BULLISH' });
+        else if (atmPcr > 0 && atmPcr < PCR_T.LEAN_BEAR) votes.push({ source: 'ATM PCR', direction: 'BEARISH' });
 
         const bullSources = votes.filter(v => v.direction === 'BULLISH').map(v => v.source);
         const bearSources = votes.filter(v => v.direction === 'BEARISH').map(v => v.source);
@@ -7654,7 +7655,7 @@ async function updatePrice(price, change, changePct, source) {
     // sizing, same as the other two caps — a Low-VIX day's Grade/confidence
     // itself is untouched, since the signal quality assessment is still valid,
     // only the historical payoff in this regime is smaller on average.
-    if (signal !== 'WAIT' && marketState.vix > 0 && marketState.vix < 14 && marketState.tradeQuality.pct > 65) {
+    if (signal !== 'WAIT' && marketState.vix > 0 && marketState.vix < VIX_T.ELEVATED && marketState.tradeQuality.pct > 65) {
         const beforePct = marketState.tradeQuality.pct;
         marketState.tradeQuality.sizeHint = `${beforePct}%→65% (Low VIX regime — weakest historical expectancy)`;
         marketState.tradeQuality.pct = 65;
@@ -12535,7 +12536,7 @@ async function computePerformanceAnalytics(windowDays = 30) {
 
             const vix = row.entry_vix != null ? parseFloat(row.entry_vix) : null;
             if (vix != null) {
-                const vixBucket = vix < 14 ? 'Low VIX' : vix < 18 ? 'Normal VIX' : 'High VIX';
+                const vixBucket = vix < VIX_T.ELEVATED ? 'Low VIX' : vix < VIX_T.HIGH ? 'Normal VIX' : 'High VIX';
                 (vixR[vixBucket] ??= []).push(rMult);
             }
             const dna = row.setup_dna || '';
@@ -15873,12 +15874,12 @@ app.get('/api/vix-trajectory', async (req, res) => {
                 ROUND(AVG(entry_vix)::numeric, 2) AS avg_vix,
                 ROUND(MIN(entry_vix)::numeric, 2) AS min_vix,
                 ROUND(MAX(entry_vix)::numeric, 2) AS max_vix,
-                COUNT(*) FILTER (WHERE entry_vix < 14)::int AS low_vix_total,
-                COUNT(*) FILTER (WHERE entry_vix < 14 AND target_hit)::int AS low_vix_wins,
-                COUNT(*) FILTER (WHERE entry_vix >= 14 AND entry_vix < 18)::int AS normal_vix_total,
-                COUNT(*) FILTER (WHERE entry_vix >= 14 AND entry_vix < 18 AND target_hit)::int AS normal_vix_wins,
-                COUNT(*) FILTER (WHERE entry_vix >= 18)::int AS high_vix_total,
-                COUNT(*) FILTER (WHERE entry_vix >= 18 AND target_hit)::int AS high_vix_wins
+                COUNT(*) FILTER (WHERE entry_vix < ${VIX_T.ELEVATED})::int AS low_vix_total,
+                COUNT(*) FILTER (WHERE entry_vix < ${VIX_T.ELEVATED} AND target_hit)::int AS low_vix_wins,
+                COUNT(*) FILTER (WHERE entry_vix >= ${VIX_T.ELEVATED} AND entry_vix < ${VIX_T.HIGH})::int AS normal_vix_total,
+                COUNT(*) FILTER (WHERE entry_vix >= ${VIX_T.ELEVATED} AND entry_vix < ${VIX_T.HIGH} AND target_hit)::int AS normal_vix_wins,
+                COUNT(*) FILTER (WHERE entry_vix >= ${VIX_T.HIGH})::int AS high_vix_total,
+                COUNT(*) FILTER (WHERE entry_vix >= ${VIX_T.HIGH} AND target_hit)::int AS high_vix_wins
             FROM signal_performance
             WHERE closed = true
               AND ts >= NOW() - INTERVAL '${windowDays} days'

@@ -6,6 +6,7 @@
 // an implicit closure variable — since JS passes objects by reference,
 // this is a pure relocation with zero behavior change: callers already
 // hold the same marketState object and now just pass it in.
+const { VIX_T, PCR_T } = require('./thresholds');   // 5 Nov — shared VIX / PCR cut-offs
 const { isExpiryDay } = require('../api/nseData');
 const { getCandleHistory } = require('../api/indicators');
 const { computeDynamicLevels, classifyDynamicLevels } = require('../api/dynamicLevels');
@@ -69,10 +70,10 @@ function computeSmartMoneyBias(marketState) {
 
     const pcr = marketState.pcr;
     if (pcr !== null && pcr > 0) {
-        if      (pcr > 1.3)             { score += 2; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Put Writing 🐂`, pts: +2, bull: true }); }
-        else if (pcr >= 1.1)            { score += 1; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Mildly Bullish`, pts: +1, bull: true }); }
-        else if (pcr >= 0.9)            {             components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Neutral zone`, pts: 0, bull: null }); }
-        else if (pcr >= 0.7)            { score -= 1; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Mildly Bearish`, pts: -1, bull: false }); }
+        if      (pcr > PCR_T.STRONG_BULL) { score += 2; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Put Writing 🐂`, pts: +2, bull: true }); }
+        else if (pcr >= PCR_T.LEAN_BULL)  { score += 1; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Mildly Bullish`, pts: +1, bull: true }); }
+        else if (pcr >= PCR_T.LEAN_BEAR)  {             components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Neutral zone`, pts: 0, bull: null }); }
+        else if (pcr >= PCR_T.STRONG_BEAR) { score -= 1; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Mildly Bearish`, pts: -1, bull: false }); }
         else                            { score -= 2; components.push({ label: 'PCR Level', value: `${pcr.toFixed(2)} — Call Writing 🐻`, pts: -2, bull: false }); }
     } else {
         components.push({ label: 'PCR Level', value: 'Awaiting data', pts: 0, bull: null });
@@ -486,7 +487,7 @@ function computeMarketRegime(marketState) {
     const vixSpike = !!marketState.tradeQuality?.vixCapped;
     const eventCaution = !!(marketState.eventCountdown?.available && marketState.eventCountdown.withinCautionWindow);
     const gapDay = Math.abs(marketState.premarketGap?.gapPct ?? 0) >= 0.5;
-    const lowVix = marketState.vix > 0 && marketState.vix < 14;
+    const lowVix = marketState.vix > 0 && marketState.vix < VIX_T.ELEVATED;
 
     const tags = [];
     if (expiry) tags.push('EXPIRY');

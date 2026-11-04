@@ -169,17 +169,29 @@ const NIFTY_STOCKS = [
 
 // Sector sub-indices from allIndices — used as Tier 3 breadth proxy
 const SECTOR_INDICES = [
-    { index: 'NIFTY BANK',     name: 'BANK',    weight: 8.0 },
-    { index: 'NIFTY IT',       name: 'IT',      weight: 5.5 },
-    { index: 'NIFTY AUTO',     name: 'AUTO',    weight: 3.0 },
-    { index: 'NIFTY FMCG',    name: 'FMCG',    weight: 2.5 },
-    { index: 'NIFTY PHARMA',   name: 'PHARMA',  weight: 2.0 },
-    { index: 'NIFTY METAL',    name: 'METAL',   weight: 1.8 },
-    { index: 'NIFTY ENERGY',   name: 'ENERGY',  weight: 4.0 },
-    { index: 'NIFTY INFRA',    name: 'INFRA',   weight: 2.0 },
+    // 5 Nov — weights below come from the official sector weights in src/utils/niftyWeights.js (see sync after this table).
+    // Nifty Bank stands in for all of Financial Services, Energy for Oil & Gas, Infra for Construction, Pharma for Healthcare.
+    // REALTY and MEDIA have no Nifty-50 sector, so they keep a small fixed weight.
+    { index: 'NIFTY BANK',     name: 'BANK',    weight: 8.0, sector: 'Financial Services' },
+    { index: 'NIFTY IT',       name: 'IT',      weight: 5.5, sector: 'Information Technology' },
+    { index: 'NIFTY AUTO',     name: 'AUTO',    weight: 3.0, sector: 'Automobile and Auto Components' },
+    { index: 'NIFTY FMCG',    name: 'FMCG',    weight: 2.5, sector: 'Fast Moving Consumer Goods' },
+    { index: 'NIFTY PHARMA',   name: 'PHARMA',  weight: 2.0, sector: 'Healthcare' },
+    { index: 'NIFTY METAL',    name: 'METAL',   weight: 1.8, sector: 'Metals & Mining' },
+    { index: 'NIFTY ENERGY',   name: 'ENERGY',  weight: 4.0, sector: 'Oil, Gas & Consumable Fuels' },
+    { index: 'NIFTY INFRA',    name: 'INFRA',   weight: 2.0, sector: 'Construction' },
     { index: 'NIFTY REALTY',   name: 'REALTY',  weight: 1.0 },
     { index: 'NIFTY MEDIA',    name: 'MEDIA',   weight: 0.8 },
 ];
+(function syncSectorWeightsFromOfficial() {
+    try {
+        const { NIFTY_WEIGHTS } = require('../utils/niftyWeights');
+        for (const si of SECTOR_INDICES) {
+            const sec = si.sector && NIFTY_WEIGHTS.sectors.find(x => x.name === si.sector);
+            if (sec) si.weight = sec.weight;
+        }
+    } catch (e) { /* keep the static table */ }
+})();
 
 // ── Tier 1: Angel One getMarketData — 50 stocks, no IP block ─────────────────
 async function fetchBreadthFromAngel() {

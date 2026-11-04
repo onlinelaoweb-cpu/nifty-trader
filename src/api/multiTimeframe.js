@@ -27,6 +27,7 @@
 //   in the quality gate's mtfAligned check.  This caused the quality gate to
 //   block real signals for the first 5–6 hours of the session on Railway.
 
+const { VIX_T } = require('../utils/thresholds');
 const axios              = require('axios');
 const { RSI, EMA, VWAP } = require('technicalindicators');
 const { getCandleHistory, getSessionCandles }    = require('./indicators');
@@ -384,9 +385,9 @@ function calcIndicators(candles, tfLabel, vix = null) {
     let adxFloor;
     if (tfLabel === '1h') {
         adxFloor = 12; // 1h ADX lags badly; keep low regardless of VIX
-    } else if (vix !== null && vix < 14) {
+    } else if (vix !== null && vix < VIX_T.ELEVATED) {
         adxFloor = 12; // Low-vol regime: ADX 12+ is sufficient trend evidence
-    } else if (vix !== null && vix < 18) {
+    } else if (vix !== null && vix < VIX_T.HIGH) {
         adxFloor = 15; // Normal regime
     } else {
         adxFloor = 18; // High-vol or VIX unknown: original strict threshold
@@ -533,8 +534,8 @@ async function analyzeMultiTimeframe(vix = null) {
     // Pass VIX to each TF so calcIndicators uses the right dynamic ADX floor.
     // vix param is passed in from server.js (marketState.vix). Defaults to null → floor=18.
     const adxFloors  = [
-        vix !== null && vix < 14 ? 12 : vix !== null && vix < 18 ? 15 : 18, // 5m
-        vix !== null && vix < 14 ? 12 : vix !== null && vix < 18 ? 15 : 18, // 15m
+        vix !== null && vix < VIX_T.ELEVATED ? 12 : vix !== null && vix < VIX_T.HIGH ? 15 : 18, // 5m
+        vix !== null && vix < VIX_T.ELEVATED ? 12 : vix !== null && vix < VIX_T.HIGH ? 15 : 18, // 15m
         12  // 1h always 12
     ];
     const tf5m  = calcIndicators(c5m,  '5m',  vix);

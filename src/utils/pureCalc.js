@@ -853,9 +853,9 @@ function computeMurarkaZone(pcr, spot, vwap, isExpiry) {
     const bearThr = isExpiry ? 0.80 : 0.75;
     let zone, label, color;
     if (pcr === null) { zone = 'AVOID'; label = 'PCR N/A — Awaiting data'; color = 'amber'; }
-    else if (pcr > bullThr)  { zone = 'BULL'; label = `PCR ${pcr.toFixed(2)} &gt; ${bullThr} — BUY CE Zone ✅`; color = 'green'; }
-    else if (pcr < bearThr)  { zone = 'BEAR'; label = `PCR ${pcr.toFixed(2)} &lt; ${bearThr} — BUY PE Zone 🔻`; color = 'red'; }
-    else                     { zone = 'AVOID'; label = `PCR ${pcr !== null ? pcr.toFixed(2) : '--'} in ${bearThr}–${bullThr} — AVOID ⚠️`; color = 'amber'; }
+    else if (pcr > bullThr)  { zone = 'BULL'; label = `PCR ${pcr.toFixed(3)} &gt; ${bullThr} — BUY CE Zone ✅`; color = 'green'; }
+    else if (pcr < bearThr)  { zone = 'BEAR'; label = `PCR ${pcr.toFixed(3)} &lt; ${bearThr} — BUY PE Zone 🔻`; color = 'red'; }
+    else                     { zone = 'AVOID'; label = `PCR ${pcr !== null ? pcr.toFixed(3) : '--'} in ${bearThr}–${bullThr} — AVOID ⚠️`; color = 'amber'; }
 
     // Murarka Entry Alert: PCR in actionable zone + spot within ±0.2% of VWAP
     let murarkaEntry = { active: false, side: null, label: 'No Murarka setup', reason: '' };
@@ -878,7 +878,7 @@ function computeMurarkaZone(pcr, spot, vwap, isExpiry) {
         }
     }
 
-    return { pcrZone: { zone, label, color, pcr }, murarkaEntry };
+    return { pcrZone: { zone, label, color, pcr, bullThr, bearThr }, murarkaEntry };
 }
 
 // ── Exhaustion-Reversal Detector (30 Sep) ────────────────────────────────────

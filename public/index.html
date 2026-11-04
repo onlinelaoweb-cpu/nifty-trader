@@ -2581,7 +2581,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <details><summary>Kaise padhein?</summary>
       <div>Har row 15 minute ka hissa hai (sabse naya upar; peela row abhi chal raha hai). <b>BUY</b> = khareedne wale ka maal, <b>SELL</b> = bechne wale ka, <b>DELTA</b> = buy minus sell (DEXT jaisa). Delta ka rang jitna gehra, utna zor: hara = buyers, laal = sellers. <b>VOL</b> = total maal. Time ke saath <b style="color:var(--green)">✓</b> = us bar mein price aur delta ek hi taraf gaye (move mein dum hai), <b style="color:var(--amber)">⚠</b> = ulte gaye (move par bharosa kam). Upar ki line pichle 1 ghante ka haal ek sentence mein batati hai. <span style="color:var(--amber)">◆</span> = us bar mein ek bahut bada single print aaya jiska buyer/seller pata nahi chalta, isliye wo delta mein nahi gina gaya (volume mein hai). Chhote bar ya +/-10K se kam ko noise samjho. <b>Open ke pehle 4 bars (09:15–10:00)</b> ka delta halka dikhta hai: gap par quotes late aate hain, isliye wahan delta kam bharose ka hai (DEXT se milane par 11:15 ke baad ke bars ka sign 2 Nov ko 15/15 mila; 10:15–11:00 aur 12:00 mein delta kam aaya).</div>
     </details>
-    <div style="margin-top:8px;font-size:10px;color:var(--dim);line-height:1.4;">Sirf dekhne ke liye. Ye exact footprint nahi hai: Angel ke free feed ke trades ke sample se bana andaza hai (DEXT se milaya: volume exact match; bars ka direction 80–92% mila, par din ka total delta DEXT se kam aata hai (2–7% volume jitna) — 2 Nov: app +63K vs DEXT +345K; 3 Nov: app +798K vs DEXT +913K, 26 mein 24 bars ka sign mila; 4 Nov: app -294K vs DEXT -329K, 26 mein 25 bars ka sign mila; open aur aakhri (15:30) bar ka delta kam bharose ka). Koi signal ya alert isse nahi chalta.</div>
+    <div style="margin-top:8px;font-size:10px;color:var(--dim);line-height:1.4;">Sirf dekhne ke liye. Ye exact footprint nahi hai: Angel ke free feed ke trades ke sample se bana andaza hai (DEXT se milaya: volume exact match; bars ka direction 80–92% mila, par din ka total delta DEXT se kam aata hai (2–7% volume jitna) — <span id="of-cal-total">2 Nov: app +63K vs DEXT +345K; 3 Nov: app +798K vs DEXT +913K, 26 mein 24 bars ka sign mila; 4 Nov: app -294K vs DEXT -329K, 26 mein 25 bars ka sign mila</span>; open aur aakhri (15:30) bar ka delta kam bharose ka). Koi signal ya alert isse nahi chalta.</div>
   </div></div>
 
   <!-- S/R LEVELS -->
@@ -3016,15 +3016,15 @@ html.vn-day .checklist-header{background:#F5F7FF;}
           <div class="mz-zone-pills" style="display:flex;flex-direction:column;gap:3px;flex:1;">
             <div id="mz-bull-btn" style="padding:4px 6px;border-radius:5px;border:2px solid transparent;background:rgba(0,255,136,0.06);transition:all 0.3s;opacity:0.45;">
               <div style="font-size:10px;font-weight:700;color:var(--green);">BUY CE</div>
-              <div style="font-size:9px;color:var(--dim);">PCR &gt; 1.15</div>
+              <div id="mz-bull-thr" style="font-size:9px;color:var(--dim);">PCR &gt; 1.15</div>
             </div>
             <div id="mz-avoid-btn" style="padding:4px 6px;border-radius:5px;border:2px solid var(--amber);background:rgba(255,187,0,0.08);transition:all 0.3s;">
               <div style="font-size:10px;font-weight:700;color:var(--amber);">AVOID ⚠️</div>
-              <div style="font-size:9px;color:var(--dim);">0.75 – 1.15</div>
+              <div id="mz-avoid-thr" style="font-size:9px;color:var(--dim);">0.75 – 1.15</div>
             </div>
             <div id="mz-bear-btn" style="padding:4px 6px;border-radius:5px;border:2px solid transparent;background:rgba(255,34,68,0.06);transition:all 0.3s;opacity:0.45;">
               <div style="font-size:10px;font-weight:700;color:var(--red);">BUY PE</div>
-              <div style="font-size:9px;color:var(--dim);">PCR &lt; 0.75</div>
+              <div id="mz-bear-thr" style="font-size:9px;color:var(--dim);">PCR &lt; 0.75</div>
             </div>
           </div>
           <div id="mz-zone-label" style="font-size:10px;color:var(--amber);margin-top:4px;line-height:1.3;">Awaiting…</div>
@@ -6470,6 +6470,13 @@ function updateMurarkaPanel(s) {
     const avoidBtn = document.getElementById('mz-avoid-btn');
     const bullBtn  = document.getElementById('mz-bull-btn');
     const lbl      = document.getElementById('mz-zone-label');
+    // 5 Nov: legend shows the thresholds actually in force (expiry day: 1.10 / 0.80, normal: 1.15 / 0.75)
+    if (zone.bullThr != null && zone.bearThr != null) {
+      const _t1 = document.getElementById('mz-bull-thr'), _t2 = document.getElementById('mz-avoid-thr'), _t3 = document.getElementById('mz-bear-thr');
+      if (_t1) _t1.innerHTML = 'PCR &gt; ' + zone.bullThr;
+      if (_t2) _t2.textContent = zone.bearThr + ' – ' + zone.bullThr;
+      if (_t3) _t3.innerHTML = 'PCR &lt; ' + zone.bearThr;
+    }
 
     // Reset all
     if (bearBtn)  { bearBtn.style.border  = '2px solid transparent'; bearBtn.style.opacity  = '0.5'; }
@@ -6668,10 +6675,10 @@ function updatePCRTrend(history) {
       timeStr = new Date(timeStr).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'});
     }
     // else plain "HH:MM" — use as-is
-    const trend = h.pcr > 1.2 ? '🟢' : h.pcr < 0.8 ? '🔴' : '🟡';
+    const trend = h.pcr > 1.3 ? '🟢' : h.pcr < 0.8 ? '🔴' : '🟡';
     // FIX: PCR value color was always amber — should be green/red/amber
-    const pcrColor = h.pcr > 1.2 ? 'var(--green)' : h.pcr < 0.8 ? 'var(--red)' : 'var(--amber)';
-    const sig = h.signal || (h.pcr > 1.2 ? 'BULLISH' : h.pcr < 0.8 ? 'BEARISH' : 'NEUTRAL');
+    const pcrColor = h.pcr > 1.3 ? 'var(--green)' : h.pcr < 0.8 ? 'var(--red)' : 'var(--amber)';
+    const sig = h.signal || (h.pcr > 1.3 ? 'BULLISH' : h.pcr < 0.8 ? 'BEARISH' : 'NEUTRAL');
     return `<div class="trend-row">${trend} <span style="color:var(--dim);">${timeStr}</span> <span style="color:${pcrColor};">PCR: ${parseFloat(h.pcr).toFixed(2)}</span> <span style="color:var(--dim);font-size:11px;">${sig}</span></div>`;
   }).join('');
 }
@@ -7554,9 +7561,10 @@ function updateChecklistAuto(s) {
   // 4. PCR Bias
   if (s.pcr != null) {
     const pcr = s.pcr;
-    const isBull = pcr > 1.1;
+    // 5 Nov: same cut-offs as the engine (pureCalc pcrLabel: >1.3 bullish, <0.8 bearish) — cards used 1.1 / 1.2 before and disagreed with it
+    const isBull = pcr > 1.3;
     const isBear = pcr < 0.8;
-    const label = pcr > 1.3 ? 'STRONG BULL' : pcr > 1.1 ? 'BULLISH' : pcr < 0.7 ? 'STRONG BEAR' : pcr < 0.8 ? 'BEARISH' : 'NEUTRAL';
+    const label = pcr > 1.5 ? 'STRONG BULL' : pcr > 1.3 ? 'BULLISH' : pcr < 0.7 ? 'STRONG BEAR' : pcr < 0.8 ? 'BEARISH' : 'NEUTRAL';
     setItem('cl-pcr', isBull ? 'pass' : isBear ? 'fail' : 'wait',
       'PCR ' + pcr.toFixed(2) + ' · ATM ' + (s.atmPcr?.toFixed(2)||'--') + ' → ' + label,
       isBull ? 'var(--green)' : isBear ? 'var(--red)' : 'var(--amber)');
@@ -7761,11 +7769,11 @@ function _pulseShort(id, s, it) {
     case 'cl-bn': { const l = s.global?.bankNiftyLeadSignal; if (l && l.label) return String(l.label).replace(/_/g, ' '); const c = s.global?.sectors?.bankNifty?.changePct; return c == null ? '--' : sg(c.toFixed(2)) + '%'; }
     case 'cl-fii': { if (!s.fii && !s.dii) return '--'; const n = (s.fii?.net || 0) + (s.dii?.net || 0); const ist = new Date(Date.now() + 19800000), mn = ist.getUTCHours() * 60 + ist.getUTCMinutes(), dw = ist.getUTCDay();
       return sg(Math.round(n)) + ' Cr' + (dw >= 1 && dw <= 5 && mn >= 555 && mn < 1080 ? ' (pichla din)' : ''); }
-    case 'cl-pcr': return s.pcr == null ? '--' : s.pcr.toFixed(2) + (s.pcr > 1.1 ? ' BULL' : s.pcr < 0.8 ? ' BEAR' : ' NEUT');
+    case 'cl-pcr': return s.pcr == null ? '--' : s.pcr.toFixed(2) + (s.pcr > 1.3 ? ' BULL' : s.pcr < 0.8 ? ' BEAR' : ' NEUT');
     case 'cl-em': return s.earlyMom && s.earlyMom.score != null ? sg(s.earlyMom.score) + ' / 9' : '--';
     case 'cl-mtf': return s.mtf && s.mtf.signal ? (s.mtf.signal === 'BUY CALL' ? 'UP' : s.mtf.signal === 'BUY PUT' ? 'DOWN' : 'MIXED') + (s.mtf.aligned ? ' ✓' : '') : '--';
     case 'cl-adx': return s.adx && s.adx.adx != null ? s.adx.adx.toFixed(0) + (s.adx.adx >= 25 ? ' TREND' : s.adx.adx >= 20 ? ' WEAK' : ' CHOP') : '--';
-    case 'cl-vix': return s.vix == null ? '--' : s.vix.toFixed(1) + (s.vix < 20 ? ' CALM' : s.vix < 25 ? ' HIGH' : ' DANGER');
+    case 'cl-vix': return s.vix == null ? '--' : s.vix.toFixed(1) + ' ' + (s.vixSignal || (s.vix < 12 ? 'VERY LOW' : s.vix < 15 ? 'LOW' : s.vix < 20 ? 'ELEVATED' : s.vix < 30 ? 'HIGH' : 'EXTREME'));
     case 'cl-events': { const m = /^(\d+) HIGH/.exec(it?.text || ''); return it && it.state !== 'wait' ? (m ? m[1] + ' TODAY' : 'NONE') : '--'; }
   }
   return '--';
@@ -8804,8 +8812,16 @@ function _ofFlash(el, cls) { if (!el) return; el.classList.remove('of-flash-g', 
 function _ofSet(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; }
 const _OF_OPEN_END = '10:15';   // 29 Oct — bars before this (09:15–10:00) have unreliable delta: at the open quotes lag the gap (DEXT 28 Oct: 09:15 bar -82K vs app -212K; from 10:15 on bars matched within ~6K)
 const _ofIsOpen = lbl => String(lbl) < _OF_OPEN_END;
+// 5 Nov — single place for the DEXT comparison numbers (static "Kaise padhein" note + live 10:15-after note both read it)
+const _OF_DEXT = {
+  total: [['2 Nov', '+63K', '+345K', ''], ['3 Nov', '+798K', '+913K', '26 mein 24 bars ka sign mila'], ['4 Nov', '-294K', '-329K', '26 mein 25 bars ka sign mila']],
+  late:  [['2 Nov', '+187K', '~0'], ['3 Nov', '+638K', '+567K'], ['4 Nov', '-392K', '-350K']]
+};
+const _ofTotalNote = () => _OF_DEXT.total.map(r => r[0] + ': app ' + r[1] + ' vs DEXT ' + r[2] + (r[3] ? ', ' + r[3] : '')).join('; ');
+const _ofLateNote = () => _OF_DEXT.late.map(r => r[0] + ' DEXT ' + r[1] + ' vs app ' + r[2]).join('; ');
 const _OF_MV = 10, _OF_DS = 30000, _OF_BMV = 3, _OF_BDS = 10000;   // trend: >=10 pts & >=30K delta; per bar: >=3 pts & >=10K delta
 function renderOrderFlow(r, isLive) {
+  { const _ct = document.getElementById('of-cal-total'); if (_ct) _ct.textContent = _ofTotalNote(); }
   const head = document.getElementById('of-head-t');
   if (!head || !r) return;
   const dot = document.getElementById('of-dot');
@@ -8857,7 +8873,7 @@ function renderOrderFlow(r, isLive) {
       '<span style="color:var(--dim);font-size:10px;">Total delta <b id="of-dd" style="color:' + dcol + '">' + _ofK(t.delta) + '</b> (andaza — DEXT se din bhar 2–7% volume jitna kam aata hai; bars ka sign dekho, total nahi)' +
       (outlier ? '<br>★ ' + big.label + ' ka ek bar (' + _ofK(big.delta) + ') total ko kheench raha hai; uske bina ' + _ofK(t.delta - big.delta) : '') +
       (openBars.length ? '<br>⚠ Open ke bars (' + openBars[0].label + '–10:00) ka delta kam bharose ka (gap par quotes late aate hain)' +
-        (lateBars.length ? '. <b>10:15 ke baad ka delta ' + '<span style="color:' + (lateDelta > 0 ? 'var(--green)' : (lateDelta < 0 ? 'var(--red)' : 'var(--text)')) + '">' + _ofK(lateDelta) + '</span></b> (andaza — DEXT se milaya: 2 Nov DEXT +187K vs app ~0; 3 Nov DEXT +638K vs app +567K; 4 Nov DEXT -392K vs app -350K; total par bharosa mat karo)' : ' — 10:15 ke baad ka delta abhi nahi bana') : '') + '</span>';
+        (lateBars.length ? '. <b>10:15 ke baad ka delta ' + '<span style="color:' + (lateDelta > 0 ? 'var(--green)' : (lateDelta < 0 ? 'var(--red)' : 'var(--text)')) + '">' + _ofK(lateDelta) + '</span></b> (andaza — DEXT se milaya: ' + _ofLateNote() + '; total par bharosa mat karo)' : ' — 10:15 ke baad ka delta abhi nahi bana') : '') + '</span>';
   }
   if (_ofPrev.delta !== null && _ofPrev.delta !== t.delta) _ofFlash(document.getElementById('of-dd'), t.delta > _ofPrev.delta ? 'of-flash-g' : 'of-flash-r');
   _ofPrev.delta = t.delta;

@@ -230,7 +230,8 @@ function formatScalpCostText(res, meta = {}) {
 // best in the past still make money on signals nobody had seen yet? Record-only: the app already records every signal and its premium
 // path (signal_outcomes / signal_outcome_path); this just replays that path under the fixed rule. It places no order and changes no signal.
 const FORWARD_RULE = { name: 'HOLD+SL15, 60 min', tp: null, sl: 15, timeoutMin: 60, stopFill: 'worse', slipPts: 0.5, chargePct: 0.07, brokerage: 0, qty: 130, declusterMin: 30, minPremium: 10 };
-const FORWARD_CRITERIA = { minTrades: 300, minDays: 10, minProfitFactor: 1.1, maxBestTradeSharePct: 15 };
+// 5 Nov: period doubled at the owner's request (was 300 trades / 10 days) — more days before a PASS/FAIL, same pass conditions.
+const FORWARD_CRITERIA = { minTrades: 600, minDays: 20, minProfitFactor: 1.1, maxBestTradeSharePct: 15 };
 
 // outcomes: same shape as computeScalpCostStudy; opts: { startTs (ms), rule?, criteria? }
 function evaluateForward(outcomes, opts = {}) {
