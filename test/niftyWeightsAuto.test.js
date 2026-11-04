@@ -10,7 +10,7 @@ for (let i = 0; i < 40; i++) rows.push({ symbol: 'X' + i, ffmc: (rest / 40) * 10
 rows.push({ symbol: 'NIFTY 50', ffmc: 0 });
 
 const m = computeWeightsFromRows(rows);
-assert(m && Math.abs(m.HDFCBANK - 10.38) < 0.02 && !m['NIFTY 50']);
+assert(m && Math.abs(m.HDFCBANK - NIFTY_WEIGHTS.top10.find(s => s.symbol === "HDFCBANK").weight) < 0.02 && !m['NIFTY 50']);
 assert.strictEqual(computeWeightsFromRows(rows.slice(0, 20)), null, 'too few rows');
 assert.strictEqual(computeWeightsFromRows(rows.map(r => ({ ...r, ffmc: null }))), null, 'no ffmc');
 assert.strictEqual(validateAgainstOfficial(m, NIFTY_WEIGHTS.top10), '');
