@@ -42,6 +42,8 @@ function computeNiftyContribution({ weights, quotes, nifty, indexQuote, sectors,
     const yIdx = (() => {                                  // Yahoo ^NSEI, sanity-checked
         const price = num(indexQuote?.price), prev = num(indexQuote?.prevClose);
         if (!(price > 0) || !(prev > 0) || Math.abs(price / prev - 1) > 0.15) return null;
+        // 4 Nov: Yahoo's prevClose was 23441 while the real one was 23811 (+453 pts / +1.93% shown when Nifty was +85) — cross-check it against the app's prevClose.
+        if (appPrev > 0 && Math.abs(prev / appPrev - 1) > 0.003) return null;
         return { price, prevClose: prev, change: price - prev, changePct: ((price - prev) / prev) * 100 };
     })();
     const appLive = !marketClosed && num(nifty?.price) > 0 && num(nifty?.change) !== null && appPrev > 0;

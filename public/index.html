@@ -7668,7 +7668,9 @@ function updateChecklistAuto(s) {
     setItem('cl-adx', strong ? 'pass' : ok ? 'wait' : 'fail',
       `ADX ${adxVal.toFixed(1)} · ${label} · ${diDir}`,
       strong ? 'var(--green)' : ok ? 'var(--amber)' : 'var(--red)');
-    bulletScore.push(strong ? 1 : adxVal < 20 ? -1 : 0);
+    // 4 Nov: ADX measures strength, not direction — a strong ADX on a DOWN trend was counted as a bull vote (Pulse said 'Cautious Bull' with all 3 TFs bearish). Vote with the DI side instead.
+    const adxDirUp = s.adx.diPlus > s.adx.diMinus;
+    bulletScore.push(strong ? (adxDirUp ? 1 : -1) : adxVal < 20 ? 0 : 0);
   } else {
     setItem('cl-adx', 'wait',
       s.adx === null ? '⏳ Active after 10:15 AM (60 session candles needed)' : 'Waiting for session data…',
@@ -8901,7 +8903,7 @@ function renderOrderFlow(r, isLive) {
     // price-vs-delta trend line (last ~1 hour): do price and delta agree? Display only.
     const tr = document.getElementById('of-trend');
     if (tr) {
-      const done = bars.filter((b, k) => !b.partial && !(isLive && k === bars.length - 1)), use = done.slice(-4);   // only finished bars: a forming bar flips back and forth
+      const done = bars.filter((b, k) => !b.partial && !(isLive && k === bars.length - 1) && !_ofIsOpen(b.label)), use = done.slice(-4);   // 4 Nov: open bars (before 10:00) excluded — their delta is low-trust and one +187K open bar flipped the verdict to 'buyers real' while later bars were all sellers   // only finished bars: a forming bar flips back and forth
       const f0 = use[0], l0 = use[use.length - 1];
       if (use.length >= 2 && f0.o != null && l0.c != null) {
         const mv = l0.c - f0.o, ds = use.reduce((a, b) => a + b.delta, 0);
@@ -8912,7 +8914,7 @@ function renderOrderFlow(r, isLive) {
         else if (mv <= -_OF_MV && ds >= _OF_DS) { msg = '⚠ Price neeche (' + mv.toFixed(0) + ' pts) par delta buyers ka: neeche ki move kamzor, bounce ho sakta hai.'; cls = 'w'; }
         else { msg = 'Pichle ' + use.length + ' bars: price aur delta saaf signal nahi de rahe (sideways ya mila-jula).'; cls = ''; }
         tr.className = 'of-trend ' + cls; tr.textContent = msg + ' (' + f0.label + ' se)'; tr.style.display = '';
-      } else { tr.className = 'of-trend'; tr.textContent = 'Price-delta trend ke liye 2 poore bars chahiye (abhi bar ban raha hai).'; tr.style.display = ''; }
+      } else { tr.className = 'of-trend'; tr.textContent = 'Price-delta trend ke liye 10:00 ke baad ke 2 poore bars chahiye (open ke bars gine nahi jaate).'; tr.style.display = ''; }
     }
     const more = document.getElementById('of-more'), card = document.getElementById('of-card');
     if (more) more.style.display = bars.length > 8 ? '' : 'none';

@@ -132,10 +132,18 @@ async function getHistoricalLevels(currentPrice) {
 // 30 Oct — running high/low of LIVE SPOT seen by this process today (index price only; the WS day high can be a futures
 // fallback with ~50 pt basis, so it is deliberately not used). Resets each IST day.
 let _liveRange = { day: '', high: 0, low: Infinity };
+let _lastAccepted = 0;
 function _trackLiveRange(price) {
     if (!(price > 0)) return;
-    const day = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
-    if (_liveRange.day !== day) _liveRange = { day, high: 0, low: Infinity };
+    const ist = new Date(Date.now() + 5.5 * 3600e3);
+    const day = ist.toISOString().slice(0, 10);
+    // 4 Nov — "7-Day High 24003" appeared while the real day high was 23906: a stray/pre-open/futures-basis price had been folded in.
+    // Only count prices inside market hours and reject a sudden >1% jump from the last accepted price.
+    const mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+    if (mins < 9 * 60 + 15 || mins > 15 * 60 + 30) return;
+    if (_liveRange.day !== day) { _liveRange = { day, high: 0, low: Infinity }; _lastAccepted = 0; }
+    if (_lastAccepted > 0 && Math.abs(price - _lastAccepted) / _lastAccepted > 0.01) return;
+    _lastAccepted = price;
     if (price > _liveRange.high) _liveRange.high = price;
     if (price < _liveRange.low)  _liveRange.low  = price;
 }
