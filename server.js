@@ -136,6 +136,7 @@ const jdayLib = require('./src/utils/journalDayStudy');   // 12 Oct — what did
 const { renkoAlignedFor } = require('./src/api/renko');
 const zoneLib = require('./src/utils/zoneStudy');   // 11 Oct — supply/demand zone research (daily candles, read-only)
 const ctxLib = require('./src/utils/entryContextStudy');   // 10 Oct — does entering on the VWAP / Fibonacci REACTION beat entering on the ACTION? (market_snapshot_log context)
+const ctLib = require('./src/utils/counterTrendStudy');   // 6 Nov — do alerts fired AGAINST the live trend lose? (read-only study, nothing feeds signals/gates)
 const sizingLib = require('./src/utils/sizingStudy');   // 10 Oct — flat lots vs fixed-rupee-risk sizing (Murarka: bigger stop -> fewer lots)
 const exitRuleLib = require('./src/utils/exitRuleStudy');
 const hourStudyLib = require('./src/utils/hourStudy');   // 14 Oct — hour-of-day study with costs + older/newer-half check (read-only)
@@ -13841,6 +13842,47 @@ app.get('/api/entry-context-study', studyGuard, async (req, res) => {
         const out = { gridUsed: grid, snapshotsWithVwap: snaps.length, ...study };
         if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(ctxLib.formatEntryContextText(study) + `\n(snapshots with VWAP available: ${snaps.length})`);
         res.json({ success: true, instrument, source: req.query.source || 'ALL', ...out });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// ── Counter-trend study (6 Nov) ─────────────────────────────────────────────
+// Read-only research. /api/counter-trend-study?instrument=NIFTY&source=&days=60&decluster=30&grid=LIVE&minN=15&tol=7&format=text
+// 5 Nov (+2.4% trend-up day): every PE alert stopped out while CE alerts made money. For each trigger outcome this takes three trend signs known at
+// fire time from the last 5-min market_snapshot_log row (price vs VWAP, move since the day's first snapshot, stored MTF signal), buckets the trades WITH /
+// AGAINST the trend, and replays the record with the AGAINST (score -2/-3) alerts skipped. Nothing here feeds signals, gates or alerts.
+// See src/utils/counterTrendStudy.js.
+app.get('/api/counter-trend-study', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const clampInt = (v, d, lo, hi) => { const x = parseInt(v, 10); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+        const instrument = String(req.query.instrument || 'NIFTY').toUpperCase();
+        if (instrument !== 'NIFTY') return res.json({ success: false, error: 'counter-trend-study supports NIFTY only (VWAP / MTF snapshot context is logged for NIFTY)' });
+        const days = clampInt(req.query.days, 60, 1, 365);
+        const params = [instrument, days];
+        let where = `o.coach_result IS NOT NULL AND o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = $1 AND o.fire_ts >= NOW() - ($2::int * INTERVAL '1 day')`;
+        if (req.query.source) { params.push(String(req.query.source)); where += ` AND o.source = $${params.length}`; }
+        const r = await dbPool.query(`
+            SELECT o.id, o.source, o.direction, o.entry_price, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
+            FROM signal_outcomes o
+            JOIN signal_outcome_path p ON p.outcome_id = o.id
+            WHERE ${where}
+            ORDER BY o.id, p.sample_ts ASC`, params);
+        const byId = new Map();
+        for (const row of r.rows) {
+            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, direction: row.direction, entryPrice: Number(row.entry_price), entryPremium: Number(row.entry_premium), fireTs: new Date(row.fire_ts).getTime(), path: [] });
+            byId.get(row.id).path.push({ ts: new Date(row.sample_ts).getTime(), premium: Number(row.premium) });
+        }
+        const s = await dbPool.query(`SELECT ts, nifty, vwap, mtf_signal FROM market_snapshot_log WHERE ts >= NOW() - (($1::int + 2) * INTERVAL '1 day') ORDER BY ts ASC`, [days]);
+        const snaps = s.rows.map(x => ({ ms: new Date(x.ts).getTime(), nifty: Number(x.nifty), vwap: x.vwap === null ? NaN : Number(x.vwap), mtfSignal: x.mtf_signal || null }));
+        const gridName = String(req.query.grid || 'LIVE').toUpperCase();
+        const grid = gridName === 'LIVE' ? coachGridFor(instrument) : (COACH_GRID_CANDIDATES[gridName] || coachGridFor(instrument));
+        const study = ctLib.computeCounterTrendStudy([...byId.values()], snaps, (e, p) => simulateTradeCoachCore(e, p, grid), {
+            tolMin: clampInt(req.query.tol, 7, 1, 30), declusterMin: clampInt(req.query.decluster, 30, 0, 240), minN: clampInt(req.query.minN, 15, 3, 200), decluster: delayLib.declusterOutcomes,
+        });
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(ctLib.formatCounterTrendText(study) + `\n(snapshots read: ${snaps.length})`);
+        res.json({ success: true, instrument, source: req.query.source || 'ALL', gridUsed: grid, snapshotsRead: snaps.length, ...study });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
