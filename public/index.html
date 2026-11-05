@@ -8820,8 +8820,8 @@ const _OF_OPEN_END = '10:15';   // 29 Oct — bars before this (09:15–10:00) h
 const _ofIsOpen = lbl => String(lbl) < _OF_OPEN_END;
 // 5 Nov — single place for the DEXT comparison numbers (static "Kaise padhein" note + live 10:15-after note both read it)
 const _OF_DEXT = {
-  total: [['2 Nov', '+63K', '+345K', ''], ['3 Nov', '+798K', '+913K', '26 mein 24 bars ka sign mila'], ['4 Nov', '-294K', '-329K', '26 mein 25 bars ka sign mila']],
-  late:  [['2 Nov', '+187K', '~0'], ['3 Nov', '+638K', '+567K'], ['4 Nov', '-392K', '-350K']]
+  total: [['2 Nov', '+63K', '+345K', ''], ['3 Nov', '+798K', '+913K', '26 mein 24 bars ka sign mila'], ['4 Nov', '-294K', '-329K', '26 mein 25 bars ka sign mila'], ['5 Nov', '+184K', '+234K', '26 mein 20 bars ka sign mila; volume har bar ka match']],
+  late:  [['2 Nov', '+187K', '~0'], ['3 Nov', '+638K', '+567K'], ['4 Nov', '-392K', '-350K'], ['5 Nov', '+158K', '+77K']]
 };
 const _ofTotalNote = () => _OF_DEXT.total.map(r => r[0] + ': app ' + r[1] + ' vs DEXT ' + r[2] + (r[3] ? ', ' + r[3] : '')).join('; ');
 const _ofLateNote = () => _OF_DEXT.late.map(r => r[0] + ' DEXT ' + r[1] + ' vs app ' + r[2]).join('; ');
