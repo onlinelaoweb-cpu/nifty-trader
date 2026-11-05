@@ -5402,7 +5402,13 @@ function renderDashboard(s) {
   // FII/DII (auto-fetched — update all display elements)
   if (s.fii || s.dii) updateFIIDIIDisplay(s.fii, s.dii);
   // Auto-checklist — only re-evaluate when signal or confidence changes
-  const clFP = (s.signal || '') + '|' + (s.confidence || 0) + '|' + (s.entryWindow?.status || '');
+  // 5 Nov: fingerprint also carries the live values the Pulse/checklist tiles show (PCR, ATM PCR, VIX, MTF, option flow, ADX, global, Nifty move).
+  // Before this the tiles refreshed only when the signal changed, so Pulse showed PCR 0.58 while the Options card showed 0.65.
+  const clFP = (s.signal || '') + '|' + (s.confidence || 0) + '|' + (s.entryWindow?.status || '')
+    + '|' + (s.pcr != null ? s.pcr.toFixed(2) : '') + '|' + (s.atmPcr != null ? s.atmPcr.toFixed(2) : '')
+    + '|' + (s.vix != null ? s.vix.toFixed(1) : '') + '|' + (s.mtf?.signal || '') + '|' + (s.earlyMom?.score ?? '')
+    + '|' + (s.adx?.adx != null ? Math.round(s.adx.adx) : '') + '|' + (s.global?.bias || '')
+    + '|' + (s.change != null ? Math.round(s.change / 5) : '') + '|' + (s.smartMoney?.bias || s.smartMoney?.label || '');
   if (clFP !== renderDashboard._lastClFP) {
     renderDashboard._lastClFP = clFP;
     updateChecklistAuto(s);
