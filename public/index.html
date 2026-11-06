@@ -5162,7 +5162,13 @@ function renderDashboard(s) {
   // Reasons
   const reasonsEl = document.getElementById('reasons');
   if (reasonsEl && s.reason && s.reason.length) {
-    reasonsEl.innerHTML = s.reason.map(r => `<div class="reason-row">${r}</div>`).join('');
+    // 7 Nov: band market mein pichle session ki lines "live" jaisi dikhti thi (RSI 96 Strong bullish ✅ + Market not open yet).
+    // Ab pehli line "market band/khula nahi" ho to baaki lines ko "pichle session ka data" ke label ke saath dikhate hain. Display-only.
+    const _closedRe = /Market (not open yet|closed)/i;
+    const _isClosed = _closedRe.test(String(s.reason[0] || ''));
+    const _rows = s.reason.map(r => `<div class="reason-row"${_isClosed && !_closedRe.test(String(r)) ? ' style="opacity:.55"' : ''}>${r}</div>`);
+    if (_isClosed && _rows.length > 1) _rows.splice(1, 0, '<div class="reason-row" style="opacity:.8;font-size:11px">⏸ Neeche ki lines pichle session ka data hain (abhi live nahi)</div>');
+    reasonsEl.innerHTML = _rows.join('');
   }
 
   // Footer
