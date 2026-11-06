@@ -2656,7 +2656,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
   <div class="sec-label">OPTIONS DATA</div>
   <div class="pcr-row">
     <div class="pv-card" style="color:var(--amber)" id="pcr-card"><div class="pv-label">PCR</div><div class="pv-val" id="pcr-val">--</div><div class="pv-sig" id="pcr-sig">FETCHING…</div><div class="pv-src" id="pcr-source-lbl" style="font-size:10px;letter-spacing:1px;margin-top:2px;color:var(--dim);">NSE AUTO</div></div>
-    <div class="pv-card" style="color:var(--amber)" id="atm-pcr-card"><div class="pv-label">ATM PCR</div><div class="pv-val" id="atm-pcr-val">--</div><div class="pv-sig" id="atm-pcr-sig">FETCHING…</div><div class="pv-src" id="atm-pcr-source-lbl" style="font-size:10px;letter-spacing:1px;margin-top:2px;color:var(--dim);">NSE AUTO</div></div>
+    <div class="pv-card" style="color:var(--amber)" id="atm-pcr-card"><div class="pv-label">ATM PCR</div><div class="pv-val" id="atm-pcr-val">--</div><div class="pv-sig" id="atm-pcr-sig">FETCHING…</div><div class="pv-src" id="atm-pcr-source-lbl" style="font-size:10px;letter-spacing:1px;margin-top:2px;color:var(--dim);">NSE AUTO</div><div id="atm-pcr-note" style="font-size:10px;line-height:1.35;margin-top:3px;color:var(--dim);"></div></div>
     <!-- 13 Sep — Combined PCR (Nifty+BankNifty+Sensex+Top10 stocks). Separate
          from PCR/ATM PCR above (those are load-bearing — Main Engine uses
          them directly). This is exploratory broader-sentiment, informational
@@ -5059,6 +5059,7 @@ function renderDashboard(s) {
   if (s.atmPcr != null) {
     document.getElementById('atm-pcr-val').textContent = s.atmPcr.toFixed(2);
     document.getElementById('atm-pcr-sig').textContent = s.atmPcrSignal || '--';
+    try { _atmPcrContext(s); } catch (e) { console.warn('[atmPcrContext]', e.message); }
   }
   // Show AUTO ✅, FETCHING… or NSE UNAVAILABLE based on pcrSource + pcrUnavailable
   const isAuto = s.pcrSource === 'auto';
@@ -6032,12 +6033,12 @@ function updateInsightsUI(s) {
       if (tc.active) {
         const color = tc.active === 'BEARISH' ? 'var(--red)' : 'var(--green)';
         const conds = tc.active === 'BEARISH' ? tc.bearConditions : tc.bullConditions;
-        if (labelEl) { labelEl.textContent = `${tc.active === 'BEARISH' ? '🔴' : '🟢'} ${tc.active} conviction — ${conds.length}/6 structural conditions aligned`; labelEl.style.color = color; }
+        if (labelEl) { labelEl.textContent = `${tc.active === 'BEARISH' ? '🔴' : '🟢'} ${tc.active} conviction — ${conds.length}/7 structural conditions aligned`; labelEl.style.color = color; }
         if (condsEl) condsEl.textContent = conds.join(' · ');
         if (wrapEl) wrapEl.style.borderColor = color;
       } else {
         if (labelEl) { labelEl.textContent = 'Not active — no strongly one-sided structural stack yet'; labelEl.style.color = 'var(--text)'; }
-        if (condsEl) condsEl.textContent = `Bearish: ${tc.bearCount}/6 · Bullish: ${tc.bullCount}/6`;
+        if (condsEl) condsEl.textContent = `Bearish: ${tc.bearCount}/7 · Bullish: ${tc.bullCount}/7`;
         if (wrapEl) wrapEl.style.borderColor = 'var(--border)';
       }
     }
@@ -7559,7 +7560,7 @@ function updateChecklistAuto(s) {
     setItem('cl-vix', ok ? 'pass' : warn ? 'wait' : 'fail',
       'VIX ' + s.vix.toFixed(2) + (ok ? ' — LOW RISK ✅' : warn ? ' — ELEVATED ⚠️' : ' — DANGER ❌'),
       ok ? 'var(--green)' : warn ? 'var(--amber)' : 'var(--red)');
-    bulletScore.push(ok ? 1 : s.vix >= 25 ? -1 : 0);
+    bulletScore.push(0);   // 6 Nov: VIX is a risk filter, not a direction. It used to add +1 BULL on every normal-VIX day (VIX 16.6 counted as a bull vote)
   } else {
     setItem('cl-vix', 'wait', 'Waiting for VIX…', 'var(--dim)');
   }
@@ -7661,12 +7662,12 @@ function updateChecklistAuto(s) {
       setItem('cl-events', 'fail',
         highImpact.length + ' HIGH-IMPACT event(s) today — trade with caution ⚠️',
         'var(--amber)');
-      bulletScore.push(-1);
+      bulletScore.push(0);   // 6 Nov: an event day is a caution (shown in the cautions line), not a bearish vote
     } else {
       setItem('cl-events', 'pass',
         'No high-impact events today ✅',
         'var(--green)');
-      bulletScore.push(1);
+      bulletScore.push(0);   // 6 Nov: no event is not a bullish vote
     }
   } else {
     setItem('cl-events', 'wait', 'Checking economic calendar…', 'var(--dim)');
@@ -7761,6 +7762,40 @@ function updateChecklistAuto(s) {
   try { renderPulse(s, bulletScore); } catch (e) { console.warn('[renderPulse] failed:', e.message); }
 }
 
+// ─── ATM PCR CONTEXT (6 Nov) — display only ──────────────────────────────────────────────────────────────────────────
+// The ATM PCR label (BEARISH < 0.8, BULLISH > 1.3) looks only at the strikes around the money, so in a rally it reads BEARISH just because the
+// new ATM strikes already carry call open interest (call writers / resistance) — 6 Nov: ATM PCR 0.42 BEARISH while total PCR rose to 0.98 and Nifty
+// rallied. The label itself is unchanged (signals/gates/Murarka use their own numbers); this only adds a short qualifier and a one-line reason
+// when the ATM reading disagrees with the full-chain PCR or with the live trend, or when the ATM window was just re-centred.
+let _atmTrack = { strike: null, changedAt: null };
+function _atmPcrContext(s) {
+  const sig = document.getElementById('atm-pcr-sig'), note = document.getElementById('atm-pcr-note');
+  if (!sig || !note || s.atmPcr == null) return;
+  const base = s.atmPcrSignal || '--', atmBear = s.atmPcr < 0.8, atmBull = s.atmPcr > 1.3;
+  const strike = s.atmStrike || (s.nifty > 0 ? Math.round(s.nifty / 50) * 50 : null);
+  const now = Date.now();
+  if (strike && _atmTrack.strike !== null && strike !== _atmTrack.strike) _atmTrack.changedAt = now;   // only a change SEEN in this session counts
+  if (strike) _atmTrack.strike = strike;
+  const movedMin = _atmTrack.changedAt ? Math.round((now - _atmTrack.changedAt) / 60000) : null;
+  // trend: price vs VWAP (+-0.15%) and the MTF signal must agree
+  let trend = 0;
+  if (s.vwap > 0 && s.nifty > 0) {
+    const d = ((s.nifty - s.vwap) / s.vwap) * 100, m = s.mtf && s.mtf.signal;
+    if (d > 0.15 && m === 'BUY CALL') trend = 1; else if (d < -0.15 && m === 'BUY PUT') trend = -1;
+  }
+  const why = [], tags = [];
+  if (s.pcr != null) {
+    if (atmBear && s.pcr >= 0.8) { tags.push('narrow'); why.push('poori chain PCR ' + s.pcr.toFixed(2) + ' ' + (s.pcr > 1.3 ? 'bullish' : 'neutral') + ' hai — sirf ATM window bearish'); }
+    else if (atmBull && s.pcr <= 1.3) { tags.push('narrow'); why.push('poori chain PCR ' + s.pcr.toFixed(2) + ' ' + (s.pcr < 0.8 ? 'bearish' : 'neutral') + ' hai — sirf ATM window bullish'); }
+  }
+  if (atmBear && trend === 1) { tags.push('vs rally'); why.push('price upar chal raha hai — rally me naye ATM par call OI zyada hota hai, ye reversal ka signal nahi'); }
+  else if (atmBull && trend === -1) { tags.push('vs fall'); why.push('price neeche chal raha hai — girawat me naye ATM par put OI zyada hota hai, ye reversal ka signal nahi'); }
+  if (movedMin !== null && movedMin < 15) { tags.push('re-centred'); why.push('ATM ' + strike + ' par ' + (movedMin === 0 ? 'abhi' : movedMin + ' min pehle') + ' shift hua — window naya hai, ratio hil sakta hai'); }
+  sig.textContent = base + (tags.length ? ' · ' + tags.join(' · ') : '');
+  note.textContent = why.length ? why.join('. ') + '.' : '';
+  sig.title = note.title = why.length ? 'Sirf display. Signals, gates ya Murarka par koi asar nahi.' : '';
+}
+
 // ─── MARKET PULSE (11 Oct) — one-look summary built from the same data as the old pre-market checklist ───
 const _PULSE_TILES = [
   ['cl-global','GLOBAL'], ['cl-gift','NIFTY vs PREV CLOSE'], ['cl-bn','BANK NIFTY'], ['cl-fii','FII + DII'],
@@ -7813,8 +7848,11 @@ function renderPulse(s, bulletScore) {
   grid.innerHTML = tiles.map((t, i) => '<div class="pt ' + t.cls + '" data-i="' + i + '" onclick="pulseTap(' + i + ')"><div class="pt-l">' + t.label + '</div><div class="pt-v">' + t.val + '</div></div>').join('');
 
   // tally (from the verdict engine's own scores + smart money / momentum tiles)
-  const bull = tiles.filter(t => t.cls === 'bull').length, bear = tiles.filter(t => t.cls === 'bear').length;
-  const live = tiles.filter(t => t.cls !== 'wait').length, neu = live - bull - bear;
+  // 6 Nov: VIX and EVENTS are context tiles (risk filters), not directions — they stay coloured but are not counted in BULL/NEUTRAL/BEAR
+  const _ctx = t => t.id === 'cl-vix' || t.id === 'cl-events';
+  const dirTiles = tiles.filter(t => !_ctx(t));
+  const bull = dirTiles.filter(t => t.cls === 'bull').length, bear = dirTiles.filter(t => t.cls === 'bear').length;
+  const live = dirTiles.filter(t => t.cls !== 'wait').length, neu = live - bull - bear;
   const pct = n => live ? (100 * n / live) : 0;
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
   const w = (id, v) => { const e = document.getElementById(id); if (e) e.style.width = v + '%'; };
@@ -7833,7 +7871,7 @@ function renderPulse(s, bulletScore) {
   set('pulse-count', closed ? 'MARKET CLOSED' : 'ENGINE: ' + (s.signal || 'WAIT') + ((s.signal && s.signal !== 'WAIT') ? ' · ' + (s.confidence || 0) + '%' : ''));   // 13 Oct: the WAIT % now lives only in the WAIT strip
 
   // plain-language summary
-  const names = cls => { const a = tiles.filter(t => t.cls === cls).map(t => t.label.toLowerCase()); return a.length > 4 ? a.length + ' indicators (' + a.slice(0, 3).join(', ') + '…)' : a.join(', '); };
+  const names = cls => { const a = dirTiles.filter(t => t.cls === cls).map(t => t.label.toLowerCase()); return a.length > 4 ? a.length + ' indicators (' + a.slice(0, 3).join(', ') + '…)' : a.join(', '); };
   const parts = [];
   if (live) {
     if (bull) parts.push('<b style="color:var(--green)">Saath:</b> ' + names('bull'));

@@ -34,7 +34,10 @@ async function getWeeklyOHLC() {
     }
     try {
         const { nseNiftyDaily } = require('./yahooFetch');
-        const days = await nseNiftyDaily(7);
+        // 6 Nov: nseNiftyDaily(n) returns its whole cache when it is warm, so a 10-day cache made the '7-Day' range cover 10 days
+        // (7-Day Low showed 22372 = the 23 Oct low until the hourly refresh; later correct 22657). Always cut to the last 7 bars here.
+        const all = await nseNiftyDaily(7);
+        const days = Array.isArray(all) ? all.slice(-7) : all;
         if (days && days.length >= 3) {
             _weeklyCache = {
                 high : Math.max(...days.map(d => d.high)),

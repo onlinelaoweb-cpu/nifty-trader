@@ -2432,14 +2432,14 @@ function combineSignals(indicators, opts) {
         const reversalNote = mtfAlignedButWeak
             ? `MTF aligned but 15m/1h ADX too weak for a genuine reversal (15m ${adx15mForReversal?.toFixed(1) ?? '--'}, 1h ${adx1hForReversal?.toFixed(1) ?? '--'}, need ${MTF_REVERSAL_MIN_ADX}+ on both)`
             : 'without genuine MTF reversal';
-        reasons.push(`⛔ Trend Conviction (${trendConviction.active}, ${conds.length}/6: ${conds.join(', ')}) contradicts ${rawSignal} — ${reversalNote} — wait`);
+        reasons.push(`⛔ Trend Conviction (${trendConviction.active}, ${conds.length}/7: ${conds.join(', ')}) contradicts ${rawSignal} — ${reversalNote} — wait`);
     } else if (rawSignal !== 'WAIT' && !convictionOpposesSignal &&
                ((trendConviction.active === 'BEARISH' && rawSignal === 'BUY PUT') ||
                 (trendConviction.active === 'BULLISH' && rawSignal === 'BUY CALL'))) {
         const conds = trendConviction.active === 'BEARISH' ? trendConviction.bearConditions : trendConviction.bullConditions;
         const boost = Math.min((conds.length - 3) * 4, 15);   // +4 per condition past 3, capped +15
         confidence = Math.min(confidence + boost, 98);
-        reasons.push(`🔥 Trend Conviction (${trendConviction.active}, ${conds.length}/6: ${conds.join(', ')}) — confidence boosted +${boost}%`);
+        reasons.push(`🔥 Trend Conviction (${trendConviction.active}, ${conds.length}/7: ${conds.join(', ')}) — confidence boosted +${boost}%`);
     }
 
     // ── Option Premium Filter — NEW ────────────────────────────────────────────
