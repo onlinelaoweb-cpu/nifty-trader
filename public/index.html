@@ -4866,6 +4866,10 @@ function renderDashboard(s) {
   sigEl.textContent = sig;
   const card = document.getElementById('signal-card');
   card.className = 'signal-card ' + (sig === 'BUY CALL' ? 'buy-call' : sig === 'BUY PUT' ? 'buy-put' : 'wait');
+  // 7 Nov: the WAIT box (big WAIT + "kyun ruke hain" strip) is clutter for this user — hide the whole block while the signal is WAIT,
+  // show it again the moment a real BUY CALL / BUY PUT appears. Display-only: every element id stays in the DOM, so no JS is affected.
+  const _sigWrap = card.closest ? card.closest('.signal-wrap') : null;
+  if (_sigWrap) _sigWrap.style.display = (sig === 'BUY CALL' || sig === 'BUY PUT') ? '' : 'none';
   document.getElementById('conf-bar').style.width = conf + '%';
   document.getElementById('conf-text').textContent = 'CONFIDENCE: ' + conf + '%';
   // Conf-bar glow animation — applies when signal is strong conviction
