@@ -82,8 +82,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <!-- 6 Oct: fonts load without blocking the page's scripts (a slow Google Fonts response used to hold up the whole dashboard start) -->
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&family=Orbitron:wght@700;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'"/>
-<noscript><link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&family=Orbitron:wght@700;900&display=swap" rel="stylesheet"/></noscript>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&family=Orbitron:wght@700;900&family=Cormorant+Garamond:ital,wght@1,600&display=swap" rel="stylesheet" media="print" onload="this.media='all'"/>
+<noscript><link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&family=Orbitron:wght@700;900&family=Cormorant+Garamond:ital,wght@1,600&display=swap" rel="stylesheet"/></noscript>
 <style>
 :root{
   --bg0:#000000;--bg1:#050505;--bg2:#0a0a0c;--bg3:#101014;
@@ -975,6 +975,35 @@ html.vn-day .gold-header-text{color:#8b6508;text-shadow:none;opacity:1;}
 .more-item:active,.more-item.active-more{color:var(--green);background:rgba(0,255,136,0.08);border-color:rgba(0,255,136,0.3);}
 .more-item span{font-size:20px;}
 .panel{display:none;}.panel.active{display:block;}
+/* ── 7 Nov: memorial tagline (gold shimmer serif + flickering diya) ── */
+.logo-wrap{display:flex;flex-direction:column;gap:3px;min-width:0;}
+.memorial{display:flex;align-items:center;gap:5px;margin-left:16px;line-height:1;white-space:nowrap;}
+.memorial-diya{display:inline-block;font-size:10px;filter:drop-shadow(0 0 4px rgba(255,170,40,.8));animation:diyaFlicker 3.2s ease-in-out infinite;}
+.memorial-txt{font-family:'Cormorant Garamond',Georgia,'Times New Roman',serif;font-style:italic;font-weight:600;font-size:11px;letter-spacing:.4px;text-shadow:none;white-space:nowrap;padding-right:2px;
+  background:linear-gradient(100deg,#9c7418 0%,#f3d77a 22%,#fff3c4 38%,#d4a62a 55%,#f3d77a 78%,#9c7418 100%);background-size:220% 100%;
+  -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;animation:goldShimmer 7s linear infinite;}
+#vn-splash .memorial-txt{font-size:17px;letter-spacing:1px;}
+#vn-splash .memorial-diya{font-size:15px;}
+.dedication-line .memorial-txt{font-size:13px;}
+@keyframes goldShimmer{0%{background-position:120% 0}100%{background-position:-100% 0}}
+@keyframes diyaFlicker{0%,100%{opacity:1;transform:scale(1)}18%{opacity:.86;transform:scale(.96)}34%{opacity:1;transform:scale(1.05)}55%{opacity:.92;transform:scale(1)}72%{opacity:1;transform:scale(1.03)}}
+html.vn-day .memorial-txt{background-image:linear-gradient(100deg,#7a560a 0%,#b8860b 30%,#d9a520 50%,#a8780c 75%,#7a560a 100%);}
+@media (prefers-reduced-motion:reduce){.memorial-txt,.memorial-diya{animation:none;}}
+
+/* ── 7 Nov: page-turn tab switch (book-page flip) ── */
+.panel.pf-under{display:block !important;}
+.panel.pf-over{display:block !important;position:fixed;left:0;right:0;top:var(--pf-top,60px);height:calc(100vh - var(--pf-top,60px));height:calc(100dvh - var(--pf-top,60px));overflow:hidden;z-index:60;pointer-events:none;
+  transform-origin:left center;backface-visibility:hidden;-webkit-backface-visibility:hidden;will-change:transform,opacity;box-shadow:16px 0 36px rgba(0,0,0,.5);}
+.panel.pf-over::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(90deg,rgba(0,0,0,0) 0%,rgba(0,0,0,.65) 100%);}
+.panel.pf-fwd{animation:pfOut .6s cubic-bezier(.55,.05,.35,1) forwards;}
+.panel.pf-back{animation:pfIn .6s cubic-bezier(.35,.05,.45,1) forwards;}
+.panel.pf-fwd::after{animation:pfShadeOut .6s ease-in forwards;}
+.panel.pf-back::after{animation:pfShadeIn .6s ease-out forwards;}
+@keyframes pfOut{0%{transform:perspective(1500px) rotateY(0deg);opacity:1}70%{opacity:1}100%{transform:perspective(1500px) rotateY(-100deg);opacity:0}}
+@keyframes pfIn{0%{transform:perspective(1500px) rotateY(-100deg);opacity:0}30%{opacity:1}100%{transform:perspective(1500px) rotateY(0deg);opacity:1}}
+@keyframes pfShadeOut{0%{opacity:0}100%{opacity:1}}
+@keyframes pfShadeIn{0%{opacity:1}100%{opacity:0}}
+
 
 /* ── Murarka panel — MOBILE FIRST ── */
 /* Default = mobile: single column stack */
@@ -2358,7 +2387,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
       <polygon points="60,5 25,55 50,55 40,95 75,45 50,45" fill="#00ff88"/>
     </svg>
     <div class="login-title">VARDAAN AI</div>
-    <div class="dedication-line">🪔 in loving memory of Asha</div>
+    <div class="dedication-line"><span class="memorial-diya">🪔</span> <span class="memorial-txt">in loving memory of Asha</span></div>
     <div class="login-sub">ENTER ACCESS PASSWORD</div>
     <div class="login-input-wrap">
       <input class="login-input" id="login-pass" type="password" placeholder="Password" autocomplete="current-password"
@@ -2379,7 +2408,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <polygon points="60,5 25,55 50,55 40,95 75,45 50,45" fill="#00ff88"/>
   </svg>
   <div class="splash-brand">VARDAAN AI</div>
-  <div class="splash-tagline">🪔 in loving memory of Asha</div>
+  <div class="splash-tagline"><span class="memorial-diya">🪔</span> <span class="memorial-txt">in loving memory of Asha</span></div>
   <div class="splash-dots">
     <div class="splash-dot"></div>
     <div class="splash-dot"></div>
@@ -2390,7 +2419,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
 <!-- HEADER -->
 <div class="header">
   <div class="header-row1">
-    <div class="logo"><div class="logo-dot"></div>VARDAAN AI</div>
+    <div class="logo-wrap"><div class="logo"><div class="logo-dot"></div>VARDAAN AI</div><div class="memorial"><span class="memorial-diya">🪔</span><span class="memorial-txt">in loving memory of Asha</span></div></div>
     <div class="header-controls">
       <span id="sse-dot" title="Connecting..." style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#ffcc00;margin-right:6px;vertical-align:middle;box-shadow:0 0 5px #ffcc00;transition:background 0.4s,box-shadow 0.4s;"></span><span id="live-clock">--:--:--</span>
       <button class="icon-btn" id="theme-btn" onclick="toggleDayNight()" title="Day / Night theme">🌙</button>
@@ -4085,6 +4114,90 @@ function switchTabFromMore(name) {
   switchTab(name, moreBtn);
 }
 
+
+// ═══ 7 Nov: page-turn tab switching + swipe left/right (display-only; same switch logic underneath) ═══
+let _pfBusy = false;
+function _pfOrder() {
+  const out = [];
+  document.querySelectorAll('.more-item[onclick*="switchTabFromMore"]').forEach(b => {
+    const m = /switchTabFromMore\('([^']+)'\)/.exec(b.getAttribute('onclick') || '');
+    if (!m || b.hidden || b.style.display === 'none' || getComputedStyle(b).display === 'none') return;
+    if (!document.getElementById('panel-' + m[1]) || out.includes(m[1])) return;
+    out.push(m[1]);
+  });
+  return out;
+}
+function _pfCurName() { const c = document.querySelector('.panel.active'); return c ? c.id.replace(/^panel-/, '') : null; }
+function switchTab(name, btn) {
+  let animated = false;
+  try {
+    const cur = document.querySelector('.panel.active'), nxt = document.getElementById('panel-' + name);
+    const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (cur && nxt && cur !== nxt && !_pfBusy && !reduce && !document.hidden) {
+      const order = _pfOrder(), ci = order.indexOf(cur.id.replace(/^panel-/, '')), ni = order.indexOf(name);
+      const fwd = (ci < 0 || ni < 0) ? true : ni > ci;
+      const hdr = document.querySelector('.header');
+      const top = hdr ? Math.max(0, Math.round(hdr.getBoundingClientRect().bottom)) : 0;
+      _pfBusy = true; animated = true;
+      try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
+      _switchTabCore(name, btn);                 // real switch first (fetches/timers unchanged)
+      const over = fwd ? cur : nxt, under = fwd ? nxt : cur;
+      const bg = getComputedStyle(document.body).backgroundColor;
+      over.style.setProperty('--pf-top', (hdr ? Math.round(hdr.getBoundingClientRect().bottom) : top) + 'px');
+      over.style.backgroundColor = (bg && bg !== 'rgba(0, 0, 0, 0)') ? bg : '#09111F';
+      under.classList.add('pf-under');
+      over.classList.add('pf-over', fwd ? 'pf-fwd' : 'pf-back');
+      let done = false;
+      const finish = () => {
+        if (done) return; done = true;
+        over.classList.remove('pf-over', 'pf-fwd', 'pf-back'); over.style.backgroundColor = ''; over.style.removeProperty('--pf-top');
+        under.classList.remove('pf-under'); _pfBusy = false;
+      };
+      over.addEventListener('animationend', function h(e) { if (e.target === over && /^pf(Out|In)$/.test(e.animationName)) { over.removeEventListener('animationend', h); finish(); } });
+      setTimeout(finish, 900);                  // safety net
+      return;
+    }
+  } catch (e) { _pfBusy = false; if (animated) return; }
+  return _switchTabCore(name, btn);
+}
+function _pfStep(dir) {
+  const order = _pfOrder(), cur = _pfCurName(), i = order.indexOf(cur);
+  if (i < 0) return;
+  const n = order[i + dir];
+  if (n) switchTabFromMore(n);
+}
+(function _pfSwipeInit() {
+  let sx = 0, sy = 0, st = 0, ok = false;
+  const blocked = el => {
+    const login = document.getElementById('vn-login'), splash = document.getElementById('vn-splash'), mm = document.getElementById('more-menu');
+    if (login && !login.classList.contains('hide')) return true;
+    if (splash && splash.offsetParent !== null && getComputedStyle(splash).opacity !== '0' && getComputedStyle(splash).display !== 'none' && getComputedStyle(splash).visibility !== 'hidden') return true;
+    if (mm && mm.style.display !== 'none' && mm.style.display !== '') return true;
+    for (let e = el; e && e !== document.body; e = e.parentElement) {
+      const tag = e.tagName;
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'CANVAS' || tag === 'IFRAME' || e.hasAttribute('data-noswipe')) return true;
+      const cs = getComputedStyle(e);
+      if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && e.scrollWidth > e.clientWidth + 2) return true;
+      if (cs.position === 'fixed' && e.id && e.id !== 'bottom-tabs-bar') { if (!/^panel-/.test(e.id)) return true; }
+    }
+    return false;
+  };
+  document.addEventListener('touchstart', e => {
+    ok = false;
+    if (e.touches.length !== 1 || _pfBusy) return;
+    const t = e.touches[0];
+    if (t.clientX < 24 || t.clientX > window.innerWidth - 24) return;   // keep OS back-gesture edges free
+    if (blocked(e.target)) return;
+    sx = t.clientX; sy = t.clientY; st = Date.now(); ok = true;
+  }, { passive: true });
+  document.addEventListener('touchend', e => {
+    if (!ok) return; ok = false;
+    const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+    if (Date.now() - st > 700 || Math.abs(dx) < 80 || Math.abs(dx) < Math.abs(dy) * 1.8) return;
+    _pfStep(dx < 0 ? 1 : -1);
+  }, { passive: true });
+})();
+
 const TAB_LABELS = {
   dashboard: { icon: '📊', label: 'NIFTY LIVE' },
   breadth:   { icon: '📈', label: 'BREADTH' },
@@ -4098,7 +4211,7 @@ const TAB_LABELS = {
   signalAccuracy: { icon: '🎯', label: 'TRACK RECORD' },
 };
 
-function switchTab(name,btn){
+function _switchTabCore(name,btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.btab').forEach(b=>b.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
