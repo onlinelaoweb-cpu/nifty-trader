@@ -504,7 +504,7 @@ function computeMarketRegime(marketState) {
     if (tags.length === 0) tags.push('NORMAL');
 
     const activeRules = [];
-    if (tags.includes('EXPIRY'))     activeRules.push('A+/A grade size capped 50% (Tuesday expiry)');
+    if (tags.includes('EXPIRY'))     activeRules.push('A+/A grade size capped 50% (expiry day)');
     if (tags.includes('EVENT_DAY'))  activeRules.push(`Confidence capped 60% (${marketState.eventCountdown?.title || 'high-impact event'} approaching)`);
     if (tags.includes('HIGH_VIX'))   activeRules.push('Size capped 50% (VIX spiked vs today\'s open)');
     if (tags.includes('LOW_VIX'))    activeRules.push('Size capped 65% (Low VIX regime — historically weakest expectancy: +0.31R vs +0.69-0.81R in Trending/Range)');

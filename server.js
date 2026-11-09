@@ -1600,8 +1600,11 @@ function combineSignals(indicators, opts) {
     // FIX: Same neutral treatment when unavailable — don't silently drop points.
     if (marketState.atmPcr !== null) {
         const as = pcrScore(marketState.atmPcr);
-        const w = Math.min(Math.max(Math.round(as * 1.5), -4), 4); // cap ±4
-        if      (w > 0) { bull += w;  reasons.push(`ATM PCR ${marketState.atmPcr} — Bullish near-strike ✅ (+${w}pts)`); }
+        let w = Math.min(Math.max(Math.round(as * 1.5), -4), 4); // cap ±4
+        // 9 Nov: window re-centred < 15 min ago = new strikes, OI not settled -> vote 0 (same 15 min as the 're-centred' tag in the UI)
+        const _atmFresh = marketState.atmPcrStrikeSince && (Date.now() - marketState.atmPcrStrikeSince) < 15 * 60000;
+        if (_atmFresh && w !== 0) { reasons.push(`ATM PCR ${marketState.atmPcr} — ATM window abhi re-centre hua (${marketState.atmPcrStrike}), 15 min tak vote nahi (was ${w > 0 ? '+' : ''}${w}pts)`); w = 0; }
+        else if (w > 0) { bull += w;  reasons.push(`ATM PCR ${marketState.atmPcr} — Bullish near-strike ✅ (+${w}pts)`); }
         else if (w < 0) { bear += -w; reasons.push(`ATM PCR ${marketState.atmPcr} — Bearish near-strike ⚠️ (+${-w}pts)`); }
         else            {             reasons.push(`ATM PCR ${marketState.atmPcr} — Neutral near-strike`); }
     } else {
@@ -5495,7 +5498,7 @@ function renkoCtxFor(instrument, direction) {
                     ceOiChg: ceD, peOiChg: peD,           // today's change in OI, whole chain (NSE-native)
                     pcrChgOi: (ceD > 0 && peD !== null) ? Math.round((peD / ceD) * 1000) / 1000 : null,   // change-in-OI PCR (needs call OI change > 0)
                     clusterPcrChgOi: (clCe > 0 && clPe !== null) ? Math.round((clPe / clCe) * 1000) / 1000 : null,   // ATM +/-100pt only
-                    maxPain: num(pc.maxPain),
+                    maxPain: num(pc.maxPain && typeof pc.maxPain === 'object' ? pc.maxPain.strike : pc.maxPain),
                     src: pc.source || null, idx: pc.fromIndex || null,
                     ageSec,
                     stale: ageSec === null ? null : ageSec > 300,
@@ -9183,6 +9186,8 @@ async function refreshPCR() {
         if (pcrState.atmPcr) {
             marketState.atmPcr       = pcrState.atmPcr;
             marketState.atmPcrSignal = pcrLabel(pcrState.atmPcr);
+            // 9 Nov: remember when the ATM window last moved - a freshly re-centred window gave a +4 vote that flipped (0.66 -> 1.66) on a 50pt move
+            if (pcrState.atm && pcrState.atm !== marketState.atmPcrStrike) { marketState.atmPcrStrike = pcrState.atm; marketState.atmPcrStrikeSince = Date.now(); }
         }
 
         // NOTE: ATM premium → optionFlow sync moved OUT of this 3-min cycle —
@@ -9199,7 +9204,8 @@ async function refreshPCR() {
         console.log(`✅ PCR auto-updated: ${pcrState.pcr} | ATM: ${pcrState.atmPcr} (source: ${srcLabel})`);
 
         // ── Max pain ──────────────────────────────────────
-        if (pcrState.maxPain?.strike) {
+        // 9 Nov: never take Max Pain from the BankNifty proxy (it is a BankNifty strike, ~59000)
+        if (pcrState.maxPain?.strike && pcrState.fromIndex !== 'BANKNIFTY') {
             marketState.maxPain = {
                 strike    : pcrState.maxPain.strike,
                 totalPain : pcrState.maxPain.totalPain,

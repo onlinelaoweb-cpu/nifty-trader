@@ -3714,6 +3714,8 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     <div id="gl-card"></div>
     <!-- FYERS LOGIN (17 Oct) — token status + button to the in-app mobile login page; filled by /js/fyers-card.js; display only -->
     <div id="fy-card"></div>
+    <!-- FYERS API USAGE (9 Nov) — today's Fyers data calls vs the 5,000/day, 50/min, 5/sec limits; filled by /js/fyers-usage-card.js from /api/fyers-usage; display only -->
+    <div id="fu-card"></div>
     <!-- ORDER TICKET (17 Oct) — DRY RUN only: checks a manual option ticket (entry+SL+target), sends nothing to any broker; filled by /js/order-ticket.js -->
     <div id="ot-card"></div>
     <div class="tool-card">
@@ -4382,7 +4384,9 @@ function updateHeaderBadges(){
   }
   markFrozenIndicators(!(isWk&&secs>=open&&secs<=cls));
   const day=ist.getDay();
-  const daysToExp=day<=2?(2-day):(2+7-day);
+  let daysToExp=day<=2?(2-day):(2+7-day);
+  // 9 Nov fix: server's daysToExpiry already walks back off holiday Tuesdays (10 Nov holiday -> Monday expiry); use it so the badge says EXPIRY TODAY
+  try { if (typeof _lastState !== 'undefined' && _lastState && _lastState.daysToExpiry != null && isFinite(_lastState.daysToExpiry)) daysToExp = Math.floor(_lastState.daysToExpiry + 0.0001); } catch (e) {}
   const expBadge=document.getElementById('expiry-badge');
   if(daysToExp===0){
     const minsToClose=(15*60+30)-(h*60+m);
@@ -9036,7 +9040,10 @@ function renderOrderFlow(r, isLive) {
   const tot = (lb.buy || 0) + (lb.sell || 0), bp = tot > 0 ? Math.round(lb.buy / tot * 100) : 50, sp = 100 - bp;
   const vbox = document.getElementById('of-verdict');
   let cls = '', title = 'Buy aur sell barabar', sub;
-  if (tot < 2000) { title = 'Abhi data kam hai'; sub = 'Is bar mein itne trades nahi aaye ki kuch kaha ja sake.'; }
+  // 9 Nov: a bar only seconds old (12:00:20, ~2K) gave '55% BUYERS haavi' - need a real sample, at least 20% of the typical bar volume
+  const _vsAll = bars.map(b => b.vol).sort((x, y) => x - y), _medAll = _vsAll[Math.floor(_vsAll.length / 2)] || 0;
+  const _minTot = Math.max(2000, isLive ? 0.2 * _medAll : 0);
+  if (tot < _minTot) { title = 'Abhi data kam hai'; sub = 'Is bar mein itne trades nahi aaye ki kuch kaha ja sake.'; }
   else if (bp >= 55) { cls = 'buy'; title = 'BUYERS haavi hain'; sub = (isLive ? 'Is chalte bar' : 'Aakhri bar') + ' (' + lb.label + ') mein khareedne wale zyada hain: ' + bp + '% buy, ' + sp + '% sell.'; }
   else if (bp <= 45) { cls = 'sell'; title = 'SELLERS haavi hain'; sub = (isLive ? 'Is chalte bar' : 'Aakhri bar') + ' (' + lb.label + ') mein bechne wale zyada hain: ' + sp + '% sell, ' + bp + '% buy.'; }
   else { sub = (isLive ? 'Is chalte bar' : 'Aakhri bar') + ' (' + lb.label + ') mein dono taraf lagbhag barabar: ' + bp + '% buy, ' + sp + '% sell.'; }
@@ -9112,7 +9119,10 @@ function renderOrderFlow(r, isLive) {
       if (use.length >= 2 && f0.o != null && l0.c != null) {
         const mv = l0.c - f0.o, ds = use.reduce((a, b) => a + b.delta, 0);
         let msg, cls;
-        if (mv >= _OF_MV && ds >= _OF_DS) { msg = 'Pichle ' + use.length + ' bars: price upar (' + mv.toFixed(0) + ' pts), buyers ka zor sach mein hai.'; cls = 'g'; }
+        const _topB = use.reduce((a, b) => Math.abs(b.delta) > Math.abs(a.delta) ? b : a, use[0]);
+        const _oneBar = Math.abs(ds) > 0 && Math.abs(_topB.delta) >= 0.7 * Math.abs(ds) && use.length >= 3;   // 9 Nov: one block-like bar carrying the whole sum
+        if (_oneBar && Math.abs(mv) >= _OF_MV && ((mv > 0 && ds >= _OF_DS) || (mv < 0 && ds <= -_OF_DS))) { msg = '⚠ Price ' + (mv > 0 ? 'upar (+' : 'neeche (') + mv.toFixed(0) + ' pts), delta ' + (ds > 0 ? 'buyers' : 'sellers') + ' ka, par zyadatar ek hi bar (' + _topB.label + ') se aaya — pakka nahi.'; cls = 'w'; }
+        else if (mv >= _OF_MV && ds >= _OF_DS) { msg = 'Pichle ' + use.length + ' bars: price upar (' + mv.toFixed(0) + ' pts), buyers ka zor sach mein hai.'; cls = 'g'; }
         else if (mv <= -_OF_MV && ds <= -_OF_DS) { msg = 'Pichle ' + use.length + ' bars: price neeche (' + mv.toFixed(0) + ' pts), sellers ka zor sach mein hai.'; cls = 'r'; }
         else if (mv >= _OF_MV && ds <= -_OF_DS) { msg = '⚠ Price upar (+' + mv.toFixed(0) + ' pts) par delta sellers ka: upar ki move par bharosa kam.'; cls = 'w'; }
         else if (mv <= -_OF_MV && ds >= _OF_DS) { msg = '⚠ Price neeche (' + mv.toFixed(0) + ' pts) par delta buyers ka: neeche ki move kamzor, bounce ho sakta hai.'; cls = 'w'; }
@@ -9553,6 +9563,7 @@ function renderVolumeScannerUI(d) {
 <script src="/js/tools-pulse.js" defer></script>
 <script src="/js/golive-card.js" defer></script>
 <script src="/js/fyers-card.js" defer></script>
+<script src="/js/fyers-usage-card.js" defer></script>
 <script src="/js/order-ticket.js" defer></script>
 <script src="/js/commodity-pulse.js" defer></script>
 <script src="/js/signal-verdict.js" defer></script>

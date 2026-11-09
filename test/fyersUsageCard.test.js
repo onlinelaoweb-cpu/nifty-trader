@@ -1,0 +1,12 @@
+'use strict';
+const assert = require('assert');
+const { summarize } = require('../public/js/fyers-usage-card.js');
+const base = { ok: true, limits: { perSec: 5, perMin: 50, perDay: 5000 }, dataCallsToday: 4257, dailyLimitUsedPct: 85.1, peakPerMinute: 19, peakPerSecond: 3, callsLastMinute: 1, status429Today: 0, minutesOverPerMinLimit: 0, secondsOverPerSecLimit: 0, dataCallsByHourIST: { 9: 485, 10: 618 } };
+let s = summarize(base);
+assert.strictEqual(s.level, 'warn'); assert.ok(s.headline.includes('4,257') && s.headline.includes('743 baaki')); assert.ok(s.hours.includes('9:485'));
+s = summarize(Object.assign({}, base, { dataCallsToday: 1200, dailyLimitUsedPct: 24 })); assert.strictEqual(s.level, 'ok'); assert.strictEqual(s.notes.length, 0);
+s = summarize(Object.assign({}, base, { dataCallsToday: 4900, dailyLimitUsedPct: 98 })); assert.strictEqual(s.level, 'bad');
+s = summarize(Object.assign({}, base, { dataCallsToday: 1000, dailyLimitUsedPct: 20, status429Today: 2 })); assert.strictEqual(s.level, 'bad'); assert.ok(s.notes[0].includes('429'));
+s = summarize(Object.assign({}, base, { dataCallsToday: 1000, dailyLimitUsedPct: 20, minutesOverPerMinLimit: 1 })); assert.strictEqual(s.level, 'warn');
+assert.strictEqual(summarize(null).level, 'warn'); assert.strictEqual(summarize({ ok: false }).level, 'warn');
+console.log('fyersUsageCard ok');

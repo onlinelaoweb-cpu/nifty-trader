@@ -2124,7 +2124,8 @@ async function fetchPCRFromFyers(spotPrice, opts = {}) {
         }
 
         console.log(`[PCR-Fyers] ✅ PCR:${pcr} | ATM PCR:${atmPcr} | ATM:${atmStrike} | CE Wall:${ceWallStrike} | PE Wall:${peWallStrike} | MaxPain:${maxPain} | Strikes:${records.length}`);
-        return { pcr, atmPcr, atm: atmStrike, ceWall: ceWallStrike, peWall: peWallStrike, maxPain, records, source: 'fyers', atmCEpremium, atmPEpremium };
+        // 9 Nov: maxPain as {strike,totalPain} like the NSE/Angel paths - it was a bare number, so server.js (pcrState.maxPain?.strike) never saw it: no Max Pain level, no expiry-gravity vote
+        return { pcr, atmPcr, atm: atmStrike, ceWall: ceWallStrike, peWall: peWallStrike, maxPain: { strike: maxPain, totalPain: Number.isFinite(minLoss) ? minLoss : null }, records, source: 'fyers', atmCEpremium, atmPEpremium };
 
     } catch (e) {
         const status = e.response?.status;
