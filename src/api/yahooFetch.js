@@ -329,7 +329,26 @@ async function yahooDirectQuote(yahooSymbol) {
         if (!result) return null;
         const meta      = result.meta;
         const price     = parseFloat((meta.regularMarketPrice  || 0).toFixed(2));
-        const prevClose = parseFloat((meta.chartPreviousClose  || meta.previousClose || price).toFixed(2));
+        let prevRaw = meta.chartPreviousClose || meta.previousClose;
+        if (!prevRaw) {
+            // FIX (2026-11-11): some Yahoo index symbols (^CNXENERGY) return neither
+            // chartPreviousClose nor previousClose, so the old `|| price` fallback made
+            // prevClose == price and the sector showed exactly +0.00% all day.
+            // Derive it from the daily bars instead: when the last bar is today's live
+            // bar, the previous session's close is the bar before it.
+            try {
+                const ts = result.timestamp || [];
+                const cl = result.indicators?.quote?.[0]?.close || [];
+                const bars = [];
+                for (let i = 0; i < ts.length; i++) if (cl[i] != null && isFinite(cl[i])) bars.push({ t: ts[i], c: cl[i] });
+                if (bars.length >= 2) {
+                    const istDay = t => new Date((t + 19800) * 1000).toISOString().slice(0, 10);
+                    const mt = meta.regularMarketTime || bars[bars.length - 1].t;
+                    prevRaw = (istDay(bars[bars.length - 1].t) === istDay(mt)) ? bars[bars.length - 2].c : bars[bars.length - 1].c;
+                }
+            } catch (_) { /* fall through to price */ }
+        }
+        const prevClose = parseFloat((prevRaw || price).toFixed(2));
         if (!price) return null;
         return {
             price,
