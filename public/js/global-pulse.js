@@ -42,7 +42,11 @@
     var tri = function (v, hi, lo) { return v >= hi ? 'bull' : v <= lo ? 'bear' : 'neu'; };
 
     var us = avgOf(g.us, ['dow', 'sp500', 'nasdaq']), eu = avgOf(g.europe, ['dax', 'ftse']), as = avgOf(g.asia, ['nikkei', 'hangseng', 'shanghai']);
-    var gift = g.asia ? chg(g.asia.giftNifty) : null;
+    // The app's "GIFT Nifty" is a PROXY: Nifty spot's own change (no reliable GIFT futures feed). Outside NSE hours
+    // that is just the LAST session's move (e.g. +0.84% from yesterday while the real pre-open is red), so it is
+    // only a valid "next open" hint while the market is live. (FIX 2026-11-12)
+    var istN = new Date(nowMs + 330 * 60000), nseLive = istN.getUTCDay() >= 1 && istN.getUTCDay() <= 5 && (istN.getUTCHours() * 60 + istN.getUTCMinutes()) >= 555 && (istN.getUTCHours() * 60 + istN.getUTCMinutes()) <= 930;
+    var gift = (g.asia && nseLive) ? chg(g.asia.giftNifty) : null;
     if (us) { tile('gp-us', 'US', tri(us.avg, 0.4, -0.4), sg(us.avg) + '%', 'Dow, S&P 500 aur Nasdaq ka average ' + sg(us.avg) + '%. ' + (us.avg >= 0.4 ? 'US mazboot — Nifty ko aam taur par sahara.' : us.avg <= -0.4 ? 'US kamzor — Nifty par dabav aa sakta hai.' : 'US ka koi saaf signal nahi.')); lines.push('US ' + sg(us.avg) + '%'); }
     else tile('gp-us', 'US', 'wait', '--', 'US data abhi aa raha hai…');
     if (eu) { tile('gp-eu', 'EUROPE', tri(eu.avg, 0.4, -0.4), sg(eu.avg) + '%', 'DAX aur FTSE ka average ' + sg(eu.avg) + '%.'); lines.push('Europe ' + sg(eu.avg) + '%'); }
@@ -50,7 +54,7 @@
     if (as) { tile('gp-as', 'ASIA', tri(as.avg, 0.4, -0.4), sg(as.avg) + '%', 'Nikkei, Hang Seng aur Shanghai ka average ' + sg(as.avg) + '%.'); lines.push('Asia ' + sg(as.avg) + '%'); }
     else tile('gp-as', 'ASIA', 'wait', '--', 'Asia data abhi aa raha hai…');
     if (gift !== null) { tile('gp-gift', 'GIFT NIFTY', tri(gift, 0.3, -0.3), sg(gift) + '%', 'GIFT Nifty ' + sg(gift) + '%. Ye Nifty ka sabse seedha sanket hai — agle open ka andaza (pakka nahi).'); lines.push('GIFT Nifty ' + sg(gift) + '%'); }
-    else tile('gp-gift', 'GIFT NIFTY', 'wait', '--', 'GIFT Nifty data abhi aa raha hai…');
+    else tile('gp-gift', 'GIFT NIFTY', 'wait', '--', nseLive ? 'GIFT Nifty data abhi aa raha hai…' : 'Market band hai. App yahan asli GIFT Nifty nahi, Nifty ka pichhle session ka move dikhata hai, isliye ise sanket nahi ginte. Asli GIFT Nifty apne broker app mein dekho.');
 
     // rupee: USD/INR UP = rupee weak = headwind for Nifty
     var fx = g.currency ? chg(g.currency.usdinr) : null, fxPx = g.currency && g.currency.usdinr ? n(g.currency.usdinr.price) : null, dxy = g.currency ? chg(g.currency.dxy) : null;

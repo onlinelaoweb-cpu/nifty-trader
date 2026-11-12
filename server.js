@@ -1366,7 +1366,12 @@ async function fetchNewsHeadlines() {
         const url = `https://newsapi.org/v2/everything?q=${query}&language=en&sortBy=publishedAt&pageSize=15&apiKey=${NEWSAPI_KEY}`;
         const r = await axios.get(url, { timeout: 10000 });
         const articles = r.data?.articles || [];
-        return articles.map(a => a.title).filter(Boolean).slice(0, 15);
+        const titles = articles.map(a => a.title).filter(Boolean).slice(0, 15);
+        // 2026-11-12: NewsAPI's free plan delays articles by ~24h (12 Nov showed "Nifty set to open 300 points higher" = 11 Nov's gap-up
+        // on a gap-down day). Keep the newest publish time so the label can say how old the news really is. Display only.
+        const times = articles.map(a => Date.parse(a.publishedAt)).filter(Number.isFinite);
+        titles.newestAt = times.length ? Math.max(...times) : null;
+        return titles;
     } catch (e) {
         console.warn('[NewsSentiment] fetch error:', e.message);
         return [];
@@ -1440,6 +1445,7 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
             return failed;
         }
         const parsed = JSON.parse(jsonMatch[0]);
+        const newsAgeH = headlines.newestAt ? (Date.now() - headlines.newestAt) / 3600000 : null;
 
         const okResult = {
             available: true,
@@ -1448,7 +1454,8 @@ Reply ONLY in this exact JSON format (no extra text, no markdown):
             reason: parsed.reason,
             volatilityFlag: !!parsed.volatilityFlag,
             headlineCount: headlines.length,
-            label: `📰 News: ${parsed.label} (${parsed.score > 0 ? '+' : ''}${parsed.score}) — ${parsed.reason}`,
+            label: `📰 News: ${parsed.label} (${parsed.score > 0 ? '+' : ''}${parsed.score}) — ${parsed.reason}` + (newsAgeH != null && newsAgeH >= 6 ? ` · ⚠ khabar ~${Math.round(newsAgeH)}h purani (free news plan late deta hai)` : ''),
+            newestHeadlineAgeHours: newsAgeH != null ? Math.round(newsAgeH * 10) / 10 : null,
             generatedAt: new Date().toISOString(),
         };
         _newsLast.key = newsKey; _newsLast.result = okResult;
@@ -9521,7 +9528,9 @@ async function fetchCalendarEvents() {
     const toStr = `${sevenDaysLater.getFullYear()}-${String(sevenDaysLater.getMonth()+1).padStart(2,'0')}-${String(sevenDaysLater.getDate()).padStart(2,'0')}`;
 
     const FINNHUB_KEY = process.env.FINNHUB_API_KEY;
-    if (FINNHUB_KEY) {
+    // 2026-11-12: a Finnhub 401/403 used to jump straight to the outer catch, which skipped the NSE weekly-expiry entry
+    // (so "next event" never showed the 17 Nov expiry). Fetch inside its own try so the merge + expiry below always run.
+    if (FINNHUB_KEY) try {
       const url = `https://finnhub.io/api/v1/calendar/economic?from=${todayStr}&to=${toStr}&token=${FINNHUB_KEY}`;
       const r   = await axios.get(url, { timeout: 8000 });
       const data = r.data?.economicCalendar || [];
@@ -9548,6 +9557,9 @@ async function fetchCalendarEvents() {
           category: 'macro',
         });
       }
+    } catch (fe) {
+      if (fe?.response?.status === 403 || fe?.response?.status === 401) console.log('[Calendar] Finnhub key missing/invalid — using hardcoded India events only');
+      else console.warn('Calendar Finnhub fetch error:', fe.message);
     }
 
     // Merge hardcoded India events

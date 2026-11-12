@@ -3,7 +3,8 @@ const assert = require('assert');
 const GP = require('../public/js/global-pulse');
 
 // 12 Oct close, 22:35 IST (as pasted by the user)
-const NOW = Date.UTC(2026, 9, 12, 17, 5);   // 22:35 IST
+const NOW = Date.UTC(2026, 9, 12, 5, 0);   // 10:30 IST Monday (NSE live: GIFT proxy is valid)
+const CLOSED = Date.UTC(2026, 9, 12, 17, 5);   // 22:35 IST (market closed)
 const g = {
     us: { dow: { changePct: 1.23 }, nasdaq: { changePct: 0.20 }, sp500: { changePct: 0.49 } },
     europe: { dax: { changePct: 1.90 }, ftse: { changePct: 2.06 } },
@@ -47,6 +48,13 @@ assert.strictEqual(weak.tiles.find(x => x.id === 'gp-fx').cls, 'bear'); assert.s
 // world down + GIFT up -> opposite chip
 const dn = GP.compute({ global: { us: { dow: { changePct: -1 }, sp500: { changePct: -1 } }, europe: { dax: { changePct: -1 } }, asia: { giftNifty: { changePct: 0.5 } } } }, NOW);
 assert.ok(dn.chips.some(c => /Duniya neeche par GIFT Nifty upar/.test(c.t)));
+// market closed: the GIFT proxy is yesterday's Nifty move -> not shown as a signal, no chip, not counted
+const cl = GP.compute({ global: g, calendarEvents: events }, CLOSED);
+assert.strictEqual(cl.tiles.find(x => x.id === 'gp-gift').cls, 'wait');
+assert.ok(!cl.chips.some(c => /GIFT Nifty/.test(c.t)));
+assert.strictEqual(cl.live, 5);
+const sat = GP.compute({ global: g }, Date.UTC(2026, 9, 17, 5, 0));   // Saturday 10:30 IST
+assert.strictEqual(sat.tiles.find(x => x.id === 'gp-gift').cls, 'wait');
 // missing data never throws
 for (const bad of [undefined, null, {}, { global: {} }, { global: { us: null, currency: 'x' }, calendarEvents: 'no' }]) {
     const e = GP.compute(bad, NOW); assert.strictEqual(e.tiles.length, 7); assert.strictEqual(e.verdict, 'Collecting data…');
