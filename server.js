@@ -2065,6 +2065,10 @@ function combineSignals(indicators, opts) {
                     // On expiry day, exclude Max Pain from S/R gate — it's not a wall,
                     // it's a magnet. The max pain vote in combineSignals() handles this.
                     if (marketState.maxPain?.expiryDay && lvl.type === 'MP') return false;
+                    // Max Pain only pulls/pins price close to expiry. With >2 days to
+                    // expiry it is not a reliable wall, so it must not block entries
+                    // (12 Nov: MP 25350 at 5 DTE blocked a whole session).
+                    if (lvl.type === 'MP' && daysToNextExpiry() > 2) return false;
                     return Math.abs(marketState.nifty - lvl.price) <= bufferPts;
                 });
                 if (nearbyLevel) {
