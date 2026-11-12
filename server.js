@@ -9554,7 +9554,7 @@ async function fetchCalendarEvents() {
     for (const ev of HARDCODED_INDIA_EVENTS) {
       if (ev.date >= todayStr) {
         const exists = events2.some(e => e.title === ev.title && e.date === ev.date);
-        if (!exists) events2.push({ ...ev, time: '10:00', category: ev.category });
+        if (!exists) events2.push({ ...ev, category: ev.category });   // FIX (2026-11-12): keep each event's own time (was forced to '10:00' — India CPI 16:00 showed as 10:00)
       }
     }
 
@@ -9597,7 +9597,7 @@ async function fetchCalendarEvents() {
       console.warn('Calendar fetch error:', e.message);
     }
     // Fallback to hardcoded only
-    _calendarCache = HARDCODED_INDIA_EVENTS.filter(e => e.date >= (() => { const i = getIST(); return `${i.getFullYear()}-${String(i.getMonth()+1).padStart(2,'0')}-${String(i.getDate()).padStart(2,'0')}`; })()).map(e => ({ ...e, time: '10:00' }));
+    _calendarCache = HARDCODED_INDIA_EVENTS.filter(e => e.date >= (() => { const i = getIST(); return `${i.getFullYear()}-${String(i.getMonth()+1).padStart(2,'0')}-${String(i.getDate()).padStart(2,'0')}`; })()).map(e => ({ ...e }));
     marketState.calendarEvents = _calendarCache;
   }
 }
