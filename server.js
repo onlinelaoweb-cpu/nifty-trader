@@ -48,6 +48,7 @@ const { processIndicators,
         computePOC, computeDelta }                    = require('./src/api/indicators');
 const { fetchMarketData }           = require('./src/api/marketData');
 const sahiApi                       = require('./src/api/sahi');   // 3 Nov — read-only Sahi market data, shadow compare only, OFF unless SAHI_ENABLED=1
+const sahiFallback                  = require('./src/api/sahiFallback');   // 13 Nov — last-resort Nifty spot only, OFF unless SAHI_FALLBACK=1
 const { analyzeMultiTimeframe, getAdxDebug } = require('./src/api/multiTimeframe');
 const { fetchGlobalCues, fetchIntradayBars } = require('./src/api/globalCues');
 const { fetchAdvanceDecline,
@@ -7864,6 +7865,7 @@ async function pollYahooPrice() {
     const mins = ist.getHours() * 60 + ist.getMinutes();
     if (mins < 480 || mins > 960) return; // 8:00 AM – 4:00 PM
     if (marketState.source === 'websocket' && (Date.now() - _lastTickAt) < 90_000) return;
+    let gotPrice = false;
     try {
         const data = await fetchMarketData();
         if (data?.niftyData?.price > 0) {
@@ -7875,9 +7877,23 @@ async function pollYahooPrice() {
             // the signal, RSI, confidence were frozen at stale values while price showed live.
             // Now calls updatePrice() exactly like the WS tick handler does.
             await updatePrice(p, change, changePct, 'yahoo');
+            gotPrice = true;
             console.log(`[Yahoo 1m] NIFTY: ${p}`);
         }
     } catch(e) { /* silent — non-critical */ }
+    // 13 Nov — Sahi last resort: ONLY if the whole normal chain gave no price, during live market hours.
+    // Spot only (no PCR/chain/candles); source is labelled 'sahi' so the footer shows it. Off unless SAHI_FALLBACK=1.
+    if (!gotPrice && isMarketOpen()) {
+        try {
+            const sp = await sahiFallback.getNiftySpot({ lastKnown: marketState.nifty || marketState.lastClose });
+            if (sp && sp.price > 0) {
+                const prev = marketState.prevClose || 0;
+                const change    = prev > 0 ? parseFloat((sp.price - prev).toFixed(2)) : (marketState.change ?? 0);
+                const changePct = prev > 0 ? parseFloat(((sp.price - prev) / prev * 100).toFixed(2)) : (marketState.changePct ?? 0);
+                await updatePrice(sp.price, change, changePct, 'sahi');
+            }
+        } catch (e) { /* silent — fallback must never break the poller */ }
+    }
 }
 
 // ── WebSocket tick watchdog ───────────────────────────────────────────────────
