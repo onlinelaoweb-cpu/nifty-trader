@@ -2509,6 +2509,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
       <div id="signal-streak" style="display:none;margin-top:5px;font-size:12px;font-family:'Orbitron',monospace;letter-spacing:1px;text-align:center;"></div>
     </div>
     <div id="ws-card" style="display:none"></div>
+    <div id="gw-card" style="display:none"></div>
   </div>
 
   <!-- Entry window badge -->
@@ -4901,6 +4902,7 @@ function renderDashboard(s) {
   const tick65 = document.getElementById('conf-tick65');
   if (tick65) tick65.style.color = conf >= 65 ? 'var(--green)' : 'var(--dim)';
   try { if (window.WaitStrip) window.WaitStrip.render(s); } catch (e) { console.warn('[WaitStrip] render failed:', e.message); }
+  try { if (window.GapWatch) window.GapWatch.render(s); } catch (e) { console.warn('[GapWatch] render failed:', e.message); }
 
   // RSI
   if (s.rsi != null) {
@@ -9569,5 +9571,6 @@ function renderVolumeScannerUI(d) {
 <script src="/js/signal-verdict.js" defer></script>
 <script src="/js/track-pulse.js" defer></script>
 <script src="/js/wait-strip.js" defer></script>
+<script src="/js/gap-watch.js" defer></script>
 </body>
 </html>
