@@ -2510,6 +2510,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
     </div>
     <div id="ws-card" style="display:none"></div>
     <div id="gw-card" style="display:none"></div>
+    <div id="mb-card" style="display:none"></div>
   </div>
 
   <!-- Entry window badge -->
@@ -4903,6 +4904,7 @@ function renderDashboard(s) {
   if (tick65) tick65.style.color = conf >= 65 ? 'var(--green)' : 'var(--dim)';
   try { if (window.WaitStrip) window.WaitStrip.render(s); } catch (e) { console.warn('[WaitStrip] render failed:', e.message); }
   try { if (window.GapWatch) window.GapWatch.render(s); } catch (e) { console.warn('[GapWatch] render failed:', e.message); }
+  try { if (window.MarketBrief) window.MarketBrief.render(s); } catch (e) { console.warn('[MarketBrief] render failed:', e.message); }
 
   // RSI
   if (s.rsi != null) {
@@ -9572,5 +9574,6 @@ function renderVolumeScannerUI(d) {
 <script src="/js/track-pulse.js" defer></script>
 <script src="/js/wait-strip.js" defer></script>
 <script src="/js/gap-watch.js" defer></script>
+<script src="/js/market-brief.js" defer></script>
 </body>
 </html>
