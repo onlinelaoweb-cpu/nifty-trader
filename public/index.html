@@ -3144,6 +3144,7 @@ html.vn-day .checklist-header{background:#F5F7FF;}
         <div class="sm-comp-row"><div class="sm-comp-icon neut">🔄</div><span class="sm-comp-label">OI BUILD</span><span class="sm-comp-value">Awaiting data</span><span class="sm-comp-pts" style="color:var(--dim);">--</span></div>
         <div class="sm-comp-row"><div class="sm-comp-icon neut">💰</div><span class="sm-comp-label">ATM FLOW</span><span class="sm-comp-value">Awaiting data</span><span class="sm-comp-pts" style="color:var(--dim);">--</span></div>
       </div>
+      <div id="sm-extra" style="display:none;margin-top:8px;font-size:11.5px;line-height:1.45;color:var(--dim);"></div>
     </div>
   </div>
 
@@ -5577,10 +5578,13 @@ function renderDashboard(s) {
   }
   // Smart Money Bias — only re-render when bias label changes
   if (s.smartMoney) {
-    const smFP = (s.smartMoney.bias || '') + '|' + (s.smartMoney.confidence || 0);
+    // 15 Nov — fingerprint now also covers score, components, window and signal so the new notes refresh (was bias only)
+    const smFP = (s.smartMoney.bias || '') + '|' + (s.smartMoney.score || 0) + '|' + (s.entryWindow?.status || '') + '|' + (s.signal || '') + '|'
+      + (s.smartMoney.components || []).map(c => (c.value || '') + (c.pts || 0)).join(',') + '|'
+      + (Array.isArray(s.reason) ? s.reason.filter(r => /Smart Money/i.test(String(r))).join(';') : '');
     if (smFP !== renderDashboard._lastSmFP) {
       renderDashboard._lastSmFP = smFP;
-      renderSmartMoney(s.smartMoney);
+      renderSmartMoney(s.smartMoney, s);
     }
   }
   if (s.optionFlow) {
@@ -6440,8 +6444,10 @@ function renderBTST(btst) {
 
 // ─── MOMENTUM BREAKDOWN RENDERER ─────────────────────────────────────────────
 // ── Smart Money Bias renderer ────────────────────────────────────────────────
-function renderSmartMoney(sm) {
+function renderSmartMoney(sm, st) {
   if (!sm) return;
+  let _smn = null;
+  try { _smn = window.SmNotes ? window.SmNotes.compute(sm, st) : null; } catch (e) { _smn = null; }
   const card   = document.getElementById('sm-card');
   const badge  = document.getElementById('sm-bias-badge');
   const fill   = document.getElementById('sm-score-fill');
@@ -6503,10 +6509,19 @@ function renderSmartMoney(sm) {
       return '<div class="sm-comp-row">'
         + '<div class="sm-comp-icon ' + iC + '">' + (icons[i] || '•') + '</div>'
         + '<span class="sm-comp-label">' + (labels[i] || c.label) + '</span>'
-        + '<span class="sm-comp-value">' + (c.value || '--') + '</span>'
+        + '<span class="sm-comp-value">' + ((_smn && _smn.closedText && /^Awaiting/.test(String(c.value || ''))) ? _smn.closedText : (c.value || '--')) + '</span>'
         + '<span class="sm-comp-pts" style="color:' + ptColor + '">' + ptText + '</span>'
         + '</div>';
     }).join('');
+  }
+  // 15 Nov — plain-language notes under the rows (display only)
+  const _x = document.getElementById('sm-extra');
+  if (_x) {
+    if (_smn) {
+      const _e = t => String(t).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+      _x.innerHTML = (_smn.scoreLine ? '<div>' + _e(_smn.scoreLine) + '</div>' : '') + '<div style="margin-top:3px;">' + _e(_smn.effectLine) + '</div>';
+      _x.style.display = 'block';
+    } else { _x.style.display = 'none'; }
   }
 }
 
@@ -9578,5 +9593,6 @@ function renderVolumeScannerUI(d) {
 <script src="/js/wait-strip.js" defer></script>
 <script src="/js/gap-watch.js" defer></script>
 <script src="/js/market-brief.js" defer></script>
+<script src="/js/sm-notes.js" defer></script>
 </body>
 </html>
