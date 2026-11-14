@@ -1120,26 +1120,50 @@ ${analyticsBlock}
     await sendMessage(msg);
 }
 
+// ── 15 Nov 2026 — SIGNAL MUTE ────────────────────────────────────────────────
+// The user asked to stop Telegram signals and let them reach ONLY the in-app Auto Journal. Signal / setup / trigger / exit alerts are muted
+// here, at the module boundary, so nothing upstream changes: the Auto Journal and signal logging run BEFORE or independently of these sends
+// (and isConfigured() is untouched — several engines return early when it is false, so it must keep telling the truth).
+// Operational and summary messages (morning/close summary, VIX, weekly review, Fyers token reminder, high-impact event warning, sync check)
+// still go out. Turn signals back on with Railway variable TELEGRAM_SIGNALS=on (read on every call, no redeploy logic needed).
+function signalsOn() { return String(process.env.TELEGRAM_SIGNALS || '').trim().toLowerCase() === 'on'; }
+let _mutedCount = 0;
+function muteSignal(name, fn) {
+    return async function (...args) {
+        if (!signalsOn()) {
+            _mutedCount++;
+            if (_mutedCount <= 3 || _mutedCount % 50 === 0) console.log(`🔇 [Telegram] ${name} muted (TELEGRAM_SIGNALS is not "on") — signals go to the Auto Journal only [${_mutedCount} muted so far]`);
+            return null;
+        }
+        return fn.apply(this, args);
+    };
+}
+async function sendOpsMessage(text) {
+    await sendMessage(text);
+}
+
 module.exports = {
     fmtReviewDate,
     fmtEodRsi,
-    sendSignalAlert,
-    sendMTFAlert,
-    sendScalpAlert,
-    sendSignalTimeline,
-    sendPartialProfitAlert,
+    signalsOn,
+    sendSignalAlert:          muteSignal('sendSignalAlert', sendSignalAlert),
+    sendMTFAlert:             muteSignal('sendMTFAlert', sendMTFAlert),
+    sendScalpAlert:           muteSignal('sendScalpAlert', sendScalpAlert),
+    sendSignalTimeline:       muteSignal('sendSignalTimeline', sendSignalTimeline),
+    sendPartialProfitAlert:   muteSignal('sendPartialProfitAlert', sendPartialProfitAlert),
     sendMorningSummary,
     sendVIXAlert,
-    sendVolumeScannerAlert,
+    sendVolumeScannerAlert:   muteSignal('sendVolumeScannerAlert', sendVolumeScannerAlert),
     sendCloseSummary,
-    sendExitAlert,
-    sendMomentumExitWarning,
-    sendDeltaResponseWarning,
-    sendEventIvWarning,
-    sendNoProgressWarning,
-    sendNishanebaazAlert,
-    sendSpreadAlert,
-    sendRawMessage,
+    sendExitAlert:            muteSignal('sendExitAlert', sendExitAlert),
+    sendMomentumExitWarning:  muteSignal('sendMomentumExitWarning', sendMomentumExitWarning),
+    sendDeltaResponseWarning: muteSignal('sendDeltaResponseWarning', sendDeltaResponseWarning),
+    sendEventIvWarning:       muteSignal('sendEventIvWarning', sendEventIvWarning),
+    sendNoProgressWarning:    muteSignal('sendNoProgressWarning', sendNoProgressWarning),
+    sendNishanebaazAlert:     muteSignal('sendNishanebaazAlert', sendNishanebaazAlert),
+    sendSpreadAlert:          muteSignal('sendSpreadAlert', sendSpreadAlert),
+    sendRawMessage:           muteSignal('sendRawMessage', sendRawMessage),   // used by trigger/setup/digest alerts -> muted; ops messages use sendOpsMessage
+    sendOpsMessage,
     sendWeeklyGateReview,
     isConfigured
 };

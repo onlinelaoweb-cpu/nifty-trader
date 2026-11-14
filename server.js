@@ -178,7 +178,7 @@ const {
     sendSignalAlert, sendMTFAlert,
     sendMorningSummary, sendVIXAlert,
     sendCloseSummary, sendExitAlert, sendMomentumExitWarning, sendDeltaResponseWarning, sendEventIvWarning, sendNoProgressWarning,
-    sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, isConfigured,
+    sendNishanebaazAlert, sendSpreadAlert, sendRawMessage, sendOpsMessage, isConfigured,
     sendScalpAlert, sendSignalTimeline, sendPartialProfitAlert,
     sendWeeklyGateReview,
 }                                   = require('./src/api/telegram');
@@ -6118,7 +6118,7 @@ async function collectBtcWeeklyData() {
 
 async function sendBtcWeeklySummary(ist) {
     const msg = formatBtcWeeklySummary(await collectBtcWeeklyData(), weekKeyIST(ist || getIST()));
-    if (isConfigured()) await sendRawMessage(msg);
+    if (isConfigured()) await sendOpsMessage(msg);
     return msg;
 }
 
@@ -6191,7 +6191,7 @@ async function collectNiftyWeeklyData() {
 
 async function sendNiftyWeeklySummary(ist) {
     const msg = formatNiftyWeeklySummary(await collectNiftyWeeklyData(), weekKeyIST(ist || getIST()));
-    if (isConfigured()) await sendRawMessage(msg);
+    if (isConfigured()) await sendOpsMessage(msg);
     return msg;
 }
 
@@ -9655,7 +9655,7 @@ function scheduleEventAlerts(evList) {
       setTimeout(async () => {
         const msg = `⚠️ HIGH IMPACT EVENT IN 30 MIN\n📌 ${ev.title}\n🕐 ${ev.time} IST\n🌍 ${ev.country}\nConsider reducing position size or avoiding new entries.`;
         try {
-          await sendRawMessage(msg);
+          await sendOpsMessage(msg);
         } catch(_) {}
       }, delay);
       console.log(`📅 Alert scheduled: ${ev.title} at ${ev.time} (in ${Math.round(delay/60000)} min)`);
@@ -13164,7 +13164,7 @@ app.get('/api/telegram-sync-check', requireToken, async (req, res) => {
     }
     try {
         const now = getIST().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-        await sendRawMessage(`✅ Telegram sync check — ${now}\nVardaanNifty AI is connected and can send messages.`);
+        await sendOpsMessage(`✅ Telegram sync check — ${now}\nVardaanNifty AI is connected and can send messages.`);
         res.json({ success: true, message: 'Sent — check your Telegram chat now' });
     } catch (e) {
         res.json({ success: false, error: e.message });
@@ -16646,7 +16646,7 @@ function startPollingIntervals() {
     setTimeout(() => { combinedPCRTick(); setInterval(combinedPCRTick, 3 * 60 * 1000); }, 55 * 1000);
     // 17 Oct — Fyers daily-token reminder: reads only the expiry inside the token (no API call); silent when the token is fresh.
     try {
-        const _fyersReminder = createFyersTokenReminder({ getToken: () => _nseDataForFyers.getFyersAccessToken(), send: m => sendRawMessage(m), log: m => console.log(m) });
+        const _fyersReminder = createFyersTokenReminder({ getToken: () => _nseDataForFyers.getFyersAccessToken(), send: m => sendOpsMessage(m), log: m => console.log(m) });
         setInterval(() => { _fyersReminder.tick().catch(() => {}); }, 60 * 1000);
     } catch (e) { console.warn('[FyersReminder] not started:', e.message); }
     // Opening Range Breakout (13 Sep) — 90s cadence, narrow window (9:30-10:30)
