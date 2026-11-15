@@ -17045,6 +17045,7 @@ async function tryAngelLogin() {
         _lastAngelAuth = { jwtToken: auth.jwtToken, feedToken: auth.feedToken };
         if (_tickFlowLab) _tickFlowLab.setAuth(_lastAngelAuth);   // 17 Oct — lab opens its OWN second socket; the app's own socket above is untouched
         _angelLoggedIn = true;
+        setTimeout(() => { try { refreshTrendShadow(); } catch (_) {} }, 8000);   // 15 Nov — shadow log only
         // On retry logins (after init is complete), immediately refresh breadth
         // with the real Angel Nifty50 data. During initial startup this is skipped
         // because initializeLiveData() calls refreshBreadth() 2s after tryAngelLogin()
