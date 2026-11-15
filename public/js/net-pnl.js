@@ -1,8 +1,8 @@
 /* NET P&L (after charges) for the Signal Journal — display only (15 Nov 2026).
  * The Journal's P&L is GROSS. This shows what is left after brokerage + statutory charges, for two ways of trading, so the forward-test verdict
  * (Profit Factor >= 1.1) is judged on money that would really stay in the account:
- *   • MANUAL     — Stoxkart manual orders: Rs 0 brokerage (statutory charges still apply)
- *   • AUTOMATION — Stoxkart API/auto orders: Rs 20 per order (2 orders per round trip)
+ *   • Rs 0 BROKERAGE — Stoxkart manual orders, and also any zero-brokerage API broker (e.g. Kotak Neo claims zero-brokerage API orders; verify current pricing): statutory charges still apply, so the numbers are identical
+ *   • Rs 20/ORDER — Stoxkart API/auto orders: Rs 20 per order (2 orders per round trip)
  * Charges for an options BUY round trip (premium bought at p1, sold at p2, qty units) — rates in force from FY 2026-27:
  *   STT 0.15% of the premium SOLD (NSE/FATAX/73524, 31 Mar 2026) · NSE transaction charge incl. IPFT 0.03553% of buy+sell premium (NSE/FA/73061, 27 Feb 2026)
  *   SEBI fee Rs 10 per crore · stamp duty 0.003% of the premium BOUGHT · GST 18% on (brokerage + NSE charge + SEBI fee).
@@ -72,15 +72,15 @@
   function html(r) {
     var t = r.total, d = r.today, col = function (n) { return n > 0 ? 'var(--green)' : n < 0 ? 'var(--red)' : 'var(--dim)'; };
     var line = function (label, g, m, a) {
-      return '<div style="margin-bottom:3px;"><b style="color:var(--text);">' + esc(label) + '</b> — gross <span style="color:' + col(g) + '">' + esc(inr(g)) + '</span> · net (manual ₹0) <span style="color:' + col(m) + ';font-weight:700;">' + esc(inr(m)) +
-        '</span> · net (automation ₹20/order) <span style="color:' + col(a) + ';font-weight:700;">' + esc(inr(a)) + '</span></div>';
+      return '<div style="margin-bottom:3px;"><b style="color:var(--text);">' + esc(label) + '</b> — gross <span style="color:' + col(g) + '">' + esc(inr(g)) + '</span> · net (manual ya zero-brokerage API, ₹0) <span style="color:' + col(m) + ';font-weight:700;">' + esc(inr(m)) +
+        '</span> · net (₹20/order automation) <span style="color:' + col(a) + ';font-weight:700;">' + esc(inr(a)) + '</span></div>';
     };
     return '<div style="margin-bottom:4px;font-family:\'Orbitron\',monospace;font-size:11px;letter-spacing:1.2px;color:var(--cyan,#4fd1ff);">💸 KHARCHE KE BAAD (NET P&amp;L)</div>' +
       (d.n ? line('Aaj (' + d.n + ' trade)', d.gross, d.manual, d.auto) : '') +
       line('Ab tak (' + t.n + ' band trade)', t.gross, t.manual, t.auto) +
-      '<div style="margin-top:3px;">Profit Factor — gross <b>' + pfTxt(t.pfGross) + '</b> · net manual <b>' + pfTxt(t.pfManual) + '</b> · net automation <b>' + pfTxt(t.pfAuto) +
+      '<div style="margin-top:3px;">Profit Factor — gross <b>' + pfTxt(t.pfGross) + '</b> · net ₹0-brokerage <b>' + pfTxt(t.pfManual) + '</b> · net ₹20/order <b>' + pfTxt(t.pfAuto) +
       '</b> (verdict ke liye ≥ 1.1 chahiye)</div>' +
-      '<div style="margin-top:3px;">Har trade par kharcha: manual ~₹' + t.perTradeManual.toFixed(0) + ' (sirf STT, exchange, stamp, GST), automation ~₹' + t.perTradeAuto.toFixed(0) + '.' +
+      '<div style="margin-top:3px;">Har trade par kharcha: ₹0-brokerage (manual ya zero-brokerage API) ~₹' + t.perTradeManual.toFixed(0) + ' (sirf STT, exchange, stamp, GST), ₹20/order automation ~₹' + t.perTradeAuto.toFixed(0) + '.' +
       (r.skipped ? ' ' + r.skipped + ' trade chhode gaye (EOD exit verify nahi tha).' : '') + ' Slippage isme nahi joda.</div>';
   }
 
