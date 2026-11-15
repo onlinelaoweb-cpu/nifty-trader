@@ -48,6 +48,7 @@ const { processIndicators,
         computePOC, computeDelta }                    = require('./src/api/indicators');
 const { fetchMarketData }           = require('./src/api/marketData');
 const sahiApi                       = require('./src/api/sahi');   // 3 Nov — read-only Sahi market data, shadow compare only, OFF unless SAHI_ENABLED=1
+const trendShadow                  = require('./src/utils/trendShadow');   // 15 Nov — shadow log only, no trades
 const sahiFallback                  = require('./src/api/sahiFallback');   // 13 Nov — last-resort Nifty spot only, OFF unless SAHI_FALLBACK=1
 const { analyzeMultiTimeframe, getAdxDebug } = require('./src/api/multiTimeframe');
 const { fetchGlobalCues, fetchIntradayBars } = require('./src/api/globalCues');
@@ -13109,6 +13110,35 @@ app.get('/api/news-sentiment', (req,res) => res.json(marketState.newsSentiment))
 app.get('/api/bos-choch', (req,res) => res.json(marketState.physicsOfTrading?.bosChoch));
 app.get('/api/option-greeks', (req,res) => res.json(marketState.optionGreeks));
 app.get('/api/market-regime', (req,res) => res.json(marketState.marketRegime));
+
+// ── 15 Nov — Trend Shadow (Nifty 1H 50-MA + Supertrend), LOG ONLY ────────────
+// Hypothetical signals from Angel ONE_HOUR candles, replayed on every refresh.
+// Never touches signals, journal or orders. Compare with the forward test.
+let _trendShadow = { state: 'NO_DATA', updatedAt: null, error: null };
+let _trendShadowLastState = null;
+async function refreshTrendShadow() {
+    try {
+        if (!_lastAngelAuth || !_lastAngelAuth.jwtToken) { _trendShadow.error = 'no angel session'; return; }
+        const fmt = (d) => { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+        const ist = getIST();
+        const from = new Date(ist.getTime() - 45 * 86400e3);
+        const res = await axios.post('https://apiconnect.angelone.in/rest/secure/angelbroking/historical/v1/getCandleData',
+            { exchange: 'NSE', symboltoken: '99926000', interval: 'ONE_HOUR', fromdate: fmt(from).slice(0, 10) + ' 09:15', todate: fmt(ist) },
+            { headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${_lastAngelAuth.jwtToken}`,
+                'X-UserType': 'USER', 'X-SourceID': 'WEB', 'X-ClientLocalIP': '127.0.0.1', 'X-ClientPublicIP': '127.0.0.1',
+                'X-MACAddress': '00:00:00:00:00:00', 'X-PrivateKey': process.env.ANGEL_API_KEY || '' }, timeout: 10_000 });
+        const candles = trendShadow.parseAngel(res.data && res.data.data, Date.now());
+        const r = trendShadow.compute(candles);
+        _trendShadow = { ...r, updatedAt: new Date().toISOString(), error: null, note: 'SHADOW ONLY. Assumed: SMA50, Supertrend ATR10 x3, exit on Supertrend flip.' };
+        if (r.state !== _trendShadowLastState) {
+            console.log(`[TrendShadow] ${_trendShadowLastState || 'init'} -> ${r.state} | px ${r.price} ma50 ${r.ma && r.ma.toFixed(1)} st ${r.stLine && r.stLine.toFixed(1)} bars ${r.bars} | closed ${r.trades.length} trades ${Math.round(r.totalPts || 0)} pts`);
+            _trendShadowLastState = r.state;
+        }
+    } catch (e) { _trendShadow.error = e.message; console.log('[TrendShadow] fetch failed:', e.message); }
+}
+setInterval(() => { try { const m = getIST().getMinutes(); if (m >= 16 && m <= 19 && isNSEMarketDay()) refreshTrendShadow(); } catch (_) {} }, 3 * 60 * 1000);
+setTimeout(refreshTrendShadow, 90 * 1000);
+app.get('/api/trend-shadow', (req, res) => res.json(_trendShadow));
 
 app.get('/api/health',  (req,res) => res.json({
     status:marketState.connected?'live':'waiting',
