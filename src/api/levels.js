@@ -58,13 +58,16 @@ async function getWeeklyOHLC() {
 let _pdWarnAt = 0;
 async function getPrevDayOHLC() {
     try {
-        const indices = await fetchAllIndices();
-        const row = indices.find(r => r.index === 'NIFTY 50' || r.indexSymbol === 'NIFTY 50');
-        if (!row) return null;
+        // 16 Nov — NSE allIndices often times out; previously that returned null and Key Levels (nearest S/R,
+        // pivots, PDH/PDL) went blank all day after a restart. Now a failed allIndices call only loses the
+        // previousClose cross-check; the real previous daily bar (history DB / daily feed) is still used.
+        let indices = [];
+        try { indices = await fetchAllIndices(); } catch (_) { indices = []; }
+        const row = Array.isArray(indices) ? indices.find(r => r.index === 'NIFTY 50' || r.indexSymbol === 'NIFTY 50') : null;
         // 28 Oct — FIX: row.high / row.low are TODAY's running high/low, so "Prev Day High/Low" and every pivot
         // were following today's developing range. Use the real previous daily bar (history DB first, then the
         // NSE/Yahoo daily feed); accepted only if its close matches NSE's previousClose (see utils/prevDay.js).
-        const prevClose = parseFloat(row.previousClose);
+        const prevClose = row ? parseFloat(row.previousClose) : NaN;   // NaN => pickPrevDayBar skips the close check
         const todayISO  = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
         let bar = null;
         try { if (_histModule) bar = pickPrevDayBar(await _histModule.getHistoricalCandles(10), todayISO, prevClose); } catch (_) { /* try next */ }
@@ -72,6 +75,7 @@ async function getPrevDayOHLC() {
             try { const { nseNiftyDaily } = require('./yahooFetch'); bar = pickPrevDayBar(await nseNiftyDaily(10), todayISO, prevClose); } catch (_) { /* fall through */ }
         }
         if (bar) return { high: bar.high, low: bar.low, close: bar.close, open: bar.open };
+        if (!row) return null;   // no verified bar and no live row either: nothing trustworthy to show
         if (Date.now() - _pdWarnAt > 30 * 60 * 1000) {
             _pdWarnAt = Date.now();
             console.warn('[SR] real previous-day bar not found — PDH/PDL/pivots use today\'s running high/low (approx) until daily data is available');
