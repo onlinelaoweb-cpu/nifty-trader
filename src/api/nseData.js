@@ -2594,6 +2594,21 @@ function parseFIIDII(data) {
     };
 }
 
+// 17 Nov — FII/DII fallback (Groww page) used ONLY while NSE is failing/backing off. Validated parse (see utils/fiidiiAlt.js).
+let _fiiAltAt = 0;
+async function _tryFiiAlt() {
+    if (_fii._failStreak < 1) return;                       // NSE not failing: leave it alone
+    if (Date.now() - _fiiAltAt < 20 * 60 * 1000) return;    // at most once per 20 min
+    _fiiAltAt = Date.now();
+    try {
+        const alt = require('../utils/fiidiiAlt');
+        const p = await alt.fetchGrowwFiiDii(axios);
+        if (_fii.date && p.date < String(_fii.date).slice(0, 10)) return;   // never replace newer data with older
+        Object.assign(_fii, p, { fetchedAt: new Date(), lastError: null, fetchCount: _fii.fetchCount + 1, source: 'groww' });
+        console.log(`💰 [FII/DII] via Groww (NSE blocked) ${p.date} | FII Net: ${p.fiiNet} | DII Net: ${p.diiNet}`);
+    } catch (e) { console.warn('[FII/DII] Groww fallback failed:', e.message); }
+}
+
 async function _fetchFIIDII() {
     // FII/DII data is end-of-day — NSE only updates it after 18:00 IST.
     // Widen to 6:00–22:00 window (was 8:00–22:00) so pre-market boot gets yesterday's data.
@@ -2604,6 +2619,7 @@ async function _fetchFIIDII() {
         return;
     }
 
+    await _tryFiiAlt();
     // Backoff guard: NSE FII/DII endpoint times out from Railway IPs during market hours.
     // After 3 consecutive failures, back off for 60 min to avoid wasting 20s per cycle.
     if (Date.now() < _fii._backoffUntil) {
