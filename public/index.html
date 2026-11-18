@@ -7123,7 +7123,7 @@ function updateFIIDIIDisplay(fii, dii) {
     const _istHour = parseInt(_ud.toLocaleString('en-GB', {hour:'2-digit', hour12:false, timeZone:'Asia/Kolkata'}), 10);
     const _dataDate = fii?.date || dii?.date || null;
     const _what = _dataDate ? ('data: ' + _dataDate) : (_istHour < 18 ? 'pichle session ka data' : 'us din ka data');
-    updEl.textContent = 'NSE \u00b7 ' + _what + ' \u00b7 fetched ' + _t + ' (end-of-day, live nahi)';
+    updEl.textContent = (fii?.source === 'groww' ? 'Groww (NSE blocked)' : 'NSE') + ' \u00b7 ' + _what + ' \u00b7 fetched ' + _t + ' (end-of-day, live nahi)';
   }
 }
 

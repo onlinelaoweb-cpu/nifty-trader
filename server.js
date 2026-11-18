@@ -9353,10 +9353,10 @@ async function refreshPCR() {
         // nseData fetches FII/DII every 15 min on its own; we read it here.
         const fiiState = getFIIState();
         if (fiiState.fiiNet !== null) {
-            marketState.fii = { buy: fiiState.fiiBuy, sell: fiiState.fiiSell, net: fiiState.fiiNet, date: fiiState.date || null, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
+            marketState.fii = { buy: fiiState.fiiBuy, sell: fiiState.fiiSell, net: fiiState.fiiNet, date: fiiState.date || null, source: fiiState.source || 'NSE', updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
         }
         if (fiiState.diiNet !== null) {
-            marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet, date: fiiState.date || null, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
+            marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet, date: fiiState.date || null, source: fiiState.source || 'NSE', updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
         }
         // BUG3 FIX: Refresh Smart Money Bias whenever OI/FII data updates (not only on price ticks)
         marketState.smartMoney = computeSmartMoneyBias(marketState);
@@ -9497,10 +9497,10 @@ function syncFIIToMarketState() {
     try {
         const fiiState = getFIIState();
         if (fiiState.fiiNet !== null) {
-            marketState.fii = { buy: fiiState.fiiBuy, sell: fiiState.fiiSell, net: fiiState.fiiNet, date: fiiState.date || null, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
+            marketState.fii = { buy: fiiState.fiiBuy, sell: fiiState.fiiSell, net: fiiState.fiiNet, date: fiiState.date || null, source: fiiState.source || 'NSE', updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
         }
         if (fiiState.diiNet !== null) {
-            marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet, date: fiiState.date || null, updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
+            marketState.dii = { buy: fiiState.diiBuy, sell: fiiState.diiSell, net: fiiState.diiNet, date: fiiState.date || null, source: fiiState.source || 'NSE', updatedAt: fiiState.fetchedAt ? new Date(fiiState.fetchedAt).toISOString() : new Date().toISOString() };
         }
         if (fiiState.fiiNet !== null || fiiState.diiNet !== null) {
             marketState.smartMoney = computeSmartMoneyBias(marketState);

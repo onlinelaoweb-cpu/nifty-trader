@@ -2664,6 +2664,7 @@ async function _fetchFIIDII() {
         Object.assign(_fii, parsed, {
             fetchedAt : new Date(),
             lastError : null,
+            source    : 'NSE',
             fetchCount: _fii.fetchCount + 1,
         });
 

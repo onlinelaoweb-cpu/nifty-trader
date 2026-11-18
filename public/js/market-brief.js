@@ -61,8 +61,15 @@
   // 1) subah ka brief --------------------------------------------------------
   function brief(s, now) {
     var items = [];
-    var close = num(s.lastClose) || num(s.nifty), chg = num(s.change), pct = num(s.changePct);
-    if (close !== null && close > 0) {
+    // 18 Nov — lastClose is overwritten by every live tick, including the 09:00-09:15 pre-open indicative price, so the brief showed
+    // "Kal ka close 25350 (-36 pts)" when the real close was 25387. The real previous close is premarketGap.prevClose (NSE); use it first.
+    var pg0 = s.premarketGap, realPrev = pg0 && pg0.available ? num(pg0.prevClose) : null;
+    var close = (realPrev !== null && realPrev > 0) ? realPrev : (num(s.lastClose) || num(s.nifty)), chg = num(s.change), pct = num(s.changePct);
+    if (realPrev !== null && realPrev > 0) {
+      var px = num(s.nifty), ind = (px !== null && px > 0 && Math.abs(px - realPrev) > 0.5) ? ' Pre-open bhav abhi ' + px.toFixed(0) + ' (' + sgn(px - realPrev) + ' pts).' : '';
+      items.push({ k: 'close', icon: '🔔', title: 'Kal ka close ' + realPrev.toFixed(0),
+        text: 'Aaj ka gap isi se naapa jayega.' + ind + ' 09:15–10:00 gap-fill window hai, engine 10:00 tak wait karta hai.' });
+    } else if (close !== null && close > 0) {
       items.push({ k: 'close', icon: '🔔', title: 'Kal ka close ' + close.toFixed(0) + (chg !== null && pct !== null ? ' (' + sgn(chg) + ' pts, ' + sgn(pct, 2) + '%)' : ''),
         text: 'Aaj ka gap isi se naapa jayega. 09:15–10:00 gap-fill window hai, engine 10:00 tak wait karta hai.' });
     }

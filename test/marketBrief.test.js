@@ -58,3 +58,11 @@ assert.doesNotThrow(() => MB.render(base()));
 const v = (x) => MB.compute(base({ vix: x }), NOW).items.find(i => i.k === 'vix').text;
 assert.ok(/shaant/.test(v(12)) && /ooncha/.test(v(22)) && /bahut ooncha/.test(v(30)));
 console.log('marketBrief tests passed');
+
+// 18 Nov — pre-open price must not be shown as "Kal ka close"
+{
+  const r2 = MB.compute({ entryWindow: { status: 'pre' }, nifty: 25350.9, lastClose: 25350.9, change: -36.5, changePct: -0.14, premarketGap: { available: true, prevClose: 25387.4, gapPts: 0, gapPct: 0 } }, Date.parse('2026-11-18T09:05:00+05:30'));
+  const c = r2.items.find(i => i.k === 'close');
+  assert.ok(c && c.title === 'Kal ka close 25387', c && c.title);
+  assert.ok(/Pre-open bhav abhi 25351/.test(c.text));
+}
