@@ -70,7 +70,7 @@
       items.push({ k: 'close', icon: '🔔', title: 'Kal ka close ' + realPrev.toFixed(0),
         text: 'Aaj ka gap isi se naapa jayega.' + ind + ' 09:15–10:00 gap-fill window hai, engine 10:00 tak wait karta hai.' });
     } else if (close !== null && close > 0) {
-      items.push({ k: 'close', icon: '🔔', title: 'Kal ka close ' + close.toFixed(0) + (chg !== null && pct !== null ? ' (' + sgn(chg) + ' pts, ' + sgn(pct, 2) + '%)' : ''),
+      items.push({ k: 'close', icon: '🔔', title: 'Kal ka close ' + close.toFixed(0) + (chg !== null && pct !== null && (chg !== 0 || pct !== 0) ? ' (' + sgn(chg) + ' pts, ' + sgn(pct, 2) + '%)' : ''),
         text: 'Aaj ka gap isi se naapa jayega. 09:15–10:00 gap-fill window hai, engine 10:00 tak wait karta hai.' });
     }
     var pdl = level(s, 'PDL'), pdh = level(s, 'PDH'), mp = level(s, 'MP');
