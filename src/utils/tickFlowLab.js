@@ -349,8 +349,9 @@ function createTickFlowLab({ dbPool, now = Date.now, log = () => {}, env = proce
         let d = String(day || '').trim();
         if (d && !/^\d{4}-\d{2}-\d{2}$/.test(d)) return { ok: false, error: 'date must look like 2026-10-19 (IST day)' };
         if (!d) {
-            const m = await dbPool.query(`SELECT MAX(ts) AS t FROM tickflow_lab_min`);
+            const m = await dbPool.query(`SELECT MAX(ts) AS t FROM tickflow_lab_min WHERE vol > 0`);
             if (!m.rows[0] || !m.rows[0].t) return { ok: false, error: 'No lab rows yet (the lab records only Mon-Fri 09:15-15:30 IST, about 90s after a deploy/restart)' };
+            // 25 Nov — skip days with no traded volume (the lab records by clock, so a market holiday such as 24 Nov left all-zero rows and the card showed 'Pichhla din' = the holiday)
             d = istParts(new Date(m.rows[0].t).getTime()).day;
         }
         const from = new Date(Date.parse(d + 'T00:00:00+05:30')), to = new Date(from.getTime() + 24 * 3600 * 1000);
