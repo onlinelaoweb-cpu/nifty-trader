@@ -32,4 +32,6 @@ m = L.missions({ open: [], closed: new Array(30).fill({ opt: 'CE', side: 'BUY', 
 // every lesson is complete and its quiz answers are in range
 L.LESSONS.forEach(l => { assert.ok(l.title && l.pts.length >= 3 && l.ex && l.quiz.length === 2, l.id); l.quiz.forEach(q => { assert.ok(q.a >= 0 && q.a < q.o.length && q.why, l.id); }); });
 assert.strictEqual(new Set(L.LESSONS.map(l => l.id)).size, L.LESSONS.length);
+assert.strictEqual(L.LESSONS.filter(l => l.lvl === 'APP').length, 9, 'app-reading lessons');
+assert.ok(L.LESSONS.every(l => ['BASIC', 'INTERMEDIATE', 'ADVANCED', 'APP'].includes(l.lvl)));
 console.log('learn tests passed');

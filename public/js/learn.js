@@ -213,14 +213,97 @@
       'SEBI ke studies mein lagbhag 90% individual F&O traders ko nuksaan hua. Isliye pehle paper, phir bahut chhota size.'],
       ex: 'Jeet-rate 40%, avg jeet ₹3,000, avg haar ₹1,000 → 0.4 × 3,000 − 0.6 × 1,000 = <b>+₹600 per trade</b> (lagat se pehle). Jeet-rate 70% par avg jeet ₹500, avg haar ₹1,500 → 350 − 450 = <b>−₹100</b>.',
       quiz: [{ q: 'Jeet 40%, avg jeet ₹3,000, avg haar ₹1,000. Expectancy (lagat se pehle)?', o: ['+₹600', '−₹600', '₹0'], a: 0, why: '0.4×3000 − 0.6×1000 = 1200 − 600 = +600.' },
-             { q: 'Natije par bharosa kitne trades ke baad?', o: ['3–5', '10', '30 ya zyada'], a: 2, why: 'Kam trades mein kismat ka role bahut bada hota hai.' }] }
+             { q: 'Natije par bharosa kitne trades ke baad?', o: ['3–5', '10', '30 ya zyada'], a: 2, why: 'Kam trades mein kismat ka role bahut bada hota hai.' }] },
+    { id: 'p1', lvl: 'APP', title: 'Dashboard ka top: price, status aur Entry Window', pts: [
+      'NIFTY 50 INDEX card mein upar: <b>price</b>, <b>ATM strike</b>, <b>DTE</b> (expiry mein kitne din), <b>VIX</b>, <b>RSI</b>, <b>PCR</b>, <b>ADX(1m)</b>, aur app ka status — <b>WAIT / BUY</b> — ke saath <b>CONFIDENCE %</b>.',
+      '<b>WAIT</b> ka matlab: app ko abhi koi saaf setup nahi mila. Wait karna bhi ek faisla hai.',
+      '<b>CONFIDENCE %</b> app ka internal score hai (kitne filter ek taraf hain) — <b>jeetne ki probability nahi</b>. 80% ka matlab guarantee nahi.',
+      '<b>Entry Window</b> (time ke hisaab se): Volatile 09:15–10:00 (gap-fill, app kehta hai 10:00 tak ruko) · Safe Entry 10:00–14:00 · Caution 14:00–14:30 (size kam) · Theta Zone 14:30–15:30 (naye entry avoid) · uske baad Market Closed.',
+      'Imandari ki baat: is app ke scalp signals ka forward test (900+ trades) costs ke baad fail hua. Isliye app ko <b>dashboard / dekhne ka aaina</b> samjho, paisa banane ki machine nahi.'],
+      ex: '09:40 par app "BUY" dikhaye, par window "Volatile (9:15–10:00)" hai — app khud kehta hai gap-fill ka time hai. Seekhne ka sahi tareeka: paper mein 10:00 ke baad ka entry dekho aur compare karo.',
+      quiz: [{ q: '14:45 par naya trade lene ke baare mein app ka window kya kehta hai?', o: ['Safe Entry', 'Theta Zone — naye entry avoid', 'Volatile'], a: 1, why: '14:30–15:30 Theta Zone hai: premium tezi se ghat-ta hai.' },
+             { q: 'CONFIDENCE 80% ka sahi matlab?', o: ['80% chance jeetne ka', 'App ka internal score, guarantee nahi', 'Profit pakka'], a: 1, why: 'Ye score filters ke ek taraf hone ka hai, probability nahi.' }] },
+    { id: 'p2', lvl: 'APP', title: 'Market Pulse aur Pre-market checklist', pts: [
+      '<b>MARKET PULSE</b> mein chhote tiles hain (PCR, VIX, FII/DII, Global, GIFT proxy, Bank Nifty lead, MTF alignment, ADX, Early momentum, Events). Har tile ek <b>vote</b> hai: BULL / NEUTRAL / BEAR. Tile par tap karo to poori detail khulti hai.',
+      '<b>Pre-market checklist</b>: Nifty vs pichhla close (ye vote nahi, sirf sandarbh) · Global bias · India VIX 20 se neeche? · PCR bias · Bank Nifty lead · BN↔Nifty correlation · FII+DII net flow · Early momentum · aaj ke high-impact events · ADX trend strength · MTF alignment.',
+      '<b>MARKET VERDICT / AUTO SCORE</b> in sabka nichod hai.',
+      'Padhne ka tareeka: ek-do tile par mat jao. Dekho <b>zyadatar kis taraf</b> hain. Beech mein atka (5 bull, 5 bear) = confusion = trade avoid ya size aadha.',
+      'Jab tiles aapas mein ladein (Global bull par PCR bear) to wahi aapko chhota size lene ka signal hai.'],
+      ex: '10 mein se 8 tile bull, 2 bear → bias bullish. 5–5 → neutral: aise din aksar chop hota hai, option buyer ka theta khata hai.',
+      quiz: [{ q: 'Pulse mein 5 tile BULL aur 5 BEAR hain. Samajhdaar kadam?', o: ['Bada size lo', 'Trade avoid ya chhota size', 'Sirf CALL lo'], a: 1, why: 'Evidence barabar hai — direction ka edge nahi.' },
+             { q: 'Market Verdict kya hai?', o: ['Guarantee', 'Checklist / tiles ka auto score', 'News headline'], a: 1, why: 'Ye sab inputs ka nichod hai, prediction nahi.' }] },
+    { id: 'p3', lvl: 'APP', title: 'Key Levels, VWAP, EMA, RSI, ADX', pts: [
+      '<b>KEY LEVELS (AUTO)</b>: sabse paas ka resistance aur support, aur Nifty unse kitne <b>points door</b> hai. Bahut paas = turant reaction ya breakout ka waqt.',
+      '<b>VWAP</b> = din ka volume-weighted average bhav. Price VWAP ke <b>upar</b> = buyers hawi, <b>neeche</b> = sellers. Intraday ka "fair value".',
+      '<b>EMA 9 / 21 cross</b>: chhota EMA bade ke upar = short-term momentum upar. 1, 5, 15 min teeno dikhte hain.',
+      '<b>RSI (9)</b>: 70 ke upar overbought, 30 ke neeche oversold — par trend wale din price overbought mein bhi chadhta rehta hai. Akele RSI par ulta trade mat lo.',
+      '<b>ADX (14)</b> trend ki <b>taakat</b> batata hai, direction nahi (direction DI+ vs DI−). App ke gates: <b>20 se neeche CHOPPY, 25 se upar TREND, 40 se upar EXPLOSIVE</b>. Option buyer ko trend chahiye, chop mein theta aur whipsaw dono marte hain.',
+      '5 min, 15 min aur 1 HR — bade timeframe ka vazan zyada hota hai.'],
+      ex: 'Price VWAP ke upar, ADX 28, DI+ > DI−, 15m aur 1H dono bullish → alignment achha. ADX 15 aur price VWAP ke chakkar kaat raha ho → choppy, trade avoid.',
+      quiz: [{ q: 'ADX 15 dikha raha hai. Matlab?', o: ['Strong trend', 'Choppy — trend kamzor', 'Nifty girega'], a: 1, why: 'App ke gate ke hisaab se 20 se neeche choppy hai.' },
+             { q: 'ADX kya batata hai?', o: ['Direction', 'Trend ki taakat (direction nahi)', 'Premium'], a: 1, why: 'Direction DI+ aur DI− se dekhte hain.' }] },
+    { id: 'p4', lvl: 'APP', title: 'PCR, ATM PCR, Call Wall / Put Wall', pts: [
+      '<b>PCR</b> = Put OI ÷ Call OI (poori chain). <b>ATM PCR</b> = sirf ATM ke aas-paas ke strikes ka — ye zyada "abhi ka" mood dikhata hai. <b>COMBINED</b> kai index ka mila-jula, abhi <b>EXPLORATORY</b> (experimental) hai.',
+      '<b>Murarka strategy (app ka rule)</b>: PCR &gt; 1.15 = BUY CE zone · PCR &lt; 0.75 = BUY PE zone · beech mein = AVOID. Ye us strategy ka rule hai, koi universal kanoon nahi.',
+      '<b>CALL WALL ⛔</b> = sabse zyada CE OI/buildup wala strike (rukawat). <b>PUT WALL 🛡️</b> = sabse zyada PE buildup (support). Neeche "CE OI Δ / PE OI Δ" us din ka OI change hai.',
+      '<b>CE WRITE / PE WRITE</b> aur <b>OI IMBALANCE</b> (ΔPuts ÷ ΔCalls): nayi writing kis taraf ho rahi hai.',
+      'PCR bheed ki positioning batata hai, <b>bhavishya ki guarantee nahi</b>. Wall tootne par writers bhaagte hain aur move tez ho jata hai.'],
+      ex: 'PCR 0.90 hai — Murarka zone ke hisaab se AVOID (0.75–1.15 ke beech). Call Wall 25,800 hai aur Nifty 25,770 par: upar rukawat paas hai, CALL kharidne se pehle sochna.',
+      quiz: [{ q: 'Call Wall ko aksar kya maana jata hai?', o: ['Support', 'Resistance', 'Target'], a: 1, why: 'Wahan CE writers ka bada daav hai.' },
+             { q: 'PCR 0.90 hai. Murarka zone ke hisaab se?', o: ['BUY CE', 'BUY PE', 'AVOID (beech ka zone)'], a: 2, why: '1.15 se upar CE, 0.75 se neeche PE; beech mein avoid.' }] },
+    { id: 'p5', lvl: 'APP', title: 'Momentum Radar (early CE/PE signal)', pts: [
+      'Ye chain ke andar ki halchal ko ek jagah dikhata hai: <b>CHAIN OI Δ</b> (intraday CE vs PE change), <b>ATM CLUSTER OI</b> (ATM ke ±100 pts, 5 strikes), <b>CE / PE VELOCITY</b> (ATM premium %/cycle — OI se pehle chalti hai), <b>BUY PRESSURE</b> (order book mein buy % ATM CE/PE par).',
+      '<b>IV SKEW</b> (PE IV vs CE IV — kis taraf demand zyada), <b>STRIKE OI SHIFT</b> (ek strike par call/put writing), <b>WALL ALIGNMENT</b> (top-3 CE vs PE buildup).',
+      'Upar ka "EARLY MOMENTUM" in sabka nichod hai: CE ki taraf jhuka ya PE ki taraf.',
+      '<b>Kya dhyan rakhein:</b> data option-chain ke <b>cycle (~3 min)</b> par aata hai — tick-by-tick nahi. Pehla reading open ke ~3 min baad.',
+      'Ek metric jhooth bol sakta hai. Jab <b>kai metric ek hi taraf</b> hon tabhi us par dhyan do.'],
+      ex: 'CE velocity +4%/cycle, PE velocity −3%, CE buy pressure 62%, wall alignment neutral → 3 metric CE ke saath, 1 neutral: halka CE lean. Sirf velocity upar ho aur baaki ulte — shak karo.',
+      quiz: [{ q: 'Momentum Radar kitni jaldi update hota hai?', o: ['Har tick par', 'Option-chain cycle (~3 min) par', 'Din mein ek baar'], a: 1, why: 'Ye NSE/Fyers chain ke cycle par chalta hai.' },
+             { q: 'Radar ko kab zyada bharose layak maanein?', o: ['Ek metric upar ho', 'Kai metric ek hi taraf hon', 'Jab VIX kam ho'], a: 1, why: 'Ek akela metric noise ho sakta hai.' }] },
+    { id: 'p6', lvl: 'APP', title: 'Order Flow (approx) padhna', pts: [
+      'Har row <b>15 minute</b> ka bar hai (sabse naya upar). <b>BUY</b> = khareedne wale ka maal, <b>SELL</b> = bechne wale ka, <b>DELTA</b> = BUY − SELL, <b>VOL</b> = total maal. Delta ka rang jitna gehra, zor utna.',
+      '<b>Divergence</b>: price badha par delta negative → move mein dum nahi, bharosa kam. Price aur delta ek taraf → move mein dum.',
+      '<b>"Approx"</b> kyun: ye Angel ke free feed ke sample se bana andaza hai. App ne DEXT se milaya: volume exact, bars ka direction ~80–92% sahi, par din ka total delta kam aata hai.',
+      'Open ke pehle 4 bars (09:15–10:00) aur aakhri bar ka delta <b>kam bharose</b> ka. Bahut bade single print ka buyer/seller pata nahi chalta — wo delta mein nahi, volume mein hai. ±10K se chhote bar noise hain.',
+      '<b>Sirf dekhne ke liye</b> — koi signal ya alert isse nahi chalta.'],
+      ex: '11:30 ka bar: price +20 pts, delta −45K. Bahar se move tez dikhta hai par andar sellers zyada — aise move par chase mat karo, agle 1–2 bar dekho.',
+      quiz: [{ q: 'Price badha par delta negative aaya. Matlab?', o: ['Move mein dum hai', 'Divergence — bharosa kam', 'Delta galat hai, ignore'], a: 1, why: 'Price aur delta ulte gaye = move par shak.' },
+             { q: 'Order Flow se app ka signal chalta hai?', o: ['Haan', 'Nahi — sirf dekhne ke liye', 'Sirf expiry par'], a: 1, why: 'App khud likhta hai: koi signal ya alert isse nahi chalta.' }] },
+    { id: 'p7', lvl: 'APP', title: 'Breadth, Sector, FII/DII aur Global tab', pts: [
+      '<b>BREADTH</b>: top-20 Nifty stocks mein kitne <b>ADV (badhe), DEC (ghate)</b>. <b>A/D ratio</b> aur <b>Bull weight</b> (weights ke saath). Nifty upar par zyadatar stocks neeche = <b>narrow rally</b> (chand heavyweight utha rahe hain) — kamzor.',
+      '<b>SECTOR HEATMAP</b>: Bank, Auto, Metal, Pharma, FMCG, Realty, Media, Energy, Infra, PSU Bank — kaun lead kar raha hai, kaun lag raha hai.',
+      '<b>OPTION BUYER/SELLER ACTIVITY</b> (ATM CE/PE ka premium, dominance) aur <b>PCR TREND TODAY</b> (din bhar PCR ki slope).',
+      '<b>FII / DII FLOW</b>: cash market mein institutions ka buy/sell/net (₹ Cr). Ye A/D se <b>alag</b> cheez hai — dono ulte ho sakte hain (FII ka paisa chand bade stocks mein).',
+      '<b>GLOBAL tab</b>: global score aur bias, US / Asia / Europe, currency, commodities (crude), economic calendar. Subah ka gap aksar global cues se decide hota hai.'],
+      ex: 'Nifty +0.4% par A/D 7 ADV : 13 DEC. Index heavyweights se upar hai, broad market nahi — aise rally mein CALL kharidna risky.',
+      quiz: [{ q: 'Nifty upar par A/D bearish hai. Ise kya kehte hain?', o: ['Narrow rally', 'Strong breadth', 'Short covering'], a: 0, why: 'Kuch heavyweight index ko kheench rahe hain, broad support nahi.' },
+             { q: 'FII net buying hai par A/D bearish. Kya ye galat hai?', o: ['Haan, data kharab', 'Nahi — dono alag cheez hain', 'Sirf holiday par hota hai'], a: 1, why: 'FII value (₹) naapta hai, A/D stocks ki ginti.' }] },
+    { id: 'p8', lvl: 'APP', title: 'Insights tab — "NO TRADE — WHY" aur advanced readings', pts: [
+      '<b>TRADE QUALITY · MARKET HEALTH · DAY TYPE</b> (trend ya range). <b>⛔ NO TRADE — WHY</b>: app jab khud batata hai ki abhi kyun trade nahi lena — ye sabse kaam ka card hai.',
+      '<b>BIAS FLIP WATCH</b>: <b>EARLY SIGNS</b> pehle badalte hain, <b>CONFIRMING SIGNS</b> baad mein pakki karte hain. Early par chhota size, confirm par hi bada.',
+      '<b>LEVELS & CONTEXT</b>: Dynamic levels (ATR bands H1–H3 / L1–L3), Opening gap, Trap zone, Next event, News sentiment.',
+      '<b>APP KA REPORT CARD</b>: signal performance (aaj / 7 din / 30 din) — app apna track record khud dikhata hai. Isey padhte raho.',
+      '<b>ADVANCED</b>: <b>BOS</b> (Break of Structure) = trend jaari rakhne wala break; <b>CHoCH</b> (Change of Character) = trend ke <b>ulte</b> pehla break — palatne ka pehla sanket. <b>Contradiction score</b> = bullish vs bearish saboot ki ladai. <b>Sequence check</b> = MTF→PCR→Delta→ORB→VWAP→Value Area ek ke baad ek mile ya nahi. <b>Confidence breakdown</b> = score kis cheez se bana.',
+      '<b>Option greeks</b> card sirf samjhane ke liye hai (explanatory).'],
+      ex: 'Uptrend mein Nifty ne pichhla higher-low tod diya = CHoCH. Isse "trend khatam" mat samjho — pehla warning hai. Confirmation ke liye agla lower-high bhi chahiye.',
+      quiz: [{ q: 'CHoCH ka matlab?', o: ['Trend jaari rahega', 'Trend palatne ka pehla sanket', 'Volume badha'], a: 1, why: 'Trend ke ulte pehla structure break = Change of Character.' },
+             { q: '"NO TRADE — WHY" dikhe to?', o: ['Phir bhi trade lo', 'Wait karo — app ko saaf setup nahi', 'Lots badha do'], a: 1, why: 'Na-karna bhi ek position hai; capital bachta hai.' }] },
+    { id: 'p9', lvl: 'APP', title: 'Tools tab: Greeks, Theta tracker, Position size, SL calculator', pts: [
+      '<b>OPTION PREMIUM + GREEKS</b>: ITM / ATM / OTM CE aur PE ka premium aur greeks. Ise Paper Trade ke ticket se milao.',
+      '<b>THETA DECAY TRACKER</b>: dhyan do — ye ek <b>rough thumb-rule</b> hai (loss/day ≈ premium × 0.15 ÷ √din; break-even ≈ premium ka 30%). Ye asli theta nahi. Asli theta ke liye Seekho ka <b>Premium Simulator</b> dekho.',
+      '<b>POSITION SIZING</b>: capital, risk %, entry aur SL se lots. App ka suggested size kamzor setup par chhota ho jata hai (grade ke hisaab se).',
+      '<b>STOP-LOSS CALCULATOR</b>: premium ka 20% / 25% SL aur <b>VIX SL ⚡</b>. VIX SL (Murarka rule): VIX &lt;12 → 20%, 12–16 → 25%, 16–20 → 30%, &gt;20 → 35%. Zyada VIX = zyada hilna, isliye SL thoda chauda.',
+      'Har tool ek <b>madad</b> hai: final faisla aur risk aapka.'],
+      ex: 'Premium ₹100, VIX 18 → VIX SL 30% = ₹70. 1 lot ka max loss = 30 × 65 = ₹1,950. 1% risk ke liye capital ≥ ₹1,95,000.',
+      quiz: [{ q: 'VIX 18 par app ka VIX-SL rule kitna SL deta hai?', o: ['20%', '25%', '30%'], a: 2, why: '16–20 VIX range mein 30%.' },
+             { q: 'Tools ka Theta tracker kya hai?', o: ['Exact theta', 'Rough thumb-rule', 'Broker ka data'], a: 1, why: 'Premium × 0.15 ÷ √din wala andaza hai; exact theta Simulator se dekho.' }] }
   ];
   var GLOSSARY = [
     ['Premium', 'Option ka daam jo buyer deta hai.'], ['Strike', 'Wo tay price jis par option ka haq hota hai.'], ['Lot', 'Ek contract ki qty (Nifty abhi 65).'],
     ['CE / PE', 'CALL aur PUT option.'], ['ITM / ATM / OTM', 'Strike Nifty ke hisaab se andar / barabar / bahar.'], ['Intrinsic value', 'Option ki abhi ki asli kamai.'],
     ['Time value', 'Premium ka wo hissa jo expiry tak ghat jata hai.'], ['Theta', 'Roz ka time decay.'], ['Delta', 'Nifty 1 hile to premium kitna hile.'], ['Vega', 'IV 1 point badle to premium kitna badle.'],
     ['IV / VIX', 'Expected volatility; VIX index-level naap.'], ['OI', 'Abhi khule contracts ki sankhya.'], ['PCR', 'Put OI ÷ Call OI.'], ['Margin', 'Seller ko broker ke paas rakhna padta paisa.'],
-    ['Slippage', 'Expected aur asli fill price ka fark.'], ['SL', 'Stop Loss — nuksaan rokne ka level.'], ['Breakeven', 'Wo Nifty level jahan na faayda na nuksaan.'], ['Expiry', 'Contract ki aakhri taareekh.']
+    ['Slippage', 'Expected aur asli fill price ka fark.'], ['VWAP', 'Din ka volume-weighted average bhav (intraday fair value).'], ['ADX / DI', 'ADX = trend ki taakat; DI+ / DI− = direction.'], ['RSI', 'Momentum ka naap (70 upar overbought, 30 neeche oversold).'], ['EMA', 'Recent bhav ko zyada vazan dene wala average.'], ['DTE', 'Days To Expiry — expiry mein kitne din.'], ['Call / Put Wall', 'Sabse zyada CE / PE OI wala strike (resistance / support).'], ['BOS / CHoCH', 'Structure break jo trend jaari rakhe / palatne ka pehla sanket.'], ['Order-flow Delta', 'Buy volume minus Sell volume (approx).'], ['SL', 'Stop Loss — nuksaan rokne ka level.'], ['Breakeven', 'Wo Nifty level jahan na faayda na nuksaan.'], ['Expiry', 'Contract ki aakhri taareekh.']
   ];
 
   // ---------- storage ----------
@@ -248,9 +331,9 @@
     var h = [], dc = doneCount(), ms = missions(paperState()), md = ms.filter(function (m) { return m.done; }).length;
     h.push('<div class="lrn-card"><div style="font-size:16px;font-weight:700;margin-bottom:4px;">📚 Option Trading — Basic se Advanced</div><div style="font-size:12px;color:var(--dim);margin-bottom:8px;line-height:1.5;">Chhote lessons, har ek ke baad quiz, aur seedha Paper Trade mein practice. Sirf shiksha hai — trading salah nahi.</div><div class="lrn-bar"><i style="width:' + Math.round(100 * dc / LESSONS.length) + '%"></i></div><div style="font-size:12px;color:var(--dim);margin-top:4px;">' + dc + ' / ' + LESSONS.length + ' lessons poore</div></div>');
     h.push('<div class="lrn-card"><div class="lrn-h">🎯 PRACTICE MISSIONS (' + md + ' / ' + ms.length + ') — Paper Trade karte hi khud tick hote hain</div>' + ms.map(function (m) { return '<div style="font-size:13px;padding:4px 0;color:' + (m.done ? 'var(--green)' : 'var(--text)') + ';">' + (m.done ? '✅ ' : '⬜ ') + esc(m.text) + '</div>'; }).join('') + '</div>');
-    ['BASIC', 'INTERMEDIATE', 'ADVANCED'].forEach(function (lv) {
+    ['BASIC', 'INTERMEDIATE', 'ADVANCED', 'APP'].forEach(function (lv) {
       var ls = LESSONS.filter(function (l) { return l.lvl === lv; }), d = ls.filter(function (l) { return P.done[l.id]; }).length;
-      h.push('<div class="lrn-card"><div class="lrn-h">' + ({ BASIC: '🟢 BASIC', INTERMEDIATE: '🟡 INTERMEDIATE', ADVANCED: '🔴 ADVANCED' })[lv] + ' · ' + d + '/' + ls.length + '</div>' +
+      h.push('<div class="lrn-card"><div class="lrn-h">' + ({ BASIC: '🟢 BASIC', INTERMEDIATE: '🟡 INTERMEDIATE', ADVANCED: '🔴 ADVANCED', APP: '📱 APP KO PADHNA — Vardaan AI ka data' })[lv] + ' · ' + d + '/' + ls.length + '</div>' +
         ls.map(function (l, i) { return '<div class="lrn-row" data-lrn-open="' + l.id + '"><span>' + (P.done[l.id] ? '✅ ' : '') + (i + 1) + '. ' + esc(l.title) + '</span><span style="color:var(--dim);">' + (P.quiz[l.id] != null ? 'quiz ' + P.quiz[l.id] + '/2 · ' : '') + '›</span></div>'; }).join('') + '</div>');
     });
     h.push('<div class="lrn-card"><details><summary style="cursor:pointer;font-weight:700;">📖 Glossary (A–Z shabd)</summary><div style="margin-top:8px;">' + GLOSSARY.map(function (g) { return '<div style="font-size:13px;padding:4px 0;line-height:1.5;"><b>' + esc(g[0]) + '</b> — ' + esc(g[1]) + '</div>'; }).join('') + '</div></details></div>');
