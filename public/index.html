@@ -3742,6 +3742,8 @@ html:not(.vn-day) [style*="color: #64748b"]{color:#DCE4F0 !important;}
 <!-- ═══════════════════════════════════ -->
 <div class="panel" id="panel-tools">
   <div class="tools-wrap">
+    <!-- PAPER TRADE (27 Nov) — virtual manual trades on the live Nifty index, kept in this browser only; filled by /js/paper-trade.js; touches no broker, signal or journal -->
+    <div id="pt-card"></div>
     <!-- TRADE PLANNER (12 Oct) — capital -> lots, SL/target levels; filled by /js/tools-pulse.js; display only -->
     <div id="tp-card"></div>
     <!-- GO-LIVE CHECKLIST (13 Oct) — loaded from token-protected /api/go-live-checklist by /js/golive-card.js; display only -->
@@ -5570,6 +5572,7 @@ function renderDashboard(s) {
   try { if (window.BreadthPulse) window.BreadthPulse.render(s); } catch (e) { console.warn('[BreadthPulse]', e.message); }
   try { if (window.GlobalPulse) window.GlobalPulse.render(s); } catch (e) { console.warn('[GlobalPulse]', e.message); }
   try { if (window.ToolsPulse) window.ToolsPulse.render(s); } catch (e) { console.warn('[ToolsPulse]', e.message); }
+  try { if (window.PaperTrade) window.PaperTrade.render(s); } catch (e) { console.warn('[PaperTrade]', e.message); }
   try { if (window.GoLive) window.GoLive.render(); } catch (e) { console.warn('[GoLive]', e.message); }
   // Global UI — only re-render when data actually changes (sector heatmap is DOM-heavy)
   if (s.global) {
@@ -9619,6 +9622,7 @@ function renderVolumeScannerUI(d) {
 <script src="/js/fyers-card.js" defer></script>
 <script src="/js/fyers-usage-card.js" defer></script>
 <script src="/js/order-ticket.js" defer></script>
+<script src="/js/paper-trade.js" defer></script>
 <script src="/js/commodity-pulse.js" defer></script>
 <script src="/js/signal-verdict.js" defer></script>
 <script src="/js/track-pulse.js" defer></script>
