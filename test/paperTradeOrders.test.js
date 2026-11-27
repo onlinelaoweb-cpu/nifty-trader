@@ -53,3 +53,7 @@ assert.strictEqual(P.settleExpired(st, { nifty: 25200, chain: mk(1, 1, '2026-12-
 st = P.blank(); o(st, ch, { product: 'CARRY' }); st.open[0].lastLtp = 123;
 assert.strictEqual(P.openPnl(st, { nifty: 25000, chain: mk(300, 300, '2026-12-08') }), (123 - 100.5) * 65);
 console.log('paperTrade orders tests passed');
+{ const P = require('../public/js/paper-trade.js'); const now = Date.UTC(2026, 10, 30, 6, 0), yest = now - 86400000;
+  const st = P.blank(); st.closed = [{ rs: 500, exitTs: now - 60000 }, { rs: -200, exitTs: now - 120000 }, { rs: 900, exitTs: yest }];
+  const d = P.dayStats(st, now, -50); assert.strictEqual(d.n, 2); assert.strictEqual(d.net, 300); assert.strictEqual(d.combined, 250); assert.strictEqual(d.wins, 1);
+  const d2 = P.dayStats(st, now + 86400000, null); assert.strictEqual(d2.n, 0); assert.strictEqual(d2.combined, 0); console.log('dayStats ok'); }

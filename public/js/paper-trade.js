@@ -224,6 +224,13 @@
     c.forEach(function (t) { net += t.rs; if (t.rs > 0) { wins++; gp += t.rs; } else if (t.rs < 0) gl += -t.rs; best = best === null ? t.rs : Math.max(best, t.rs); worst = worst === null ? t.rs : Math.min(worst, t.rs); });
     return { n: c.length, wins: wins, winPct: c.length ? Math.round(100 * wins / c.length) : null, net: net, pf: gl > 0 ? gp / gl : (gp > 0 ? null : null), best: best, worst: worst };
   }
+  // today's (IST) P&L: closed today + open now = combined day P&L. Resets by itself when the IST date changes (older trades stay in the lifetime stats).
+  function dayStats(st, now, openRs) {
+    var today = istDay(now), tr = st.closed.filter(function (t) { return istDay(t.exitTs) === today; }), net = 0, w = 0, l = 0;
+    tr.forEach(function (t) { net += t.rs; if (t.rs > 0) w++; else if (t.rs < 0) l++; });
+    var o = n(openRs) === null ? 0 : openRs;
+    return { day: today, trades: tr, n: tr.length, net: net, wins: w, losses: l, open: o, combined: net + o };
+  }
   function openPnl(st, price) {
     var c = asCtx(price), s = 0, any = false;
     st.open.forEach(function (t) { var m = markOf(t, c); if (m > 0) { s += trRs(t, m); any = true; } });
@@ -332,16 +339,25 @@
         '<button data-pt-cancel="' + p.id + '" class="tg-btn" style="padding:3px 10px;font-size:12px;">Cancel</button></div>');
     });
     // results
-    h.push('<div style="font-size:12px;letter-spacing:1px;color:var(--dim);margin:8px 0 4px;">NATIJA (band hue ' + S.n + ' trade, charges ke baad)</div>');
+    var D = dayStats(st, Date.now(), ps);
+    h.push('<div style="font-size:12px;letter-spacing:1px;color:var(--dim);margin:8px 0 4px;">AAJ KA P&L (naye din reset)</div>');
+    h.push('<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;text-align:center;margin-bottom:6px;">' +
+      '<div style="background:var(--bg3);border-radius:6px;padding:5px;"><div style="color:var(--dim);">Band (' + D.n + ')</div><b style="color:' + col(D.net) + ';">' + inr(D.net) + '</b></div>' +
+      '<div style="background:var(--bg3);border-radius:6px;padding:5px;"><div style="color:var(--dim);">Open (' + st.open.length + ')</div><b style="color:' + col(D.open) + ';">' + inr(D.open) + '</b></div>' +
+      '<div style="background:var(--bg3);border-radius:6px;padding:5px;border:1px solid ' + (D.combined >= 0 ? 'var(--green)' : 'var(--red)') + ';"><div style="color:var(--dim);">Kul aaj</div><b style="color:' + col(D.combined) + ';">' + inr(D.combined) + '</b></div></div>');
+    if (D.n) {
+      h.push('<div style="font-size:11px;color:var(--dim);margin-bottom:3px;">Aaj ke band trade (charges ke baad) · ' + D.wins + ' jeet / ' + D.losses + ' haar</div>');
+      D.trades.forEach(function (t) {
+        h.push('<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border);"><span>' + hhmm(t.exitTs) + ' · ' + (t.opt ? t.side + ' ' + t.strike + ' ' + t.opt + ' ' : t.side + ' ') + t.lots + 'L ' + t.entry.toFixed(1) + '→' + t.exit.toFixed(1) + '</span><b style="color:' + col(t.rs) + ';">' + inr(t.rs) + '</b></div>');
+      });
+    } else h.push('<div style="font-size:12px;color:var(--dim);margin-bottom:4px;">Aaj abhi koi trade band nahi hua.</div>');
+    h.push('<div style="font-size:12px;letter-spacing:1px;color:var(--dim);margin:10px 0 4px;">TOTAL RECORD (sab din, ' + S.n + ' trade)</div>');
     if (S.n) {
       h.push('<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;text-align:center;margin-bottom:6px;">' +
         '<div style="background:var(--bg3);border-radius:6px;padding:5px;"><div style="color:var(--dim);">Net</div><b style="color:' + col(S.net) + ';">' + inr(S.net) + '</b></div>' +
         '<div style="background:var(--bg3);border-radius:6px;padding:5px;"><div style="color:var(--dim);">Jeet</div><b>' + S.winPct + '% (' + S.wins + '/' + S.n + ')</b></div>' +
         '<div style="background:var(--bg3);border-radius:6px;padding:5px;"><div style="color:var(--dim);">Profit factor</div><b>' + (S.pf === null ? '--' : S.pf.toFixed(2)) + '</b></div></div>');
       if (S.n < 20) h.push('<div style="font-size:11px;color:var(--dim);margin-bottom:6px;">⚠ ' + S.n + ' trade bahut kam hain — kam se kam 20–30 trade ke baad hi natije par bharosa karo.</div>');
-      st.closed.slice(0, 8).forEach(function (t) {
-        h.push('<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border);"><span>' + (t.opt ? t.side + ' ' + t.strike + ' ' + t.opt + ' ' : t.side + ' ') + t.lots + 'L ' + t.entry.toFixed(1) + '→' + t.exit.toFixed(1) + ' <span style="color:var(--dim);">' + esc(t.reason) + ' ' + hhmm(t.exitTs) + '</span></span><b style="color:' + col(t.rs) + ';">' + inr(t.rs) + '</b></div>');
-      });
     } else h.push('<div style="font-size:12px;color:var(--dim);">Abhi koi band trade nahi.</div>');
     if ((st.log || []).length) {
       h.push('<div style="font-size:12px;letter-spacing:1px;color:var(--dim);margin:8px 0 4px;">ORDER LOG</div>');
@@ -488,7 +504,7 @@
       redrawIfIdle();
     } catch (e) { try { console.warn('[PaperTrade]', e && e.message); } catch (_) {} }
   }
-  var api = { processPending: processPending, cancelPending: cancelPending, cancelAllPending: cancelAllPending, settleExpired: settleExpired, openOption: openOption, optCharges: optCharges, premFor: premFor, SLIP: SLIP, account: account, setCapital: setCapital, blank: blank, openTrade: openTrade, closeTrade: closeTrade, onTick: onTick, squareOffAll: squareOffAll, stats: stats, openPnl: openPnl, trPts: trPts, marketLive: marketLive, render: render, spot: function () { return lastPrice; }, LOT: LOT };
+  var api = { dayStats: dayStats, processPending: processPending, cancelPending: cancelPending, cancelAllPending: cancelAllPending, settleExpired: settleExpired, openOption: openOption, optCharges: optCharges, premFor: premFor, SLIP: SLIP, account: account, setCapital: setCapital, blank: blank, openTrade: openTrade, closeTrade: closeTrade, onTick: onTick, squareOffAll: squareOffAll, stats: stats, openPnl: openPnl, trPts: trPts, marketLive: marketLive, render: render, spot: function () { return lastPrice; }, LOT: LOT };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PaperTrade = api;
 })(typeof window !== 'undefined' ? window : this);
