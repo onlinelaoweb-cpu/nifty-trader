@@ -3740,10 +3740,15 @@ html:not(.vn-day) [style*="color: #64748b"]{color:#DCE4F0 !important;}
 <!-- ═══════════════════════════════════ -->
 <!-- PANEL: TOOLS                       -->
 <!-- ═══════════════════════════════════ -->
+<!-- PANEL: PAPER TRADE (27 Nov) — own tab. Virtual Nifty option trades, kept in this browser only; filled by /js/paper-trade.js; touches no broker, signal or journal -->
+<div class="panel" id="panel-paper">
+  <div class="tools-wrap">
+    <div id="pt-card"></div>
+  </div>
+</div>
+
 <div class="panel" id="panel-tools">
   <div class="tools-wrap">
-    <!-- PAPER TRADE (27 Nov) — virtual manual trades on the live Nifty index, kept in this browser only; filled by /js/paper-trade.js; touches no broker, signal or journal -->
-    <div id="pt-card"></div>
     <!-- TRADE PLANNER (12 Oct) — capital -> lots, SL/target levels; filled by /js/tools-pulse.js; display only -->
     <div id="tp-card"></div>
     <!-- GO-LIVE CHECKLIST (13 Oct) — loaded from token-protected /api/go-live-checklist by /js/golive-card.js; display only -->
@@ -3889,6 +3894,7 @@ html:not(.vn-day) [style*="color: #64748b"]{color:#DCE4F0 !important;}
 
     <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">TOOLS & ANALYSIS</div>
     <button class="more-item" onclick="switchTabFromMore('tools')"><span>🔧</span>TOOLS</button>
+    <button class="more-item" onclick="switchTabFromMore('paper')"><span>📝</span>PAPER TRADE</button>
 
     <div style="font-size:10px;color:var(--dim);letter-spacing:1.5px;padding:8px 6px 2px;opacity:0.65;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">CRUDE OIL</div>
     <button class="more-item" onclick="switchTabFromMore('crude')"><span>🛢️</span>CRUDE LIVE</button>
@@ -3918,6 +3924,7 @@ function _initDesktopLayout() {
     { id: 'global',    icon: '🌍', label: 'GLOBAL' },
     { id: 'scanner',   icon: '🔥', label: 'SCANNER' },
     { id: 'tools',     icon: '🔧', label: 'TOOLS' },
+    { id: 'paper',     icon: '📝', label: 'PAPER TRADE' },
     { id: 'crude',     icon: '🛢️', label: 'CRUDE LIVE' },
     { id: 'bitcoin',   icon: '₿', label: 'BITCOIN' },
     { id: 'signalAccuracy', icon: '🎯', label: 'TRACK RECORD' },
@@ -4267,6 +4274,7 @@ const TAB_LABELS = {
   scanner:   { icon: '🔥', label: 'SCANNER' },
   crude:     { icon: '🛢️', label: 'CRUDE LIVE' },
   bitcoin:   { icon: '₿', label: 'BITCOIN' },
+  paper: { icon: '📝', label: 'PAPER TRADE' },
   signalAccuracy: { icon: '🎯', label: 'TRACK RECORD' },
 };
 
