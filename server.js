@@ -9466,6 +9466,14 @@ async function refreshFyersVolume() {
 // is fixed once today's open prints and doesn't need per-tick refresh.
 async function computePremarketGap() {
     if (!isNSEMarketDay()) return;
+    // 27 Nov — Fyers-quota saver: this ran every 60 s all 24 h (~1,440 calls/day, ~66/h even at night) for a value that is fixed once the
+    // open prints. Now: only 08:55–15:35 IST, and once today's gap is stored after the 09:15 open it is not fetched again. Display is unchanged.
+    try {
+        const _n = getIST(), _m = _n.getHours() * 60 + _n.getMinutes(), _today = _n.toISOString().slice(0, 10);
+        if (_m < 8 * 60 + 55 || _m > 15 * 60 + 35) return;
+        const _pg = marketState.premarketGap;
+        if (_pg && _pg.available && _pg.final && _pg.istDay === _today) return;   // stored after the 09:15 open print today
+    } catch (_) { /* fall through and fetch */ }
     try {
         const q = await fetchFyersQuote('NSE:NIFTY50-INDEX');
         if (!q || !q.open || !q.close) {
@@ -9483,6 +9491,8 @@ async function computePremarketGap() {
         marketState.premarketGap = {
             available: true, open: q.open, prevClose: q.close,
             gapPts, gapPct, zone, label,
+            istDay: getIST().toISOString().slice(0, 10),
+            final: (getIST().getHours() * 60 + getIST().getMinutes()) >= 9 * 60 + 16,
             updatedAt: new Date().toISOString(),
         };
     } catch (e) {
