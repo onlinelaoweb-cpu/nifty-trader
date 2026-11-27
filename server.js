@@ -13129,6 +13129,23 @@ app.get('/api/signal-history', (req,res) => res.json(marketState.signalHistory))
 app.get('/api/news-sentiment', (req,res) => res.json(marketState.newsSentiment));
 app.get('/api/bos-choch', (req,res) => res.json(marketState.physicsOfTrading?.bosChoch));
 app.get('/api/option-greeks', (req,res) => res.json(marketState.optionGreeks));
+// 27 Nov — read-only strike-wise premiums for the Paper Trade card (Tools tab). Reads the PCR option-chain snapshot already in memory;
+// no fetch, no write, no change to marketState or any signal. Nearest weekly (Tuesday, holiday-shifted) expiry only.
+app.get('/api/paper-chain', (req, res) => {
+    try {
+        const p = getPCRState(), spot = marketState.nifty;
+        if (!Array.isArray(p.records) || !p.records.length || !(spot > 0) || p.fromIndex === 'BANKNIFTY') return res.json({ ok: false, error: 'chain not available' });
+        const rows = p.records.filter(r => r && Number.isFinite(r.strikePrice) && Math.abs(r.strikePrice - spot) <= 1000)
+            .map(r => ({ k: r.strikePrice, ce: Number(r.CE?.lastPrice) || 0, pe: Number(r.PE?.lastPrice) || 0, ceVol: Number(r.CE?.volume) || 0, peVol: Number(r.PE?.volume) || 0 }))
+            .sort((a, b) => a.k - b.k);
+        const ist = getIST(); let d = new Date(ist); const dow = d.getDay(); let add = (2 - dow + 7) % 7;
+        if (add === 0 && (ist.getHours() * 60 + ist.getMinutes()) >= 930) add = 7;
+        d.setDate(d.getDate() + add);
+        for (let i = 0; i < 6 && isNSEHoliday(d); i++) d.setDate(d.getDate() - 1);
+        const pad = n => String(n).padStart(2, '0');
+        res.json({ ok: true, expiry: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, spot, atm: p.atm || null, lot: LOT_SIZE, source: p.source || null, fetchedAt: p.fetchedAt || null, rows });
+    } catch (e) { res.json({ ok: false, error: e.message }); }
+});
 app.get('/api/market-regime', (req,res) => res.json(marketState.marketRegime));
 
 // ── 15 Nov — Trend Shadow (Nifty 1H 50-MA + Supertrend), LOG ONLY ────────────
