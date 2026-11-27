@@ -8008,7 +8008,7 @@ function _pulseShort(id, s, it) {
     case 'cl-global': return s.global?.bias || '--';
     case 'cl-gift': { const c = (s.nifty > 0 && s.change != null) ? s.change : s.global?.asia?.giftNifty?.change; return c == null ? '--' : sg(Math.round(c)) + ' pts'; }
     case 'cl-bn': { const l = s.global?.bankNiftyLeadSignal; if (l && l.label) return String(l.label).replace(/_/g, ' '); const c = s.global?.sectors?.bankNifty?.changePct; return c == null ? '--' : sg(c.toFixed(2)) + '%'; }
-    case 'cl-fii': { if (!s.fii && !s.dii) return '--'; const n = (s.fii?.net || 0) + (s.dii?.net || 0); const ist = new Date(Date.now() + 19800000), mn = ist.getUTCHours() * 60 + ist.getUTCMinutes(), dw = ist.getUTCDay();
+    case 'cl-fii': { if (!(s.fii && s.fii.net != null) && !(s.dii && s.dii.net != null)) return '--'; const n = (s.fii?.net || 0) + (s.dii?.net || 0); const ist = new Date(Date.now() + 19800000), mn = ist.getUTCHours() * 60 + ist.getUTCMinutes(), dw = ist.getUTCDay();
       return sg(Math.round(n)) + ' Cr' + (dw >= 1 && dw <= 5 && mn >= 555 && mn < 1080 ? ' (pichla din)' : ''); }
     case 'cl-pcr': return s.pcr == null ? '--' : s.pcr.toFixed(2) + (s.pcr > 1.3 ? ' BULL' : s.pcr < 0.8 ? ' BEAR' : ' NEUT');
     case 'cl-em': return s.earlyMom && s.earlyMom.score != null ? sg(s.earlyMom.score) + ' / 9' : '--';

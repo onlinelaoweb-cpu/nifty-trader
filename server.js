@@ -9479,6 +9479,14 @@ async function computePremarketGap() {
         if (!q || !q.open || !q.close) {
             return; // today's open not printed yet (pre-9:15) or token issue — stay "awaiting data"
         }
+        // 27 Nov — before the 09:15 open prints, Fyers' open equals the previous close, so the card showed 'Flat open: 0pt' at 09:07.
+        // Keep prevClose (the Market Brief uses it) but do not call it a gap until the open has printed.
+        const _pm = getIST().getHours() * 60 + getIST().getMinutes();
+        if (_pm < 9 * 60 + 15) {
+            marketState.premarketGap = { available: true, open: null, prevClose: q.close, gapPts: null, gapPct: null, zone: null,
+                label: `⏳ Open abhi nahi hua — kal ka close ${q.close}`, istDay: getIST().toISOString().slice(0, 10), final: false, updatedAt: new Date().toISOString() };
+            return;
+        }
         const gapPts = parseFloat((q.open - q.close).toFixed(2));
         const gapPct = parseFloat(((gapPts / q.close) * 100).toFixed(2));
         const zone = gapPct > 0.15 ? 'GAP_UP' : gapPct < -0.15 ? 'GAP_DOWN' : 'FLAT';
