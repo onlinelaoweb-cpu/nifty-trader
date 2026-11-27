@@ -99,7 +99,7 @@
       return { ok: false, error: (buy ? 'Paisa kam hai: ' : 'Margin kam hai: ') + lots + ' lot ke liye ₹' + Math.round(need).toLocaleString('en-IN') + ' chahiye, free ₹' + Math.max(0, Math.round(acc.free)).toLocaleString('en-IN') + (maxL ? ' (max ' + maxL + ' lot)' : '') };
     }
     st.seq += 1;
-    st.open.push({ id: st.seq, side: o.side, opt: o.opt, strike: o.strike, expiry: o.expiry || '', product: o.product === 'CARRY' ? 'CARRY' : 'INTRADAY', entry: fillPx,
+    st.open.push({ id: st.seq, side: o.side, opt: o.opt, strike: o.strike, expiry: o.expiry || '', product: o.product === 'CARRY' ? 'CARRY' : 'INTRADAY', otype: o.otype || 'MARKET', entry: fillPx,
       lastLtp: n(o.ltp) || fillPx, lastSpot: spot || null, lots: lots, qty: qty, margin: need, entryTs: now, sl: sl, tg: tg });
     return { ok: true };
   }
@@ -113,7 +113,7 @@
     var exp = o.expiry || (o.chain && o.chain.expiry) || '', ltp = premFor(o.chain, o.opt, k, exp);
     if (!(ltp > 0)) return { ok: false, error: 'Is strike ka live premium nahi mila — doosra strike chuno' };
     if (!(lots >= 1 && lots <= 50)) return { ok: false, error: 'Lots 1 se 50 ke beech rakho' };
-    var base = { opt: o.opt, strike: k, expiry: exp, side: side, lots: lots, lot: lot, product: product, spot: n(o.spot) || n(o.chain && o.chain.spot), chain: o.chain, ltp: ltp,
+    var base = { opt: o.opt, strike: k, expiry: exp, side: side, lots: lots, lot: lot, product: product, otype: type, spot: n(o.spot) || n(o.chain && o.chain.spot), chain: o.chain, ltp: ltp,
       slPrem: o.slPrem, tgPrem: o.tgPrem, slSpec: o.slSpec, tgSpec: o.tgSpec };
     var price = n(o.price), fp;
     if (type === 'MARKET') {
@@ -152,7 +152,7 @@
       else { go = buy ? ltp >= p.price : ltp <= p.price; fp = buy ? r2(ltp + SLIP) : Math.max(0.05, r2(ltp - SLIP)); }
       if (!go) return;
       st.pending = st.pending.filter(function (x) { return x.id !== p.id; });
-      var r = fillOrder(st, { opt: p.opt, strike: p.strike, expiry: p.expiry, side: p.side, lots: p.lots, lot: p.lot, product: p.product, spot: c.nifty, chain: c.chain, ltp: ltp,
+      var r = fillOrder(st, { opt: p.opt, strike: p.strike, expiry: p.expiry, side: p.side, lots: p.lots, lot: p.lot, product: p.product, otype: p.type, spot: c.nifty, chain: c.chain, ltp: ltp,
         slPrem: p.slPrem, tgPrem: p.tgPrem, slSpec: p.slSpec, tgSpec: p.tgSpec }, fp, now);
       note(st, now, '#' + p.id + ' ' + p.side + ' ' + p.strike + ' ' + p.opt + (r.ok ? ' ' + p.type + ' fill @ ' + fp.toFixed(2) : ' cancel — ' + r.error)); done++;
     });
@@ -165,7 +165,7 @@
     if (t.opt) {   // option: exit slightly worse than the mark (slippage) unless it settled at expiry; approximate charges deducted
       var buy = t.side === 'BUY', ex = noSlip ? Math.max(0, r2(price)) : (buy ? Math.max(0.05, r2(price - SLIP)) : r2(price + SLIP));
       var ch = buy ? optCharges(t.entry, ex, t.qty) : optCharges(ex, t.entry, t.qty), gross = (buy ? ex - t.entry : t.entry - ex) * t.qty;
-      st.closed.unshift({ id: t.id, side: t.side, opt: t.opt, strike: t.strike, product: t.product, entry: t.entry, exit: ex, lots: t.lots, qty: t.qty, entryTs: t.entryTs, exitTs: now, reason: reason,
+      st.closed.unshift({ id: t.id, side: t.side, opt: t.opt, strike: t.strike, product: t.product, otype: t.otype, sl: t.sl, tg: t.tg, entry: t.entry, exit: ex, lots: t.lots, qty: t.qty, entryTs: t.entryTs, exitTs: now, reason: reason,
         pts: gross / t.qty, charges: ch, rs: gross - ch });
       if (st.closed.length > MAX_CLOSED) st.closed.length = MAX_CLOSED;
       return;
@@ -488,7 +488,7 @@
       redrawIfIdle();
     } catch (e) { try { console.warn('[PaperTrade]', e && e.message); } catch (_) {} }
   }
-  var api = { processPending: processPending, cancelPending: cancelPending, cancelAllPending: cancelAllPending, settleExpired: settleExpired, openOption: openOption, optCharges: optCharges, premFor: premFor, SLIP: SLIP, account: account, setCapital: setCapital, blank: blank, openTrade: openTrade, closeTrade: closeTrade, onTick: onTick, squareOffAll: squareOffAll, stats: stats, openPnl: openPnl, trPts: trPts, marketLive: marketLive, render: render, LOT: LOT };
+  var api = { processPending: processPending, cancelPending: cancelPending, cancelAllPending: cancelAllPending, settleExpired: settleExpired, openOption: openOption, optCharges: optCharges, premFor: premFor, SLIP: SLIP, account: account, setCapital: setCapital, blank: blank, openTrade: openTrade, closeTrade: closeTrade, onTick: onTick, squareOffAll: squareOffAll, stats: stats, openPnl: openPnl, trPts: trPts, marketLive: marketLive, render: render, spot: function () { return lastPrice; }, LOT: LOT };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PaperTrade = api;
 })(typeof window !== 'undefined' ? window : this);

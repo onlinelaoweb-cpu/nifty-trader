@@ -3743,7 +3743,9 @@ html:not(.vn-day) [style*="color: #64748b"]{color:#DCE4F0 !important;}
 <!-- PANEL: PAPER TRADE (27 Nov) — own tab. Virtual Nifty option trades, kept in this browser only; filled by /js/paper-trade.js; touches no broker, signal or journal -->
 <div class="panel" id="panel-paper">
   <div class="tools-wrap">
+    <div class="ptx-seg" id="paper-sub" style="margin-bottom:10px;"><button data-sub="trade" class="on">📝 Trade</button><button data-sub="learn">📚 Seekho</button></div>
     <div id="pt-card"></div>
+    <div id="learn-card" style="display:none"></div>
   </div>
 </div>
 
@@ -9631,6 +9633,7 @@ function renderVolumeScannerUI(d) {
 <script src="/js/fyers-usage-card.js" defer></script>
 <script src="/js/order-ticket.js" defer></script>
 <script src="/js/paper-trade.js" defer></script>
+<script src="/js/learn.js" defer></script>
 <script src="/js/commodity-pulse.js" defer></script>
 <script src="/js/signal-verdict.js" defer></script>
 <script src="/js/track-pulse.js" defer></script>
