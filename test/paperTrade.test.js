@@ -37,3 +37,24 @@ assert.strictEqual(P.marketLive({}), false);
 const s2 = P.blank(); for (let i = 0; i < 10; i++) assert.ok(P.openTrade(s2, { side: 'BUY', price: 100, lots: 1, now: i }).ok);
 assert.strictEqual(P.openTrade(s2, { side: 'BUY', price: 100, lots: 1, now: 11 }).ok, false);
 console.log('paperTrade tests passed');
+// ---- virtual capital / margin ----
+{
+  const a = P.blank(); assert.strictEqual(P.account(a, 25000).capital, 500000); assert.strictEqual(P.account(a, 25000).free, 500000);
+  // 1 lot @25000 needs 25000*65*0.11 = 178,750
+  assert.ok(P.openTrade(a, { side: 'BUY', price: 25000, lots: 1, now: 1 }).ok);
+  assert.ok(Math.abs(P.account(a, 25000).marginUsed - 178750) < 1e-6);
+  assert.ok(P.openTrade(a, { side: 'BUY', price: 25000, lots: 1, now: 2 }).ok);       // 357,500 used, 142,500 free
+  const r = P.openTrade(a, { side: 'BUY', price: 25000, lots: 1, now: 3 });
+  assert.strictEqual(r.ok, false); assert.ok(/Margin kam/.test(r.error));
+  // open loss reduces free margin
+  assert.ok(P.account(a, 24900).free < P.account(a, 25000).free);
+  // closed P&L moves the balance; drawdown is measured on closed balance
+  P.closeTrade(a, a.open[0].id, 24900, 4);                    // -100*65 = -6,500
+  const ac = P.account(a, 24900); assert.strictEqual(ac.balance, 500000 - 6500); assert.ok(ac.maxDdPct > 1.29 && ac.maxDdPct < 1.31);
+  // capital changes only with no open trades and in range
+  assert.strictEqual(P.setCapital(a, 100000).ok, false);
+  P.squareOffAll(a, 24900, 5); assert.strictEqual(P.setCapital(a, 9999).ok, false); assert.strictEqual(P.setCapital(a, 200000).ok, true);
+  assert.strictEqual(P.account(a, 24900).capital, 200000);
+  const r2 = P.openTrade(a, { side: 'BUY', price: 25000, lots: 2, now: 6 }); assert.strictEqual(r2.ok, false); assert.ok(/max 1 lot/.test(r2.error));
+}
+console.log('paperTrade capital tests passed');
