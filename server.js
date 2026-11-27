@@ -13136,7 +13136,10 @@ app.get('/api/paper-chain', (req, res) => {
         const p = getPCRState(), spot = marketState.nifty;
         if (!Array.isArray(p.records) || !p.records.length || !(spot > 0) || p.fromIndex === 'BANKNIFTY') return res.json({ ok: false, error: 'chain not available' });
         const rows = p.records.filter(r => r && Number.isFinite(r.strikePrice) && Math.abs(r.strikePrice - spot) <= 1000)
-            .map(r => ({ k: r.strikePrice, ce: Number(r.CE?.lastPrice) || 0, pe: Number(r.PE?.lastPrice) || 0, ceVol: Number(r.CE?.volume) || 0, peVol: Number(r.PE?.volume) || 0 }))
+            .map(r => ({ k: r.strikePrice, ce: Number(r.CE?.lastPrice) || 0, pe: Number(r.PE?.lastPrice) || 0, ceVol: Number(r.CE?.volume) || 0, peVol: Number(r.PE?.volume) || 0,
+                ceOi: Number(r.CE?.openInterest) || 0, peOi: Number(r.PE?.openInterest) || 0,
+                ceOiCh: Number.isFinite(Number(r.CE?.changeinOpenInterest)) && r.CE?.changeinOpenInterest !== undefined ? Number(r.CE.changeinOpenInterest) : null,
+                peOiCh: Number.isFinite(Number(r.PE?.changeinOpenInterest)) && r.PE?.changeinOpenInterest !== undefined ? Number(r.PE.changeinOpenInterest) : null }))
             .sort((a, b) => a.k - b.k);
         const ist = getIST(); let d = new Date(ist); const dow = d.getDay(); let add = (2 - dow + 7) % 7;
         if (add === 0 && (ist.getHours() * 60 + ist.getMinutes()) >= 930) add = 7;
