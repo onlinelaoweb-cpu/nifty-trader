@@ -35,3 +35,4 @@ assert.strictEqual(new Set(L.LESSONS.map(l => l.id)).size, L.LESSONS.length);
 assert.strictEqual(L.LESSONS.filter(l => l.lvl === 'APP').length, 9, 'app-reading lessons');
 assert.ok(L.LESSONS.every(l => ['BASIC', 'INTERMEDIATE', 'ADVANCED', 'APP'].includes(l.lvl)));
 console.log('learn tests passed');
+{ const p2 = require('../public/js/learn.js').LESSONS.find(l => l.id === 'p2'); const t = p2.pts.join(' '); ['1.3', '0.8', '+500', '≥ +3', '25'].forEach(x => assert.ok(t.includes(x), 'p2 threshold ' + x)); }
