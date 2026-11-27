@@ -13885,6 +13885,40 @@ app.get('/api/scalp-forward-test', studyGuard, async (req, res) => {
     }
 });
 
+// ── Forward test #3 (27 Nov 2026): Sustained Drift + trailing exit, signals fired from 2026-11-30 on ─────────────────────────────
+// Record-only replay of premium paths the app already stores. /api/drift-forward-test?format=text (start: env DRIFT_FORWARD_START, default 2026-11-30)
+// Rule + pass conditions are fixed in docs/forward-test-3-sustained-drift.md. Reads the database only when asked; feeds no signal, gate, alert or display.
+const driftFwdLib = require('./src/utils/driftForward');
+app.get('/api/drift-forward-test', studyGuard, async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not connected' });
+    try {
+        const okD = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+        const startStr = okD(req.query.start) ? String(req.query.start) : (okD(process.env.DRIFT_FORWARD_START) ? process.env.DRIFT_FORWARD_START : '2026-11-30');
+        const startTs = new Date(startStr + 'T00:00:00+05:30').getTime();
+        const r = await dbPool.query(`
+            SELECT o.id, o.source, o.direction, o.entry_premium, o.fire_ts, p.sample_ts, p.premium
+            FROM signal_outcomes o
+            JOIN signal_outcome_path p ON p.outcome_id = o.id
+            WHERE o.entry_premium > 0 AND o.entry_strike IS NOT NULL AND o.instrument = 'NIFTY' AND o.source = $2 AND o.fire_ts >= $1
+            ORDER BY o.id, p.sample_ts ASC
+            LIMIT 100000`, [new Date(startTs), driftFwdLib.SOURCE]);
+        const byId = new Map();
+        for (const row of r.rows) {
+            if (!byId.has(row.id)) byId.set(row.id, { id: row.id, source: row.source, fireTs: new Date(row.fire_ts).getTime(), entryPremium: Number(row.entry_premium), path: [] });
+            byId.get(row.id).path.push({ ts: new Date(row.sample_ts).getTime(), premium: Number(row.premium) });
+        }
+        // only outcomes whose 90-minute path window has fully passed (a half-recorded path would look like an early exit)
+        const cutoff = Date.now() - 95 * 60000;
+        const done = [...byId.values()].filter(x => x.fireTs <= cutoff);
+        const out = driftFwdLib.evaluate(done, { startTs });
+        const meta = { start: startStr };
+        if (String(req.query.format || '').toLowerCase() === 'text') return res.type('text/plain').send(driftFwdLib.formatText(out, meta));
+        res.json({ success: true, ...meta, rowsRead: r.rows.length, ...out });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // ── Entry-context study (10 Oct) ────────────────────────────────────────────
 // Read-only research. /api/entry-context-study?instrument=NIFTY&source=&days=60&decluster=30&grid=LIVE&minN=15&tol=7&format=text
 // For every trigger outcome: where did the signal's spot price sit relative to VWAP and to the latest impulse leg's Fibonacci retracement
