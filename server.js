@@ -9271,7 +9271,9 @@ async function refreshPCR() {
         try {
             const daysToExp = daysToNextExpiry();
             marketState.optionGreeks = computeOptionGreeksDashboard(
-                pcrState.records, marketState.nifty, marketState.vix, daysToExp, LOT_SIZE
+                // 27 Nov — Fyers/Sahi chain OI is already in share units (e.g. +839K at one strike in one cycle), so multiplying by LOT_SIZE
+                // inflated GEX 65x (showed Rs 3.98 lakh Cr). Pass 1; max-gamma strike and flip level are unaffected (scale-free).
+                pcrState.records, marketState.nifty, marketState.vix, daysToExp, 1
             );
         } catch (e) {
             console.warn('[OptionGreeks] compute error:', e.message);
